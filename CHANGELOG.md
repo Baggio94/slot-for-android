@@ -2,6 +2,13 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v2.1.1 — 8 November 2026
+
+- Game Boy / Game Boy Color labels: art.slot-cfw.fyi serves WebP (its index still names .png); the art proxy asks for <art>.webp first, then <art>.png, and converts to PNG for the automatic labels and Cart Studio.
+- Settings → Controls: A, Up and Down can't be cleared or left keyless by a swap (slot.'s menus need them); a controller saved by 2.1.0 without one gets its own key back on load.
+- Choosing a save or state folder copies slot.'s saves and RTCs, or auto-states and the manual slots mirroring the Polaroids (with their pictures), in RetroArch's layout; for files the folder holds differently the player keeps slot.'s (folder's kept as .before-transfer-<date>) or the folder's (slot.'s kept as .slot-<date>).
+- Cart Studio: a fully opaque PNG picked as Custom logo is used as the Custom label.
+
 ## v2.1.0 — 6 November 2026
 
 The repository is renamed slot-for-android: releases are tagged vX.Y.Z with slot-for-android-X.Y.Z-arm64.apk, and the updater asks slot-for-android directly (2.0 follows GitHub's redirect; 1.3 needs one manual install).

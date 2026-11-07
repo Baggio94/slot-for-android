@@ -1,6 +1,8 @@
 package fyi.slot.konkr
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.AtomicFile
 import android.util.Log
 import android.webkit.WebResourceResponse
@@ -18,7 +20,8 @@ import org.json.JSONObject
  * In a normal browser the Studio runs on studio.slot-cfw.fyi. Inside Slot the
  * origin is appassets.androidplatform.net, which is NOT necessarily admitted
  * by the art CDN's CORS policy. Serve the identical upstream bytes from our
- * appassets origin: /studio/art/index.json and /studio/art/<platform>/<art>.png.
+ * appassets origin: /studio/art/index.json and /studio/art/<platform>/<art>.png
+ * (fetched as the set's <art>.webp when it has one, handed on as PNG).
  *
  * We neither scrape HTML nor modify upstream artwork. A bounded private disk
  * cache makes previously fetched art available after network interruptions.
@@ -33,6 +36,7 @@ internal class CartStudioArtProxy(private val context: Context) {
         private const val MAX_IMAGE_BYTES = 8 * 1024 * 1024
         private const val FRESH_MS = 7L * 24 * 60 * 60 * 1000
         private val safePath = Regex("[a-zA-Z0-9_./-]+")
+        private val PNG = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
     }
 
     private val cacheDir = File(context.cacheDir, "slot-studio-art").apply { mkdirs() }
@@ -131,55 +135,42 @@ internal class CartStudioArtProxy(private val context: Context) {
             previous()?.let { return response(200, type, it) }
         }
         try {
-            val connection = (URL(BASE + path).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 9_000
-                readTimeout = 12_000
-                requestMethod = "GET"
-                instanceFollowRedirects = false
-                setRequestProperty("Accept", if (isIndex) "application/json" else "image/png")
+            val bytes = if (isIndex) {
+                download(path, "application/json", limit)
+                    ?: return response(404, "text/plain", "Not found".toByteArray())
+            } else {
+                // The art set moved to WebP (slot. original's Studio asks for
+                // <art>.webp first, then <art>.png) while its index still names
+                // .png files. Ask in the same order and hand on a PNG, which is
+                // what Cart Studio's decoder and the automatic labels read.
+                val webp = download(path.dropLast(4) + ".webp", "image/webp", limit)
+                if (webp != null) webpToPng(webp) ?: error("Art WebP could not be decoded")
+                else download(path, "image/png", limit)
+                    ?: return response(404, "text/plain", "Not found".toByteArray())
+            }
+            if (isIndex) {
+                require(bytes[0] == '{'.code.toByte() || bytes[0] == '['.code.toByte()) {
+                    "Art index is not JSON"
+                }
+            } else {
+                require(bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(PNG)) {
+                    "Art response is not PNG"
+                }
             }
             try {
-                val status = connection.responseCode
-                if (status == 404) return response(404, "text/plain", "Not found".toByteArray())
-                check(status == 200) { "Artwork CDN returned HTTP $status" }
-                val out = ByteArrayOutputStream()
-                connection.inputStream.use { input ->
-                    val buffer = ByteArray(32 * 1024)
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        if (count == 0) continue
-                        require(out.size() + count <= limit) { "Artwork response too large" }
-                        out.write(buffer, 0, count)
-                    }
-                }
-                val bytes = out.toByteArray()
-                require(bytes.isNotEmpty()) { "Empty artwork response" }
-                if (isIndex) {
-                    require(bytes[0] == '{'.code.toByte() || bytes[0] == '['.code.toByte()) {
-                        "Art index is not JSON"
-                    }
-                } else {
-                    require(bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(
-                        byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10))) { "Art response is not PNG" }
-                }
+                val atomic = AtomicFile(cache)
+                val stream = atomic.startWrite()
                 try {
-                    val atomic = AtomicFile(cache)
-                    val stream = atomic.startWrite()
-                    try {
-                        stream.write(bytes)
-                        atomic.finishWrite(stream)
-                    } catch (error: Exception) {
-                        atomic.failWrite(stream)
-                        throw error
-                    }
+                    stream.write(bytes)
+                    atomic.finishWrite(stream)
                 } catch (error: Exception) {
-                    Log.w(TAG, "Could not cache $path", error)
+                    atomic.failWrite(stream)
+                    throw error
                 }
-                return response(200, type, bytes)
-            } finally {
-                connection.disconnect()
+            } catch (error: Exception) {
+                Log.w(TAG, "Could not cache $path", error)
             }
+            return response(200, type, bytes)
         } catch (error: Exception) {
             Log.w(TAG, "Original art server request failed: $path", error)
             // A stale but previously verified original file is safer than
@@ -188,6 +179,54 @@ internal class CartStudioArtProxy(private val context: Context) {
             return response(503, "text/plain",
                 ("Official art server unavailable (" + error.javaClass.simpleName +
                     "). Check connection or retry later.").toByteArray())
+        }
+    }
+
+    /** One file of the art set: its bytes, or null when the server has none (404). */
+    private fun download(path: String, accept: String, limit: Int): ByteArray? {
+        val connection = (URL(BASE + path).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 9_000
+            readTimeout = 12_000
+            requestMethod = "GET"
+            instanceFollowRedirects = false
+            setRequestProperty("Accept", accept)
+        }
+        try {
+            val status = connection.responseCode
+            if (status == 404) return null
+            check(status == 200) { "Artwork CDN returned HTTP $status for $path" }
+            val out = ByteArrayOutputStream()
+            connection.inputStream.use { input ->
+                val buffer = ByteArray(32 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (count == 0) continue
+                    require(out.size() + count <= limit) { "Artwork response too large" }
+                    out.write(buffer, 0, count)
+                }
+            }
+            return out.toByteArray().also { require(it.isNotEmpty()) { "Empty artwork response" } }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /** A WebP of the art set as the PNG the rest of slot. reads, same pixels. */
+    private fun webpToPng(webp: ByteArray): ByteArray? {
+        if (webp.size < 12 || String(webp, 0, 4, Charsets.US_ASCII) != "RIFF" ||
+            String(webp, 8, 4, Charsets.US_ASCII) != "WEBP") return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(webp, 0, webp.size, bounds)
+        if (bounds.outWidth !in 1..4096 || bounds.outHeight !in 1..4096) return null
+        val bitmap = BitmapFactory.decodeByteArray(webp, 0, webp.size,
+            BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 })
+            ?: return null
+        return try {
+            val out = ByteArrayOutputStream()
+            if (bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) out.toByteArray() else null
+        } finally {
+            bitmap.recycle()
         }
     }
 }

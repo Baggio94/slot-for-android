@@ -340,8 +340,14 @@ impl Engine {
                     self.controls_listen = Some(listen);
                     return;
                 }
-                self.controls.pad_mut(fp).map(button, code);
-                self.persist_controls();
+                let pad = self.controls.pad_mut(fp);
+                let holder = pad.button_for(code);
+                if pad.map(button, code) {
+                    self.persist_controls();
+                } else if let Some(holder) = holder {
+                    set_message(format!("That key is {}'s, which slot.'s menus need: give {} a key first.",
+                        controls::BUTTONS[holder].0, controls::BUTTONS[button].0));
+                }
             }
             Listen::Console { port, button, .. } => {
                 if self.controls.on_port(port) != Some(fp) {
@@ -498,8 +504,12 @@ impl Engine {
                         _ => set_message("Turn on the controller first.".into()),
                     },
                     (100, PortRow::Button(button)) => if let Some(fp) = fp.as_deref() {
-                        self.controls.pad_mut(fp).clear(button);
-                        self.persist_controls();
+                        if self.controls.pad_mut(fp).clear(button) {
+                            self.persist_controls();
+                        } else {
+                            set_message(format!("{} is needed in slot.'s menus: map it to another key instead.",
+                                controls::BUTTONS[button].0));
+                        }
                     },
                     (21 | 22 | 96, PortRow::Stick) => if let Some(fp) = fp.as_deref() {
                         let pad = self.controls.pad_mut(fp);

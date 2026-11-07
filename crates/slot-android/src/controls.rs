@@ -33,6 +33,13 @@ pub const BUTTONS: [(&str, i32); 16] = [
     ("L3", 106), ("R3", 107), ("SELECT", 109), ("START", 108),
 ];
 
+/// slot.'s own menus can't be used without these (BUTTONS' Up, Down, A): A
+/// selects, Up and Down move. They always keep a key, or a cleared A locks
+/// the player out of the very page that would give it back: Clear refuses
+/// them, a mapping that would leave one keyless is refused, and a saved
+/// controller that has lost one gets its own key back on load.
+pub const ESSENTIAL: [usize; 3] = [0, 1, 4];
+
 /// A controller's own settings. Only what differs from the defaults is kept.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -66,17 +73,47 @@ impl Pad {
         (0..BUTTONS.len()).find(|&button| self.bind(button) == Some(code))
     }
 
+    pub fn essential(button: usize) -> bool { ESSENTIAL.contains(&button) }
+
     /// Bind `code` to `button`. A key already bound elsewhere swaps with it,
-    /// so no key ever does two things.
-    pub fn map(&mut self, button: usize, code: i32) {
+    /// so no key ever does two things. False, changing nothing, when the key
+    /// is an essential button's and `button` has none to give it in return.
+    pub fn map(&mut self, button: usize, code: i32) -> bool {
         let old = self.bind(button);
         if let Some(other) = self.button_for(code).filter(|&other| other != button) {
+            if old.is_none() && Self::essential(other) { return false; }
             self.set(other, old);
         }
         self.set(button, Some(code));
+        true
     }
 
-    pub fn clear(&mut self, button: usize) { self.set(button, None); }
+    /// Leave `button` without a key. False, changing nothing, for an
+    /// essential button.
+    pub fn clear(&mut self, button: usize) -> bool {
+        if Self::essential(button) { return false; }
+        self.set(button, None);
+        true
+    }
+
+    /// Give every essential button that has no key its own key back. That
+    /// key goes with it: a button that took it since is left without one,
+    /// unless it is essential too. True when anything changed.
+    pub fn keep_essentials(&mut self) -> bool {
+        let mut changed = false;
+        for button in ESSENTIAL {
+            if self.bind(button).is_some() { continue; }
+            let own = BUTTONS[button].1;
+            match self.button_for(own) {
+                Some(other) if Self::essential(other) => continue,
+                Some(other) => self.set(other, None),
+                None => {}
+            }
+            self.set(button, Some(own));
+            changed = true;
+        }
+        changed
+    }
 
     pub fn is_default(&self) -> bool { self.binds.is_empty() && !self.stick_off }
 
@@ -983,6 +1020,8 @@ impl Controls {
     pub fn sanitized(mut self) -> Self {
         if self.ports[0].is_empty() { self.ports[0] = BUILTIN.to_owned(); }
         if self.ports[1] == self.ports[0] { self.ports[1].clear(); }
+        // 2.1.0 let A be cleared, which locked its players out of the menus.
+        for pad in self.pads.values_mut() { pad.keep_essentials(); }
         // Every other controller stays known, even with default keys: a
         // known controller never takes Port 2 by itself again.
         if self.pads.get(BUILTIN).is_some_and(Pad::is_default) { self.pads.remove(BUILTIN); }
@@ -1029,6 +1068,37 @@ mod tests {
         pad.map(7, 99); // Y <- the X key: X had no key, so it stays empty
         assert_eq!(pad.bind(7), Some(99));
         assert_eq!(pad.bind(6), None);
+    }
+
+    #[test]
+    fn a_up_and_down_can_never_be_left_without_a_key() {
+        let mut pad = Pad::default();
+        for button in ESSENTIAL {
+            assert!(!pad.clear(button), "{} can't be cleared", BUTTONS[button].0);
+            assert!(pad.bind(button).is_some());
+        }
+        assert!(pad.clear(7), "Y can");
+        assert!(!pad.map(7, 96), "Y has no key to give A for its own");
+        assert_eq!((pad.bind(4), pad.bind(7)), (Some(96), None));
+        assert!(pad.map(7, 100));
+        assert!(pad.map(7, 96), "with a key of its own Y swaps with A");
+        assert_eq!((pad.bind(4), pad.bind(7)), (Some(100), Some(96)));
+        assert!(pad.map(4, 96) && pad.map(4, 103), "A itself can move to any key");
+        assert_eq!(pad.bind(4), Some(103));
+    }
+
+    #[test]
+    fn a_saved_controller_without_a_gets_it_back_on_load() {
+        // What 2.1.0 could save: A cleared, and then the A key given to X.
+        let json = r#"{"pads":{"builtin":{"binds":{"A":0,"X":96,"Down":0}}}}"#;
+        let controls = serde_json::from_str::<Controls>(json).unwrap().sanitized();
+        let pad = controls.pad(BUILTIN);
+        assert_eq!(pad.bind(4), Some(96), "A has its key again");
+        assert_eq!(pad.bind(6), None, "X gave it back");
+        assert_eq!(pad.bind(1), Some(20), "Down too");
+        assert_eq!(controls.slot_code(BUILTIN, 96, false), Some(96));
+        let fine = Controls::default().sanitized();
+        assert_eq!(fine, Controls::default(), "nothing changes for everyone else");
     }
 
     #[test]

@@ -326,6 +326,14 @@ function observeAndroidCarts(s) {
     # draws them (scripts/stage-konkr-cart-studio.py). A label is made at its
     # mould's well, which the platform names after a colon.
     js = checked_replace(js, "  auto_shell,\n", "  auto_shell,\n  home_auto_shell,\n  home_outline,\n")
+    # A picture picked as a Custom logo, with no transparency at all, is a
+    # whole label: as a logo it would sit shrunk in the logo's box with the
+    # ground all around it (reported on the Pocket Advance). Use it as the
+    # Custom label instead, which fills the label as slot. covers it.
+    js = checked_replace(js, "  logo_luma,\n", "  logo_luma,\n  konkr_png_is_opaque,\n")
+    js = checked_replace(js,
+        "function useCustomLogo(c, bytes) {\n",
+        "function useCustomLogo(c, bytes) {\n  if (konkr_png_is_opaque(bytes)) return useCustomLabel(c, bytes);\n")
     js = checked_replace(js,
         "const boxOf = (platform) => faceBox.get(platform) ?? faceBox.get('GBA');",
         """const boxOf = (platform) => faceBox.get(platform) ?? faceBox.get('GBA');

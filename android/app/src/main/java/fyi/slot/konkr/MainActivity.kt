@@ -2928,10 +2928,12 @@ class MainActivity : Activity() {
                     val key = if (requestCode == SAVE_REQUEST) SAVE_ROOT else STATE_ROOT
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                         .putString(key, uri.toString()).apply()
-                    val kind = if (requestCode == SAVE_REQUEST) "Save" else "Save State"
+                    val states = requestCode == STATE_REQUEST
+                    val kind = if (states) "Save State" else "Save"
                     SlotToast.makeText(this,
-                        "$kind folder selected.",
+                        "$kind folder selected. Copying your ${if (states) "states" else "saves"} there…",
                         Toast.LENGTH_LONG).show()
+                    transferToFolder(uri, states)
                 }
             }
         } catch (error: SecurityException) {
@@ -2942,6 +2944,69 @@ class MainActivity : Activity() {
             }
             Log.e(TAG, "Android folder permission error", error)
         }
+    }
+
+    /** A newly chosen save or state folder gets everything slot. keeps of
+     *  that kind (RetroArchStorage.planTransfer / applyTransfer), on the game
+     *  loader so no launch imports from or exports to the folder meanwhile.
+     *  Where the folder already holds a different copy, the player chooses. */
+    private fun transferToFolder(root: Uri, states: Boolean) {
+        val noun = if (states) "state" else "save"
+        gameLoader.execute {
+            val result = try {
+                val plan = RetroArchStorage.planTransfer(applicationContext, root, states)
+                val keepSlot = plan.different.isEmpty() ||
+                    askTransferConflict(states, plan.different.map {
+                        if (states) it.name.substringBefore(".state") else it.name.substringBeforeLast('.')
+                    }.distinct().size)
+                RetroArchStorage.applyTransfer(applicationContext, plan, keepSlot)
+            } catch (error: Exception) {
+                Log.e(TAG, "Folder transfer failed", error)
+                null
+            }
+            val text = when {
+                result == null -> "Couldn't copy your ${noun}s to the folder. Your ${noun}s are safe in slot."
+                result.copied + result.replaced + result.kept == 0 && result.failed == 0 ->
+                    if (result.same > 0) "Your ${noun}s were already in the folder." else "No ${noun}s to copy yet."
+                else -> buildString {
+                    val moved = result.copied + result.replaced
+                    append("Copied $moved file${if (moved == 1) "" else "s"} to the folder.")
+                    if (result.replaced > 0) append(" The folder's old copies were kept as .before-transfer files.")
+                    if (result.kept > 0) append(" The folder's ${noun}s were kept; slot.'s are beside them as .slot files.")
+                    if (result.failed > 0) append(" ${result.failed} couldn't be copied and stay in slot.")
+                }
+            }
+            uiHandler.post { SlotToast.makeText(this, text, Toast.LENGTH_LONG).show() }
+        }
+    }
+
+    /** Which copy a folder keeps for games it already holds differently:
+     *  true for slot.'s. The other is always kept beside it. Called from the
+     *  game loader, which waits while the UI thread shows the choice. */
+    private fun askTransferConflict(states: Boolean, games: Int): Boolean {
+        val ready = CountDownLatch(1)
+        val keepSlot = java.util.concurrent.atomic.AtomicBoolean(false)
+        val noun = if (states) "states" else "saves"
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "${noun.uppercase()} ALREADY IN THIS FOLDER",
+                    "$games game${if (games == 1) " has" else "s have"} different $noun in this folder " +
+                        "than in slot. Which should the folder keep? The other copy is kept beside it.",
+                    onDismiss = { ready.countDown() })
+                dialog.addButton("KEEP SLOT. ${noun.uppercase()}") {
+                    keepSlot.set(true)
+                    dialog.dismiss()
+                }
+                dialog.addButton("KEEP FOLDER ${noun.uppercase()}") { dialog.dismiss() }
+                dialog.show()
+            } catch (error: Exception) {
+                Log.e(TAG, "Cannot open the folder transfer choice", error)
+                ready.countDown()
+            }
+        }
+        // No answer keeps the folder's: nothing is lost either way.
+        return ready.await(300L, TimeUnit.SECONDS) && keepSlot.get()
     }
 
     /** Read only a cache that belongs to this persisted SAF tree. */

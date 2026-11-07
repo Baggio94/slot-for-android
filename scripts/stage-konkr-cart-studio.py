@@ -10,6 +10,7 @@ every change is a checked replacement that fails loudly if upstream moved.
   by #[path], so Studio and the device share one table.
 - lib.rs routes the platforms NES, SNES and MD (optionally NES:<mould>) there.
 - label.rs makes a label at a home well's shape and shows it whole.
+- konkr_png_is_opaque tells a whole picture from a logo (Custom logo).
 """
 from pathlib import Path
 import argparse
@@ -118,6 +119,36 @@ pub fn home_auto_shell(platform: &str, stem: &str, head: &[u8]) -> String {
 #[wasm_bindgen]
 pub fn home_outline(platform: &str, stem: &str, head: &[u8], shell: &str) -> String {
     konkr_home::outline(platform, stem, head, shell)
+}
+
+/// KONKR: a PNG without a single transparent pixel is a picture to fill the
+/// label with, not a logo to set on a ground: Custom logo would shrink it
+/// into the logo's box with the ground all around.
+#[wasm_bindgen]
+pub fn konkr_png_is_opaque(png: &[u8]) -> bool {
+    art::decode(png).is_some_and(|(rgba, _, _)| rgba.chunks_exact(4).all(|p| p[3] == 255))
+}
+
+#[cfg(test)]
+mod konkr_home_opaque_tests {
+    fn png(alpha: impl Fn(u32) -> u8) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, 8, 4);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().unwrap();
+        let data: Vec<u8> = (0..32).flat_map(|i| [200, 40, 30, alpha(i)]).collect();
+        w.write_image_data(&data).unwrap();
+        drop(w);
+        out
+    }
+
+    #[test]
+    fn a_picture_is_opaque_and_a_logo_is_not() {
+        assert!(super::konkr_png_is_opaque(&png(|_| 255)));
+        assert!(!super::konkr_png_is_opaque(&png(|i| if i == 5 { 0 } else { 255 })));
+        assert!(!super::konkr_png_is_opaque(b"not a png"));
+    }
 }
 '''
     (src / "lib.rs").write_text(lib, encoding="utf-8")

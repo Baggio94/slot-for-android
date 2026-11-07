@@ -1118,9 +1118,104 @@ internal object RetroArchStorage {
         }
     }
 
+    /** What a folder transfer did, file by file. */
+    data class Transfer(val copied: Int, val same: Int, val replaced: Int, val kept: Int, val failed: Int)
+
+    /** One file slot. keeps that a newly chosen folder is to get. */
+    class TransferItem(val core: String, val file: File, val state: Boolean) {
+        val name: String get() = file.name
+    }
+
+    /** What a transfer would do: files the folder lacks, has the same, or
+     *  holds a different copy of (the player chooses which one it keeps). */
+    class TransferPlan(val root: Uri, val states: Boolean,
+                       val missing: List<TransferItem>, val same: Int,
+                       val different: List<TransferItem>)
+
+    /** RetroArch's per-core files slot. keeps privately, by kind. States are
+     *  the auto-state and the manual slots (.state, .state1-9) that mirror
+     *  the Polaroids, each with the picture RetroArch shows for it. */
+    internal fun transferKind(name: String, states: Boolean): Boolean =
+        if (states) Regex(".+\\.state(\\.auto|[1-9])?(\\.png)?").matches(name)
+        else name.endsWith(".srm") || name.endsWith(".rtc")
+
+    fun planTransfer(context: Context, root: Uri, states: Boolean): TransferPlan {
+        val base = File(context.filesDir, if (states) "States" else "Saves")
+        val missing = mutableListOf<TransferItem>()
+        val different = mutableListOf<TransferItem>()
+        var same = 0
+        for (core in CORES.sorted()) {
+            val files = File(base, core).listFiles()?.filter { it.isFile }.orEmpty()
+            for (file in files.sortedBy { it.name }) {
+                val name = file.name
+                if (name.startsWith(".") || !transferKind(name, states)) continue
+                val item = TransferItem(core, file, states && !name.endsWith(".png"))
+                val limit = if (item.state) MAX_STATE else MAX_SAVE
+                if (file.length() !in 1L..limit.toLong()) continue
+                try {
+                    val existing = readNamed(context, root, core, name, limit)
+                    when {
+                        existing == null -> missing.add(item)
+                        existing.contentEquals(file.readBytes()) -> same++
+                        else -> different.add(item)
+                    }
+                } catch (error: Exception) {
+                    Log.w(TAG, "Folder transfer cannot compare $core/$name; treated as different", error)
+                    different.add(item)
+                }
+            }
+        }
+        return TransferPlan(root, states, missing, same, different)
+    }
+
+    /**
+     * Copy slot.'s files into the folder in RetroArch's layout; its private
+     * copies stay. Where the folder holds a different copy, `keepSlot` says
+     * which one the folder keeps under the game's name; the other is written
+     * beside it, untouched: the folder's as <file>.before-transfer-<date>,
+     * slot.'s as <file>.slot-<date>. An unsupported RetroArch state is never
+     * replaced. Runs on the game loader, so no launch syncs meanwhile.
+     */
+    fun applyTransfer(context: Context, plan: TransferPlan, keepSlot: Boolean): Transfer {
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT)
+            .format(java.util.Date())
+        var copied = 0; var replaced = 0; var kept = 0; var failed = 0
+        for (item in plan.missing) {
+            try {
+                writeSaf(context, plan.root, item.core, item.name, item.file.readBytes(), item.state,
+                    createOnly = true, backup = false)
+                copied++
+            } catch (error: Exception) {
+                Log.w(TAG, "Folder transfer skipped ${item.core}/${item.name}; kept in slot.", error)
+                failed++
+            }
+        }
+        for (item in plan.different) {
+            try {
+                val bytes = item.file.readBytes()
+                if (keepSlot) {
+                    writeSaf(context, plan.root, item.core, item.name, bytes, item.state,
+                        backupAs = "${item.name}.before-transfer-$stamp")
+                    replaced++
+                } else {
+                    writeSaf(context, plan.root, item.core, "${item.name}.slot-$stamp", bytes,
+                        item.state, createOnly = true, backup = false)
+                    kept++
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "Folder transfer skipped ${item.core}/${item.name}; both copies kept", error)
+                failed++
+            }
+        }
+        Log.i(TAG, "Folder transfer (${if (plan.states) "states" else "saves"}): copied=$copied " +
+            "same=${plan.same} replaced=$replaced kept=$kept failed=$failed")
+        return Transfer(copied, plan.same, replaced, kept, failed)
+    }
+
     private fun writeSaf(context: Context, root: Uri, core: String,
                          name: String, bytes: ByteArray, isState: Boolean,
-                         createOnly: Boolean = false, backup: Boolean = true) {
+                         createOnly: Boolean = false, backup: Boolean = true,
+                         backupAs: String? = null) {
         val resolver = context.contentResolver
         // ExternalStorageProvider: open the core folder and the files
         // directly instead of listing folders that hold every game's saves
@@ -1160,7 +1255,7 @@ internal object RetroArchStorage {
             }
             // Never destroy the pre-Slot save on first sync. A backup is
             // retained in a dedicated subdirectory of the same core folder.
-            val backupName = name + ".before-slot"
+            val backupName = backupAs ?: (name + ".before-slot")
             if (backup && lookup(backupName) == null) {
                 val backup = DocumentsContract.createDocument(resolver, folder,
                     "application/octet-stream", backupName)
