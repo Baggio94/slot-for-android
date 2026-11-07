@@ -1,0 +1,109 @@
+name: Cart art
+
+# Builds slot.'s cart label set with tools/home-art/harvest.py and publishes it to the R2
+# bucket served at the art domain. Each run starts from the published indexes, so the set
+# grows run after run within ScreenScraper's daily quota, then keeps up with new dumps.
+# A push to feature/home-art runs a short Super Nintendo trial that publishes nothing.
+
+on:
+  push:
+    branches: [feature/home-art]
+    paths: [tools/home-art/**, .github/workflows/home-art.yml]
+  schedule:
+    - cron: '23 1 * * *'
+  workflow_dispatch:
+    inputs:
+      platform:
+        type: choice
+        options: [all, GB, GBC, GBA, NES, SNES, MD]
+        default: all
+      limit:
+        description: Games to ask ScreenScraper about (empty for no limit)
+        default: ''
+      match:
+        description: Only dat names matching this regex (empty for all)
+        default: ''
+      publish:
+        description: Publish to the R2 bucket
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cart-art
+  cancel-in-progress: false
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      PUBLISH: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+      PLATFORM: ${{ github.event_name == 'push' && 'SNES' || inputs.platform || 'all' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pillow
+        run: python3 -m pip install --quiet Pillow
+      - name: Tests
+        run: python3 -m unittest tools/home-art/test_harvest.py
+      - name: Start from the published set
+        if: env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          test -n "$R2_BUCKET" || { echo "::error::R2 secrets are missing"; exit 1; }
+          # Indexes and state only: the images stay in the bucket.
+          aws s3 sync "s3://$R2_BUCKET/" art/ --exclude 'files/*' \
+            --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --only-show-errors
+      - name: Harvest
+        env:
+          SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
+          SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
+          SS_SOFTNAME: ${{ secrets.SCREENSCRAPER_SOFTNAME }}
+          SS_SSID: ${{ secrets.SCREENSCRAPER_SSID }}
+          SS_SSPASSWORD: ${{ secrets.SCREENSCRAPER_SSPASSWORD }}
+          LIMIT: ${{ github.event_name == 'push' && '40' || inputs.limit || '' }}
+          MATCH: ${{ github.event_name == 'push' && '^(Super Mario World|Super Metroid|Chrono Trigger|F-Zero|EarthBound|Final Fantasy)' || inputs.match || '' }}
+        run: |
+          set -euo pipefail
+          test -n "$SS_DEVID" || { echo "::error::ScreenScraper secrets are missing"; exit 1; }
+          args=(--platform "$PLATFORM" --out art --max-minutes 290)
+          [ -n "$LIMIT" ] && args+=(--limit "$LIMIT")
+          [ -n "$MATCH" ] && args+=(--match "$MATCH")
+          python3 tools/home-art/harvest.py "${args[@]}"
+      - name: Publish
+        if: always() && env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          endpoint="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+          # Files are named by their SHA-1: they never change, cache them for good.
+          if [ -d art/files ]; then
+            aws s3 sync art/files "s3://$R2_BUCKET/files" --size-only --exclude '*.part' \
+              --cache-control 'public, max-age=31536000, immutable' \
+              --endpoint-url "$endpoint" --only-show-errors
+          fi
+          # Indexes after the files they name, so a reader never meets a missing file.
+          aws s3 cp art/ "s3://$R2_BUCKET/" --recursive --exclude '*' --include '*.json' \
+            --exclude 'files/*' --exclude '*.part' \
+            --cache-control 'public, max-age=3600' --content-type application/json \
+            --endpoint-url "$endpoint" --only-show-errors
+          echo "published to the bucket"
+      - name: Contact sheet and weight
+        if: always()
+        run: |
+          python3 tools/home-art/preview.py --out art --platform "$PLATFORM" | tail -5 || true
+          if [ -d art/files ]; then python3 tools/home-art/stats.py --out art | tail -3; fi
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: cart-art-trial-${{ github.run_number }}
+          path: |
+            art
+            !art/.state
+          if-no-files-found: warn
