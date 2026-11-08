@@ -220,6 +220,23 @@ class FilesTests(unittest.TestCase):
             self.assertTrue(a.endswith('.png') and a.startswith('files/'))
             self.assertEqual(body, (Path(d) / a).read_bytes())
 
+    def test_store_the_same_image_from_many_threads(self):
+        import threading
+        body = self.png(300, 200)
+        with tempfile.TemporaryDirectory() as d:
+            got, errors = [], []
+            def one():
+                try:
+                    got.append(harvest.store(body, Path(d), webp=False))
+                except Exception as e:  # the race this guards against
+                    errors.append(e)
+            threads = [threading.Thread(target=one) for _ in range(8)]
+            for t in threads: t.start()
+            for t in threads: t.join()
+            self.assertEqual(errors, [])
+            self.assertEqual(len(set(got)), 1)
+            self.assertEqual(list(Path(d).rglob('*.part')), [])
+
     def test_webp_keeps_every_pixel(self):
         from PIL import Image
         rng = random.Random(7)

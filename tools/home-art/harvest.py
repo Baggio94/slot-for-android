@@ -342,7 +342,8 @@ def store(body, out, webp=True):
     dest = out / rel
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(dest.suffix + '.part')
+        # Two games can share an image: each thread writes its own part.
+        tmp = dest.with_name(f'{dest.name}.{threading.get_ident()}.part')
         tmp.write_bytes(body)
         tmp.replace(dest)
     return rel

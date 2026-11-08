@@ -20,7 +20,7 @@ SS_DEVID=... SS_DEVPASSWORD=... SS_SSID=... SS_SSPASSWORD=... \
 python3 -m unittest tools/home-art/test_harvest.py
 ```
 
-The **Cart art** workflow runs it every night with the repository's ScreenScraper secrets,
+The **Cart art** workflow runs it every six hours with the repository's ScreenScraper secrets,
 starting from the published indexes, and publishes new files and indexes to the R2 bucket
 (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`). A push to
 feature/home-art runs a short trial kept as an artifact.

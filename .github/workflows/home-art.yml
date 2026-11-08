@@ -10,7 +10,8 @@ on:
     branches: [feature/home-art]
     paths: [tools/home-art/**, .github/workflows/home-art.yml]
   schedule:
-    - cron: '23 1 * * *'
+    # Every six hours until the set is full, then it only keeps up with new dumps.
+    - cron: '23 1,7,13,19 * * *'
   workflow_dispatch:
     inputs:
       platform:
