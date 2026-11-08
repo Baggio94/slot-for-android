@@ -17,8 +17,8 @@ jobs:
       SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
       SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
       SS_SOFTNAME: ${{ secrets.SCREENSCRAPER_SOFTNAME }}
-      SS_USER: ${{ secrets.SCREENSCRAPER_USER }}
-      SS_PASSWORD: ${{ secrets.SCREENSCRAPER_PASSWORD }}
+      SS_USER: ${{ secrets.SCREENSCRAPER_SSID }}
+      SS_PASSWORD: ${{ secrets.SCREENSCRAPER_SSPASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - run: python3 tools/cart-colours/check.py
@@ -31,8 +31,8 @@ jobs:
       SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
       SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
       SS_SOFTNAME: ${{ secrets.SCREENSCRAPER_SOFTNAME }}
-      SS_USER: ${{ secrets.SCREENSCRAPER_USER }}
-      SS_PASSWORD: ${{ secrets.SCREENSCRAPER_PASSWORD }}
+      SS_USER: ${{ secrets.SCREENSCRAPER_SSID }}
+      SS_PASSWORD: ${{ secrets.SCREENSCRAPER_SSPASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - run: pip install numpy pillow scipy
@@ -43,7 +43,10 @@ jobs:
           path: cache
           key: cart-colours-${{ github.run_id }}
           restore-keys: cart-colours-
-      - run: python3 -u tools/cart-colours/scrape.py --limit "$(cat tools/cart-colours/limit.txt)" --only "$(cat tools/cart-colours/only.txt 2>/dev/null)"
+      - if: hashFiles('tools/cart-colours/probe.json') != ''
+        run: cd tools/cart-colours && python3 -u probe.py probe.json
+      - if: hashFiles('tools/cart-colours/probe.json') == ''
+        run: python3 -u tools/cart-colours/scrape.py --limit "$(cat tools/cart-colours/limit.txt)" --only "$(cat tools/cart-colours/only.txt 2>/dev/null)"
       - uses: actions/cache/save@v4
         if: always()
         with:
