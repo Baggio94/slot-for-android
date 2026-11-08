@@ -380,6 +380,10 @@ game (
             self.assertEqual([], index['00000004'])
             self.assertEqual(3, len(self.downloads))  # Beta's media were already stored
 
+            names = json.loads((out / 'SNES.names.json').read_text())
+            self.assertEqual({'00000001': 'Alpha (USA)', '00000002': 'Alpha (USA) (Rev 1)',
+                              '00000003': 'Beta (Japan)'}, names, 'named: every dump with art')
+
             self.lookups.clear()
             self.run_harvest(out, dat)
             self.assertEqual([], self.lookups)

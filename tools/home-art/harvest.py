@@ -18,7 +18,8 @@ against a port of the Kotlin pick.
 
 Files are named by their SHA-1, so the revisions and alternate dumps of one game share them.
 Each platform gets an index, <out>/<PLATFORM>.json: CRC32 -> [[type, region, file], ...],
-an empty list for a dump ScreenScraper has no label for.
+an empty list for a dump ScreenScraper has no label for, and <PLATFORM>.names.json: CRC32 -> dat
+name for every dump with art, which Cart Studio searches (Another game…).
 
 ScreenScraper's quota is per account, per minute and per day. This reads the account's own
 limits, paces to them and stops when the day's allowance is spent; a later run skips every
@@ -523,6 +524,9 @@ def main():
                         pool.submit(work, platform, index, *job)
             finally:
                 write_json(index_path, index)
+                # The names Cart Studio searches: every dump the set has art for.
+                write_json(out / f'{platform}.names.json',
+                           {crc: entries[crc][0] for crc in index if index[crc] and crc in entries})
     except KeyboardInterrupt:
         stop.set()
         print('\nstopped by hand')
