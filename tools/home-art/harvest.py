@@ -502,8 +502,7 @@ def main():
 
     try:
         for platform in chosen:
-            if stop.is_set():
-                break
+            # A stopped run still rewrites every platform's names (no lookups).
             entries = entries_for(platform, args.dat, hacks=not args.no_hacks)
             index_path = out / f'{platform}.json'
             index = load(index_path, {})
