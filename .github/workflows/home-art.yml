@@ -95,11 +95,13 @@ jobs:
             --cache-control 'public, max-age=3600' --content-type application/json \
             --endpoint-url "$endpoint" --only-show-errors
           echo "published to the bucket"
-      - name: Contact sheet and weight
+      - name: Weight
         if: always()
-        run: |
-          python3 tools/home-art/preview.py --out art --platform "$PLATFORM" | tail -5 || true
-          if [ -d art/files ]; then python3 tools/home-art/stats.py --out art | tail -3; fi
+        run: if [ -d art/files ]; then python3 tools/home-art/stats.py --out art | tail -3; fi
+      # The contact sheet takes most of an hour on the full set: trials and runs by hand only.
+      - name: Contact sheet
+        if: always() && github.event_name != 'schedule'
+        run: python3 tools/home-art/preview.py --out art --platform "$PLATFORM" | tail -5 || true
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'push'
         with:
