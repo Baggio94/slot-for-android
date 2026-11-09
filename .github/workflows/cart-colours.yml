@@ -46,7 +46,7 @@ jobs:
       - if: hashFiles('tools/cart-colours/probe.json') != ''
         run: cd tools/cart-colours && python3 -u probe.py probe.json
       - if: hashFiles('tools/cart-colours/probe.json') == ''
-        run: python3 -u tools/cart-colours/scrape.py --limit "$(cat tools/cart-colours/limit.txt)" --only "$(cat tools/cart-colours/only.txt 2>/dev/null)"
+        run: python3 -u tools/cart-colours/scrape.py --limit "$(cat tools/cart-colours/limit.txt)" --only "$(cat tools/cart-colours/only.txt 2>/dev/null)" --systems "$(cat tools/cart-colours/systems.txt 2>/dev/null || echo GB,GBC,GBA)"
       - uses: actions/cache/save@v4
         if: always()
         with:

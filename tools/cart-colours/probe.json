@@ -1,5 +1,0 @@
-{
-  "MD": "^(Sonic The Hedgehog \\(|Sonic & Knuckles|Streets of Rage \\(|Bare Knuckle|Gunstar Heroes|Phantasy Star IV|Ecco the Dolphin \\(|Virtua Racing|Micro Machines \\(|Road Rash \\(|Puyo Puyo \\(|Jurassic Park \\(USA|Pier Solar|Shining Force \\()",
-  "NES": "^(Super Mario Bros\\. \\(|Legend of Zelda, The \\(|Zelda II|Tetris \\(USA\\) \\(Tengen|Bible Adventures|Micro Machines \\(|Duck Hunt|Xevious \\(|Dragon Quest \\(|Metroid \\(|Castlevania \\()",
-  "SNES": "^(Super Mario World \\(|Killer Instinct \\(|Donkey Kong Country \\(|Star Fox \\(|Super Metroid \\(|Chrono Trigger \\(|EarthBound \\(|Street Fighter II Turbo \\()"
-}

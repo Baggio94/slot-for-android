@@ -23,7 +23,13 @@ SYSTEMS = {
     "GB": ("Nintendo - Game Boy.dat", 9),
     "GBC": ("Nintendo - Game Boy Color.dat", 10),
     "GBA": ("Nintendo - Game Boy Advance.dat", 12),
+    "NES": ("Nintendo - Nintendo Entertainment System.dat", 3),
+    "SNES": ("Nintendo - Super Nintendo Entertainment System.dat", 4),
+    "MD": ("Sega - Mega Drive - Genesis.dat", 1),
 }
+# Home carts' support-2D is drawn per game (gold Zeldas, black Tengens, EA moulds); the Game
+# Boy family's is one template with the label pasted on, so only its real scans count.
+HOME = {"NES", "SNES", "MD"}
 SKIP = re.compile(r"\((Proto|Beta|Demo|Sample|Debug|Program|Pirate|Aftermarket)[^)]*\)|\[BIOS\]", re.I)
 REGIONS = {
     "World": "wor", "USA": "us", "Europe": "eu", "Japan": "jp", "France": "fr",
@@ -165,12 +171,14 @@ def main():
     ap.add_argument("--budget-min", type=float, default=320)
     ap.add_argument("--limit", type=int, default=0, help="max new ROMs per system (0 = all)")
     ap.add_argument("--pause", type=float, default=1.2)
+    ap.add_argument("--systems", default="GB,GBC,GBA")
     ap.add_argument("--only", default="", help="regex of ROM names to re-check, printing their media")
     args = ap.parse_args()
     cache, out = Path(args.cache), Path(args.out)
     (cache / "img").mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
-    seen_path = cache / "seen-scan.jsonl"
+    systems = [p for p in args.systems.split(",") if p in SYSTEMS]
+    seen_path = cache / ("seen-home.jsonl" if HOME & set(systems) else "seen-scan.jsonl")
     seen = {}
     if seen_path.exists():
         for line in seen_path.read_text().splitlines():
@@ -179,7 +187,8 @@ def main():
     deadline = time.time() + args.budget_min * 60
     stopped = None
     with seen_path.open("a") as log:
-        for platform, (dat_name, system_id) in SYSTEMS.items():
+        for platform in systems:
+            dat_name, system_id = SYSTEMS[platform]
             status, body = get(DAT_BASE + urllib.parse.quote(dat_name))
             if status != 200:
                 print(f"{platform}: DAT HTTP {status}", file=sys.stderr)
@@ -221,7 +230,7 @@ def main():
                         row["kinds"] = sorted({m.get("type") for m in medias if str(m.get("type", "")).startswith("support")})
                         # support-2D is a template with the label pasted on; only real scans
                         # show the shell's own plastic.
-                        media = pick_support(medias, row["regions"], "support-scan")
+                        media = pick_support(medias, row["regions"], "support-2D" if platform in HOME else "support-scan")
                         if media:
                             row["media_region"] = media.get("region", "")
                             key = media.get("md5") or media.get("crc") or f"{row['game_id']}-scan-{row['media_region']}"
