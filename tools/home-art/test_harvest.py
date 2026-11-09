@@ -297,6 +297,29 @@ game (
         self.assertEqual(('Tetris (Japan)', 1024), got['0000ABCD'])
         self.assertEqual(('Tetris (Japan)', 2048), got['0000ABCE'])
 
+    def test_the_game_a_dump_comes_from(self):
+        self.assertEqual(('alpha', ('USA',)), harvest.game_of('Alpha (USA) (Rev 1)'))
+        self.assertEqual(harvest.game_of('Alpha (USA)'), harvest.game_of('Alpha (USA) (Beta 2) (1993-04-01)'))
+        self.assertEqual(('alpha', ('Japan, USA', 'En,Ja')), harvest.game_of('Alpha (Japan, USA) (En,Ja) [b]'))
+        self.assertNotEqual(harvest.game_of('Tetris (USA)'), harvest.game_of('Tetris (USA) (Unl)'))
+        self.assertEqual(('alpha redux', ()), harvest.game_of('Alpha Redux [Hack by X]'))
+        dat = 'game (\n\tname "Alpha Redux [Hack by X]"\n\trom ( name "Alpha (USA).sfc" size 1 crc 0000000A )\n)\n'
+        self.assertEqual({'0000000A': 'Alpha (USA)'}, harvest.rom_stems(dat))
+
+    def test_derive(self):
+        entries = {'1': ('Alpha (USA)', 1), '2': ('Alpha (USA) (Rev 1)', 1),
+                   '3': ('Alpha (USA) (Beta)', 1), '4': ('Alpha (Japan) (Proto)', 1),
+                   '5': ('Alpha Redux [Hack by X]', 1), '6': ('Gamma (Europe)', 1),
+                   '7': ('Delta (USA) (Demo)', 1)}
+        index = {'1': [], '2': [['support-texture', 'us', 'f/2']], '3': [], '4': [], '5': [], '6': [],
+                 '7': [['support-texture', 'us', 'f/7']]}
+        stems = {'5': 'Alpha (USA)'}
+        # Alpha (USA) has none of its own: its revision lends it one; the beta too. The hack
+        # names Alpha (USA), which has none, so it is matched by its own name: nothing.
+        self.assertEqual({'1': '2', '3': '2'}, harvest.derive(index, entries, stems))
+        index['1'] = [['support-texture', 'us', 'f/1']]
+        self.assertEqual({'3': '1', '5': '1'}, harvest.derive(index, entries, stems))
+
 
 class RunTests(unittest.TestCase):
     """A whole run against a stand-in ScreenScraper: index, shared files, quota, resume."""
@@ -324,6 +347,7 @@ game (
         self.lookups = []
         self.downloads = []
         self.quota_after = None
+        self.missing = {'00000004'}
         game = {'medias': [
             {'type': 'support-texture', 'region': 'us', 'url': 'https://ss/m?devid=x&media=tex-us'},
             {'type': 'support-texture', 'region': 'jp', 'url': 'https://ss/m?devid=x&media=tex-jp'},
@@ -339,7 +363,7 @@ game (
             self.lookups.append(params['crc'])
             if self.quota_after is not None and len(self.lookups) > self.quota_after:
                 raise harvest.QuotaSpent('spent')
-            return None if params['crc'] == '00000004' else {'response': {'jeu': game}}
+            return None if params['crc'] in self.missing else {'response': {'jeu': game}}
 
         def fetch(url, tries=3):
             self.downloads.append(url)
@@ -406,6 +430,57 @@ game (
             self.assertEqual([], self.lookups)
             self.run_harvest(out, dat, '--retry-missing')
             self.assertEqual(['00000004'], self.lookups)
+
+    def test_a_dump_without_a_label_wears_its_games(self):
+        import json
+        dat_text = self.DAT + '''game (
+\tname "Alpha (USA) (Beta)"
+\trom ( name "Alpha (USA) (Beta).sfc" size 1024 crc 00000005 )
+)
+game (
+\tname "Alpha (Japan) (Proto)"
+\trom ( name "Alpha (Japan) (Proto).sfc" size 1024 crc 00000006 )
+)
+game (
+\tname "Alpha Redux [Hack by X]"
+\trom ( name "Alpha (USA).sfc" size 1024 crc 00000007 )
+)
+'''
+        self.missing = {'00000004', '00000005', '00000006', '00000007'}
+        with tempfile.TemporaryDirectory() as d:
+            out, dat = Path(d) / 'set', Path(d) / 'snes.dat'
+            dat.write_text(dat_text)
+            self.run_harvest(out, dat)
+            index = json.loads((out / 'SNES.json').read_text())
+            self.assertEqual(index['00000001'], index['00000005'])
+            self.assertEqual(index['00000001'], index['00000007'])
+            self.assertEqual([], index['00000006'])  # no Japanese Alpha to borrow from
+            self.assertEqual([], index['00000004'])
+            self.assertEqual({'00000005': '00000001', '00000007': '00000001'},
+                             json.loads((out / '.state' / 'SNES.derived.json').read_text()))
+            names = json.loads((out / 'SNES.names.json').read_text())
+            self.assertIn('00000005', names)
+
+            # Borrowed labels don't count as answers: asked again, and ScreenScraper's own wins.
+            self.lookups.clear()
+            self.missing = {'00000004', '00000006', '00000007'}
+            self.run_harvest(out, dat, '--retry-missing')
+            self.assertEqual(['00000006', '00000005', '00000007', '00000004'], self.lookups)
+            self.assertEqual({'00000007': '00000001'},
+                             json.loads((out / '.state' / 'SNES.derived.json').read_text()))
+
+            # --retry-after: only the dumps last asked about long enough ago.
+            asked_path = out / '.state' / 'SNES.asked.json'
+            asked = json.loads(asked_path.read_text())
+            self.assertEqual({'00000004', '00000006', '00000007'}, set(asked))
+            asked['00000004'] = '2000-01-01'
+            asked_path.write_text(json.dumps(asked))
+            self.lookups.clear()
+            self.run_harvest(out, dat, '--retry-after', '30')
+            self.assertEqual(['00000004'], self.lookups)
+            self.lookups.clear()
+            self.run_harvest(out, dat, '--retry-after', '30')
+            self.assertEqual([], self.lookups)
 
 
 if __name__ == '__main__':

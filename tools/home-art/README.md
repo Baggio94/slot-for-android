@@ -10,6 +10,10 @@ ScreenScraper, the way slot.'s art set (art.slot-cfw.fyi) is, and published to a
   `[type, region, file]`. Files live under
   `files/`, named by SHA-1, so revisions of one game share them. It paces itself to the account's
   quota and resumes where it stopped.
+  A dump ScreenScraper has no label for wears the label of the game it comes from: a revision,
+  beta, proto, demo or alternate dump that of the same game in the same region, a rom hack that
+  of the dump its dat names (`.state/<PLATFORM>.derived.json` lists them; they are asked again
+  like any dump without a label).
 - `test_harvest.py` proves that the app's `HomeCartLabels.pick` answers the same over the stored
   set as over ScreenScraper's full list, so the shelf shows exactly the labels it shows today.
 - `preview.py` writes a contact sheet, `preview.html`, of a set.
@@ -20,8 +24,9 @@ SS_DEVID=... SS_DEVPASSWORD=... SS_SSID=... SS_SSPASSWORD=... \
 python3 -m unittest tools/home-art/test_harvest.py
 ```
 
-The **Cart art** workflow runs it every six hours with the repository's ScreenScraper secrets,
-starting from the published indexes, and publishes new files and indexes to the R2 bucket
+The **Cart art** workflow runs it once a week with the repository's ScreenScraper secrets,
+starting from the published indexes, asks again about a dump without a label a month after the
+last answer (`--retry-after 30`), and publishes new files and indexes to the R2 bucket
 (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`). A push to
 feature/home-art runs a short trial kept as an artifact.
 

@@ -10,8 +10,9 @@ on:
     branches: [feature/home-art]
     paths: [tools/home-art/**, .github/workflows/home-art.yml]
   schedule:
-    # Every six hours until the set is full, then it only keeps up with new dumps.
-    - cron: '23 1,7,13,19 * * *'
+    # The set is full (2026-11-09): once a week, for new dumps and, a month after
+    # ScreenScraper last had nothing for a dump, to ask it again.
+    - cron: '23 3 * * 1'
   workflow_dispatch:
     inputs:
       platform:
@@ -75,6 +76,7 @@ jobs:
           set -euo pipefail
           test -n "$SS_DEVID" || { echo "::error::ScreenScraper secrets are missing"; exit 1; }
           args=(--platform "$PLATFORM" --out art --max-minutes 290)
+          [ "${{ github.event_name }}" = schedule ] && args+=(--retry-after 30)
           [ -n "$LIMIT" ] && args+=(--limit "$LIMIT")
           [ -n "$MATCH" ] && args+=(--match "$MATCH")
           python3 tools/home-art/harvest.py "${args[@]}"

@@ -395,14 +395,77 @@ def read_dat(platform, local=None, base=LIBRETRO):
         raise
 
 
-def entries_for(platform, local=None, hacks=True):
+def dat_texts(platform, local=None, hacks=True):
+    """The dats to read for a platform: No-Intro's (or a local one), then libretro's rom hacks."""
+    texts = [read_dat(platform, local)]
+    if hacks and not local:
+        texts.append(read_dat(platform, base=LIBRETRO_HACKS))
+    return texts
+
+
+def entries_for(platform, local=None, hacks=True, texts=None):
     """Every dump to ask about: No-Intro's, then libretro's known rom hacks (a No-Intro name
     wins where both list a checksum)."""
-    entries = parse_dat(read_dat(platform, local))
-    if hacks and not local:
-        for crc, entry in parse_dat(read_dat(platform, base=LIBRETRO_HACKS)).items():
+    texts = dat_texts(platform, local, hacks) if texts is None else texts
+    entries = parse_dat(texts[0])
+    for text in texts[1:]:
+        for crc, entry in parse_dat(text).items():
             entries.setdefault(crc, entry)
     return entries
+
+
+# --------------------------------------------------------------- parents ---
+
+def rom_stems(text):
+    """CRC32 -> the dump's file name without its extension. A rom hack's dat names there the
+    game it was made from: its file keeps the original's No-Intro name."""
+    out = {}
+    for rom in re.finditer(r'^\s*rom\s*\((.*)\)\s*$', text, re.M):
+        line = rom.group(1)
+        file = re.search(r'\bname\s+"([^"]+)"', line)
+        crc = re.search(r'\bcrc\s+([0-9A-Fa-f]{8})\b', re.sub(r'"[^"]*"', '""', line))
+        if file and crc:
+            out.setdefault(crc.group(1).upper(), re.sub(r'\.[A-Za-z0-9]{1,4}$', '', file.group(1)))
+    return out
+
+
+# A dump's own variations: the same cart, label and all. Anything else in its name (region,
+# languages, Unl, Pirate, a publisher...) tells a different cart.
+VARIANT = re.compile(r'^(Rev [\w.]+|Beta( \d+)?|Proto( \d+)?|Demo( \d+)?|Sample( \d+)?|Alt( \d+)?|'
+                     r'v\d[\w.]*|Debug|Kiosk|Virtual Console|Switch Online|Aftermarket|'
+                     r'\d{4}-\d{2}(-\d{2})?)$', re.I)
+
+
+def game_of(name):
+    """'Alpha (USA) (En,Fr) (Rev 1)' -> ('alpha', ('USA', 'En,Fr')): the cart a dump is of,
+    its name's groups but its variations."""
+    groups = tuple(g.strip() for g in re.findall(r'\(([^)]*)\)', name) if not VARIANT.match(g.strip()))
+    title = re.sub(r'\s*(\([^)]*\)|\[[^\]]*\])', '', name).strip().lower()
+    return title, groups
+
+
+def derive(index, entries, stems):
+    """Labels for the dumps ScreenScraper has none for, from the game they come from: a
+    revision, beta, proto, demo or alternate dump wears the label of the same game in the same
+    region (its plainest labelled dump), a rom hack the label of the dump its dat names.
+    CRC -> the CRC whose label it wears. Only dumps asked and answered with nothing."""
+    labelled = sorted((crc for crc, e in index.items() if e and crc in entries),
+                      key=lambda c: (len(entries[c][0]), entries[c][0]))
+    by_name = {entries[c][0]: c for c in labelled}
+    by_game = {}
+    for crc in labelled:
+        by_game.setdefault(game_of(entries[crc][0]), crc)
+    out = {}
+    for crc, (name, _) in entries.items():
+        if index.get(crc) != []:
+            continue
+        stem = stems.get(crc)
+        parent = by_name.get(stem) if stem and stem != name else None
+        if parent is None:
+            parent = by_game.get(game_of(name))
+        if parent is not None and parent != crc:
+            out[crc] = parent
+    return out
 
 
 # ------------------------------------------------------------------ main ---
@@ -421,6 +484,8 @@ def main():
                     help='store ScreenScraper\'s PNGs as they are instead of as lossless WebP')
     ap.add_argument('--retry-missing', action='store_true',
                     help='ask again for dumps recorded with no label')
+    ap.add_argument('--retry-after', type=float, metavar='DAYS',
+                    help='ask again for dumps last answered with no label more than DAYS ago')
     args = ap.parse_args()
 
     chosen = sorted(PLATFORMS) if args.platform == 'all' else [args.platform]
@@ -446,6 +511,9 @@ def main():
     lock = threading.Lock()
     stop = threading.Event()
     n = {'asked': 0, 'labelled': 0, 'none': 0, 'failed': 0, 'skipped': 0, 'downloads': 0}
+    today = time.strftime('%Y-%m-%d', time.gmtime())
+    cutoff = (time.strftime('%Y-%m-%d', time.gmtime(time.time() - args.retry_after * 86400))
+              if args.retry_after is not None else None)
 
     def media_file(m):
         key = public(m['url'])
@@ -461,7 +529,7 @@ def main():
                 urls[key] = rel
         return rel
 
-    def work(platform, index, crc, name, size):
+    def work(platform, index, asked, crc, name, size):
         with lock:
             if stop.is_set():
                 return
@@ -493,6 +561,10 @@ def main():
             return
         with lock:
             index[crc] = entry
+            if entry:
+                asked.pop(crc, None)
+            else:
+                asked[crc] = today
             n['labelled' if entry else 'none'] += 1
             done = n['labelled'] + n['none']
             if done % 50 == 0:
@@ -504,14 +576,32 @@ def main():
     try:
         for platform in chosen:
             # A stopped run still rewrites every platform's names (no lookups).
-            entries = entries_for(platform, args.dat, hacks=not args.no_hacks)
+            texts = dat_texts(platform, args.dat, hacks=not args.no_hacks)
+            entries = entries_for(platform, texts=texts)
+            stems = {}
+            for text in texts:
+                for crc, stem in rom_stems(text).items():
+                    stems.setdefault(crc, stem)
             index_path = out / f'{platform}.json'
             index = load(index_path, {})
+            # Labels borrowed from the game a dump comes from: ScreenScraper's own answer for
+            # these was none, so they are asked again with --retry-missing and derived anew.
+            derived_path = out / '.state' / f'{platform}.derived.json'
+            for crc in load(derived_path, {}):
+                if crc in index:
+                    index[crc] = []
+            # When each dump without a label was last asked about, for --retry-after.
+            asked_path = out / '.state' / f'{platform}.asked.json'
+            asked = load(asked_path, {})
+            for crc, entry in index.items():
+                if not entry:
+                    asked.setdefault(crc, today)
             jobs = []
             for crc, (name, size) in sorted(entries.items(), key=lambda kv: kv[1][0]):
                 if match and not match.search(name):
                     continue
-                if crc in index and (index[crc] or not args.retry_missing):
+                if crc in index and (index[crc] or not (
+                        args.retry_missing or (cutoff and asked.get(crc, today) < cutoff))):
                     n['skipped'] += 1
                     continue
                 jobs.append((crc, name, size))
@@ -521,9 +611,17 @@ def main():
                     for job in jobs:
                         if stop.is_set():
                             break
-                        pool.submit(work, platform, index, *job)
+                        pool.submit(work, platform, index, asked, *job)
             finally:
+                derived = derive(index, entries, stems)
+                for crc, parent in derived.items():
+                    index[crc] = index[parent]
                 write_json(index_path, index)
+                write_json(derived_path, derived)
+                write_json(asked_path, {crc: d for crc, d in asked.items() if crc in index and not index[crc]
+                                        or crc in derived})
+                print(f'{platform}: {len(derived)} dumps without a label of their own wear the '
+                      f'label of the game they come from', flush=True)
                 # The names Cart Studio searches: every dump the set has art for.
                 write_json(out / f'{platform}.names.json',
                            {crc: entries[crc][0] for crc in index if index[crc] and crc in entries})
