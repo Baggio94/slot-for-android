@@ -59,6 +59,31 @@ pub fn draw_footer_with_ink(
     printed(out_w() as f32 - margin - clock.w as f32,clock,out);
 }
 
+/// Settings > Status Bar (Siham 2026-11-09): the battery and the clock on
+/// the bar (`top` false) or level with the top icons, read like a phone's:
+/// the clock on the left, the battery on the right. When the icons share the
+/// line, the apps follow the clock and Wi-Fi/Bluetooth precede the battery.
+/// Answers how wide the clock and the battery are, for the icons' places.
+pub fn draw_status_clock(
+    top: bool,
+    battery: Option<Battery>, percent: Printed, bolt: Option<TexId>,
+    clock: Printed, ink: [u8; 3], out: &mut Vec<Draw>,
+) -> (f32, f32) {
+    let line = if top { STATUS_TOP_Y } else { FOOTER_Y };
+    let y = line + (HINT_H as f32 - GAUGE_H) / 2.0;
+    let c = [ink[0] as f32 / 255.0, ink[1] as f32 / 255.0, ink[2] as f32 / 255.0, 1.0];
+    let margin = footer_margin(out_w());
+    // Like a phone, wherever the line is: the clock on the left, the
+    // battery on the right (Siham 2026-11-09).
+    let gauge = crate::battery::status_gauge_width(battery, percent);
+    crate::battery::draw_status_gauge(out_w() as f32 - margin, y, battery, percent, bolt, c, out);
+    draw_printed(margin, line, clock, out);
+    (clock.w as f32, gauge)
+}
+
+/// The top icons' line (Android's status row, 12 px down, 24 high).
+const STATUS_TOP_Y: f32 = 12.0;
+
 pub(crate) fn draw_printed(x: f32, y: f32, p: Printed, out: &mut Vec<Draw>) {
     if p.w == 0 {
         return;

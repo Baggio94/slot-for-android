@@ -35,4 +35,37 @@ fakelottes by hunterk, after crt-lottes by Timothy Lottes. No curvature.
 crt-aperture by EasyMode. GPL.
 Source: https://github.com/libretro/glsl-shaders/tree/master/crt
 
+More shaders for the NES, Super Nintendo and Mega Drive, one pass each,
+preset defaults:
+crt-easymode by EasyMode. GPL.
+crt-hyllian by Hyllian, copyright (C) 2011-2020. MIT License.
+SABR v3.0 by Joshua Street. GNU General Public License version 2 or later.
+Super Eagle by the DOSBox Team, after Derek Liauw Kie Fa's 2xSaI. GPL.
+Changes: its two passes (2x picture, then bilinear stretch) drawn as one,
+colours compared exactly instead of as one packed number.
+xBR-lv2 by Hyllian, copyright (C) 2011-2016. MIT License.
+Source: https://github.com/libretro/glsl-shaders/tree/master/crt, .../xbr,
+.../sabr and .../eagle
+
+Dot Matrix (Game Boy): Gameboy Color Dot Matrix v0.9 by LuigiRa, after
+Harlequin's Gameboy shader. GNU General Public License version 3.
+Its background texture is the shader's dmg-bg, scaled to 1024x1024.
+Changes: its three passes drawn as one; the DMG preset's colours are the
+player's Game Boy palette (its lightest shade behind, a dark one for the dots).
+Source: https://github.com/libretro/glsl-shaders/tree/master/handheld
+
+Dither Blending (Mega Drive): Genesis Dithering and Pseudo Transparency
+(GDAPT) v1.3 by Sp00kyFox, 2014, from the libretro shader collection.
+Its two passes run on the picture before it is drawn, MODE 0, PWR 2, STEPS 1.
+Used in slot. with the author's permission.
+Source: https://github.com/libretro/glsl-shaders/tree/master/dithering
+
+LCD Effect (Game Boy, Game Boy Color, Game Boy Advance): Pixel Transparency
+and Sunlight Shimmer v3.0, copyright (C) Matt Akins. Adapted for slot. with
+the author's permission. Author defaults; its cache passes (shadow, film
+noise, light field) are computed in place, in one pass after the LCD shader.
+Source: https://github.com/mattakins/Pixel_Transparency
+
+Simpletex paper texture: slot.'s own paper texture, drawn again since 2.2.
+
 slot itself is GNU General Public License version 3 or later, which these licenses permit.

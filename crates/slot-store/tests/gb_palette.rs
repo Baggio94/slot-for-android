@@ -54,3 +54,11 @@ fn prev_walks_back_and_wraps() {
         assert_eq!(p.next().prev(), p);
     }
 }
+
+#[test]
+fn dot_matrix_colours_follow_the_palette_list() {
+    let game_com = GbPalette::parse(slot_store::TWB64_GAME_COM).unwrap();
+    assert_eq!(game_com.dot_matrix(), [0xA7BF6B, 0x0F4F2F, 0x000000]);
+    assert_eq!(GbPalette::parse("Grayscale").unwrap().dot_matrix(), [0xFFFFFF, 0x525252, 0x000000]);
+    assert_eq!(GbPalette::parse("DMG Green").unwrap().dot_matrix()[0], 0x8BA44A);
+}

@@ -148,6 +148,35 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeWallpaperTarget(
         .map_or(std::ptr::null_mut(), |s| s.into_raw())
 }
 
+/// The Screenshot hotkey's PNG, once (null when none is waiting).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeTakeScreenshot(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jni::sys::jbyteArray {
+    let png = SCREENSHOT.lock().unwrap_or_else(|e| e.into_inner()).take();
+    png.and_then(|bytes| env.byte_array_from_slice(&bytes).ok())
+        .map_or(std::ptr::null_mut(), |array| array.into_raw())
+}
+
+/// Cart Studio's pictures for the cart it edits: the real label PNG and the
+/// logo PNG, either null when Android found none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeStudioArt(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, uri: JString<'_>,
+    real: jni::objects::JByteArray<'_>, logo: jni::objects::JByteArray<'_>, kind: jint, name: JString<'_>,
+) {
+    let Ok(uri) = env.get_string(&uri).map(|s| s.to_string_lossy().into_owned()) else { return };
+    let name = env.get_string(&name).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut bytes = |array: &jni::objects::JByteArray<'_>| -> Option<Vec<u8>> {
+        if array.is_null() { return None; }
+        env.convert_byte_array(array).ok().filter(|b| b.len() <= 16 * 1024 * 1024)
+    };
+    let real = bytes(&real);
+    let logo = bytes(&logo);
+    INPUT.lock().unwrap_or_else(|e| e.into_inner())
+        .push_back(Input::StudioArt { uri, real, logo, kind, name });
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReloadCartLabel(
     mut env: JNIEnv<'_>, _this: JObject<'_>, uri: JString<'_>,
@@ -272,6 +301,16 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetShelfStatus(
     } else { 0 };
     INPUT.lock().unwrap_or_else(|poison| poison.into_inner())
         .push_back(Input::ShelfStatus(safe));
+}
+
+/// The scan's progress, at most ten times a second: carts read of how many,
+/// or carts found so far with a total of 0 while the folders are listed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetScanProgress(
+    _env: *mut c_void, _activity: *mut c_void, done: i32, total: i32,
+) {
+    INPUT.lock().unwrap_or_else(|poison| poison.into_inner())
+        .push_back(Input::ScanProgress(done.max(0) as u32, total.max(0) as u32));
 }
 
 /// Kotlin resolves the connected Wi-Fi interface and takes a MulticastLock

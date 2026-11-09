@@ -26,9 +26,8 @@
 /android/local.properties
 /android/app/src/main/jniLibs/
 
-# Local Android core build products and temporary pinned Studio checkout.
+# Local Android core build products.
 # The signed APK bundles only the selected packaged assets and native libs.
 /.build/
-/studio-upstream/
 __pycache__/
 /tools/slot-relay/target

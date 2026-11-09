@@ -36,8 +36,12 @@ impl WallpaperPick {
             Self::Random=>"Random".into(),
             Self::Shelf=>"Shelf".into(),
             Self::Default=>"Default".into(),
-            Self::Blur=>"DEFAULT BLUR".into(),
-            Self::File(name)=>name.rsplit_once('.').map(|(a,_)|a).unwrap_or(name).into()
+            Self::Blur=>"Default Blur".into(),
+            // The imported image reads "User", like the other values.
+            Self::File(name)=>match name.rsplit_once('.').map(|(a,_)|a).unwrap_or(name) {
+                stem if stem.eq_ignore_ascii_case("user") => "User".into(),
+                stem => stem.into(),
+            }
         }
     }
 }
@@ -83,6 +87,32 @@ pub enum Blending {
     Mix,
     /// Mix plus the fading trail of an LCD.
     Ghosting,
+}
+
+/// LCD Effect of the Game Boy family: Matt Akins' Pixel Transparency or
+/// Sunlight Shimmer over the shader (Siham 2026-11-09).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LcdEffect {
+    #[default]
+    Off,
+    Transparency,
+    Sunlight,
+}
+
+impl LcdEffect {
+    pub fn step(self, right: bool) -> LcdEffect {
+        const ALL: [LcdEffect; 3] = [LcdEffect::Off, LcdEffect::Transparency, LcdEffect::Sunlight];
+        let at = ALL.iter().position(|b| *b == self).unwrap_or(0);
+        ALL[if right { (at + 1) % 3 } else { (at + 2) % 3 }]
+    }
+    pub fn gpu(self) -> slot_gfx::LcdEffect {
+        match self {
+            LcdEffect::Off => slot_gfx::LcdEffect::Off,
+            LcdEffect::Transparency => slot_gfx::LcdEffect::PixelTransparency,
+            LcdEffect::Sunlight => slot_gfx::LcdEffect::SunlightShimmer,
+        }
+    }
 }
 
 impl Blending {
@@ -241,6 +271,14 @@ pub enum Shader {
     ZfastCrt, CrtGdvTrinitron, CrtGeomDeluxe, CrtPi,
     // Light ones for the weaker GPUs (Siham 2026-11-05).
     Fakelottes, CrtAperture,
+    // Game Boy Dot Matrix, the player's palette (Siham 2026-11-09).
+    DotMatrix,
+    // Five more for NES, Super Nintendo and Mega Drive (Siham 2026-11-09).
+    CrtEasymode,
+    CrtHyllian,
+    Sabr,
+    SuperEagle,
+    XbrLv2,
 }
 impl Shader {
     // Exactly ten GBA RetroArch shaders plus Off, preserving the backward
@@ -255,11 +293,19 @@ impl Shader {
         Self::Off, Self::Lcd3x, Self::Grid, Self::Simpletex,
         Self::ZfastLcd, Self::Lcd1x, Self::LcdGridV2, Self::SharpBilinear, Self::Dot,
     ];
+    /// Game Boy (DMG) only: the GB/GBC list plus Dot Matrix, a shader made
+    /// for the original Game Boy's greens (Siham 2026-11-09).
+    pub const DMG: [Self; 10] = [
+        Self::Off, Self::Lcd3x, Self::Grid, Self::Simpletex,
+        Self::ZfastLcd, Self::Lcd1x, Self::LcdGridV2, Self::SharpBilinear, Self::Dot,
+        Self::DotMatrix,
+    ];
     /// NES / Super Nintendo / Mega Drive: Off, then Siham's CRT list with
     /// zfast-crt first (the default), fakelottes second, crt-aperture third.
-    pub const HOME: [Self; 7] = [
+    pub const HOME: [Self; 12] = [
         Self::Off, Self::ZfastCrt, Self::Fakelottes, Self::CrtAperture,
         Self::CrtGdvTrinitron, Self::CrtGeomDeluxe, Self::CrtPi,
+        Self::CrtEasymode, Self::CrtHyllian, Self::Sabr, Self::SuperEagle, Self::XbrLv2,
     ];
     pub fn effect(self) -> ScreenEffect {
         match self {
@@ -282,6 +328,12 @@ impl Shader {
             Self::CrtPi => ScreenEffect::CrtPi,
             Self::Fakelottes => ScreenEffect::Fakelottes,
             Self::CrtAperture => ScreenEffect::CrtAperture,
+            Self::DotMatrix => ScreenEffect::DotMatrix,
+            Self::CrtEasymode => ScreenEffect::CrtEasymode,
+            Self::CrtHyllian => ScreenEffect::CrtHyllian,
+            Self::Sabr => ScreenEffect::Sabr,
+            Self::SuperEagle => ScreenEffect::SuperEagle,
+            Self::XbrLv2 => ScreenEffect::XbrLv2,
         }
     }
     pub fn includes_gba_color(self) -> bool {
@@ -362,6 +414,19 @@ pub struct Settings {
     pub show_integrations: bool,
     /// Missing legacy field retains original 24h display.
     pub time_format: TimeFormat,
+    /// Clock & Battery at the top of the shelf instead of on the bar.
+    #[serde(default)]
+    pub clock_on_top: bool,
+    /// Wi-Fi, Bluetooth and app icons on the bar instead of at the top.
+    #[serde(default)]
+    pub icons_on_bottom: bool,
+    /// Apps: only the running ones, instead of the stopped ones dimmed.
+    #[serde(default)]
+    pub apps_running_only: bool,
+    /// Cart Studio's library in big carts, one row of two (SELECT), the
+    /// default (Siham 2026-11-09).
+    #[serde(default = "big_carts")]
+    pub cart_studio_big: bool,
     #[serde(default)]
     pub status_opt_in_v2: bool,
     // Slot v1.7 visual settings; independent of saved emulation profiles.
@@ -393,6 +458,17 @@ pub struct Settings {
     pub blending_snes: Blending,
     #[serde(default)]
     pub blending_md: Blending,
+    /// LCD Effect of each Game Boy (Systems > [system] > LCD Effect).
+    #[serde(default)]
+    pub lcd_effect_gba: LcdEffect,
+    #[serde(default)]
+    pub lcd_effect_gbc: LcdEffect,
+    #[serde(default)]
+    pub lcd_effect_gb: LcdEffect,
+    /// Mega Drive: Sp00kyFox's GDAPT blends the dithering games used for
+    /// transparency (Systems > Mega Drive > Dither Blending).
+    #[serde(default)]
+    pub dither_blend_md: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -414,12 +490,16 @@ impl Default for Settings {
             run_ahead_frames: 0,
             show_wifi: false, show_bluetooth: false, show_integrations: false,
             time_format: TimeFormat::TwentyFourHour,
+            clock_on_top: false, icons_on_bottom: false, apps_running_only: false,
+            cart_studio_big: true,
             status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
             show_recents: false, show_titles: false, home_bezel_three_two: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
-            blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off }
+            blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
+            lcd_effect_gba: LcdEffect::Off, lcd_effect_gbc: LcdEffect::Off, lcd_effect_gb: LcdEffect::Off,
+            dither_blend_md: false }
     }
 }
 impl Settings {
@@ -429,6 +509,9 @@ impl Settings {
     pub fn first_install_defaults() -> Self {
         Self {
             wallpaper: WallpaperPick::None,
+            // The clock and battery at the top with the icons, like a phone
+            // (Siham 2026-11-09); upgrades keep theirs on the bar.
+            clock_on_top: true,
             shader_gba: Shader::Lcd3x,
             shader_gbc: Shader::Lcd3x,
             shader_gb: Shader::Lcd3x,
@@ -509,7 +592,7 @@ impl Settings {
                 if !SPEEDS.contains(&s.ff_speed) { s.ff_speed = 2; }
                 if s.shader_gba == Shader::Grid { s.shader_gba = Shader::LcdGridV2; }
                 if !Shader::GBA.contains(&s.shader_gba) { s.shader_gba = Shader::Off; }
-                if !Shader::GB.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
+                if !Shader::DMG.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
                 if !Shader::GB.contains(&s.shader_gbc) { s.shader_gbc = Shader::Off; }
                 for shader in [&mut s.shader_nes, &mut s.shader_snes, &mut s.shader_md] {
                     if !Shader::HOME.contains(shader) { *shader = Shader::ZfastCrt; }
@@ -612,6 +695,21 @@ impl Settings {
         }
     }
 
+    /// The Settings key of a Game Boy's LCD Effect row (66..=68), or the
+    /// Mega Drive's Dither Blending row (69): the row after the shader.
+    pub fn look_key(platform: slot_store::Platform) -> Option<usize> {
+        use slot_store::Platform::*;
+        match platform { Gba => Some(66), Gbc => Some(67), Gb => Some(68), Md => Some(69), _ => None }
+    }
+
+    pub fn lcd_effect_for(&self, platform: slot_store::Platform) -> LcdEffect {
+        use slot_store::Platform::*;
+        match platform {
+            Gba => self.lcd_effect_gba, Gbc => self.lcd_effect_gbc, Gb => self.lcd_effect_gb,
+            _ => LcdEffect::Off,
+        }
+    }
+
     pub fn blending_for(&self, platform: slot_store::Platform) -> Blending {
         use slot_store::Platform::*;
         match platform {
@@ -674,7 +772,7 @@ impl Settings {
         let before = self.clone();
         match key {
             0 => self.shader_gba = self.shader_gba.step(&Shader::GBA, right),
-            1 => self.shader_gb = self.shader_gb.step(&Shader::GB, right),
+            1 => self.shader_gb = self.shader_gb.step(&Shader::DMG, right),
             2 | 22 => self.set_colour_for(slot_store::Platform::Gba,
                 !self.colour_correction_gba),
             23 => self.set_colour_for(slot_store::Platform::Gbc,
@@ -688,6 +786,10 @@ impl Settings {
                 let blending = self.blending_mut(platform);
                 *blending = blending.step(right);
             }
+            66 => self.lcd_effect_gba = self.lcd_effect_gba.step(right),
+            67 => self.lcd_effect_gbc = self.lcd_effect_gbc.step(right),
+            68 => self.lcd_effect_gb = self.lcd_effect_gb.step(right),
+            69 => self.dither_blend_md = !self.dither_blend_md,
             25 => self.step_bezel(slot_store::Platform::Gba,right),
             26 => self.step_bezel(slot_store::Platform::Gbc,right),
             27 => self.step_bezel(slot_store::Platform::Gb,right),
@@ -711,9 +813,23 @@ impl Settings {
             10 => self.show_fps = !self.show_fps,
             11 => self.responsive_loop = !self.responsive_loop,
             12 => self.run_ahead_frames = cycle_u8(self.run_ahead_frames, 2, right),
-            13 => self.show_wifi = !self.show_wifi,
+            // Wi-Fi & Bluetooth: BOTH, WI-FI, BLUETOOTH, OFF.
+            13 => {
+                const RADIOS: [(bool, bool); 4] = [(true, true), (true, false), (false, true), (false, false)];
+                let at = RADIOS.iter().position(|r| *r == (self.show_wifi, self.show_bluetooth)).unwrap_or(3);
+                (self.show_wifi, self.show_bluetooth) = RADIOS[if right { (at + 1) % 4 } else { (at + 3) % 4 }];
+            }
             14 => self.show_bluetooth = !self.show_bluetooth,
-            15 => self.show_integrations = !self.show_integrations,
+            // Apps: ALL, RUNNING, OFF.
+            15 => {
+                const APPS: [(bool, bool); 3] = [(true, false), (true, true), (false, false)];
+                let now = if self.show_integrations { (true, self.apps_running_only) } else { (false, false) };
+                let at = APPS.iter().position(|a| *a == now).unwrap_or(2);
+                (self.show_integrations, self.apps_running_only) =
+                    APPS[if right { (at + 1) % 3 } else { (at + 2) % 3 }];
+            }
+            32 => self.clock_on_top = !self.clock_on_top,
+            33 => self.icons_on_bottom = !self.icons_on_bottom,
             28 => self.time_format = self.time_format.toggle(),
             _ => return false,
         }
@@ -1016,6 +1132,7 @@ mod tests {
         assert_eq!(s.appearance,Appearance::Dark);
         assert_eq!(s.wallpaper_tint,WallpaperTint::Off);
         assert!(!s.show_recents && !s.show_titles);
+        assert!(s.clock_on_top);
         assert!(!s.show_wifi && !s.show_bluetooth && !s.show_integrations);
         // SCREEN: three independent LCD3x selections, no grade, proper bezels
         for platform in [Gba,Gbc,Gb] {
@@ -1164,6 +1281,25 @@ mod tests {
         assert!(Shader::Dot.core_colour(true));
     }
     #[test]
+    fn new_shaders_lcd_effects_and_dither_blending_roundtrip() {
+        assert_eq!(Shader::HOME.len(), 12);
+        assert!(Shader::DMG.contains(&Shader::DotMatrix) && !Shader::GB.contains(&Shader::DotMatrix));
+        let mut s = Settings::default();
+        assert_eq!(s.lcd_effect_for(slot_store::Platform::Gb), LcdEffect::Off);
+        assert!(s.change(68, true) && s.lcd_effect_gb == LcdEffect::Transparency);
+        assert!(s.change(66, false) && s.lcd_effect_gba == LcdEffect::Sunlight);
+        assert!(s.change(69, true) && s.dither_blend_md);
+        s.shader_md = Shader::XbrLv2;
+        s.shader_gb = Shader::DotMatrix;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"xbrlv2\"") && json.contains("\"dotmatrix\"") && json.contains("\"sunlight\""));
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+        // Older settings files have none of these.
+        let old: Settings = serde_json::from_str(r#"{"shader_md":"zfastcrt"}"#).unwrap();
+        assert_eq!((old.lcd_effect_gbc, old.dither_blend_md), (LcdEffect::Off, false));
+        assert_eq!(Settings::look_key(slot_store::Platform::Nes), None);
+    }
+    #[test]
     fn gba_grid_v2_migration_keeps_original_gb_gbc() {
         let root=std::env::temp_dir().join(format!(
             "slot-gba-shader-migration-{}-{}",
@@ -1223,7 +1359,7 @@ mod tests {
     fn screen_gameplay_original_choices_cycle() {
         let mut s = Settings::default();
         s.change(0, false); assert_eq!(s.shader_gba, Shader::Dot);
-        s.change(1, false); assert_eq!(s.shader_gb, Shader::Dot);
+        s.change(1, false); assert_eq!(s.shader_gb, Shader::DotMatrix);
         // 2x wraps left to Off (original Slot 1.8.1), then back to 6x.
         s.change(4, false); assert_eq!(s.ff_speed, 0);
         s.change(4, false); assert_eq!(s.ff_speed, 6);
@@ -1281,11 +1417,36 @@ mod tests {
         let mut s = Settings::default();
         assert!(!s.show_wifi && !s.show_bluetooth && !s.show_integrations);
         assert!(s.status_opt_in_v2);
-        assert!(s.change(13, true) && s.show_wifi);
-        assert!(s.change(14, true) && s.show_bluetooth);
-        assert!(s.change(15, true) && s.show_integrations);
+        assert!(s.change(13, true) && s.show_wifi && s.show_bluetooth);
+        assert!(s.change(15, true) && s.show_integrations && !s.apps_running_only);
         let json = serde_json::to_string(&s).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, s);
+    }
+    #[test]
+    fn status_bar_rows_cycle_their_choices() {
+        let mut s = Settings::default();
+        // Wi-Fi & Bluetooth: OFF > BOTH > WI-FI > BLUETOOTH > OFF.
+        let mut radios = Vec::new();
+        for _ in 0..4 {
+            s.change(13, true);
+            radios.push((s.show_wifi, s.show_bluetooth));
+        }
+        assert_eq!(radios, [(true, true), (true, false), (false, true), (false, false)]);
+        s.change(13, false);
+        assert_eq!((s.show_wifi, s.show_bluetooth), (false, true));
+        // Apps: OFF > ALL > RUNNING > OFF.
+        s.change(15, true);
+        assert!(s.show_integrations && !s.apps_running_only);
+        s.change(15, true);
+        assert!(s.show_integrations && s.apps_running_only);
+        s.change(15, true);
+        assert!(!s.show_integrations && !s.apps_running_only);
+        // Clock & Battery and Icons swap places.
+        assert!(!s.clock_on_top && !s.icons_on_bottom);
+        assert!(s.change(32, true) && s.clock_on_top);
+        assert!(s.change(33, true) && s.icons_on_bottom);
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(restored, s);
     }
     #[test]
@@ -1423,3 +1584,5 @@ mod tests {
         let _=fs::remove_dir_all(&root);
     }
 }
+
+fn big_carts() -> bool { true }

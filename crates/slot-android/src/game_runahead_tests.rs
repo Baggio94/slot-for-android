@@ -142,6 +142,8 @@ fn session(root: &Path, failure: Failure) -> (GameSession, Arc<Mutex<Calls>>) {
         manual_export_prefix: root.join("manual"),
         state: root.join("test.state"),
         retroarch_export: root.join("test.export"),
+        stale_state: None,
+        opening_battery: None,
         gambatte_legacy_export: false,
         ring: StateRing::new(root, Platform::Gba, Core::Mgba, "test"),
         rewind: RewindThread::spawn(REWIND_BYTES),
@@ -166,13 +168,14 @@ fn session(root: &Path, failure: Failure) -> (GameSession, Arc<Mutex<Calls>>) {
         preempt: crate::preemptive::Preempt::default(),
         last_step_timings: FrameStepTimings::default(),
         mgba_flash_runahead_guard: false,
+        kept_flash_save: false,
         sma4_runahead_guard: false,
         solar: None,
         sun_luminance: None,
         sun_auto_minutes: None,
         palette_live: false,
         core_kind: Core::Mgba,
-        pending_undo: None,
+        pending_undo: None, cheat_file: None, cheats: Vec::new(),
         last_sram: Instant::now(),
         battery_writer: None,
         sample_rate: 65536,
@@ -510,9 +513,40 @@ fn pokemon_flash_guard_saves_a_new_game_but_protects_a_complete_save() {
         s[0xFFC..0x1000].copy_from_slice(&7u32.to_le_bytes());
     }
     std::fs::write(&game.save, &complete).unwrap();
-    // An incomplete image must never replace a complete in-game save.
-    assert!(game.save_for_eject(false).is_err());
+    // An incomplete image must never replace a complete in-game save,
+    // and the cart still ejects (issue #103).
+    assert!(game.save_for_eject(false).is_ok());
     assert_eq!(std::fs::read(&game.save).unwrap(), complete);
+}
+
+#[test]
+fn ejecting_without_a_state_after_saving_in_game_retires_the_older_auto_state() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("test.mgba.state-stale.once");
+    let (mut game, _) = session(root.path(), Failure::None);
+    game.stale_state = Some(marker.clone());
+    game.opening_battery = Some(battery_hash(&0u32.to_le_bytes()));
+    // Played without saving in-game: the auto-state is still the newest.
+    assert_eq!(game.save_for_eject(false), Ok(true));
+    assert!(!marker.exists());
+    // Saved in-game (the battery moved on), ejected without a state.
+    assert!(game.advance(ButtonMask::X, true, false));
+    assert_eq!(game.save_for_eject(false), Ok(true));
+    assert!(marker.exists());
+}
+
+#[test]
+fn a_save_state_on_eject_keeps_the_auto_state_current() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("test.mgba.state-stale.once");
+    let (mut game, _) = session(root.path(), Failure::None);
+    game.stale_state = Some(marker.clone());
+    game.opening_battery = Some(battery_hash(&0u32.to_le_bytes()));
+    assert!(game.advance(ButtonMask::X, true, false));
+    // A state written with this battery: nothing is stale afterwards.
+    assert_eq!(game.save_for_eject(true), Ok(true));
+    assert_eq!(game.save_for_eject(false), Ok(true));
+    assert!(!marker.exists());
 }
 
 #[test]
@@ -549,4 +583,27 @@ fn a_game_boy_game_never_sees_port_2() {
     game.set_port2(ButtonMask::B);
     assert!(game.advance(ButtonMask::A, false, false));
     assert_eq!(calls.lock().unwrap().port2_real, vec![0]);
+}
+
+#[test]
+fn empty_pokemon_flash_never_blocks_save_and_eject() {
+    // Issue #103: a save state from before the first in-game save holds an
+    // empty Flash. Save & Eject must still eject, keeping the save on disk.
+    let root = tempfile::tempdir().unwrap();
+    let (mut game, _) = session(root.path(), Failure::None);
+    game.mgba_flash_runahead_guard = true;
+    let mut disk = vec![0u8; 128 * 1024];
+    for i in 0..14usize {
+        let s = &mut disk[i * 4096..(i + 1) * 4096];
+        s[0xFF4..0xFF6].copy_from_slice(&(i as u16).to_le_bytes());
+        s[0xFF8..0xFFC].copy_from_slice(&0x0801_2025u32.to_le_bytes());
+        s[0xFFC..0x1000].copy_from_slice(&7u32.to_le_bytes());
+    }
+    assert_eq!(pokemon_flash_complete_bank_count(&disk), 1);
+    std::fs::write(&game.save, &disk).unwrap();
+    assert!(game.save_for_eject(true).is_ok());
+    assert_eq!(std::fs::read(&game.save).unwrap(), disk, "the in-game save on disk is kept");
+    assert!(game.state.exists(), "the auto-state is still written");
+    assert!(game.take_kept_flash_save());
+    assert!(!game.take_kept_flash_save());
 }

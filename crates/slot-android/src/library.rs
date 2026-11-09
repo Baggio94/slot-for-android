@@ -3,7 +3,6 @@
 use serde::Deserialize;
 use slot_store::{sort_key, Cart, Outline, Platform, ShellChoice, ShellFinish};
 use slot_store::gb::{Class, Header};
-use slot_ui::Finish;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -67,6 +66,87 @@ pub fn next_populated(current: usize, direction: i32, count: &[usize]) -> usize 
     current
 }
 
+/// A cart's automatic shell, as the shelf gives it when Cart Studio names none.
+fn auto_shell(entry: &RomEntry, platform: Platform) -> Option<ShellChoice> {
+    match platform {
+        Platform::Gba => None,
+        // The region's mould, a publisher's, and the game's colour.
+        Platform::Nes | Platform::Snes | Platform::Md => slot_ui::home_shell(
+            platform, entry.title.trim(), &entry.home_region, &entry.home_maker),
+        Platform::Gb | Platform::Gbc => {
+            // Cart Studio and the shelf must resolve the same automatic
+            // per-game shell, even for SAF content URIs and zipped ROMs.
+            // Explicit saved Studio overrides still take precedence below.
+            let detected = entry.gb_cgb_flag
+                .and_then(|flag| u8::try_from(flag).ok())
+                .map(|cgb| {
+                    let header = Header {
+                        title: entry.gb_title.clone(),
+                        code: entry.gb_code.clone(),
+                        japan: entry.gb_japan,
+                        cgb,
+                    };
+                    let material = slot_ui::gb_shell_from_header(&header);
+                    ShellChoice {
+                        outline: if header.class() == Class::ColourOnly {
+                            Outline::Rounded
+                        } else {
+                            Outline::Notched
+                        },
+                        colour: material.colour,
+                        finish: material.finish.stored(),
+                    }
+                });
+            Some(detected.unwrap_or_else(|| {
+                // Legacy indexes continue to render until a background
+                // scan supplies GB header identity, with no ROM writes.
+                let color_only = entry.color_only;
+                ShellChoice {
+                    outline: if color_only { Outline::Rounded } else { Outline::Notched },
+                    colour: match (platform, color_only) {
+                        (_, true) => [0x7c, 0x7a, 0x8a],
+                        (Platform::Gbc, false) => [0x33, 0x30, 0x31],
+                        _ => [0x9a, 0x97, 0x8f],
+                    },
+                    finish: if color_only { ShellFinish::Clear } else { ShellFinish::Solid },
+                }
+            }))
+        }
+    }
+}
+
+/// The shell a cart wears with a Cart Studio choice over its automatic one.
+pub fn chosen_shell(platform: Platform, auto: Option<ShellChoice>, chosen: Option<ShellChoice>) -> Option<ShellChoice> {
+    chosen
+        .map(|mut chosen| {
+            // A Studio colour on a home cart keeps the automatic mould
+            // unless it names one of that system's own.
+            if let Some(auto) = auto.filter(|_| {
+                matches!(platform, Platform::Nes | Platform::Snes | Platform::Md)
+                    && chosen.outline.platform() != Some(platform)
+            }) {
+                chosen.outline = auto.outline;
+            }
+            chosen
+        })
+        .or(auto)
+}
+
+/// The automatic shell of the cart at `uri` in the current library.
+pub fn auto_shell_of(uri: &str) -> Option<ShellChoice> {
+    let state = LIBRARY.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = state.entries.as_ref()?.iter().find(|e| e.uri == uri)?;
+    auto_shell(entry, Platform::parse(&entry.platform)?)
+}
+
+/// Cart Studio saved a shell: the library keeps it for the next rebuild.
+pub fn remember_shell(uri: &str, chosen: Option<ShellChoice>) {
+    let mut state = LIBRARY.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(entry) = state.entries.as_mut().and_then(|e| e.iter_mut().find(|e| e.uri == uri)) {
+        entry.shell_override = chosen.map(|c| c.to_value());
+    }
+}
+
 pub fn carts_by_platform(entries: &[RomEntry]) -> [Vec<Cart>; Platform::ALL.len()] {
     let mut groups: [Vec<Cart>; Platform::ALL.len()] = std::array::from_fn(|_| Vec::new());
     for entry in entries.iter().take(MAX_ROMS) {
@@ -75,69 +155,8 @@ pub fn carts_by_platform(entries: &[RomEntry]) -> [Vec<Cart>; Platform::ALL.len(
         }
         let Some(platform) = Platform::parse(&entry.platform) else { continue };
         let group = platform as usize;
-        let shell = match platform {
-            Platform::Gba => None,
-            // The region's mould, a publisher's, and the game's colour.
-            Platform::Nes | Platform::Snes | Platform::Md => slot_ui::home_shell(
-                platform, entry.title.trim(), &entry.home_region, &entry.home_maker),
-            Platform::Gb | Platform::Gbc => {
-                // Cart Studio and the shelf must resolve the same automatic
-                // per-game shell, even for SAF content URIs and zipped ROMs.
-                // Explicit saved Studio overrides still take precedence below.
-                let detected = entry.gb_cgb_flag
-                    .and_then(|flag| u8::try_from(flag).ok())
-                    .map(|cgb| {
-                        let header = Header {
-                            title: entry.gb_title.clone(),
-                            code: entry.gb_code.clone(),
-                            japan: entry.gb_japan,
-                            cgb,
-                        };
-                        let material = slot_ui::gb_shell_from_header(&header);
-                        ShellChoice {
-                            outline: if header.class() == Class::ColourOnly {
-                                Outline::Rounded
-                            } else {
-                                Outline::Notched
-                            },
-                            colour: material.colour,
-                            finish: match material.finish {
-                                Finish::Solid => ShellFinish::Solid,
-                                Finish::Translucent => ShellFinish::Clear,
-                                Finish::Glitter => ShellFinish::Glitter,
-                            },
-                        }
-                    });
-                Some(detected.unwrap_or_else(|| {
-                    // Legacy indexes continue to render until a background
-                    // scan supplies GB header identity, with no ROM writes.
-                    let color_only = entry.color_only;
-                    ShellChoice {
-                        outline: if color_only { Outline::Rounded } else { Outline::Notched },
-                        colour: match (platform, color_only) {
-                            (_, true) => [0x7c, 0x7a, 0x8a],
-                            (Platform::Gbc, false) => [0x33, 0x30, 0x31],
-                            _ => [0x9a, 0x97, 0x8f],
-                        },
-                        finish: if color_only { ShellFinish::Clear } else { ShellFinish::Solid },
-                    }
-                }))
-            }
-        };
-        let shell = entry.shell_override.as_deref()
-            .and_then(ShellChoice::parse)
-            .map(|mut chosen| {
-                // A Studio colour on a home cart keeps the automatic mould
-                // unless it names one of that system's own.
-                if let Some(auto) = shell.filter(|_| {
-                    matches!(platform, Platform::Nes | Platform::Snes | Platform::Md)
-                        && chosen.outline.platform() != Some(platform)
-                }) {
-                    chosen.outline = auto.outline;
-                }
-                chosen
-            })
-            .or(shell);
+        let shell = chosen_shell(platform, auto_shell(entry, platform),
+            entry.shell_override.as_deref().and_then(ShellChoice::parse));
         groups[group].push(Cart {
             platform,
             stem: entry.title.trim().to_owned(),

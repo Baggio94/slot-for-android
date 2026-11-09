@@ -72,7 +72,7 @@ float dot_weight(vec2 f, vec2 o, float bloom) {
 }
 
 /* GLES2 ports of libretro/glsl-shaders (see licenses/shaders.txt).
-   No recompilation on hot switching: all modes are linked once at startup.
+   One program per mode, built the first time the mode is shown.
    Multi-pass AGB/AGS and textured presets are analytic/native-scale ports
    requiring visual QA before claiming byte-for-byte RetroArch parity. */
 float lcd_integral(float z, bool y) {
@@ -447,6 +447,410 @@ vec3 grid_line(vec2 uv, vec3 c) {
     vec2 edge = (grid_band(at + hp) - grid_band(at - hp))/(2.0*hp);
     return c*(1.0 - 0.75*max(edge.x, edge.y));
 }
+/* LCD Effect: Pixel Transparency / Sunlight Shimmer v3.0 by Matt Akins
+   (Soft grid placement, author defaults), adapted with his permission.
+   Every cache pass of the original (shadow, film noise, light field) is
+   computed in place: same maths, one pass. LCD_FX: 0 off, 1 Pixel
+   Transparency, 2 Sunlight Shimmer, fixed when the program is built. */
+uniform vec2 u_light;      // light position (0..1 over the picture)
+uniform vec2 u_shadow;     // shadow offset in reference pixels (3,3)
+
+float pt_luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+float pt_hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+float pt_paper(vec2 uv) {
+    vec2 p = uv * 0.25 * 512.0;
+    return pt_hash(p) * 0.5 + pt_hash(p * 2.0) * 0.25 + pt_hash(p * 4.0) * 0.125;
+}
+float pt_caster(vec2 cell) {
+    if (any(lessThan(cell, floor(u_pic.xy * u_src + 0.5)))
+        || any(greaterThanEqual(cell, floor(u_pic.zw * u_src + 0.5))))
+        return 1.0; // screen edge shadow
+    return 1.0 - pt_luma(texture2D(u_game, (cell + 0.5) / u_src).rgb);
+}
+float pt_shadow(vec2 native, vec2 r) {
+    float v = pt_caster(floor(native)) * 4.0;
+    v += pt_caster(floor(native - vec2(r.x, 0.0))) * 2.0;
+    v += pt_caster(floor(native + vec2(r.x, 0.0))) * 2.0;
+    v += pt_caster(floor(native - vec2(0.0, r.y))) * 2.0;
+    v += pt_caster(floor(native + vec2(0.0, r.y))) * 2.0;
+    v += pt_caster(floor(native - r));
+    v += pt_caster(floor(native + vec2(r.x, -r.y)));
+    v += pt_caster(floor(native + vec2(-r.x, r.y)));
+    v += pt_caster(floor(native + r));
+    return v / 16.0;
+}
+float sun_smooth(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(pt_hash(i), pt_hash(i + vec2(1.0, 0.0)), f.x),
+               mix(pt_hash(i + vec2(0.0, 1.0)), pt_hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float sun_film(vec2 uv) {
+    vec2 p = uv * 0.6 * 8.0;
+    return sun_smooth(p) * 0.5 + sun_smooth(p * 2.0) * 0.25 + sun_smooth(p * 4.0) * 0.125;
+}
+vec3 sun_qwp(float g) {
+    vec3 t = vec3(0.0); float k;
+    k = cos(0.031415927 * g); t += vec3(0.0, 0.0, 0.026075) * k * k;
+    k = cos(0.028399638 * g); t += vec3(0.141223, 0.0, 0.368894) * k * k;
+    k = cos(0.025874228 * g); t += vec3(0.0, 0.480861, 0.473477) * k * k;
+    k = cos(0.023809524 * g); t += vec3(0.081095, 0.812848, 0.339825) * k * k;
+    k = cos(0.021991149 * g); t += vec3(0.783356, 0.793891, 0.134941) * k * k;
+    k = cos(0.020462441 * g); t += vec3(0.972432, 0.423991, 0.215476) * k * k;
+    k = cos(0.019138570 * g); t += vec3(0.648322, 0.114430, 0.0) * k * k;
+    return t / max(max(t.r, max(t.g, t.b)), 0.001);
+}
+vec3 lcd_effect(vec3 lcd, vec2 uv) {
+#if LCD_FX > 0
+    vec2 out_px = u_rect.zw * u_fbo;          // picture size on screen
+    vec2 texel = 1.0 / out_px;
+    float scale = sqrt(out_px.x / 640.0 * out_px.y / 480.0);
+    vec3 orig = texture2D(u_game, uv).rgb;
+    float bright = pt_luma(orig);
+    float alpha = clamp(0.20 * bright * 2.665, 0.0, 1.0);   // Bright mode, 0.20
+    vec3 bg = vec3(0.48) + (pt_paper(v_uv) - 0.4375) * 0.065;
+    // Drop shadow, 3 px at 640x480, blur 2, opacity 0.5, 9 taps.
+    vec2 off = -u_shadow * scale * texel;
+    vec2 native = (v_uv + off) * u_uv.zw * u_src + u_uv.xy * u_src;
+    vec2 radius = 2.0 * scale * texel * u_uv.zw * u_src;
+    float s = pt_shadow(native, radius) * 0.5;
+    float dz = (1.0 - 0.90) * 0.5;
+    s = smoothstep(0.0, dz, s) * s;
+    bg = mix(bg, bg * 0.2, s);
+    // Neutral backing tint (palette 3), intensity 1.
+    vec3 pal = vec3(0.766, 0.73, 0.763);
+    pal *= 0.675 / max(pal.r, max(pal.g, pal.b));
+    bg = clamp(pal + mix(vec3(-1.0), vec3(1.0), bg), 0.0, 1.0);
+    vec3 c = mix(lcd, bg, alpha);
+#if LCD_FX > 1
+    // Sunlight Shimmer: rainbow through the pixels, then glare on top.
+    float aspect = out_px.x / out_px.y;
+    vec2 to_light = (v_uv - u_light) * vec2(aspect, 1.0);
+    float ang = clamp(length(to_light) * 1.8, 0.0, 1.4);
+    float sr = sin(ang) / 1.5;
+    float g = 275.0 * sqrt(1.0 - sr * sr);
+    g *= 1.0 + (sun_film(vec2(v_uv.x * aspect, v_uv.y)) - 0.4375) * 0.5;
+    vec3 tint = sun_qwp(g) * orig * orig;
+    float strength = 0.15 * mix(0.03, 1.0, bright);
+    if (any(notEqual(c, vec3(0.0)))) {
+        vec3 tinted = c * mix(vec3(1.0), tint, strength);
+        float tl = pt_luma(tinted);
+        if (tl > 0.001) tinted *= pt_luma(c) / tl;
+        c = tinted;
+    }
+#endif
+    c *= mix(vec3(1.0), vec3(0.94, 1.0, 0.865), 1.0);          // polarizer
+    c = clamp(c * (1.0 + 0.05 * pt_luma(c)), 0.0, 1.0);       // highlights
+#if LCD_FX > 1
+    float glare = exp(-dot(to_light, to_light) / (2.0 * 0.25 * 0.25)) * 0.15;
+    c = mix(c, vec3(1.0), clamp(glare, 0.0, 0.85));
+#endif
+    c += (pt_hash(floor(v_uv * out_px) + 0.5) - 0.5) / 255.0;  // dither
+    return c;
+#else
+    return lcd;
+#endif
+}
+/* Dot Matrix after LuigiRa's Gameboy Color Dot Matrix v0.9 (GPL-3),
+   itself after Harlequin's Gameboy shader (GPL-3): its three passes (dots,
+   gap blending, shadow and background) evaluated per screen pixel, DMG
+   preset. The core draws the player's palette, so a shade's darkness is
+   read between the palette's lightest and darkest colours (u_dm_lum); the
+   dots take the palette's dark shade and the background its lightest. */
+uniform sampler2D u_dm_bg;
+uniform vec3 u_dm_fg;
+uniform vec3 u_dm_bgc;
+uniform vec2 u_dm_lum;
+vec2 dm_out() { return u_rect.zw * u_fbo; }
+float dm_alpha(vec2 px) {
+    vec2 tp = (u_uv.xy + px / dm_out() * u_uv.zw) * u_src;
+    vec2 cell = floor(tp);
+    vec2 s = dm_out() / (u_uv.zw * u_src);
+    vec2 inside = fract(tp) * s;
+    float on = (inside.x >= 1.0 && inside.y >= 1.0) ? 1.0 : 0.0;
+    float l = dot(texture2D(u_game, (cell + 0.5) / u_src).rgb, vec3(0.299, 0.587, 0.114));
+    float dark = clamp((u_dm_lum.x - l) / max(u_dm_lum.x - u_dm_lum.y, 0.001), 0.0, 1.0);
+    return clamp((dark + on * 0.10) * on, 0.0, 1.0);
+}
+float dm_blend(vec2 px) {
+    float a = dm_alpha(px);
+    if (a > 0.0) return a;                      // blending mode 0: gaps only
+    float n = dm_alpha(px + vec2(0.0, 1.0)) + dm_alpha(px - vec2(0.0, 1.0))
+            + dm_alpha(px + vec2(1.0, 0.0)) + dm_alpha(px - vec2(1.0, 0.0));
+    return clamp(n * 0.25, 0.0, 1.0);
+}
+vec3 dot_matrix() {
+    vec2 px = floor(v_uv * dm_out()) + 0.5;
+    const float contrast = 0.8, light = 0.8, opacity = 0.9;
+    vec3 col = mix(u_dm_fg, vec3(dot(u_dm_fg, vec3(0.299, 0.587, 0.114))), 0.8);
+    float fa = dm_blend(px);
+    float sa = dm_blend(px - vec2(1.0)) * contrast * 0.5;
+    vec3 bg = texture2D(u_dm_bg, v_uv).rgb;
+    bg = clamp(u_dm_bgc + mix(vec3(-1.0), vec3(1.0), bg), 0.0, 1.0);
+    vec3 o = col * sa + bg * (1.0 - sa);
+    return col * fa * (1.0 - fa * fa * contrast) + o * (light - fa * contrast * opacity);
+}
+/* Home console shaders (GLSL ES 1.00 ports, one pass each):
+   crt-easymode (EasyMode, GPL), crt-hyllian (Hyllian, MIT),
+   SABR v3.0 (Joshua Street, GPL-2+), Super Eagle (DOSBox
+   Team / Derek Liauw Kie Fa, GPL) and xBR-lv2 (Hyllian, MIT), from
+   libretro/glsl-shaders, preset defaults. All single pass.            */
+#define HPI 3.141592653589
+vec3 hs(vec2 uv) { return texture2D(u_game, uv).rgb; }
+vec2 h_out() { return u_rect.zw * u_fbo; }   // picture size in screen pixels
+
+/* crt-easymode, ENABLE_LANCZOS path. */
+float em_curve(float x, float sharp) {
+    float s = step(0.5, x);
+    float c = 0.5 - sqrt(0.25 - (x - s) * (x - s)) * sign(0.5 - x);
+    return mix(x, c, sharp);
+}
+vec3 em_tex(vec2 c) { vec3 t = hs(c); return t * t; }   // dilate 1.0
+vec3 em_row(vec2 co, vec2 dx, vec4 k) {
+    vec3 a = em_tex(co - dx), b = em_tex(co), c = em_tex(co + dx), d = em_tex(co + 2.0 * dx);
+    vec3 col = a * k.x + b * k.y + c * k.z + d * k.w;
+    return clamp(col, min(b, c), max(b, c));
+}
+vec3 crt_easymode(vec2 uv) {
+    vec2 dx = vec2(1.0 / u_src.x, 0.0), dy = vec2(0.0, 1.0 / u_src.y);
+    vec2 pc = uv * u_src - 0.5;
+    vec2 tc = (floor(pc) + 0.5) / u_src;
+    vec2 dist = fract(pc);
+    float cx = em_curve(dist.x, 0.25);
+    vec4 k = HPI * vec4(1.0 + cx, cx, 1.0 - cx, 2.0 - cx);
+    k = max(abs(k), 1e-5);
+    k = 2.0 * sin(k) * sin(k * 0.5) / (k * k);
+    k /= dot(k, vec4(1.0));
+    vec3 col = em_row(tc, dx, k), col2 = em_row(tc + dy, dx, k);
+    col = mix(col, col2, em_curve(dist.y, 1.0));
+    col = pow(col, vec3(1.0));                     // GAMMA_INPUT 2 / (DILATION + 1)
+    float luma = dot(vec3(0.2126, 0.7152, 0.0722), col);
+    float bright = (max(col.r, max(col.g, col.b)) + luma) * 0.5;
+    float sbright = clamp(bright, 0.35, 0.65);
+    float sbeam = clamp(bright * 1.5, 1.5, 1.5);
+    float sw = 1.0 - pow(cos(uv.y * 2.0 * HPI * u_src.y) * 0.5 + 0.5, sbeam);
+    float m = 1.0 - 0.3;
+    float dot_no = mod(floor(v_uv.x * h_out().x), 3.0);
+    vec3 mw = dot_no < 0.5 ? vec3(1.0, m, m) : (dot_no < 1.5 ? vec3(m, 1.0, m) : vec3(m, m, 1.0));
+    if (u_src.y >= 400.0) sw = 1.0;
+    col2 = col;
+    col *= sw;
+    col = mix(col, col2, sbright);
+    col *= mw;
+    col = pow(col, vec3(1.0 / 1.8));
+    return col * 1.2;
+}
+
+/* crt-hyllian, defaults (BP 0, Catmull-Rom, phosphor layout 4). */
+vec4 hy_in(vec2 c) { return pow(texture2D(u_game, c), vec4(2.4)); }
+vec3 crt_hyllian(vec2 uv) {
+    const float B = 0.0, C = 0.5;
+    mat4 invX = mat4((-B - 6.0*C)/6.0, (12.0 - 9.0*B - 6.0*C)/6.0, -(12.0 - 9.0*B - 6.0*C)/6.0, (B + 6.0*C)/6.0,
+                     (3.0*B + 12.0*C)/6.0, (-18.0 + 12.0*B + 6.0*C)/6.0, (18.0 - 15.0*B - 12.0*C)/6.0, -C,
+                     (-3.0*B - 6.0*C)/6.0, 0.0, (3.0*B + 6.0*C)/6.0, 0.0,
+                     B/6.0, (6.0 - 2.0*B)/6.0, B/6.0, 0.0);
+    vec4 prof = vec4(0.58, 0.86, 1.0, 1.25);
+    vec2 dx = vec2(1.0 / u_src.x, 0.0), dy = vec2(0.0, 1.0 / u_src.y);
+    vec2 pc = uv * u_src + vec2(-0.5, 0.5);
+    vec2 tc = (floor(pc) + 0.5) / u_src;
+    vec2 fp = fract(pc);
+    vec4 c00 = hy_in(tc - dx - dy), c01 = hy_in(tc - dy), c02 = hy_in(tc + dx - dy), c03 = hy_in(tc + 2.0*dx - dy);
+    vec4 c10 = hy_in(tc - dx), c11 = hy_in(tc), c12 = hy_in(tc + dx), c13 = hy_in(tc + 2.0*dx);
+    vec4 lobes = vec4(fp.x*fp.x*fp.x, fp.x*fp.x, fp.x, 1.0);
+    vec4 w = invX * lobes;
+    vec4 color0 = mat4(c00, c01, c02, c03) * w;
+    vec4 color1 = mat4(c10, c11, c12, c13) * w;
+    color0 = clamp(color0, min(c01, c02), max(c01, c02));
+    color1 = clamp(color1, min(c11, c12), max(c11, c12));
+    vec4 lum0 = mix(vec4(prof.y), vec4(prof.z), color0);
+    vec4 lum1 = mix(vec4(prof.y), vec4(prof.z), color1);
+    vec4 d0 = 4.0 * prof.x * fp.y / (lum0 + 0.0000001);
+    vec4 d1 = 4.0 * prof.x * (1.0 - fp.y) / (lum1 + 0.0000001);
+    d0 = exp(-d0 * d0);
+    d1 = exp(-d1 * d1);
+    vec3 col = (prof.w * (color0 * d0 + color1 * d1)).rgb;
+    float off = 1.0 - 0.5;
+    col *= mix(vec3(1.0, 1.0, off), vec3(off, off, 1.0), floor(mod(gl_FragCoord.x, 2.0)));
+    return pow(max(col, vec3(0.0)), vec3(1.0 / 2.2));
+}
+
+/* SABR v3.0 */
+const vec4 sAi = vec4(1.0, -1.0, -1.0, 1.0);
+const vec4 sB45 = vec4(1.0, 1.0, -1.0, -1.0), sC45 = vec4(1.5, 0.5, -0.5, 0.5);
+const vec4 sB30 = vec4(0.5, 2.0, -0.5, -2.0), sC30 = vec4(1.0, 1.0, -0.5, 0.0);
+const vec4 sB60 = vec4(2.0, 0.5, -2.0, -0.5), sC60 = vec4(2.0, 0.0, -1.0, 0.5);
+const vec4 sM45 = vec4(0.4), sM30 = vec4(0.2, 0.4, 0.2, 0.4), sM60 = vec4(0.4, 0.2, 0.4, 0.2), sMs = vec4(0.2);
+const vec3 slum = vec3(0.21, 0.72, 0.07);
+bvec4 s_and(bvec4 a, bvec4 b) { return bvec4(a.x && b.x, a.y && b.y, a.z && b.z, a.w && b.w); }
+bvec4 s_or(bvec4 a, bvec4 b) { return bvec4(a.x || b.x, a.y || b.y, a.z || b.z, a.w || b.w); }
+vec4 s_lum(vec3 a, vec3 b, vec3 c, vec3 d) { return vec4(dot(slum, a), dot(slum, b), dot(slum, c), dot(slum, d)); }
+bvec4 s_eq(vec4 a, vec4 b) { return lessThan(abs(a - b), vec4(0.32)); }
+vec4 s_wd(vec4 a, vec4 b, vec4 c, vec4 d, vec4 e, vec4 f, vec4 g, vec4 h) {
+    return abs(a - b) + abs(a - c) + abs(d - e) + abs(d - f) + 4.0 * abs(g - h);
+}
+float s_cdf(vec3 a, vec3 b) { vec3 d = abs(a - b); return d.r + d.g + d.b; }
+vec3 sabr(vec2 uv) {
+    float x = 1.0 / u_src.x, y = 1.0 / u_src.y;
+    vec2 tc = uv * vec2(1.0004, 1.0);
+    vec3 P1 = hs(tc + vec2(-x, -2.0*y)), P2 = hs(tc + vec2(0.0, -2.0*y)), P3 = hs(tc + vec2(x, -2.0*y));
+    vec3 P6 = hs(tc + vec2(-x, -y)), P7 = hs(tc + vec2(0.0, -y)), P8 = hs(tc + vec2(x, -y));
+    vec3 P11 = hs(tc + vec2(-x, 0.0)), P12 = hs(tc), P13 = hs(tc + vec2(x, 0.0));
+    vec3 P16 = hs(tc + vec2(-x, y)), P17 = hs(tc + vec2(0.0, y)), P18 = hs(tc + vec2(x, y));
+    vec3 P21 = hs(tc + vec2(-x, 2.0*y)), P22 = hs(tc + vec2(0.0, 2.0*y)), P23 = hs(tc + vec2(x, 2.0*y));
+    vec3 P5 = hs(tc + vec2(-2.0*x, -y)), P10 = hs(tc + vec2(-2.0*x, 0.0)), P15 = hs(tc + vec2(-2.0*x, y));
+    vec3 P9 = hs(tc + vec2(2.0*x, -y)), P14 = hs(tc + vec2(2.0*x, 0.0)), P19 = hs(tc + vec2(2.0*x, y));
+    vec4 p7 = s_lum(P7, P11, P17, P13), p8 = s_lum(P8, P6, P16, P18);
+    vec4 p11 = p7.yzwx, p12 = s_lum(P12, P12, P12, P12), p13 = p7.wxyz;
+    vec4 p14 = s_lum(P14, P2, P10, P22), p16 = p8.zwxy, p17 = p7.zwxy, p18 = p8.wxyz;
+    vec4 p19 = s_lum(P19, P3, P5, P21), p22 = p14.wxyz, p23 = s_lum(P23, P9, P1, P15);
+    vec2 fp = fract(tc * u_src);
+    vec4 ma45 = smoothstep(sC45 - sM45, sC45 + sM45, sAi * fp.y + sB45 * fp.x);
+    vec4 ma30 = smoothstep(sC30 - sM30, sC30 + sM30, sAi * fp.y + sB30 * fp.x);
+    vec4 ma60 = smoothstep(sC60 - sM60, sC60 + sM60, sAi * fp.y + sB60 * fp.x);
+    vec4 marn = smoothstep(sC45 - sM45 + sMs, sC45 + sM45 + sMs, sAi * fp.y + sB45 * fp.x);
+    vec4 e45 = s_wd(p12, p8, p16, p18, p22, p14, p17, p13);
+    vec4 econt = s_wd(p17, p11, p23, p13, p7, p19, p12, p18);
+    vec4 e30 = abs(p13 - p16), e60 = abs(p8 - p17);
+    bvec4 r45_1 = s_and(notEqual(p12, p13), notEqual(p12, p17));
+    bvec4 r45_2 = s_and(not(s_eq(p13, p7)), not(s_eq(p13, p8)));
+    bvec4 r45_3 = s_and(not(s_eq(p17, p11)), not(s_eq(p17, p16)));
+    bvec4 r45_4 = s_and(s_eq(p12, p18), s_or(s_and(not(s_eq(p13, p14)), not(s_eq(p13, p19))),
+                                             s_and(not(s_eq(p17, p22)), not(s_eq(p17, p23)))));
+    bvec4 r45_5 = s_or(s_eq(p12, p16), s_eq(p12, p8));
+    bvec4 r45 = s_and(r45_1, s_or(s_or(s_or(r45_2, r45_3), r45_4), r45_5));
+    bvec4 r30 = s_and(notEqual(p12, p16), notEqual(p11, p16));
+    bvec4 r60 = s_and(notEqual(p12, p8), notEqual(p7, p8));
+    bvec4 edr45 = s_and(lessThan(e45, econt), r45);
+    bvec4 edrrn = lessThanEqual(e45, econt);
+    bvec4 edr30 = s_and(lessThanEqual(2.0 * e30, e60), r30);
+    bvec4 edr60 = s_and(lessThanEqual(2.0 * e60, e30), r60);
+    vec4 f45 = vec4(s_and(s_and(not(edr30), not(edr60)), edr45));
+    vec4 f30 = vec4(s_and(s_and(edr45, not(edr60)), edr30));
+    vec4 f60 = vec4(s_and(s_and(edr45, not(edr30)), edr60));
+    vec4 f36 = vec4(s_and(s_and(edr60, edr30), edr45));
+    vec4 frn = vec4(s_and(not(edr45), edrrn));
+    vec4 px = step(abs(p12 - p17), abs(p12 - p13));
+    vec4 mac = f36 * max(ma30, ma60) + f30 * ma30 + f60 * ma60 + f45 * ma45 + frn * marn;
+    vec3 r1 = P12;
+    r1 = mix(r1, mix(P13, P17, px.x), mac.x);
+    r1 = mix(r1, mix(P7, P13, px.y), mac.y);
+    r1 = mix(r1, mix(P11, P7, px.z), mac.z);
+    r1 = mix(r1, mix(P17, P11, px.w), mac.w);
+    vec3 r2 = P12;
+    r2 = mix(r2, mix(P17, P11, px.w), mac.w);
+    r2 = mix(r2, mix(P11, P7, px.z), mac.z);
+    r2 = mix(r2, mix(P7, P13, px.y), mac.y);
+    r2 = mix(r2, mix(P13, P17, px.x), mac.x);
+    return mix(r1, r2, step(s_cdf(P12, r1), s_cdf(P12, r2)));
+}
+
+/* Super Eagle: the 2x picture, read nearest (the preset's stock pass).
+   Colours compare exactly (vec3 equality) instead of upstream's packed
+   float, which mediump GPUs would round. */
+bool se(vec3 a, vec3 b) { return all(equal(a, b)); }
+float se_r(vec3 a, vec3 b, vec3 c, vec3 d) {
+    float x = 0.0, y = 0.0, r = 0.0;
+    if (se(a, c)) x += 1.0; else if (se(b, c)) y += 1.0;
+    if (se(a, d)) x += 1.0; else if (se(b, d)) y += 1.0;
+    if (x <= 1.0) r += 1.0;
+    if (y <= 1.0) r -= 1.0;
+    return r;
+}
+vec3 super_eagle(vec2 uv) {
+    float dx = 1.0 / u_src.x, dy = 1.0 / u_src.y;
+    vec2 fp = fract(uv * u_src);
+    vec3 C0 = hs(uv + vec2(-dx, -dy)), C1 = hs(uv + vec2(-dx, 0.0)), C2 = hs(uv + vec2(dx, -dy));
+    vec3 D3 = hs(uv + vec2(2.0*dx, -dy)), C3 = hs(uv + vec2(-dx, 0.0)), C4 = hs(uv);
+    vec3 C5 = hs(uv + vec2(dx, 0.0)), D4 = hs(uv + vec2(2.0*dx, 0.0)), C6 = hs(uv + vec2(-dx, dy));
+    vec3 C7 = hs(uv + vec2(0.0, dy)), C8 = hs(uv + vec2(dx, dy)), D5 = hs(uv + vec2(2.0*dx, dy));
+    vec3 D0 = hs(uv + vec2(-dx, 2.0*dy)), D1 = hs(uv + vec2(0.0, 2.0*dy)), D2 = hs(uv + vec2(dx, 2.0*dy));
+    vec3 p00, p10, p01, p11;
+    if (!se(C4, C8)) {
+        if (se(C7, C5)) {
+            p01 = C7; p10 = C7;
+            p00 = (se(C6, C7) || se(C5, C2)) ? 0.25*(3.0*C7 + C4) : 0.5*(C4 + C5);
+            p11 = (se(C5, D4) || se(C7, D1)) ? 0.25*(3.0*C7 + C8) : 0.5*(C7 + C8);
+        } else {
+            p11 = 0.125*(6.0*C8 + C7 + C5);
+            p00 = 0.125*(6.0*C4 + C7 + C5);
+            p10 = 0.125*(6.0*C7 + C4 + C8);
+            p01 = 0.125*(6.0*C5 + C4 + C8);
+        }
+    } else {
+        if (!se(C7, C5)) {
+            p11 = C4; p00 = C4;
+            p01 = (se(C1, C4) || se(C8, D5)) ? 0.25*(3.0*C4 + C5) : 0.5*(C4 + C5);
+            p10 = (se(C8, D2) || se(C3, C4)) ? 0.25*(3.0*C4 + C7) : 0.5*(C7 + C8);
+        } else {
+            float r = se_r(C5, C4, C6, D1) + se_r(C5, C4, C3, C1) + se_r(C5, C4, D2, D5) + se_r(C5, C4, C2, D4);
+            if (r > 0.0) { p01 = C7; p10 = C7; p00 = 0.5*(C4 + C5); p11 = p00; }
+            else if (r < 0.0) { p11 = C4; p00 = C4; p01 = 0.5*(C4 + C5); p10 = p01; }
+            else { p11 = C4; p00 = C4; p01 = C7; p10 = C7; }
+        }
+    }
+    return (fp.x < 0.5) ? (fp.y < 0.5 ? p00 : p10) : (fp.y < 0.5 ? p01 : p11);
+}
+
+/* xBR-lv2 (XBR_SCALE 3, small details off, no smooth tips). */
+const vec3 xw = vec3(14.352, 28.176, 5.472);
+vec4 x_df(vec4 a, vec4 b) { return abs(a - b); }
+vec4 x_diff(vec4 a, vec4 b) { return vec4(notEqual(a, b)); }
+vec4 x_eq(vec4 a, vec4 b) { return step(x_df(a, b), vec4(15.0)); }
+vec4 x_neq(vec4 a, vec4 b) { return vec4(1.0) - x_eq(a, b); }
+vec4 x_wd(vec4 a, vec4 b, vec4 c, vec4 d, vec4 e, vec4 f, vec4 g, vec4 h) {
+    return x_df(a,b) + x_df(a,c) + x_df(d,e) + x_df(d,f) + 4.0*x_df(g,h);
+}
+vec3 xbr_lv2(vec2 uv) {
+    float dx = 1.0 / u_src.x, dy = 1.0 / u_src.y;
+    vec2 fp = fract(uv * u_src);
+    vec3 A1 = hs(uv + vec2(-dx, -2.0*dy)), B1 = hs(uv + vec2(0.0, -2.0*dy)), C1 = hs(uv + vec2(dx, -2.0*dy));
+    vec3 A = hs(uv + vec2(-dx, -dy)), B = hs(uv + vec2(0.0, -dy)), C = hs(uv + vec2(dx, -dy));
+    vec3 D = hs(uv + vec2(-dx, 0.0)), E = hs(uv), F = hs(uv + vec2(dx, 0.0));
+    vec3 G = hs(uv + vec2(-dx, dy)), H = hs(uv + vec2(0.0, dy)), I = hs(uv + vec2(dx, dy));
+    vec3 G5 = hs(uv + vec2(-dx, 2.0*dy)), H5 = hs(uv + vec2(0.0, 2.0*dy)), I5 = hs(uv + vec2(dx, 2.0*dy));
+    vec3 A0 = hs(uv + vec2(-2.0*dx, -dy)), D0 = hs(uv + vec2(-2.0*dx, 0.0)), G0 = hs(uv + vec2(-2.0*dx, dy));
+    vec3 C4 = hs(uv + vec2(2.0*dx, -dy)), F4 = hs(uv + vec2(2.0*dx, 0.0)), I4 = hs(uv + vec2(2.0*dx, dy));
+    vec4 b = vec4(dot(B, xw), dot(D, xw), dot(H, xw), dot(F, xw));
+    vec4 c = vec4(dot(C, xw), dot(A, xw), dot(G, xw), dot(I, xw));
+    vec4 d = b.yzwx, e = vec4(dot(E, xw)), f = b.wxyz, g = c.zwxy, h = b.zwxy, i = c.wxyz;
+    vec4 i4 = vec4(dot(I4, xw), dot(C1, xw), dot(A0, xw), dot(G5, xw));
+    vec4 i5 = vec4(dot(I5, xw), dot(C4, xw), dot(A1, xw), dot(G0, xw));
+    vec4 h5 = vec4(dot(H5, xw), dot(F4, xw), dot(B1, xw), dot(D0, xw));
+    vec4 f4 = h5.yzwx;
+    const vec4 Ao = vec4(1.0, -1.0, -1.0, 1.0), Bo = vec4(1.0, 1.0, -1.0, -1.0), Co = vec4(1.5, 0.5, -0.5, 0.5);
+    const vec4 Bx = vec4(0.5, 2.0, -0.5, -2.0), Cx = vec4(1.0, 1.0, -0.5, 0.0);
+    const vec4 By = vec4(2.0, 0.5, -2.0, -0.5), Cy = vec4(2.0, 0.0, -1.0, 0.5);
+    vec4 delta = vec4(1.0 / 3.0), delta_l = vec4(0.5 / 3.0, 1.0 / 3.0, 0.5 / 3.0, 1.0 / 3.0), delta_u = delta_l.yxwz;
+    vec4 fx = Ao * fp.y + Bo * fp.x, fx_l = Ao * fp.y + Bx * fp.x, fx_u = Ao * fp.y + By * fp.x;
+    vec4 irlv0 = x_diff(e, f) * x_diff(e, h);
+    vec4 irlv1 = irlv0 * (x_neq(f, b) * x_neq(f, c) + x_neq(h, d) * x_neq(h, g)
+        + x_eq(e, i) * (x_neq(f, f4) * x_neq(f, i4) + x_neq(h, h5) * x_neq(h, i5)) + x_eq(e, g) + x_eq(e, c));
+    vec4 irlv2l = x_diff(e, g) * x_diff(d, g);
+    vec4 irlv2u = x_diff(e, c) * x_diff(b, c);
+    vec4 fx45 = clamp((fx + delta - Co) / (2.0 * delta), 0.0, 1.0);
+    vec4 fx30 = clamp((fx_l + delta_l - Cx) / (2.0 * delta_l), 0.0, 1.0);
+    vec4 fx60 = clamp((fx_u + delta_u - Cy) / (2.0 * delta_u), 0.0, 1.0);
+    vec4 wd1 = x_wd(e, c, g, i, h5, f4, h, f);
+    vec4 wd2 = x_wd(h, d, i5, f, i4, b, e, i);
+    vec4 edr = step(wd1 + vec4(0.1), wd2) * step(vec4(0.5), irlv1);
+    vec4 edr_l = step(2.0 * x_df(f, g), x_df(h, c)) * irlv2l * edr;
+    vec4 edr_u = step(2.0 * x_df(h, c), x_df(f, g)) * irlv2u * edr;
+    fx45 = edr * fx45; fx30 = edr_l * fx30; fx60 = edr_u * fx60;
+    vec4 px = step(x_df(e, f), x_df(e, h));
+    vec4 mx = max(max(fx30, fx60), fx45);
+    vec3 r1 = E;
+    r1 = mix(r1, mix(H, F, px.x), mx.x);
+    r1 = mix(r1, mix(B, D, px.z), mx.z);
+    vec3 r2 = E;
+    r2 = mix(r2, mix(F, B, px.y), mx.y);
+    r2 = mix(r2, mix(D, H, px.w), mx.w);
+    return mix(r1, r2, step(s_cdf(E, r1), s_cdf(E, r2)));
+}
 void main() {
     vec2 uv = u_uv.xy + v_uv * u_uv.zw;
     vec2 f = fract(uv * u_src);
@@ -465,6 +869,18 @@ void main() {
         // Outside the picture (a home console's side bands at Integer or
         // Original Ratio): black, as RetroArch, never the edge texel smeared.
         c = vec3(0.0);
+    } else if (u_mode > 23.5) {
+        c = xbr_lv2(uv);
+    } else if (u_mode > 22.5) {
+        c = super_eagle(uv);
+    } else if (u_mode > 21.5) {
+        c = sabr(uv);
+    } else if (u_mode > 20.5) {
+        c = crt_hyllian(uv);
+    } else if (u_mode > 19.5) {
+        c = crt_easymode(uv);
+    } else if (u_mode > 18.5) {
+        c = dot_matrix();
     } else if (u_mode > 17.5) {
         c = crt_aperture(uv);
     } else if (u_mode > 16.5) {
@@ -590,6 +1006,7 @@ void main() {
         vec3 xfactors = (4.0 + sin(angle.x + offsets)) / 5.0;
         c *= yfactor * xfactors;
     }
+    if (inside) c = lcd_effect(c, uv);
     // These two RetroArch presets already contain GBA Color. Never
     // unintentionally apply the global correction twice.
     if (u_colour_correct > 0.5 && inside &&

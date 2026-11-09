@@ -29,7 +29,8 @@ internal object AutoCartLabels {
     private const val MAX_LABEL = 2 * 1024 * 1024
     // Bigger batches one second apart (Siham 2026-11-04: scraping too slow).
     private const val MAX_ATTEMPTS = 48
-    private const val MAX_SAVED = 24
+    /** Carts whose own labels are fetched side by side. */
+    private const val PREFETCH = 12
     private const val NEXT_BATCH_MS = 1_000L
     private val safeArtPath = Regex("[a-zA-Z0-9_./-]+")
     private val pngSignature = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
@@ -46,25 +47,86 @@ internal object AutoCartLabels {
 
     private fun reschedule(pending: List<CartStudioCatalog.Rom>,
                            shouldContinue: () -> Boolean): Boolean {
-        if (!shouldContinue() || !retry.pending(INDEX_KEY)) return false
+        if (!shouldContinue()) return false
         val remaining = pending.filter { retry.pending(it.uri) }
         if (remaining.isEmpty()) return false
         val now = android.os.SystemClock.elapsedRealtime()
         batchDelayMs = maxOf(NEXT_BATCH_MS,
-            retry.waitMs(INDEX_KEY, now),
             retry.nextDelayMs(remaining.map { it.uri }, now))
             .coerceAtMost(180_000L)
         Log.i(TAG, "Pending automatic labels: ${remaining.size}; next pass in ${batchDelayMs}ms")
         return true
     }
 
-    private fun indexFailure(pending: List<CartStudioCatalog.Rom>,
-                             shouldContinue: () -> Boolean, reason: String): Boolean {
-        if (!shouldContinue()) return false // Pauses aren't failed attempts.
-        val allowed = retry.transient(INDEX_KEY, android.os.SystemClock.elapsedRealtime())
-        Log.w(TAG, "Official art index temporarily unavailable: $reason; " +
-            if (allowed) "retry scheduled" else "retry budget exhausted until app restart")
-        return allowed && reschedule(pending, shouldContinue)
+    /** slot.'s older art set's index (art.slot-cfw.fyi), now only asked
+     *  for the carts our own set doesn't hold; null when it can't be had. */
+    private fun loadOfficialIndex(context: Context, shouldContinue: () -> Boolean): JSONObject? {
+        fun failed(reason: String): JSONObject? {
+            Log.w(TAG, "Official art index temporarily unavailable: $reason")
+            return null
+        }
+        val indexBytes = try {
+            val response = CartStudioArtProxy(context).intercept("index.json")
+            if (response.statusCode != 200)
+                return failed("HTTP ${response.statusCode}")
+            response.data.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                while (true) {
+                    if (!shouldContinue()) return null
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    if (output.size() + n > MAX_INDEX) {
+                        return failed("index exceeds size limit")
+                    }
+                    output.write(buffer, 0, n)
+                }
+                output.toByteArray()
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "Official art index request failed", error)
+            return failed(error.javaClass.simpleName)
+        }
+        val index = try { JSONObject(String(indexBytes, Charsets.UTF_8)) }
+            catch (error: Exception) {
+                Log.w(TAG, "Official art index could not be parsed", error)
+                return failed("invalid JSON")
+            }
+        return index
+    }
+
+    /** Three low-priority threads: our own set has no quota, and the carousel
+     *  keeps the device's attention. */
+    private val workers = java.util.concurrent.Executors.newFixedThreadPool(3) { task ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            task.run()
+        }, "slot-gb-labels").apply { isDaemon = true }
+    }
+
+    /** The carts' label scans from our own set, as PNG: a cart is left out
+     *  when it couldn't be asked (the pass asks again), null when the set
+     *  doesn't hold one. */
+    private fun prefetch(context: Context, roms: List<CartStudioCatalog.Rom>,
+                         shouldContinue: () -> Boolean): Map<String, ByteArray?> {
+        val jobs = roms.map { rom ->
+            rom.uri to workers.submit<Pair<Boolean, ByteArray?>> {
+                if (!shouldContinue()) return@submit false to null
+                try {
+                    val crc = CartStudioCatalog.cached(context, rom)
+                        ?: CartStudioCatalog.identify(context, rom)
+                    true to SlotArtSet.scanPng(context, rom.platform, crc.hex)
+                } catch (error: Exception) {
+                    false to null
+                }
+            }
+        }
+        val out = HashMap<String, ByteArray?>()
+        for ((uri, job) in jobs) {
+            val (asked, bytes) = try { job.get() } catch (_: Exception) { false to null }
+            if (asked) out[uri] = bytes
+        }
+        return out
     }
 
     /** Returns true if more bounded foreground work is pending, including retries. */
@@ -88,43 +150,28 @@ internal object AutoCartLabels {
         AutoCartLabelDiagnostics.start(checked, checked + pending.size, savedTotal)
 
         val now = android.os.SystemClock.elapsedRealtime()
-        if (!retry.ready(INDEX_KEY, now)) return reschedule(pending, shouldContinue)
         val due = pending.filter { retry.ready(it.uri, now) }
         if (due.isEmpty()) return reschedule(pending, shouldContinue)
 
-        // The same official cache, index, matching and PNG conversion as 1.2.1.
-        // The only new behavior is how failed attempts are classified/scheduled.
-        val indexBytes = try {
-            val response = CartStudioArtProxy(context).intercept("index.json")
-            if (response.statusCode != 200)
-                return indexFailure(pending, shouldContinue, "HTTP ${response.statusCode}")
-            response.data.use { input ->
-                val output = ByteArrayOutputStream()
-                val buffer = ByteArray(16 * 1024)
-                while (true) {
-                    if (!shouldContinue()) return false
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    if (output.size() + n > MAX_INDEX) {
-                        return indexFailure(pending, shouldContinue, "index exceeds size limit")
-                    }
-                    output.write(buffer, 0, n)
-                }
-                output.toByteArray()
+        // Our own art set (art.slot-android.app) answers first. slot.'s older
+        // set is a fallback: its index is fetched the first time a cart isn't
+        // in ours, so an outage there never holds back the labels we have.
+        var indexTried = false
+        var cachedIndex: JSONObject? = null
+        fun officialIndex(): JSONObject? {
+            if (indexTried) return cachedIndex
+            indexTried = true
+            if (!retry.ready(INDEX_KEY, android.os.SystemClock.elapsedRealtime())) return null
+            val loaded = loadOfficialIndex(context, shouldContinue)
+            cachedIndex = loaded
+            if (loaded != null) {
+                retry.reset(INDEX_KEY)
+                Log.i(TAG, "Official art index ready: CRC entries=${loaded.length()}")
+            } else if (shouldContinue()) {
+                retry.transient(INDEX_KEY, android.os.SystemClock.elapsedRealtime())
             }
-        } catch (error: Exception) {
-            Log.w(TAG, "Official art index request failed", error)
-            return indexFailure(pending, shouldContinue, error.javaClass.simpleName)
+            return loaded
         }
-        val index = try { JSONObject(String(indexBytes, Charsets.UTF_8)) }
-            catch (error: Exception) {
-                Log.w(TAG, "Official art index could not be parsed", error)
-                return indexFailure(pending, shouldContinue, "invalid JSON")
-            }
-        retry.reset(INDEX_KEY)
-        // Index success clears its temporary outage budget; future batches
-        // still use the same official index/cache and can check connectivity.
-        Log.i(TAG, "Official art index ready: CRC entries=${index.length()}")
 
         val art = CartStudioArtProxy(context)
         val dats = HashMap<String, OfficialArtMatcher.Catalog?>()
@@ -133,14 +180,24 @@ internal object AutoCartLabels {
         var fetched = 0
         var notFound = 0
         var errors = 0
-        for (rom in due) {
-            if (!shouldContinue() || attempted >= MAX_ATTEMPTS || saved >= MAX_SAVED) break
+        // Only the carts our own set doesn't hold are bounded per pass: it has
+        // no quota, so every label it holds comes in one pass.
+        val pre = HashMap<String, ByteArray?>()
+        var prefetchedUntil = 0
+        for ((i, rom) in due.withIndex()) {
+            if (!shouldContinue() || attempted >= MAX_ATTEMPTS) break
             val target = CartLabelPaths.file(context.filesDir, rom.uri)
             if (target.exists()) {
                 retry.finished(rom.uri)
                 continue
             }
-            attempted++
+            if (i >= prefetchedUntil) {
+                // The next few carts' labels from our own set, side by side.
+                prefetchedUntil = minOf(due.size, i + PREFETCH)
+                pre.clear()
+                pre.putAll(prefetch(context, due.subList(i, prefetchedUntil), shouldContinue))
+                if (!shouldContinue()) break
+            }
             var outcome = "NOT_FOUND"
             try {
                 val crc = CartStudioCatalog.cached(context, rom)
@@ -149,55 +206,71 @@ internal object AutoCartLabels {
                     outcome = "INTERRUPTED"
                     break
                 }
-                val direct = OfficialArtResolver.artPath(index, rom.platform, crc.hex)
-                // Kotlin getOrPut() re-invokes the initializer when it returns
-                // null. Preserve null failures within THIS pass explicitly,
-                // to avoid repeated 9s+12s DAT timeouts on each of 16 carts.
-                if (direct == null && !dats.containsKey(rom.platform)) {
-                    dats[rom.platform] = OfficialDatSource.load(
-                        context, rom.platform, shouldContinue)
+                // slot. for Android's own art set first (art.slot-android.app),
+                // then slot.'s, matched as before.
+                var bytes: ByteArray? = if (pre.containsKey(rom.uri)) pre[rom.uri] else try {
+                    SlotArtSet.scanPng(context, rom.platform, crc.hex)
+                } catch (error: Exception) {
+                    Log.w(TAG, "Own art set lookup failed; trying slot.'s", error)
+                    null
                 }
-                if (!shouldContinue()) {
-                    outcome = "INTERRUPTED"
-                    break
-                }
-                val dat = if (direct != null) null else dats[rom.platform]
-                if (direct == null && dat == null) {
-                    outcome = "DAT_UNAVAILABLE"
-                    continue
-                }
-                val resolved = OfficialArtResolver.match(rom, crc, index, dat)
-                val path = resolved?.let {
-                    OfficialArtResolver.artPath(index, rom.platform, it)
-                } ?: continue // Verified official no-match: session-terminal.
-                val response = art.intercept(path)
-                if (response.statusCode != 200) {
-                    outcome = when (response.statusCode) {
-                        404 -> "NOT_FOUND"
-                        else -> "NETWORK_ERROR"
+                if (bytes == null) {
+                    attempted++
+                    val index = officialIndex()
+                    if (index == null) {
+                        outcome = if (shouldContinue()) "NETWORK_ERROR" else "INTERRUPTED"
+                        continue
                     }
-                    errors++
-                    continue
-                }
-                outcome = "NETWORK_ERROR" // Partial reads are retryable.
-                val bytes = response.data.use { input ->
-                    val out = ByteArrayOutputStream()
-                    val buffer = ByteArray(16 * 1024)
-                    while (true) {
-                        if (!shouldContinue()) break
-                        val n = input.read(buffer)
-                        if (n < 0) break
-                        if (out.size() + n > MAX_SOURCE) break
-                        out.write(buffer, 0, n)
+                    val direct = OfficialArtResolver.artPath(index, rom.platform, crc.hex)
+                    // Kotlin getOrPut() re-invokes the initializer when it returns
+                    // null. Preserve null failures within THIS pass explicitly,
+                    // to avoid repeated 9s+12s DAT timeouts on each of 16 carts.
+                    if (direct == null && !dats.containsKey(rom.platform)) {
+                        dats[rom.platform] = OfficialDatSource.load(
+                            context, rom.platform, shouldContinue)
                     }
-                    out.toByteArray()
-                }
-                if (!shouldContinue()) {
-                    outcome = "INTERRUPTED"
-                    break
+                    if (!shouldContinue()) {
+                        outcome = "INTERRUPTED"
+                        break
+                    }
+                    val dat = if (direct != null) null else dats[rom.platform]
+                    if (direct == null && dat == null) {
+                        outcome = "DAT_UNAVAILABLE"
+                        continue
+                    }
+                    val resolved = OfficialArtResolver.match(rom, crc, index, dat)
+                    val path = resolved?.let {
+                        OfficialArtResolver.artPath(index, rom.platform, it)
+                    } ?: continue // Verified official no-match: session-terminal.
+                    val response = art.intercept(path)
+                    if (response.statusCode != 200) {
+                        outcome = when (response.statusCode) {
+                            404 -> "NOT_FOUND"
+                            else -> "NETWORK_ERROR"
+                        }
+                        errors++
+                        continue
+                    }
+                    outcome = "NETWORK_ERROR" // Partial reads are retryable.
+                    bytes = response.data.use { input ->
+                        val out = ByteArrayOutputStream()
+                        val buffer = ByteArray(16 * 1024)
+                        while (true) {
+                            if (!shouldContinue()) break
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            if (out.size() + n > MAX_SOURCE) break
+                            out.write(buffer, 0, n)
+                        }
+                        out.toByteArray()
+                    }
+                    if (!shouldContinue()) {
+                        outcome = "INTERRUPTED"
+                        break
+                    }
                 }
                 fetched++
-                if (bytes.size !in 8..MAX_SOURCE ||
+                if (bytes == null || bytes.size !in 8..MAX_SOURCE ||
                     !bytes.copyOfRange(0, 8).contentEquals(pngSignature)) {
                     outcome = "INVALID_ARTWORK"
                     continue
@@ -275,6 +348,70 @@ internal object AutoCartLabels {
         return reschedule(pending, shouldContinue)
     }
 
+    /** Cart Studio's pictures for a Game Boy family cart: the real label as
+     *  the automatic labels save it (the own art set first, slot.'s second)
+     *  and the art set's logo. Either is null when none is found.
+     *  The dump is matched as the automatic labels match it: by its CRC, then
+     *  by its name in the No-Intro list when the CRC is unknown (a revision,
+     *  a patched or a slightly different dump), and that game's logo is the
+     *  one shown (Siham 2026-11-09: Advance Wars had a label but neither). */
+    internal fun studioArt(context: Context, rom: CartStudioCatalog.Rom): Pair<ByteArray?, ByteArray?> {
+        val crc = CartStudioCatalog.cached(context, rom) ?: CartStudioCatalog.identify(context, rom)
+        val proxy = CartStudioArtProxy(context)
+        val index: JSONObject? = try {
+            val indexed = proxy.intercept("index.json")
+            if (indexed.statusCode == 200)
+                JSONObject(String(indexed.data.use { it.readBytes() }, Charsets.UTF_8)) else null
+        } catch (error: Exception) {
+            Log.w(TAG, "slot.'s art set index unavailable for Cart Studio", error); null
+        }
+        fun ownScan(dump: String): ByteArray? = try {
+            SlotArtSet.scanPng(context, rom.platform, dump)
+        } catch (error: Exception) {
+            Log.w(TAG, "Own art set lookup failed for Cart Studio", error); null
+        }
+        fun theirScan(dump: String): ByteArray? = try {
+            index?.let { OfficialArtResolver.artPath(it, rom.platform, dump) }?.let { path ->
+                val image = proxy.intercept(path)
+                if (image.statusCode == 200) image.data.use { it.readBytes() } else null
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "slot.'s art set lookup failed for Cart Studio", error); null
+        }
+        fun hasArt(dump: String): Boolean = try {
+            SlotArtSet.entries(context, rom.platform, dump)?.any { it.type == "support-texture" } == true ||
+                index?.let { OfficialArtResolver.artPath(it, rom.platform, dump) } != null
+        } catch (_: Exception) { false }
+        // The CRC first, then the name, as the shelf's labels.
+        var dump = crc.hex
+        var scan = ownScan(dump) ?: theirScan(dump)
+        if (scan == null) {
+            val named = try {
+                OfficialDatSource.load(context, rom.platform) { true }?.let { dat ->
+                    OfficialArtMatcher.fromCatalog(rom.platform, rom.title, crc.head, dat) { candidate ->
+                        candidate.takeIf(::hasArt)
+                    }
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "No-Intro name match failed for Cart Studio", error); null
+            }
+            if (named != null) {
+                dump = named
+                scan = ownScan(named) ?: theirScan(named)
+            }
+        }
+        val real = scan?.takeIf { it.size >= 8 && it.copyOfRange(0, 8).contentEquals(pngSignature) }
+            ?.let { cropPhysicalCartLabel(it, rom.platform) }
+        val logo = try {
+            listOf(crc.hex, dump).distinct().firstNotNullOfOrNull { candidate ->
+                SlotArtSet.entries(context, rom.platform, candidate)?.firstOrNull { it.type == "wheel" }
+            }?.let { SlotArtSet.file(context, it) }?.let(SlotArtSet::toPng)
+        } catch (error: Exception) {
+            Log.w(TAG, "Logo lookup failed for Cart Studio", error); null
+        }
+        return real to logo
+    }
+
     internal fun validArtworkPath(path: String, platform: String): Boolean =
         path.isNotBlank() && path.length <= 150 &&
             safeArtPath.matches(path) && !path.startsWith("/") &&
@@ -291,7 +428,7 @@ internal object AutoCartLabels {
      * Saved at up to 3x the label well (3x panels) within the bounded decode
      * budget: no custom/Studio label or ROM bytes are changed.
      */
-    private fun cropPhysicalCartLabel(bytes: ByteArray, platform: String): ByteArray? {
+    internal fun cropPhysicalCartLabel(bytes: ByteArray, platform: String): ByteArray? {
         val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
         val w = opts.outWidth

@@ -1,12 +1,14 @@
 package fyi.slot.konkr
 
 import android.app.Activity
+import android.content.ContentValues
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.AudioTimestamp
 import android.media.PlaybackParams
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.Build
@@ -19,6 +21,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.content.IntentFilter
+import android.provider.MediaStore
 import android.util.AtomicFile
 import java.security.MessageDigest
 import java.io.File
@@ -88,7 +91,7 @@ class MainActivity : Activity() {
         private const val WALLPAPER_REQUEST = 4706
         private val WALLPAPER_TARGET_NAME = Regex("[A-Za-z]{1,16}\\.png")
         private const val LABEL_REQUEST = 4707
-        private const val CART_STUDIO_REQUEST = 4708
+        private const val STUDIO_PICTURE_REQUEST = 4712
         private const val PREFS = "slot_konkr_library"
         private const val ROM_ROOT = "rom_root_uri"
         private const val BIOS_ROOT = "bios_root_uri"
@@ -136,6 +139,7 @@ class MainActivity : Activity() {
     external fun nativeEmulationDiagnostics(): String?
     external fun nativeShelfIndicatorFlags(): Int
     external fun nativeSetShelfStatus(code: Int)
+    external fun nativeSetScanProgress(done: Int, total: Int)
     external fun nativeSetLibrary(json: String): Int
     external fun nativeConfigure(dataDir: String, libraryDir: String,
         isRetroidPocketClassic: Boolean)
@@ -171,11 +175,13 @@ class MainActivity : Activity() {
     external fun nativeRaStopReady(): Boolean
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
     external fun nativePollUiAction(): Int
+    external fun nativeTakeScreenshot(): ByteArray?
     external fun nativeUpdateStatus(status: Int, installed: String, available: String, automatic: Boolean)
     external fun nativeReloadVisualAssets()
     external fun nativePollCartLabelUri(): String?
     external fun nativeWallpaperTarget(): String?
     external fun nativeReloadCartLabel(uri: String)
+    external fun nativeStudioArt(uri: String, real: ByteArray?, logo: ByteArray?, kind: Int, name: String)
     external fun nativePollCartSfx(): Int
     external fun nativePollRumbleStrength(): Int
     external fun nativeSensorsAvailable(mask: Int)
@@ -197,7 +203,6 @@ class MainActivity : Activity() {
     external fun nativeLinkActive(): Boolean
 
     private var pendingCartLabelUri: String? = null
-    private var pendingCartStudioUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
     private data class PendingLibraryIndex(
@@ -209,6 +214,7 @@ class MainActivity : Activity() {
     private lateinit var libraryRefreshIndicator: SlotLibraryRefreshIndicator
     private lateinit var autoLabelIndicator: SlotAutoLabelIndicator
     private val raLoginWorker = Executors.newSingleThreadExecutor()
+    private val screenshotWorker = Executors.newSingleThreadExecutor()
     private val raSmartWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "slot-ra-smart-cache").apply { priority = Thread.MIN_PRIORITY }
     }
@@ -219,6 +225,8 @@ class MainActivity : Activity() {
         Thread(task, "slot-kpa-rom-warm").apply { priority = Thread.MIN_PRIORITY }
     }
     private val warmedCandidate = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    /** Cart Studio's art requests: one cart's real label and logo at a time. */
+    private val studioArtWorker = Executors.newSingleThreadExecutor()
     private val autoLabelsWorker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "slot-kpa-auto-labels").apply { priority = Thread.MIN_PRIORITY }
     }
@@ -228,7 +236,6 @@ class MainActivity : Activity() {
     @Volatile private var autoLabelsChainBase = -1
     /** Last pulse's game state: leaving a game resumes the label passes. */
     private var autoLabelsWasPlaying = false
-    @Volatile private var cartStudioOpening = false
     // Paint fresh labels only when all moving carts and pending GPU uploads
     // have settled. The renderer's manual reload path is synchronous.
     private val autoLabelUpdates = java.util.concurrent.ConcurrentLinkedQueue<String>()
@@ -668,7 +675,7 @@ class MainActivity : Activity() {
             }
             autoLabelsWasPlaying = labelsPlaying
             if (::autoLabelIndicator.isInitialized) {
-                if (nativeIsPlaying() || cartStudioOpening) {
+                if (nativeIsPlaying()) {
                     autoLabelIndicator.hide()
                 } else if (autoLabelsRunning.get()) {
                     // The scanner only writes one immutable, lock-free
@@ -721,8 +728,9 @@ class MainActivity : Activity() {
                 10 -> resetVisualFile(WALLPAPER_REQUEST)
                 11 -> openCartLabelPicker()
                 12 -> removeSelectedCartLabel()
-                13 -> openSelectedCartStudio()
-                14 -> openAllCartStudio()
+                30 -> requestStudioArt()
+                32 -> requestStudioGameArt(1)
+                33 -> requestStudioPicture()
                 15 -> {
                     try {
                         returnFromSlotChild = true
@@ -740,6 +748,7 @@ class MainActivity : Activity() {
                 17 -> toggleShareGbaSaves()
                 18 -> showPeerCartridgeConsent()
                 23 -> shareLinkCode()
+                40 -> saveScreenshot()
                 19 -> slotUpdater.check(true)
                 20 -> slotUpdater.openNotes()
                 21 -> {
@@ -917,6 +926,8 @@ class MainActivity : Activity() {
     // Fixed native shelf states mirror SHELF_STATUS_TEXT in runtime.rs.
     private val shelfNone = 0
     private val shelfScanning = 1
+    /** Carts on the shelf, from the last library handed to the renderer. */
+    private var shelfCarts = 0
     private val shelfEmpty = 2
     private val shelfImportError = 3
     private val shelfPermissionExpired = 4
@@ -1158,7 +1169,7 @@ class MainActivity : Activity() {
         if (!cleanSignOut) {
             uiHandler.postDelayed({
                 SlotToast.makeText(this,
-                    "The last RetroAchievements sign-out didn't finish. Your unlocks are safe.",
+                    "Last RA sign-out unfinished. Unlocks safe.",
                     Toast.LENGTH_LONG).show()
             }, 800L)
         }
@@ -2186,10 +2197,9 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Label passes run on the carousel and while Cart Studio is open over
-     * it (its labels are then on the shelf on return), never in a game. */
+    /** Label passes run on the carousel, never in a game. */
     private fun autoLabelsMayRun(): Boolean =
-        (resumed || cartStudioOpening) && !isDestroyed && !nativeIsPlaying()
+        resumed && !isDestroyed && !nativeIsPlaying()
 
     private fun startAutoCartLabels() {
         if (!autoLabelsMayRun()) return
@@ -2216,6 +2226,7 @@ class MainActivity : Activity() {
                     // successful saved label for an idle carousel repaint.
                     // Status/UI snapshots are completely separate.
                     val keepGoing = { autoLabelsMayRun() }
+                    HomeCartLabels.announce(applicationContext)
                     anotherBatch = AutoCartLabels.fill(applicationContext,
                         shouldContinue = keepGoing,
                         onSaved = { uri -> autoLabelUpdates.add(uri) })
@@ -2240,8 +2251,8 @@ class MainActivity : Activity() {
                                 "other_error=${report.otherError}")
                         uiHandler.post {
                             if (::autoLabelIndicator.isInitialized) {
-                                if (resumed && !isDestroyed && !nativeIsPlaying() &&
-                                    !cartStudioOpening) autoLabelIndicator.finished(added)
+                                if (resumed && !isDestroyed && !nativeIsPlaying())
+                                    autoLabelIndicator.finished(added)
                                 else autoLabelIndicator.hide()
                             }
                         }
@@ -2378,7 +2389,7 @@ class MainActivity : Activity() {
         if (isDestroyed || nativeIsPlaying()) return
         if (attempt >= 25) {
             SlotToast.makeText(this,
-                "Unlocks are still being saved. Sign-out cancelled to keep them.",
+                "Unlocks still saving. Sign-out cancelled.",
                 Toast.LENGTH_LONG).show()
             return
         }
@@ -2427,12 +2438,12 @@ class MainActivity : Activity() {
                 if (success) {
                     panel.dismiss()
                     SlotToast.makeText(this,
-                        "Signed out of RetroAchievements. Your unlocks were kept.",
+                        "Signed out of RA. Unlocks kept.",
                         Toast.LENGTH_LONG).show()
                     openRetroAchievementsAccount()
                 } else {
                     SlotToast.makeText(this,
-                        "Sign-out didn't finish. Your unlocks were kept. Restart slot. to try again.",
+                        "Sign-out unfinished. Unlocks kept.",
                         Toast.LENGTH_LONG).show()
                 }
             }
@@ -2698,6 +2709,43 @@ class MainActivity : Activity() {
         }
     }
 
+    /** The Screenshot hotkey (Siham 2026-11-09): the PNG Rust read from the
+     * screen, filed where Android keeps its own, Pictures/Screenshots. */
+    private fun saveScreenshot() {
+        val png = nativeTakeScreenshot() ?: return
+        screenshotWorker.execute {
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                .format(java.util.Date())
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "slot_$stamp.png")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                put(MediaStore.Images.Media.RELATIVE_PATH,
+                    Environment.DIRECTORY_PICTURES + "/Screenshots")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val saved = runCatching {
+                val uri = contentResolver.insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: error("No media entry")
+                try {
+                    contentResolver.openOutputStream(uri)?.use { it.write(png) }
+                        ?: error("No media stream")
+                    contentResolver.update(uri, ContentValues().apply {
+                        put(MediaStore.Images.Media.IS_PENDING, 0)
+                    }, null, null)
+                } catch (error: Exception) {
+                    contentResolver.delete(uri, null, null)
+                    throw error
+                }
+            }.onFailure { Log.w(TAG, "Cannot save screenshot", it) }.isSuccess
+            runOnUiThread {
+                if (!isDestroyed) SlotToast.makeText(this,
+                    if (saved) "Screenshot saved." else "Couldn't save the screenshot.",
+                    Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     private fun visualFile(kind: Int): File {
         if (kind == THEME_REQUEST) return File(filesDir, "Config/theme.txt")
         // While the Shelf wallpaper is picked, import/delete acts on the
@@ -2767,40 +2815,136 @@ class MainActivity : Activity() {
     private fun cartLabelFile(romUri: String): File =
         CartLabelPaths.file(filesDir, romUri)
 
-    private fun openCartStudio(selected: String?) {
-        cartStudioOpening = true
-        pendingCartStudioUri = selected
-        val intent = Intent(this, CartStudioActivity::class.java).apply {
-            if (selected != null) putExtra(CartStudioActivity.EXTRA_ROM, selected)
+    private var pendingStudioPictureUri: String? = null
+
+    /** X on a cart opened the native Cart Studio: fetch its pictures. */
+    private fun requestStudioArt() {
+        val uri = nativePollCartLabelUri() ?: return
+        studioArtWorker.execute {
+            val art = ownStudioArt(uri)
+            nativeStudioArt(uri, art.first, art.second, 0, "")
+        }
+    }
+
+    /** A cart's own real label (as the automatic labels prepare it) and logo. */
+    private fun ownStudioArt(uri: String): Pair<ByteArray?, ByteArray?> =
+            try {
+                val platform = CartStudioCatalog.games(applicationContext).firstOrNull { it.uri == uri }
+                // The names Search game... searches, for the systems it may borrow from.
+                val group = if (platform?.platform in Systems.HOME_PLATFORMS) listOfNotNull(platform?.platform)
+                    else listOf(Systems.GB, Systems.GBC, Systems.GBA)
+                group.forEach { SlotArtSet.writeNames(applicationContext, it) }
+                when {
+                    platform == null -> null to null
+                    platform.platform in Systems.HOME_PLATFORMS -> HomeCartLabels.studioArt(applicationContext, uri)
+                    else -> AutoCartLabels.studioArt(applicationContext, platform)
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "Cart Studio art unavailable", error)
+                null to null
+            }
+
+    /** Search game... picked a game (kind 1): that game's label for the cart. */
+    private fun requestStudioGameArt(kind: Int) {
+        val request = nativePollCartLabelUri() ?: return
+        val parts = request.split('\t')
+        if (parts.size < 4) return
+        val (uri, platform, crc, name) = parts
+        studioArtWorker.execute {
+            var real: ByteArray? = null
+            var logo: ByteArray? = null
+            try {
+                val target = CartStudioCatalog.games(applicationContext).firstOrNull { it.uri == uri }
+                val entries = SlotArtSet.entries(applicationContext, platform, crc)
+                if (target != null && entries != null) {
+                    logo = entries.firstOrNull { it.type == "wheel" }
+                        ?.let { SlotArtSet.file(applicationContext, it) }?.let(SlotArtSet::toPng)
+                    real = if (target.platform in Systems.HOME_PLATFORMS) {
+                        HomeCartLabels.studioGameLabel(applicationContext, uri, entries)
+                    } else {
+                        entries.firstOrNull { it.type == "support-texture" }
+                            ?.let { SlotArtSet.file(applicationContext, it) }?.let(SlotArtSet::toPng)
+                            ?.let { AutoCartLabels.cropPhysicalCartLabel(it, target.platform) }
+                    }
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "Another game's label unavailable", error)
+            }
+            nativeStudioArt(uri, real, logo, kind, name)
+        }
+    }
+
+    /** Picture...: the Android picker, for the cart being edited. */
+    private fun requestStudioPicture() {
+        val uri = nativePollCartLabelUri() ?: return
+        pendingStudioPictureUri = uri
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
         }
         @Suppress("DEPRECATION")
         try {
             returnFromSlotChild = true
-            startActivityForResult(intent, CART_STUDIO_REQUEST)
-            SlotTransitions.open(this)
+            startActivityForResult(intent, STUDIO_PICTURE_REQUEST)
         } catch (error: Exception) {
-            cartStudioOpening = false
             returnFromSlotChild = false
+            pendingStudioPictureUri = null
             nativeExternalReturn()
-            Log.w(TAG, "Cannot open Cart Studio", error)
-            SlotToast.makeText(this, "Couldn't open Cart Studio.",
-                Toast.LENGTH_SHORT).show()
+            nativeStudioArt(uri, null, null, 2, "")
+            SlotToast.makeText(this, "Couldn't open your pictures.", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun openAllCartStudio() = openCartStudio(null)
-
-    private fun openSelectedCartStudio() {
-        val selected = nativePollCartLabelUri()
-        if (selected.isNullOrBlank()) {
-            SlotToast.makeText(this, "Select a cartridge first.", Toast.LENGTH_SHORT).show()
-            return
+    /** A picture the player chose: at most 2048 px, as PNG; opaque in the
+     *  first slot (a whole label), with transparency in the second (a logo). */
+    private fun studioPicture(cart: String, picture: Uri) {
+        studioArtWorker.execute {
+            var opaque: ByteArray? = null
+            var transparent: ByteArray? = null
+            try {
+                val bytes = contentResolver.openInputStream(picture)?.use { input ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        if (out.size() + n > 24 * 1024 * 1024) error("Picture too large")
+                        out.write(buffer, 0, n)
+                    }
+                    out.toByteArray()
+                }
+                if (bytes != null) {
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    var sample = 1
+                    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 2048) sample *= 2
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
+                        BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 })
+                    if (bitmap != null) {
+                        try {
+                            val pixels = IntArray(bitmap.width * bitmap.height)
+                            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                            val clear = bitmap.hasAlpha() && pixels.any { (it ushr 24) < 250 }
+                            val out = java.io.ByteArrayOutputStream()
+                            if (bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                                if (clear) transparent = out.toByteArray() else opaque = out.toByteArray()
+                            }
+                        } finally {
+                            bitmap.recycle()
+                        }
+                    }
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "Cart Studio picture unreadable", error)
+            }
+            nativeStudioArt(cart, opaque, transparent, 2, "")
         }
-        openCartStudio(selected)
     }
 
     private fun setStudioOverrides(json: String): Int =
-        nativeSetLibrary(CartStudioCatalog.withOverrides(this, json))
+        nativeSetLibrary(CartStudioCatalog.withOverrides(this, json)).also {
+            if (it >= 0) shelfCarts = it
+        }
 
     private fun openCartLabelPicker() {
         val selected = nativePollCartLabelUri()
@@ -2872,25 +3016,13 @@ class MainActivity : Activity() {
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == CART_STUDIO_REQUEST) {
-            val selected = pendingCartStudioUri
-            pendingCartStudioUri = null
-            if (resultCode == RESULT_OK) {
-                // Rebuild every edited cart in the in-memory shelf from cached
-                // library metadata. No ROM rescan, game saves or state edits.
-                try {
-                    val cache = File(filesDir, ROM_CACHE_NAME)
-                    val json = JSONObject(cache.readText(Charsets.UTF_8))
-                        .getJSONArray("games").toString()
-                    if (setStudioOverrides(json) < 0) error("Studio library reload failed")
-                    // nativeSetLibrary refreshes *all* GBA/GB/GBC label and shell
-                    // material textures; keep the selected-cart path for focus.
-                    if (selected != null) nativeReloadCartLabel(selected)
-                } catch (error: Exception) {
-                    Log.e(TAG, "Studio changes could not refresh shelf", error)
-                    SlotToast.makeText(this, "Labels saved. Restart slot. to see them.",
-                        Toast.LENGTH_LONG).show()
-                }
+        if (requestCode == STUDIO_PICTURE_REQUEST) {
+            val cart = pendingStudioPictureUri
+            pendingStudioPictureUri = null
+            val picture = data?.data
+            if (cart != null) {
+                if (resultCode == RESULT_OK && picture != null) studioPicture(cart, picture)
+                else nativeStudioArt(cart, null, null, 2, "")
             }
             return
         }
@@ -3090,6 +3222,7 @@ class MainActivity : Activity() {
             nativeSetShelfStatus(shelfImportError)
             return
         }
+        shelfCarts = count
         nativeSetShelfStatus(if (count == 0) shelfEmpty else shelfNone)
         // Index persistence and RA diagnostics remain on background workers.
         scanner.execute {
@@ -3120,10 +3253,27 @@ class MainActivity : Activity() {
         pendingLibraryIndex = null
         if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
         if (!quiet) nativeSetShelfStatus(shelfScanning)
+        // Refresh Library over a shelf of carts: the scan shows top right in
+        // the task rail; on an empty shelf the renderer draws it centred.
+        val inRail = !quiet && shelfCarts > 0
+        if (inRail && ::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.showScan(0, 0)
+        var lastReport = 0L
+        val progress: ((Int, Int) -> Unit)? = if (quiet) null else { done, total ->
+            val now = SystemClock.uptimeMillis()
+            if (now - lastReport >= 100L || (total > 0 && done >= total)) {
+                lastReport = now
+                runOnUiThread {
+                    if (!isDestroyed && scanSerial.get() == serial) {
+                        nativeSetScanProgress(done, total)
+                        if (inRail) libraryRefreshIndicator.showScan(done, total)
+                    }
+                }
+            }
+        }
         scanner.execute {
             try {
                 val previous = cachedLibraryGames(uri)
-                val result = RomLibrary.scan(this, uri, previous)
+                val result = RomLibrary.scan(this, uri, previous, progress)
                 if (scanSerial.get() != serial) return@execute
                 // A bounded/incomplete SAF scan is not evidence that a ROM
                 // was removed. Fail closed, retaining the previous shelf.
@@ -3131,9 +3281,10 @@ class MainActivity : Activity() {
                     Log.w(TAG, "Incomplete SAF ROM listing: retaining existing index")
                     runOnUiThread {
                         if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                            libraryRefreshIndicator.hide()
                             nativeSetShelfStatus(shelfNone)
                             SlotToast.makeText(this,
-                                "Couldn't read the whole ROM folder. Your cartridges were kept.",
+                                "ROM folder partly read. Carts kept.",
                                 Toast.LENGTH_LONG).show()
                         }
                     }
@@ -3144,6 +3295,7 @@ class MainActivity : Activity() {
                         " carts; no renderer rebuild")
                     runOnUiThread {
                         if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                            libraryRefreshIndicator.hide()
                             nativeSetShelfStatus(if (result.count == 0) shelfEmpty else shelfNone)
                             SlotToast.makeText(this, "Library is up to date.",
                                 Toast.LENGTH_SHORT).show()
@@ -3163,8 +3315,10 @@ class MainActivity : Activity() {
             } catch (error: Exception) {
                 Log.e(TAG, "SAF ROM scan failed; previous cache retained", error)
                 runOnUiThread {
-                    if (!isDestroyed && scanSerial.get() == serial && !quiet)
+                    if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                        libraryRefreshIndicator.hide()
                         nativeSetShelfStatus(shelfReadError)
+                    }
                 }
             }
         }
@@ -3234,7 +3388,6 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        cartStudioOpening = false
         if (returnFromSlotChild) {
             // Clear the preserved native menu ONLY after Apps/Studio has
             // finished and the shelf itself is about to be visible again.

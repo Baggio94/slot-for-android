@@ -269,6 +269,35 @@ fn label_art(cart: &Cart, w: u32, h: u32) -> Option<Vec<u8>> {
     }
 }
 
+/// Cart Studio: a label picture of any size (straight RGBA) fitted to this
+/// cart's well as the shelf fits a label file, at the well's texels.
+pub fn label_art_from_rgba(cart: &Cart, src: &[u8], sw: u32, sh: u32) -> Option<Vec<u8>> {
+    let (lw, lh) = label_size(cart);
+    let (w, h) = (px(lw), px(lh));
+    if src.len() < (sw * sh * 4) as usize {
+        return None;
+    }
+    match body_of(cart) {
+        Body::Home(_) => art::fit_label_rgba(src, sw, sh, w, h),
+        _ => art::cover_rgba(src, sw, sh, w, h),
+    }
+}
+
+/// Cart Studio: slot.'s own text label for this cart, at the well's texels.
+pub fn generated_label_art(cart: &Cart) -> (Vec<u8>, u32, u32) {
+    let s = spec(shape_of(cart));
+    let (_, _, lw, lh) = s.label;
+    (generated_label(&s, &label_text(cart)), px(lw), px(lh))
+}
+
+/// Cart Studio's Logo Only label for this cart: the logo on the ground whose
+/// deep corner is `deep` (the pale one follows), at the well's texels.
+pub fn logo_label_art(cart: &Cart, logo: &[u8], w: u32, h: u32, deep: [u8; 3], pale: [u8; 3]) -> (Vec<u8>, u32, u32) {
+    let (lw, lh) = label_size(cart);
+    let (tw, th) = (px(lw), px(lh));
+    (crate::logo_label::compose(logo, w, h, tw, th, deep, pale), tw, th)
+}
+
 pub fn cart_face(cart: &Cart) -> CartFace {
     let (lw, lh) = label_size(cart);
     let art = label_art(cart, px(lw), px(lh));
@@ -282,7 +311,7 @@ pub fn is_clear(cart: &Cart) -> bool {
 /// A glitter GB/GBA shell is clear plastic with flecks; a home cart's (the
 /// gold Zelda) is opaque.
 fn see_through(finish: Finish, home: bool) -> bool {
-    finish == Finish::Translucent || (finish == Finish::Glitter && !home)
+    matches!(finish, Finish::Translucent | Finish::ClearGlitter) || (finish == Finish::Glitter && !home)
 }
 
 /// The back plastic at 80% opacity. A GBA cart uses `gba_interior.png` with
@@ -566,7 +595,7 @@ fn shell_face(s: &Spec, shell: &Shell) -> CartFace {
             blend_over(&mut rgba, &decal);
         }
     }
-    if shell.finish == Finish::Glitter {
+    if shell.finish.has_flecks() {
         // The flecks keep their logical size and place at any density.
         let k = density::scale();
         for y in 0..th {
@@ -704,7 +733,7 @@ mod dense_tests {
             for k in [1.0, 4.0 / 3.0, 2.25, 3.0] {
                 density::with_scale(k, || {
                     let s = spec(body);
-                    for finish in [Finish::Solid, Finish::Translucent, Finish::Glitter] {
+                    for finish in [Finish::Solid, Finish::Translucent, Finish::Glitter, Finish::SolidGlitter, Finish::ClearGlitter] {
                         let face = shell_face(&s, &Shell { colour: [200, 40, 40], finish });
                         assert_eq!(face.rgba.len(), (px(s.w) * px(s.h) * 4) as usize, "{body:?} at {k}");
                         assert_eq!(mask_of(&s).len(), (px(s.w) * px(s.h)) as usize, "{body:?} at {k}");

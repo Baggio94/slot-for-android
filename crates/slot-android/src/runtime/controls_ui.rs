@@ -231,6 +231,7 @@ impl Engine {
             Action::Smaller => self.shortcut(20),
             Action::RunAheadDown => self.shortcut(21),
             Action::RunAheadUp => self.shortcut(22),
+            Action::Screenshot => self.screenshot_requested = true,
             Action::SunDown | Action::SunUp => {
                 if !linked && self.game.as_ref().is_some_and(GameSession::solar) {
                     self.nudge_sun(action == Action::SunUp);
@@ -345,8 +346,8 @@ impl Engine {
                 if pad.map(button, code) {
                     self.persist_controls();
                 } else if let Some(holder) = holder {
-                    set_message(format!("That key is {}'s, which slot.'s menus need: give {} a key first.",
-                        controls::BUTTONS[holder].0, controls::BUTTONS[button].0));
+                    let holder = controls::BUTTONS[holder].0;
+                    set_message(format!("Menus need this key for {holder}. Move {holder} first."));
                 }
             }
             Listen::Console { port, button, .. } => {
@@ -507,7 +508,7 @@ impl Engine {
                         if self.controls.pad_mut(fp).clear(button) {
                             self.persist_controls();
                         } else {
-                            set_message(format!("{} is needed in slot.'s menus: map it to another key instead.",
+                            set_message(format!("Menus need {}. Map it to another key.",
                                 controls::BUTTONS[button].0));
                         }
                     },
@@ -566,7 +567,7 @@ impl Engine {
                                 port, button, until: now + controls::LISTEN_MS,
                             });
                         }
-                        _ => set_message(format!("Choose Port {}'s controller in Settings > Controls first.", port + 1)),
+                        _ => set_message(format!("Choose Port {}'s controller first.", port + 1)),
                     },
                     (100, LayoutRow::Button(button)) => {
                         self.controls.clear_console(&scope, port, button);
@@ -749,16 +750,45 @@ impl Engine {
                 };
                 Some(("HOTKEYS".to_owned(), lines, row, hints))
             }
+            ShelfOverlay::Cheats { row } => {
+                use super::cheats_ui::{short_name, CheatRow};
+                let rows = self.cheat_rows();
+                let source = self.cheat_sources.get(self.cheat_source);
+                let lines: Vec<ControlsLine> = rows.iter().map(|item| match *item {
+                    CheatRow::Cheat(index) => {
+                        let name = source.and_then(|s| s.cheats.get(index))
+                            .map_or_else(String::new, |c| short_name(&c.desc));
+                        let on = self.cheat_is_on(index);
+                        dim(line(&name, if on { "ON" } else { "OFF" }.into(), false), on)
+                    }
+                    CheatRow::Empty => dim(line("No cheats for this game", String::new(), false), false),
+                }).collect();
+                let any_on = self.game.as_ref().is_some_and(|game| !game.cheats().is_empty());
+                let mut hints = match rows.get(row) {
+                    Some(CheatRow::Cheat(_)) => vec![("A", "On / Off")],
+                    _ => Vec::new(),
+                };
+                if self.cheat_sources.len() > 1 { hints.push(("L1 R1", "File")); }
+                if any_on { hints.push(("Y", "All Off")); }
+                hints.push(("B", "Back"));
+                // The file shown, in the title: "CHEATS · GAME GENIE".
+                let heading = match source {
+                    Some(source) if self.cheat_sources.len() > 1 =>
+                        format!("CHEATS  ·  {}", source.label.to_uppercase()),
+                    _ => "CHEATS".to_owned(),
+                };
+                Some((heading, lines, row, hints))
+            }
             _ => None,
         }
     }
 
     /// The cache key of a face: dim text is another face.
-    fn face_key(text: &str, lit: bool) -> String {
+    pub(super) fn face_key(text: &str, lit: bool) -> String {
         if lit { text.to_owned() } else { format!("\u{1}{text}") }
     }
 
-    fn controls_face(&mut self, text: &str, lit: bool) {
+    pub(super) fn controls_face(&mut self, text: &str, lit: bool) {
         let key = Self::face_key(text, lit);
         if text.is_empty() || self.controls_faces.contains_key(&key) { return; }
         // Countdowns and names make a few dozen faces at most; start over
@@ -775,7 +805,7 @@ impl Engine {
         self.controls_faces.insert(key, (tex, face.w, face.h));
     }
 
-    fn controls_hint(&mut self, key: &'static str, label: &'static str) -> (slot_gfx::TexId, u32) {
+    pub(super) fn controls_hint(&mut self, key: &'static str, label: &'static str) -> (slot_gfx::TexId, u32) {
         if let Some(&hint) = self.controls_hint_faces.get(&(key, label)) { return hint; }
         let face = if key == "SWAP" { arrows_hint_face(label) } else { hint_face(key, label) };
         let hint = (self.gpu.create_face(&face), face.w);
@@ -801,7 +831,14 @@ impl Engine {
             self.controls_face(&line.label, true);
             self.controls_face(&line.value, line.lit);
         }
-        let hints: Vec<(slot_gfx::TexId, u32)> = hint_keys.into_iter().map(|(k, l)| self.controls_hint(k, l)).collect();
+        let mut hints: Vec<(slot_gfx::TexId, u32)> = hint_keys.iter().map(|&(k, l)| self.controls_hint(k, l)).collect();
+        // A narrow screen drops B, then A: Cheats keeps A On / Off
+        // (Siham 2026-11-09).
+        let mut keys = hint_keys.clone();
+        for dropped in ["B", "A"] {
+            if !legend_too_wide(&hints) { break; }
+            while let Some(i) = keys.iter().position(|&(k, _)| k == dropped) { keys.remove(i); hints.remove(i); }
+        }
         let offset = controls::scroll_offset(selected, lines.len());
         self.controls_view = ControlsView { heading, lines, selected, offset, hints };
     }
@@ -823,6 +860,10 @@ impl Engine {
             ShelfOverlay::LayoutPort { port, row, .. } if rows > 0 => {
                 let offset = controls::scroll_offset(row, rows);
                 Some((22 + port as u8, row - offset, rows.min(controls::VISIBLE_ROWS)))
+            }
+            ShelfOverlay::Cheats { row } if rows > 0 => {
+                let offset = controls::scroll_offset(row, rows);
+                Some((26, row - offset, rows.min(controls::VISIBLE_ROWS)))
             }
             _ => None,
         }

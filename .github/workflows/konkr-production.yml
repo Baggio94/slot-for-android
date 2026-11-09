@@ -122,43 +122,6 @@ jobs:
           for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive; do
             bash scripts/build-home-core-android.sh "$core"
           done
-      - name: Checkout official Slot revision required by Cart Studio
-        uses: actions/checkout@v4
-        with:
-          repository: BrandonKowalski/slot
-          ref: 34ac38031fd903eb2a0a0157f1dea4d3a5546195
-          path: studio-upstream/slot
-
-      - name: Stage original Studio with its pinned upstream Slot sources
-        run: |
-          set -euo pipefail
-          cp -a third_party/slot-cart-studio studio-upstream/slot-cart-studio
-          # Isolate the pinned upstream Cargo project from our parent workspace.
-          # This edit affects the ephemeral CI copy only; vendored sources stay exact.
-          printf '\n[workspace]\n' >> studio-upstream/slot-cart-studio/Cargo.toml
-          # NES, Super Nintendo and Mega Drive carts, by checked replacements.
-          python3 scripts/stage-konkr-cart-studio.py --studio studio-upstream/slot-cart-studio
-          test "$(tr -d '\r\n' < studio-upstream/slot-cart-studio/slot.ref)" = \
-               "$(git -C studio-upstream/slot rev-parse HEAD)"
-          node --test studio-upstream/slot-cart-studio/web/*.test.mjs
-
-      - name: Install wasm-pack and target for original Studio
-        run: |
-          rustup target add wasm32-unknown-unknown --toolchain 1.96.0
-          curl -fsSL https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz \
-            | tar -xz -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/wasm-pack-v0.15.0-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
-
-      - name: Build and package genuine Cart Studio HTML/JS/WASM in APK assets
-        run: |
-          set -euo pipefail
-          (cd studio-upstream/slot-cart-studio && cargo test --lib konkr_home)
-          (cd studio-upstream/slot-cart-studio && \
-            wasm-pack build --release --target web --no-typescript --out-dir web/pkg)
-          python3 scripts/package-konkr-cart-studio.py \
-            --source . --built studio-upstream/slot-cart-studio/web
-          test -s android/app/src/main/assets/studio/pkg/slot_cart_studio_bg.wasm
-
       - name: Test Android debug and release policies on JVM
         run: gradle --no-daemon -p android :app:testDebugUnitTest :app:testReleaseUnitTest
       - name: Assemble signed ARM64 release
@@ -217,7 +180,6 @@ jobs:
           for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro; do
             unzip -Z -1 "$APK" | grep -Fx "lib/arm64-v8a/lib${core}.so"
           done
-          unzip -Z -1 "$APK" | grep -Fx 'assets/studio/pkg/slot_cart_studio_bg.wasm'
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
             echo "::error::Lab APK must remain ARM64 for Apple Silicon AVD"; exit 1
           fi
@@ -246,7 +208,6 @@ jobs:
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
             echo "::error::Non-ARM64 ABI included in production APK"; exit 1
           fi
-          unzip -Z -1 "$APK" | grep -Fx 'assets/studio/pkg/slot_cart_studio_bg.wasm'
           # Prevent a future signed build from silently omitting either
           # mandatory upstream safety patch or selecting a different core.
           python3 - "$APK" <<'PY'

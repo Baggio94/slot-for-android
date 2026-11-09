@@ -100,16 +100,16 @@ internal object SlotToast {
         if (msg.isEmpty()) return "Done."
         return when {
             msg.equals("RAOfflineProxy unavailable", true) ->
-                "RAOfflineProxy wasn't found. Install or open it to use achievements."
+                "RAOfflineProxy not found. Install or open it."
             msg.equals("RAOfflineProxy stopped", true) ->
                 "RAOfflineProxy is stopped. Open it to check achievements."
             msg.equals("RAOfflineProxy address invalid", true) ->
-                "RAOfflineProxy is running, but its connection settings need checking."
+                "RAOfflineProxy: check its connection."
             msg.startsWith("Multiplayer:", true) && msg.length > 90 ->
-                "Multiplayer connection failed. Check both consoles and try again."
+                "Multiplayer failed. Check both consoles."
             msg.contains("java.lang.", true) || msg.contains("Exception:", true) ||
                 msg.contains("content://", true) ->
-                "Something went wrong. Check your files and try again."
+                "Something went wrong. Check your files."
             else -> msg
         }
     }

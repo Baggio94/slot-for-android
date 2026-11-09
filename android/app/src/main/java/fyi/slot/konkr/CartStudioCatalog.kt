@@ -180,7 +180,7 @@ internal object CartStudioCatalog {
     /**
      * Called off the UI thread. Missing or unreliable SAF metadata triggers
      * recalculation, while unchanged ROMs reuse the exact previous CRC/header.
-     * The partial batch is flushed on CartStudioActivity.onDestroy().
+     * The partial batch is flushed when the label passes end.
      */
     @Synchronized
     fun identify(context: Context, rom: Rom): Fingerprint {

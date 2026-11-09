@@ -66,7 +66,13 @@ impl Outline {
 pub enum ShellFinish {
     Solid,
     Clear,
+    /// Flecks on the system's own glitter plastic: clear on a Game Boy or
+    /// a Game Boy Advance cart, opaque on a home console's (the gold Zelda).
     Glitter,
+    /// Flecks on opaque plastic, on any system.
+    SolidGlitter,
+    /// Flecks on clear plastic, on any system.
+    ClearGlitter,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -89,6 +95,8 @@ impl ShellChoice {
             "solid" => ShellFinish::Solid,
             "clear" => ShellFinish::Clear,
             "glitter" => ShellFinish::Glitter,
+            "solid-glitter" => ShellFinish::SolidGlitter,
+            "clear-glitter" => ShellFinish::ClearGlitter,
             _ => return None,
         };
         words.next().is_none().then_some(ShellChoice {
@@ -104,6 +112,8 @@ impl ShellChoice {
             ShellFinish::Solid => "solid",
             ShellFinish::Clear => "clear",
             ShellFinish::Glitter => "glitter",
+            ShellFinish::SolidGlitter => "solid-glitter",
+            ShellFinish::ClearGlitter => "clear-glitter",
         };
         let [r, g, b] = self.colour;
         format!("{outline} {r:02x}{g:02x}{b:02x} {finish}")

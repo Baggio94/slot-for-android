@@ -148,7 +148,7 @@ fn paused_game_controls_inherit_globals_until_overridden() {
 fn eject_to_play_solo_is_an_action_not_a_noop() {
     assert_eq!(pause_rows(false,false),
         &[PauseRow::Resume,PauseRow::States,PauseRow::Multiplayer,
-            PauseRow::Settings,PauseRow::SaveEject]);
+            PauseRow::Cheats,PauseRow::Settings,PauseRow::SaveEject]);
     assert_eq!(pause_rows(true,false),
         &[PauseRow::Resume,PauseRow::Multiplayer,PauseRow::Settings,
             PauseRow::SaveEject]);
@@ -166,6 +166,9 @@ fn eject_to_play_solo_is_an_action_not_a_noop() {
     assert_eq!(pause_row_text(PauseRow::SaveEject,true),78);
     assert_eq!(pause_row_text(PauseRow::Settings,false),25);
     assert!(!pause_rows(true,false).contains(&PauseRow::States));
+    // Cheats belong to a solo game: none while linked.
+    assert!(!pause_rows(true,false).contains(&PauseRow::Cheats));
+    assert_eq!(MENU_TEXT[pause_row_text(PauseRow::Cheats,false)],"Cheats");
 }
 
 #[test]

@@ -114,6 +114,9 @@ impl RetroCore for Tracked {
     fn set_option(&mut self, key: &str, value: &str) {
         self.core.set_option(key, value);
     }
+    fn set_cheats(&mut self, codes: &[String]) {
+        self.core.set_cheats(codes);
+    }
     fn set_sun(&mut self, luminance: u8) {
         self.core.set_sun(luminance);
     }

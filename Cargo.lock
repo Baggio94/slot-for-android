@@ -1844,6 +1844,7 @@ dependencies = [
 name = "slot-android"
 version = "0.0.1"
 dependencies = [
+ "flate2",
  "jni 0.21.1",
  "libc",
  "lz4_flex",

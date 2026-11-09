@@ -17,6 +17,7 @@ mod draw;
 mod footer;
 mod home;
 mod home_art;
+pub mod logo_label;
 mod hud;
 mod icon;
 mod link_art;
@@ -48,7 +49,7 @@ pub use board::{
     SLIDE_SHARE, SLIDE_UP, SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
 pub use cart::{
-    cart_box, cart_box_for, body_box, body_of, body_seated_box, platform_body, seated_box_for, home_cart_shadow, Body, cart_face, cart_face_with, cart_face_with_material, cart_interior, cart_backing, is_clear, cart_shadow, clean_label, gb_cart_shadow, gb_label_panel,
+    cart_box, cart_box_for, generated_label_art, label_art_from_rgba, logo_label_art, body_box, body_of, body_seated_box, platform_body, seated_box_for, home_cart_shadow, Body, cart_face, cart_face_with, cart_face_with_material, cart_interior, cart_backing, is_clear, cart_shadow, clean_label, gb_cart_shadow, gb_label_panel,
     gb_shell_of, label_colour, label_panel, label_rect, label_size, label_tags, label_text, seated_box,
     CartFace, CART_H, CART_W, GB_CART_H, GB_CART_W, GB_LABEL_H, GB_LABEL_W, GB_LABEL_X, GB_LABEL_Y,
     LABEL_H, LABEL_W, LABEL_X, LABEL_Y,
@@ -57,7 +58,7 @@ pub use home::{home_mould_of, home_shell, title_key, HomeMould, HOME_CART_W};
 pub use clock::{clock_label, date_time_text, hhmm, set_clock_hint_face, ClockPicker, Field};
 pub use density::Face;
 pub use draw::{Draw, TexId, OUT_H, out_w};
-pub use footer::{draw_footer, draw_footer_with_ink, footer_ink, Printed};
+pub use footer::{draw_footer, draw_footer_with_ink, draw_status_clock, footer_ink, Printed};
 pub use hud::{
     badge_at, ff_badge, FfState, Hud, HudKind, LinkBadge, Millis, HUD_ICON_PX, HUD_INK, HUD_MS,
     LINK_HOST_INK, LINK_JOIN_INK, PLATE_H,
@@ -88,7 +89,7 @@ pub use refusal::Refusal;
 pub use shelf::{foot_y, rest_y, set_shelf_slack, Shelf};
 pub use shell::{
     gb_table_shells, gb_shell_from_header, gba_shell_for, lookup_order_is_exact_then_family_then_default, shell_for,
-    shell_presets, table_keys, Finish, Shell, DEFAULT_SHELL, DMG_SHELL, DUAL_MODE_SHELL,
+    shell_presets, system_swatches, table_keys, Finish, Shell, Swatch, DEFAULT_SHELL, FUN_SWATCHES, DMG_SHELL, DUAL_MODE_SHELL,
     GB_CLEAR_SHELL,
 };
 pub use silhouette::{gb_silhouette, silhouette, GbShell};

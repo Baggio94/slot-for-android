@@ -1,0 +1,14 @@
+crates/slot-android/cheats/*.cht.z
+
+Cheat codes from libretro-database (https://github.com/libretro/libretro-database),
+folder cht/, commit c4e17d41ec1bb744fb064f7cefeb61b878fc5d64, by the libretro
+contributors. Licensed under Creative Commons Attribution-ShareAlike 4.0
+International (https://creativecommons.org/licenses/by-sa/4.0/).
+The packed files are shared under the same license; they are not covered by
+slot.'s GPL-3.0 license.
+
+Changes: the Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo
+and Mega Drive cheat files are packed into one zlib file per system, with an
+index from each game's No-Intro checksum (libretro-database metadat/no-intro)
+to its cheat files. "(Rumbles)" files and RetroArch memory-search entries are
+left out. See tools/cheats/pack.py.

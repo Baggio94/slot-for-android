@@ -6,6 +6,8 @@ mod cart_disk_cache;
 mod settings;
 mod controls;
 mod frame_blend;
+mod dither_blend;
+mod tilt_light;
 mod gambatte_state;
 mod recents;
 mod favorites;
@@ -38,6 +40,8 @@ mod presentation_probe;
 #[allow(dead_code)]
 #[path = "../../../third_party/slot-cart-studio/src/dat.rs"]
 mod studio_dat;
+// Cheats: libretro-database's cheat files, packed in, per game.
+mod cheats;
 // Reuse the exact upstream Slot wallpaper ordering and filtering.
 mod wallpaper;
 // Use Slot's original per-game Actual/Stretch geometry and video_mode.ini.

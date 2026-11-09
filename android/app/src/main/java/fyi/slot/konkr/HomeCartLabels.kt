@@ -40,7 +40,8 @@ internal object HomeCartLabels {
     private const val MAX_IMAGE = 6 * 1024 * 1024
     // One request at a time, but enough carts per pass that a library fills
     // in minutes, not hours (each pass waits for the next shelf idle).
-    private const val MAX_SAVED = 24
+    /** Carts whose checksums and own labels are fetched side by side. */
+    private const val PREFETCH = 12
     /** Labels saved since the app started, for the shelf's counter. */
     @Volatile private var savedTotal = 0
     private const val MAX_ATTEMPTS = 40
@@ -342,6 +343,65 @@ internal object HomeCartLabels {
         }
     }
 
+    /** A cart's label from slot. for Android's own art set: the media
+     *  pick() chooses among the dump's stored scans and renders, and its
+     *  bytes. Null when the set doesn't hold the dump or has no fitting label. */
+    internal fun ownLabel(context: Context, rom: Rom, crcs: List<String>): Pair<Media, ByteArray>? {
+        for (crc in crcs) {
+            val entries = SlotArtSet.entries(context, rom.platform, crc) ?: continue
+            val medias = entries.map { Media(it.type, it.region, it.url) }
+            val media = pick(medias, rom) ?: return null
+            val entry = entries.first { it.url == media.url }
+            val bytes = SlotArtSet.file(context, entry) ?: return null
+            return media to bytes
+        }
+        return null
+    }
+
+    /** Cart Studio's pictures for a NES, Super Nintendo or Mega Drive cart:
+     *  its label as the automatic labels save it (the own art set first,
+     *  ScreenScraper second) and the art set's logo. Null when none. */
+    internal fun studioArt(context: Context, uri: String): Pair<ByteArray?, ByteArray?> {
+        val rom = games(context).firstOrNull { it.uri == uri } ?: return null to null
+        val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri)) ?: return null to null
+        val (whole, bare) = RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
+            checksums(input)
+        }
+        val crcs = listOfNotNull(whole, bare).distinct()
+        var real: ByteArray? = try {
+            ownLabel(context, rom, crcs)?.let { (media, bytes) -> labelPng(bytes, media, rom) }
+        } catch (error: Exception) {
+            Log.w(TAG, "Own art set lookup failed for Cart Studio", error); null
+        }
+        if (real == null) {
+            real = try {
+                studioLabel(context, rom.platform, rom.filename.ifBlank { rom.title }, crcs)
+            } catch (error: Exception) {
+                Log.w(TAG, "ScreenScraper lookup failed for Cart Studio", error); null
+            }
+        }
+        val logo = try {
+            crcs.firstNotNullOfOrNull { SlotArtSet.entries(context, rom.platform, it) }
+                ?.firstOrNull { it.type == "wheel" }?.let { SlotArtSet.file(context, it) }
+                ?.let(SlotArtSet::toPng)
+        } catch (error: Exception) {
+            Log.w(TAG, "Logo lookup failed for Cart Studio", error); null
+        }
+        return real to logo
+    }
+
+    /** Another game's label for a home cart, from the art set's entries for
+     *  that game: the media pick() chooses for this cart's shell, prepared as
+     *  the automatic labels prepare it. */
+    internal fun studioGameLabel(context: Context, uri: String, entries: List<SlotArtSet.Entry>): ByteArray? {
+        val rom = games(context).firstOrNull { it.uri == uri } ?: return null
+        val medias = entries.map { Media(it.type, it.region, it.url) }
+        val media = pick(medias, rom) ?: medias.firstOrNull { it.type == "support-texture" } ?: return null
+        val entry = entries.first { it.url == media.url }
+        val bytes = SlotArtSet.file(context, entry) ?: return null
+        return labelPng(bytes, media, rom)
+    }
+
     /** Games Cart Studio asked for that ScreenScraper doesn't know, this run. */
     private val studioMisses = java.util.Collections.synchronizedSet(HashSet<String>())
 
@@ -356,6 +416,17 @@ internal object HomeCartLabels {
             ?.let { return it.readBytes() }
         val key = platform + ":" + crcs.joinToString(",")
         if (key in studioMisses) return null
+        try {
+            val chosen = Rom("", platform, name, name, -1, -1, "", "")
+            ownLabel(context, chosen, crcs)?.let { (media, bytes) ->
+                labelPng(bytes, media, chosen)?.let { png ->
+                    writeAtomic(File(dir, "${crcs.first()}.png"), png)
+                    return png
+                }
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "Own art set lookup failed for Cart Studio", error)
+        }
         val creds = credentials() ?: return null
         if (android.os.SystemClock.elapsedRealtime() < closedUntil) return null
         val rom = Rom("", platform, name, name, -1, -1, "", "")
@@ -386,12 +457,44 @@ internal object HomeCartLabels {
     }
 
     /** Returns true while carts are left for a later pass. */
-    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit): Boolean {
-        val creds = credentials() ?: return false
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (now < closedUntil || !shouldContinue()) return false
-        val state = state(context)
-        val real = realDone(context)
+    /** A cart's checksums and its label from our own set, worked out ahead. */
+    private class Prefetched(val whole: String, val bare: String?, val own: Pair<Media, ByteArray>?)
+
+    /** Three low-priority threads: our own set has no quota, and the carousel
+     *  keeps the device's attention. */
+    private val workers = java.util.concurrent.Executors.newFixedThreadPool(3) { task ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            task.run()
+        }, "slot-home-labels").apply { isDaemon = true }
+    }
+
+    private fun prefetch(context: Context, roms: List<Rom>,
+                         shouldContinue: () -> Boolean): Map<String, Prefetched> {
+        val jobs = roms.map { rom ->
+            rom.uri to workers.submit<Prefetched?> {
+                if (!shouldContinue()) return@submit null
+                try {
+                    val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
+                        ?: return@submit null
+                    val (whole, bare) = RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
+                        checksums(input)
+                    }
+                    val own = try { ownLabel(context, rom, listOfNotNull(whole, bare).distinct()) }
+                        catch (error: Exception) { Log.w(TAG, "Own art set lookup failed", error); null }
+                    Prefetched(whole, bare, own)
+                } catch (error: Exception) {
+                    null // The pass itself tries again and reports it.
+                }
+            }
+        }
+        return jobs.mapNotNull { (uri, job) ->
+            try { job.get()?.let { uri to it } } catch (_: Exception) { null }
+        }.toMap()
+    }
+
+    /** The home carts still to label, out of all of them. */
+    private fun missingOf(context: Context, state: JSONObject, real: JSONObject): Pair<List<Rom>, List<Rom>> {
         val all = games(context)
         // A cart is missing its label, or (scraped before Studio offered it)
         // the copy Cart Studio shows as its real label.
@@ -399,50 +502,107 @@ internal object HomeCartLabels {
             (!CartLabelPaths.file(context.filesDir, it.uri).exists() || !real.has(it.uri)) &&
                 !known(state, it) && retry.pending(it.uri)
         }
+        return all to missing
+    }
+
+    /**
+     * Counts the home carts into "LABELS n/total" before the handheld pass
+     * runs, so the total is right from the start instead of growing when
+     * this pass begins (Siham 2026-11-09).
+     */
+    fun announce(context: Context) {
+        try {
+            credentials() ?: return
+            if (android.os.SystemClock.elapsedRealtime() < closedUntil) return
+            val (all, missing) = missingOf(context, state(context), realDone(context))
+            if (missing.isEmpty()) return
+            AutoCartLabelDiagnostics.start(all.size - missing.size, all.size, savedTotal,
+                AutoCartLabelDiagnostics.HOME)
+        } catch (error: Exception) {
+            Log.w(TAG, "Home carts not counted ahead", error)
+        }
+    }
+
+    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit): Boolean {
+        val creds = credentials() ?: return false
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now < closedUntil || !shouldContinue()) return false
+        val state = state(context)
+        val real = realDone(context)
+        val (all, missing) = missingOf(context, state, real)
         if (missing.isEmpty()) return false
         // The shelf's "LABELS n/total" counter, for the home carts' own pass.
         var checked = all.size - missing.size
         AutoCartLabelDiagnostics.start(checked, all.size, savedTotal, AutoCartLabelDiagnostics.HOME)
         var saved = 0
-        var attempts = 0
+        // Only ScreenScraper's lookups are bounded and paced: our own set has
+        // no quota, so the carts it holds all come in one pass.
+        var asks = 0
         var dirty = false
-        for (rom in missing.filter { retry.ready(it.uri, now) }) {
-            if (!shouldContinue() || saved >= MAX_SAVED || attempts >= MAX_ATTEMPTS) break
-            attempts++
+        val ready = missing.filter { retry.ready(it.uri, now) }
+        val pre = HashMap<String, Prefetched>()
+        var prefetchedUntil = 0
+        for ((i, rom) in ready.withIndex()) {
+            if (!shouldContinue() || asks >= MAX_ATTEMPTS) break
+            if (i >= prefetchedUntil) {
+                // The next few carts' checksums and own labels, side by side.
+                prefetchedUntil = minOf(ready.size, i + PREFETCH)
+                pre.clear()
+                pre.putAll(prefetch(context, ready.subList(i, prefetchedUntil), shouldContinue))
+                if (!shouldContinue()) break
+            }
+            var asked = false
             var outcome = "NOT_FOUND"
             try {
-                val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
-                    ?: throw IllegalStateException("ROM unreadable")
-                val (whole, bare) = RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
-                    checksums(input)
-                }
-                var reply: Http? = null
-                for (crc in listOfNotNull(whole, bare).distinct()) {
-                    if (!shouldContinue()) break
-                    reply = lookup(rom, crc, creds, shouldContinue)
-                    if (reply.code != 404) break
-                    Thread.sleep(150L)
-                }
-                if (!shouldContinue()) { outcome = "INTERRUPTED"; break }
-                val answer = reply ?: continue
-                when (answer.code) {
-                    200 -> {}
-                    404 -> { outcome = "NOT_FOUND"; continue }
-                    400, 401, 403, 423, 426 -> {
-                        // Refused credentials or a closed API: stop for an hour.
-                        closedUntil = android.os.SystemClock.elapsedRealtime() + 3_600_000L
-                        Log.w(TAG, "ScreenScraper refused the request: HTTP ${answer.code}")
-                        outcome = "INTERRUPTED"
-                        break
+                val early = pre[rom.uri]
+                val (whole, bare) = early?.let { it.whole to it.bare } ?: run {
+                    val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
+                        ?: throw IllegalStateException("ROM unreadable")
+                    RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
+                        checksums(input)
                     }
-                    else -> { outcome = "NETWORK_ERROR"; continue }
                 }
-                val json = JSONObject(String(answer.body, Charsets.UTF_8))
-                val media = pick(medias(json), rom) ?: continue
-                Thread.sleep(100L)
-                val image = get(media.url, MAX_IMAGE, shouldContinue)
-                if (image.code != 200) { outcome = "NETWORK_ERROR"; continue }
-                val png = labelPng(image.body, media, rom) ?: continue
+                // slot. for Android's own art set first (art.slot-android.app),
+                // then ScreenScraper for the dumps it doesn't hold.
+                val own = if (early != null) early.own
+                    else try { ownLabel(context, rom, listOfNotNull(whole, bare).distinct()) }
+                    catch (error: Exception) { Log.w(TAG, "Own art set lookup failed", error); null }
+                var media: Media? = own?.first
+                var imageBytes: ByteArray? = own?.second
+                if (own == null) {
+                    asks++
+                    asked = true
+                    var reply: Http? = null
+                    for (crc in listOfNotNull(whole, bare).distinct()) {
+                        if (!shouldContinue()) break
+                        reply = lookup(rom, crc, creds, shouldContinue)
+                        if (reply.code != 404) break
+                        Thread.sleep(150L)
+                    }
+                    if (!shouldContinue()) { outcome = "INTERRUPTED"; break }
+                    val answer = reply ?: continue
+                    when (answer.code) {
+                        200 -> {}
+                        404 -> { outcome = "NOT_FOUND"; continue }
+                        400, 401, 403, 423, 426 -> {
+                            // Refused credentials or a closed API: stop for an hour.
+                            closedUntil = android.os.SystemClock.elapsedRealtime() + 3_600_000L
+                            Log.w(TAG, "ScreenScraper refused the request: HTTP ${answer.code}")
+                            outcome = "INTERRUPTED"
+                            break
+                        }
+                        else -> { outcome = "NETWORK_ERROR"; continue }
+                    }
+                    val json = JSONObject(String(answer.body, Charsets.UTF_8))
+                    val picked = pick(medias(json), rom) ?: continue
+                    Thread.sleep(100L)
+                    val image = get(picked.url, MAX_IMAGE, shouldContinue)
+                    if (image.code != 200) { outcome = "NETWORK_ERROR"; continue }
+                    media = picked
+                    imageBytes = image.body
+                }
+                val chosen = media ?: continue
+                val png = labelPng(imageBytes ?: continue, chosen, rom) ?: continue
                 for (crc in listOfNotNull(whole, bare).distinct()) writeAtomic(File(File(context.filesDir, REAL_DIR), "$crc.png"), png)
                 real.put(rom.uri, true)
                 dirty = true
@@ -483,7 +643,7 @@ internal object HomeCartLabels {
                     AutoCartLabelDiagnostics.HOME)
                 Log.i(TAG, "HOME_ART_RESULT $outcome [${rom.platform}] ${rom.title.take(96)}")
             }
-            Thread.sleep(250L)
+            if (asked) Thread.sleep(250L)
         }
         if (dirty) try {
             saveState(context, state)

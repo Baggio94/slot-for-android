@@ -12,3 +12,8 @@ Game names and CRCs come from
 from [ScreenScraper](https://www.screenscraper.fr/) (CC BY-NC-SA 4.0). 
 
 Game Boy is a trademark of Nintendo. Not affiliated with Nintendo.
+
+## In slot. for Android
+
+Only `src/dat.rs` (No-Intro DAT matching) and its test fixture are kept, compiled into
+slot. for Android as they are. Since 2.2 the cart editor is slot.'s own native Cart Studio.

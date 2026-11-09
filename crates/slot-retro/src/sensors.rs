@@ -40,6 +40,8 @@ static LIGHT_WANTED: AtomicU8 = AtomicU8::new(0);
 // mGBA's MBC7 (Kirby Tilt 'n' Tumble) negates both tilt axes that its
 // GBA tilt cartridges take as they are.
 static TILT_INVERTED: AtomicU8 = AtomicU8::new(0);
+/// slot. itself reads the accelerometer (Sunlight Shimmer's light).
+static TILT_WANTED: AtomicU8 = AtomicU8::new(0);
 
 struct Calibration {
     done: bool,
@@ -111,6 +113,27 @@ pub fn wanted() -> u8 {
         .filter(|&s| WANTED[bit_index(s)].load(Ordering::Acquire) > 0)
         .fold(0, |mask, s| mask | s)
         | if LIGHT_WANTED.load(Ordering::Acquire) != 0 { ILLUMINANCE } else { 0 }
+        | if TILT_WANTED.load(Ordering::Acquire) != 0 { ACCELEROMETER } else { 0 }
+}
+
+/// Keep the accelerometer on for slot.'s own use (Sunlight Shimmer).
+pub fn set_tilt_wanted(wanted: bool) {
+    let wanted = wanted && available() & ACCELEROMETER != 0;
+    if TILT_WANTED.swap(wanted as u8, Ordering::AcqRel) == 0 && wanted
+        && WANTED[bit_index(ACCELEROMETER)].load(Ordering::Acquire) == 0 {
+        begin(ACCELEROMETER);
+    }
+}
+
+/// The accelerometer in g along the screen's X, Y and Z, turned as games
+/// read it. None before the first reading.
+pub fn gravity() -> Option<[f32; 3]> {
+    let raw = [load(0), load(1), load(2)];
+    if raw == [0.0; 3] {
+        return None;
+    }
+    let rotation = ROTATION.load(Ordering::Relaxed);
+    Some([ACCELEROMETER_X, ACCELEROMETER_X + 1, ACCELEROMETER_Z].map(|id| turned(id, rotation, false)))
 }
 
 /// Keep the light sensor on for a solar cartridge whose Sun is SENSOR.
@@ -227,6 +250,10 @@ fn begin(sensor: u8) {
 /// RetroArch's input_get_sensor_state on Android: X and Y follow the
 /// detected rotation (90°: X->Y, Y->-X), Z and light are untouched.
 fn read(id: c_uint, rotation: u8) -> f32 {
+    turned(id, rotation, true)
+}
+
+fn turned(id: c_uint, rotation: u8, invertible: bool) -> f32 {
     let (base, scale) = match id {
         ACCELEROMETER_X..=ACCELEROMETER_Z => (0, 1.0 / GRAVITY),
         GYROSCOPE_X..=GYROSCOPE_Z => (3, 1.0),
@@ -241,7 +268,7 @@ fn read(id: c_uint, rotation: u8) -> f32 {
         (0, _) => (1, -1.0),
         _ => (0, 1.0),
     };
-    let inverted = base == 0 && axis < 2 && TILT_INVERTED.load(Ordering::Relaxed) != 0;
+    let inverted = invertible && base == 0 && axis < 2 && TILT_INVERTED.load(Ordering::Relaxed) != 0;
     load(base + axis) * scale * if inverted { -sign } else { sign }
 }
 

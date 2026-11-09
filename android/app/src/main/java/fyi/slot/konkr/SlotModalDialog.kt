@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.view.Gravity
+import android.view.WindowInsets
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -44,7 +45,17 @@ internal class SlotModalDialog(
             when (keyCode) {
                 KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
                     if (event.action == KeyEvent.ACTION_DOWN &&
-                        event.repeatCount == 0 && !busy) dismiss()
+                        event.repeatCount == 0 && !busy) {
+                        // B while typing closes the keyboard only: the page
+                        // and its text stay (Siham 2026-11-09).
+                        val imeShown = window?.decorView?.rootWindowInsets
+                            ?.isVisible(WindowInsets.Type.ime()) == true
+                        val focus = currentFocus
+                        if (imeShown && focus is EditText) {
+                            (activity.getSystemService(Context.INPUT_METHOD_SERVICE)
+                                as? InputMethodManager)?.hideSoftInputFromWindow(focus.windowToken, 0)
+                        } else dismiss()
+                    }
                     return true
                 }
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
@@ -170,7 +181,7 @@ internal class SlotModalDialog(
         // viewport until the first D-pad focus movement scrolled it.
         val labelHeight = if (isRaLogin) SlotUi.menuPixel(activity, 22) else dp(27)
         val fieldHeight = if (isRaLogin) SlotUi.menuPixel(activity, 45) else dp(48)
-        val fieldGap = if (isRaLogin) SlotUi.menuPixel(activity, 6) else dp(10)
+        val fieldGap = if (isRaLogin) SlotUi.menuPixel(activity, 16) else dp(10)
         body.addView(SlotUi.label(activity, label, 13f, SlotUi.muted),
             LinearLayout.LayoutParams(-1, labelHeight).apply {
                 topMargin = if (isRaLogin) SlotUi.menuPixel(activity, 3) else dp(4)
@@ -179,6 +190,16 @@ internal class SlotModalDialog(
                 if (isRaLogin) bottomMargin = SlotUi.menuPixel(activity, 7)
             })
         val field = SlotUi.field(activity, hint, password)
+        if (isRaLogin) {
+            // The box is 45 canvas pixels: Android's 48dp minimum and 10dp
+            // insets outgrew it on the KONKR and cut the text's top off.
+            val side = SlotUi.menuPixel(activity, 13)
+            field.setPadding(side, 0, side, 0)
+            field.minHeight = 0
+            field.minimumHeight = 0
+            field.gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            field.includeFontPadding = false
+        }
         field.contentDescription = label
         body.addView(field, LinearLayout.LayoutParams(-1, fieldHeight).apply {
             bottomMargin = fieldGap

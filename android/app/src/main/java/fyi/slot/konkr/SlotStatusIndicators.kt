@@ -53,11 +53,13 @@ internal class SlotStatusIndicators(
     frame: FrameLayout
 ) {
     private val scale = SlotUi.canvasScale(host).coerceIn(1f, 4f)
-    private val iconSize = (24f * scale).roundToInt()
+    // 20 on the 24 line (Siham 2026-11-09): the glyphs stand about as tall as
+    // the clock's digits and the battery, centred on the same line.
+    private val iconSize = (ICON * scale).roundToInt()
     private val spacing = (5f * scale).roundToInt()
     private val margin = (24f * scale).roundToInt()
     // Move only the shelf status row up; preserve its horizontal padding.
-    private val statusTop = (12f * scale).roundToInt()
+    private val statusTop = ((12f + (24f - ICON) / 2f) * scale).roundToInt()
     private val left = LinearLayout(host).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
@@ -148,6 +150,40 @@ internal class SlotStatusIndicators(
             topMargin = statusTop
         })
     }
+
+    /** Settings > Status Bar (2026-11-09): the icons at the top or on the
+     * bar, level with its clock. Sharing the clock's line it reads as a
+     * phone's: the apps after the clock on the left, Wi-Fi and Bluetooth
+     * before the battery on the right; the renderer gives both widths. */
+    private var placed = -1L
+    private fun place(bottom: Boolean, grouped: Boolean, clockW: Int, batteryW: Int) {
+        val key = (if (bottom) 2L else 0L) or (if (grouped) 1L else 0L) or
+            (clockW.toLong() shl 2) or (batteryW.toLong() shl 12)
+        if (key == placed) return
+        placed = key
+        val vertical = if (bottom) Gravity.BOTTOM else Gravity.TOP
+        // The clock and battery's own inset (slot-ui footer_margin).
+        val metrics = host.resources.displayMetrics
+        val canvasW = maxOf(metrics.widthPixels, metrics.heightPixels) / scale
+        val edge = if (canvasW < 640f) 12f else 24f
+        fun FrameLayout.LayoutParams.line() {
+            topMargin = if (bottom) 0 else statusTop
+            bottomMargin = if (bottom) barLine else 0
+        }
+        left.layoutParams = (left.layoutParams as FrameLayout.LayoutParams).apply {
+            gravity = vertical or Gravity.START
+            leftMargin = ((edge + if (grouped) clockW + SHARED_GAP else 0f) * scale).roundToInt()
+            line()
+        }
+        right.layoutParams = (right.layoutParams as FrameLayout.LayoutParams).apply {
+            gravity = vertical or Gravity.END
+            rightMargin = ((edge + if (grouped) batteryW + SHARED_GAP else 0f) * scale).roundToInt() - spacing
+            line()
+        }
+    }
+    /** From the bottom of the screen to the bottom of an icon centred on the
+     * bar's clock line (17 to the line's bottom). */
+    private val barLine = ((17f + (24f - ICON) / 2f) * scale).roundToInt()
 
     /**
      * Read-only SleepManager events are cheap notifications; actual provider
@@ -385,6 +421,10 @@ internal class SlotStatusIndicators(
             return
         }
         val integrations = flags and 8 != 0
+        val runningOnly = flags and 128 != 0
+        place(flags and 32 != 0, flags and 64 != 0, (flags shr 10) and 0xff, (flags shr 18) and 0xff)
+        val darkInk = flags and 256 != 0
+        for (glyph in listOf(sleep, basicsync, syncthing, ra, wifi, bluetooth)) glyph.darkInk = darkInk
         val radios = flags and 6 != 0
         val now = SystemClock.elapsedRealtime()
         if (now - lastStatePoll >= 3000L || lastStatePoll == 0L) {
@@ -397,9 +437,10 @@ internal class SlotStatusIndicators(
         }
 
         if (integrations) {
-            show(sleep, installedSleep, observedSleepRunning)
-            show(basicsync, installedBasic, basicRunning && basicStateKnown &&
-                now - lastBasicResponse < 45000L)
+            // Apps: ALL dims a stopped app, RUNNING hides it.
+            show(sleep, installedSleep && (!runningOnly || observedSleepRunning), observedSleepRunning)
+            val basicUp = basicRunning && basicStateKnown && now - lastBasicResponse < 45000L
+            show(basicsync, installedBasic && (!runningOnly || basicUp), basicUp)
             // BasicSync and Syncthing-Fork may expose a local Syncthing
             // daemon on the same default port. A healthy port owned by
             // BasicSync is NOT proof the Fork itself is running.
@@ -409,8 +450,8 @@ internal class SlotStatusIndicators(
             val forkHealthAttributable = !installedBasic ||
                 (basicStateKnown && !basicRunning &&
                     now - lastBasicResponse < 45000L)
-            show(syncthing, installedSyncthing,
-                syncthingRunning && forkHealthAttributable)
+            val syncthingUp = syncthingRunning && forkHealthAttributable
+            show(syncthing, installedSyncthing && (!runningOnly || syncthingUp), syncthingUp)
             // Only the account's configured/unconfigured state matters here.
             // Display the SAME trophy online and offline.
             show(ra, raAccountConfigured)
@@ -437,14 +478,18 @@ internal class SlotStatusIndicators(
             wifi.visibility = View.GONE
             bluetooth.visibility = View.GONE
         }
-        left.visibility = if (listOf(sleep, basicsync, syncthing, ra)
-            .any { it.visibility == View.VISIBLE }) View.VISIBLE else View.GONE
-        right.visibility = if (wifi.visibility == View.VISIBLE ||
-            bluetooth.visibility == View.VISIBLE) View.VISIBLE else View.GONE
+        for (group in listOf(left, right)) {
+            group.visibility = if ((0 until group.childCount)
+                    .any { group.getChildAt(it).visibility == View.VISIBLE }) View.VISIBLE else View.GONE
+        }
     }
 
     private companion object {
         const val STOPPED_ALPHA = 0.4f
+        /** Between the icons and the clock or battery sharing their line. */
+        const val SHARED_GAP = 10f
+        /** The icons' square, in canvas pixels. */
+        const val ICON = 20f
     }
 }
 
@@ -465,6 +510,11 @@ internal class StatusGlyph(context: Context, private val glyph: Glyph) : View(co
         set(value) {
             if (field != value) { field = value; invalidate() }
         }
+    /** Black, shadowless, on a light console bar (icons on the bar). */
+    var darkInk = false
+        set(value) {
+            if (field != value) { field = value; invalidate() }
+        }
     private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
@@ -479,11 +529,15 @@ internal class StatusGlyph(context: Context, private val glyph: Glyph) : View(co
         super.onDraw(canvas)
         canvas.save()
         canvas.scale(width / 24f, height / 24f)
-        canvas.save()
-        canvas.translate(0f, SHADOW_DY)
-        layer(canvas, Color.BLACK, SHADOW_ALPHA, STROKE + SHADOW_SPREAD)
-        canvas.restore()
-        layer(canvas, Color.WHITE, 1f, STROKE)
+        if (darkInk) {
+            layer(canvas, Color.BLACK, 1f, STROKE)
+        } else {
+            canvas.save()
+            canvas.translate(0f, SHADOW_DY)
+            layer(canvas, Color.BLACK, SHADOW_ALPHA, STROKE + SHADOW_SPREAD)
+            canvas.restore()
+            layer(canvas, Color.WHITE, 1f, STROKE)
+        }
         canvas.restore()
     }
 

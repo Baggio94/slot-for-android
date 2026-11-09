@@ -1,4 +1,4 @@
-use crate::lcd3x::ScreenEffect;
+use crate::lcd3x::{LcdEffect, ScreenEffect};
 use crate::power::{screen_brightness, screen_rect_in};
 use crate::quad::Quad;
 use crate::shaders::{GAME_FRAG, RECT_VERT};
@@ -21,14 +21,18 @@ struct GameProgram {
     u_fbo: gl::types::GLint,
     u_pic: gl::types::GLint,
     u_src: gl::types::GLint,
+    u_light: gl::types::GLint,
+    u_dm_fg: gl::types::GLint,
+    u_dm_bgc: gl::types::GLint,
+    u_dm_lum: gl::types::GLint,
 }
 
 impl GameProgram {
     /// The game shader with its effect fixed: the compiler drops every
     /// other effect, so a light effect stays light on a small GPU instead
     /// of paying for the heaviest one's registers.
-    fn new(effect: ScreenEffect) -> Result<Self, GfxError> {
-        let prog = crate::shaders::program(RECT_VERT, &game_frag(effect))?;
+    fn new(effect: ScreenEffect, lcd: LcdEffect) -> Result<Self, GfxError> {
+        let prog = crate::shaders::program(RECT_VERT, &game_frag(effect, lcd))?;
         let at = |name| crate::gl::uniform_location(prog, name);
         unsafe {
             gl::UseProgram(prog);
@@ -36,6 +40,9 @@ impl GameProgram {
             gl::Uniform2f(at("u_src"), SRC_W as f32, SRC_H as f32);
             gl::Uniform2f(at("u_target"), out_w() as f32, OUT_H as f32);
             gl::Uniform1i(at("u_paper"), 1);
+            gl::Uniform1i(at("u_dm_bg"), 2);
+            // Pixel Transparency's drop shadow: 3,3 at 640x480.
+            gl::Uniform2f(at("u_shadow"), 3.0, 3.0);
         }
         Ok(GameProgram {
             prog,
@@ -47,16 +54,33 @@ impl GameProgram {
             u_fbo: at("u_fbo"),
             u_pic: at("u_pic"),
             u_src: at("u_src"),
+            u_light: at("u_light"),
+            u_dm_fg: at("u_dm_fg"),
+            u_dm_bgc: at("u_dm_bgc"),
+            u_dm_lum: at("u_dm_lum"),
         })
     }
 }
 
-fn game_frag(effect: ScreenEffect) -> String {
-    GAME_FRAG.replace("uniform float u_mode;",
+fn game_frag(effect: ScreenEffect, lcd: LcdEffect) -> String {
+    format!("#define LCD_FX {}\n", lcd as u8) + &GAME_FRAG.replace("uniform float u_mode;",
         &format!("const float u_mode = {:.1};", effect.mode()))
 }
 
-const EFFECTS: usize = ScreenEffect::CrtAperture as usize + 1;
+const EFFECTS: usize = ScreenEffect::XbrLv2 as usize + 1;
+const LCD_EFFECTS: usize = 3;
+
+fn program_slot(effect: ScreenEffect, lcd: LcdEffect) -> usize {
+    effect as usize * LCD_EFFECTS + lcd as usize
+}
+
+fn rgb(c: u32) -> [f32; 3] {
+    [((c >> 16) & 255) as f32 / 255.0, ((c >> 8) & 255) as f32 / 255.0, (c & 255) as f32 / 255.0]
+}
+
+fn luma(c: [f32; 3]) -> f32 {
+    0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+}
 
 /// How a home console frame (any size) fills the screen. The Game Boy
 /// family keeps its 240x160 canvas and the source/picture rects instead.
@@ -110,8 +134,8 @@ pub fn fit_window(fit: Fit, tex: (u32, u32), out: (f32, f32)) -> [f32; 4] {
 
 pub struct GamePass {
     context_lost: bool,
-    /// Compiled on first use, one per effect.
-    programs: [Option<GameProgram>; EFFECTS],
+    /// Compiled on first use, one per effect and LCD Effect.
+    programs: Vec<Option<GameProgram>>,
     game: gl::types::GLuint,
     // Reuse the Android GLES2-compatible RGBA staging pixels each frame.
     // The old per-frame flat_map().collect() allocated ~150 KiB at 60 Hz.
@@ -124,6 +148,14 @@ pub struct GamePass {
     paper_size: f32,
     paper_pixels: Option<(u32, Vec<u8>)>,
     effect: ScreenEffect,
+    lcd: LcdEffect,
+    /// Sunlight Shimmer's light, 0..1 over the picture.
+    light: [f32; 2],
+    /// Dot Matrix: background, dots, then the lightest and darkest shade
+    /// the game draws (0xRRGGBB).
+    dot_palette: [u32; 4],
+    dot_bg: gl::types::GLuint,
+    dot_bg_pixels: Option<(u32, Vec<u8>)>,
     power: f32,
     src: [f32; 4],
     /// Canvas rect the whole 240x160 game texture maps to.
@@ -143,13 +175,20 @@ impl GamePass {
 
     pub(crate) fn recovery_bytes(&self) -> usize {
         self.paper_pixels.as_ref().map_or(0, |p| p.1.len())
+            + self.dot_bg_pixels.as_ref().map_or(0, |p| p.1.len())
     }
 
     pub(crate) fn restore_settings_into(&self, target: &mut Self) {
         target.colour_correct = self.colour_correct;
         target.fbo_scale = self.fbo_scale;
         target.pic = self.pic;
+        target.lcd = self.lcd;
         target.set_effect(self.effect);
+        target.light = self.light;
+        target.dot_palette = self.dot_palette;
+        if let Some((size, rgba)) = &self.dot_bg_pixels {
+            target.set_dot_background(*size, rgba);
+        }
         target.power = self.power;
         target.src = self.src;
         target.area = self.area;
@@ -166,10 +205,11 @@ impl GamePass {
         #[cfg(not(target_os = "android"))]
         let format = gl::BGRA;
         let effect = ScreenEffect::Lcd3x;
-        let mut programs: [Option<GameProgram>; EFFECTS] = Default::default();
-        programs[effect as usize] = Some(GameProgram::new(effect)?);
+        let mut programs: Vec<Option<GameProgram>> = (0..EFFECTS * LCD_EFFECTS).map(|_| None).collect();
+        programs[program_slot(effect, LcdEffect::Off)] = Some(GameProgram::new(effect, LcdEffect::Off)?);
         let game = crate::gl::texture(SRC_W, SRC_H, gl::NEAREST, gl::CLAMP_TO_EDGE, format, None);
         let paper = crate::gl::texture(1, 1, gl::NEAREST, gl::REPEAT, gl::RGBA, Some(&[255; 4]));
+        let dot_bg = crate::gl::texture(1, 1, gl::NEAREST, gl::REPEAT, gl::RGBA, Some(&[128, 128, 128, 255]));
         Ok(GamePass {
             context_lost: false,
             programs,
@@ -183,6 +223,11 @@ impl GamePass {
             paper_size: 1.0,
             paper_pixels: None,
             effect,
+            lcd: LcdEffect::Off,
+            light: [0.5, 0.5],
+            dot_palette: [0xD9C425, 0x1D6A6B, 0xFFFFFF, 0x000000],
+            dot_bg,
+            dot_bg_pixels: None,
             power: 1.0,
             src: WHOLE_TEXTURE,
             area: default_area(),
@@ -205,15 +250,55 @@ impl GamePass {
     }
 
     pub fn set_effect(&mut self, effect: ScreenEffect) {
-        let slot = &mut self.programs[effect as usize];
+        if self.build(effect, self.lcd) {
+            self.effect = effect;
+        }
+    }
+
+    /// Pixel Transparency / Sunlight Shimmer over the current shader.
+    pub fn set_lcd_effect(&mut self, lcd: LcdEffect) {
+        if self.build(self.effect, lcd) {
+            self.lcd = lcd;
+        }
+    }
+
+    fn build(&mut self, effect: ScreenEffect, lcd: LcdEffect) -> bool {
+        let slot = &mut self.programs[program_slot(effect, lcd)];
         if slot.is_none() {
-            match GameProgram::new(effect) {
+            match GameProgram::new(effect, lcd) {
                 Ok(program) => *slot = Some(program),
                 // Keep the current effect rather than draw nothing.
-                Err(_) => return,
+                Err(_) => return false,
             }
         }
-        self.effect = effect;
+        true
+    }
+
+    /// Sunlight Shimmer's light position, 0..1 over the picture.
+    pub fn set_light(&mut self, x: f32, y: f32) {
+        self.light = [x, y];
+    }
+
+    /// Dot Matrix colours, 0xRRGGBB: background, dots, then the lightest
+    /// and darkest shade the game draws (they set how dark a dot is).
+    pub fn set_dot_palette(&mut self, colours: [u32; 4]) {
+        self.dot_palette = colours;
+    }
+
+    pub fn has_dot_background(&self) -> bool {
+        self.dot_bg_pixels.is_some()
+    }
+
+    pub fn has_paper(&self) -> bool {
+        self.paper_pixels.is_some()
+    }
+
+    /// Dot Matrix background grain, a square RGBA texture.
+    pub fn set_dot_background(&mut self, size: u32, rgba: &[u8]) {
+        let tex = crate::gl::texture(size, size, gl::LINEAR, gl::REPEAT, gl::RGBA, Some(rgba));
+        unsafe { gl::DeleteTextures(1, &self.dot_bg) };
+        self.dot_bg = tex;
+        self.dot_bg_pixels = Some((size, rgba.to_vec()));
     }
 
     pub fn set_colour_correction(&mut self, enabled: bool) {
@@ -331,7 +416,8 @@ impl GamePass {
 
     fn draw_source(&self, tex: gl::types::GLuint, quad: &Quad, src: [f32; 4],
                    size: (u32, u32), pic: [f32; 4], area: [f32; 4]) {
-        let Some(p) = &self.programs[self.effect as usize] else { return };
+        let Some(p) = &self.programs[program_slot(self.effect, self.lcd)] else { return };
+        let [bg, dots, light, dark] = self.dot_palette.map(rgb);
         let (x, y, w, h) = screen_rect_in(area, self.power);
         unsafe {
             gl::UseProgram(p.prog);
@@ -346,6 +432,12 @@ impl GamePass {
             gl::Uniform1f(p.u_paper_size, self.paper_size);
             gl::Uniform2f(p.u_fbo, self.fbo_scale[0], self.fbo_scale[1]);
             gl::Uniform4f(p.u_pic, pic[0], pic[1], pic[2], pic[3]);
+            gl::Uniform2f(p.u_light, self.light[0], self.light[1]);
+            gl::Uniform3f(p.u_dm_fg, dots[0], dots[1], dots[2]);
+            gl::Uniform3f(p.u_dm_bgc, bg[0], bg[1], bg[2]);
+            gl::Uniform2f(p.u_dm_lum, luma(light), luma(dark));
+            gl::ActiveTexture(gl::TEXTURE2);
+            gl::BindTexture(gl::TEXTURE_2D, self.dot_bg);
             gl::ActiveTexture(gl::TEXTURE1);
             gl::BindTexture(gl::TEXTURE_2D, self.paper);
             gl::ActiveTexture(gl::TEXTURE0);
@@ -389,6 +481,7 @@ impl Drop for GamePass {
         unsafe {
             gl::DeleteTextures(1, &self.game);
             gl::DeleteTextures(1, &self.paper);
+            gl::DeleteTextures(1, &self.dot_bg);
             for program in self.programs.iter().flatten() {
                 gl::DeleteProgram(program.prog);
             }
@@ -402,12 +495,15 @@ mod tests {
 
     #[test]
     fn each_effect_gets_its_own_constant_mode() {
-        for effect in [ScreenEffect::None, ScreenEffect::ZfastLcd, ScreenEffect::SharpBilinear] {
-            let frag = game_frag(effect);
+        for effect in [ScreenEffect::None, ScreenEffect::ZfastLcd, ScreenEffect::SharpBilinear,
+                       ScreenEffect::DotMatrix, ScreenEffect::XbrLv2] {
+            let frag = game_frag(effect, LcdEffect::SunlightShimmer);
             assert!(!frag.contains("uniform float u_mode;"));
             assert!(frag.contains(&format!("const float u_mode = {:.1};", effect.mode())));
+            assert!(frag.starts_with("#define LCD_FX 2\n"));
         }
-        assert_eq!(EFFECTS, 19);
+        assert_eq!(EFFECTS, 25);
+        assert_eq!(program_slot(ScreenEffect::XbrLv2, LcdEffect::SunlightShimmer), EFFECTS * LCD_EFFECTS - 1);
     }
 
     #[test]

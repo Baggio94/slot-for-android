@@ -30,12 +30,30 @@ pub enum ScreenEffect {
     CrtGeomDeluxe,
     Fakelottes,
     CrtAperture,
+    /// Game Boy Dot Matrix (LuigiRa after Harlequin), one pass, the
+    /// player's palette as its colours.
+    DotMatrix,
+    CrtEasymode,
+    CrtHyllian,
+    Sabr,
+    SuperEagle,
+    XbrLv2,
 }
 
 impl ScreenEffect {
     pub fn mode(self) -> f32 {
         self as u8 as f32
     }
+}
+
+/// Matt Akins' Pixel Transparency / Sunlight Shimmer, drawn over the
+/// Game Boy family's LCD shader (setting "LCD Effect").
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum LcdEffect {
+    #[default]
+    Off,
+    PixelTransparency,
+    SunlightShimmer,
 }
 
 pub fn lcd3x_mask() -> [[[f32; 3]; 3]; 3] {

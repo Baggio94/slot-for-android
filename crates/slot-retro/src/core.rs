@@ -108,6 +108,10 @@ pub trait RetroCore: Send {
     /// Reject incomplete native GB/GBC lockstep frames before advancing netplay.
     fn link_step_fault(&self) -> bool { false }
     fn set_option(&mut self, _key: &str, _value: &str) {}
+    /// The cheats to play with, replacing any before: each a code as the
+    /// cheat files give it ("+" between the lines of a multi-line code).
+    /// An empty list turns every cheat off.
+    fn set_cheats(&mut self, _codes: &[String]) {}
     /// A solar cartridge's light, 0..=255 (mGBA's own levels stop at 205).
     fn set_sun(&mut self, _luminance: u8) {}
     fn set_frame_skip(&mut self, _skip: bool) {}

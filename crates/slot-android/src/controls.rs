@@ -769,12 +769,14 @@ pub enum Action {
     GameMenu, Screen, SaveEject, Multiplayer, SaveState, LoadState, FastForward, Rewind,
     ShaderPrev, ShaderNext, Color, PalettePrev, PaletteNext,
     Bigger, Smaller, RunAheadDown, RunAheadUp, SunDown, SunUp,
+    /// The screen as shown, into Pictures/Screenshots (Siham 2026-11-09).
+    Screenshot,
 }
 
 impl Action {
-    pub const ALL: [Action; 19] = [
+    pub const ALL: [Action; 20] = [
         Action::GameMenu, Action::Screen, Action::SaveEject, Action::Multiplayer, Action::SaveState,
-        Action::LoadState, Action::FastForward, Action::Rewind, Action::ShaderPrev,
+        Action::LoadState, Action::Screenshot, Action::FastForward, Action::Rewind, Action::ShaderPrev,
         Action::ShaderNext, Action::Color, Action::PalettePrev, Action::PaletteNext,
         Action::Bigger, Action::Smaller, Action::RunAheadDown, Action::RunAheadUp,
         Action::SunDown, Action::SunUp,
@@ -792,6 +794,7 @@ impl Action {
             Action::Bigger => "Bigger Screen", Action::Smaller => "Smaller Screen",
             Action::RunAheadDown => "Run-Ahead -", Action::RunAheadUp => "Run-Ahead +",
             Action::SunDown => "Less Sun", Action::SunUp => "More Sun",
+            Action::Screenshot => "Screenshot",
         }
     }
 
@@ -802,7 +805,7 @@ impl Action {
         let with = |key| Combo { modifier: true, key };
         let alone = |key| Combo { modifier: false, key };
         Some(match self {
-            Action::Color => return None,
+            Action::Color | Action::Screenshot => return None,
             Action::GameMenu => with(99), Action::Screen => with(100),
             Action::SaveEject => with(108),
             Action::Multiplayer => with(MODE), Action::SaveState => with(103),

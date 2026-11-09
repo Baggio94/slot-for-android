@@ -243,6 +243,13 @@ pub struct SoloRejoin {
     expected_ra_export_name: String,
 }
 
+fn battery_hash(ram: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    ram.hash(&mut hasher);
+    hasher.finish()
+}
+
 pub struct GameSession {
     // Wrapped with the native softcore evaluator for opted-in GBA sessions.
     core: Box<dyn RetroCore>,
@@ -274,6 +281,13 @@ pub struct GameSession {
     manual_export_prefix: PathBuf,
     state: PathBuf,
     retroarch_export: PathBuf,
+    // Solo only: written when the game was saved in-game during a session
+    // ejected without a save state, so an older auto-state never resumes
+    // over that newer battery (Auto Save on Eject turned off, then on).
+    stale_state: Option<PathBuf>,
+    // The battery as of the last auto-state (the session's start, after any
+    // resume, or its last Save & Eject / suspend), to tell.
+    opening_battery: Option<u64>,
     /// RetroArch's Gambatte predates the Sachen items: export its layout.
     gambatte_legacy_export: bool,
     ring: StateRing,
@@ -302,6 +316,8 @@ pub struct GameSession {
     last_step_timings: FrameStepTimings,
     // Keep mGBA speculative frames away from Pokémon Gen III FLASH1M.
     mgba_flash_runahead_guard: bool,
+    /// Save & Eject kept the Pokémon save on disk over an empty Flash.
+    kept_flash_save: bool,
     sma4_runahead_guard: bool,
     solar: Option<Solar>,
     // The light handed to a solar cart; None while the light sensor decides.
@@ -324,6 +340,10 @@ pub struct GameSession {
     blending: Option<crate::settings::Blending>,
     slot_blending: crate::frame_blend::Mode,
     pending_undo: Option<(Instant, PendingUndo)>,
+    /// Solo only: where this game's cheats turned on are kept.
+    cheat_file: Option<PathBuf>,
+    /// The cheats turned on (kept off during Multiplayer).
+    cheats: Vec<crate::cheats::Cheat>,
     last_sram: Instant,
     // F7: owns at most one immutable periodic SRAM/RTC write per solo session.
     battery_writer: Option<BatteryWriter>,
@@ -818,9 +838,13 @@ impl GameSession {
         // backwards despite correct SRAM syncing. Kotlin stages a one-shot
         // marker ONLY when the imported save comes from the other core.
         let skip_resume_marker = root.join(format!("{id}.{}.skip-resume.once", which.as_str()));
+        // The same guard after a session that saved in-game but ejected
+        // without a state: the old auto-state is older than the battery.
+        let stale_state = root.join(format!("{id}.{}.state-stale.once", which.as_str()));
         // Link sessions never consume a pending solo mGBA/gpSP
         // cross-core guard; it belongs exclusively to solo resume.
-        let cross_core_import = linked_boot.is_none() && skip_resume_marker.exists();
+        let cross_core_import = linked_boot.is_none()
+            && (skip_resume_marker.exists() || stale_state.exists());
         if cross_core_import {
             use std::time::{SystemTime, UNIX_EPOCH};
             let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
@@ -836,8 +860,12 @@ impl GameSession {
                 .map_err(|e| format!("Cannot guard existing RetroArch states: {e}"))?;
             atomic_write(&generation_record, key.as_bytes())
                 .map_err(|e| format!("Cannot record protected save-state generation: {e}"))?;
-            std::fs::remove_file(&skip_resume_marker)
-                .map_err(|e| format!("Cannot clear cross-core resume guard: {e}"))?;
+            for marker in [&skip_resume_marker, &stale_state] {
+                if marker.exists() {
+                    std::fs::remove_file(marker)
+                        .map_err(|e| format!("Cannot clear cross-core resume guard: {e}"))?;
+                }
+            }
             log_launch_timing("Cross-core SRAM selected: new immutable state generation; old auto states protected");
         } else if linked_boot.is_none() {
             if let Some(key) = active_state_generation(&root, id, which)? {
@@ -928,7 +956,9 @@ impl GameSession {
                 }
             }
         } else { None };
+        let opening_battery = core.save_ram_verified().ok().flatten().map(|ram| battery_hash(&ram));
         let mut session = Self {
+            stale_state: linked_boot.is_none().then_some(stale_state), opening_battery,
             core, link: None, game_link: None, link_touched: false, home_netplay: None,
             link_peer_bios: peer_bios_option.is_some(), linked_boot, gpsp_serial,
             rom_path: rom.to_path_buf(), rom_stem: rom_stem.to_owned(),
@@ -951,16 +981,56 @@ impl GameSession {
             preempt: crate::preemptive::Preempt::default(),
             last_step_timings: FrameStepTimings::default(),
             mgba_flash_runahead_guard: flash_guard,
+            kept_flash_save: false,
             sma4_runahead_guard: sma4_guard,
             solar, sun_luminance: None, sun_auto_minutes: None,
             pending_undo: None, last_sram: Instant::now(), battery_writer,
+            cheat_file: linked_boot.is_none()
+                .then(|| crate::cheats::saved_path(storage, platform, rom_stem)),
+            cheats: Vec::new(),
             sample_rate: core_sample_rate(sample_rate),
             fps,
         };
         // The handheld's default sun until the runtime applies this game's own.
         let light = slot_retro::sensors::available() & slot_retro::sensors::ILLUMINANCE != 0;
         session.set_sun(crate::emulation::default_sun(light));
+        if let Some(path) = session.cheat_file.as_ref() {
+            session.cheats = crate::cheats::read_saved(path);
+            if !session.cheats.is_empty() {
+                log_launch_timing(&format!("Cheats: {} turned on", session.cheats.len()));
+                session.apply_cheats();
+            }
+        }
         Ok(session)
+    }
+
+    /// The cheats turned on for this game.
+    pub fn cheats(&self) -> &[crate::cheats::Cheat] { &self.cheats }
+
+    /// Cheats belong to a solo game (Multiplayer boots a private one).
+    pub fn takes_cheats(&self) -> bool { self.cheat_file.is_some() }
+
+    /// Turn on these cheats (and off every other), kept for the next start.
+    pub fn set_cheats(&mut self, cheats: Vec<crate::cheats::Cheat>) -> Result<(), String> {
+        let path = self.cheat_file.clone().ok_or("No cheats during Multiplayer")?;
+        crate::cheats::write_saved(&path, &cheats).map_err(|e| e.to_string())?;
+        self.cheats = cheats;
+        self.apply_cheats();
+        Ok(())
+    }
+
+    /// Hand the cheats to the core (and Run-Ahead's copy): none while
+    /// another console plays along, or the two would drift apart.
+    fn apply_cheats(&mut self) {
+        let codes: Vec<String> = if self.cheat_file.is_none() || self.in_multiplayer() {
+            Vec::new()
+        } else {
+            self.cheats.iter().map(|cheat| cheat.code.clone()).collect()
+        };
+        self.core.set_cheats(&codes);
+        if let Some(copy) = self.runahead_secondary.as_mut() { copy.set_cheats(&codes); }
+        self.runahead_video.clear();
+        self.preempt.clear();
     }
 
     /// The second local player's buttons for the next frames. Ignored by
@@ -1117,6 +1187,7 @@ impl GameSession {
         if self.runahead_rollback_failed { return Err("Unsafe Run-Ahead state; Link blocked".into()); }
         self.game_link = Some(crate::gb_netlink::GameLink::begin(
             self.core.as_mut(), role, host, transport));
+        if !self.cheats.is_empty() { self.apply_cheats(); }
         self.runahead_video.clear();
         self.preempt.clear();
         self.rewind_frames = 0;
@@ -1145,6 +1216,7 @@ impl GameSession {
             .without_bios_check();
         self.link = Some(link);
         self.home_netplay = Some(HomeNetplay { own });
+        if !self.cheats.is_empty() { self.apply_cheats(); }
         self.runahead_video.clear();
         self.preempt.clear();
         self.rewind_frames = 0;
@@ -1432,12 +1504,15 @@ impl GameSession {
                 }
             }
         }
+        if !self.cheats.is_empty() { self.apply_cheats(); }
         self.runahead_video.clear();
         self.preempt.clear();
         self.rewind_frames = 0;
     }
 
     pub fn mgba_flash_runahead_blocked(&self) -> bool { self.mgba_flash_runahead_guard }
+    /// True once after Save & Eject kept the in-game save on disk.
+    pub fn take_kept_flash_save(&mut self) -> bool { std::mem::take(&mut self.kept_flash_save) }
     pub fn sma4_runahead_blocked(&self) -> bool { self.sma4_runahead_guard }
 
     /// True only after prediction has mutated the core and full restoration
@@ -1553,6 +1628,7 @@ impl GameSession {
                     log_launch_timing(&format!(
                         "Run-Ahead second instance ready in {}ms", started.elapsed().as_millis()));
                     self.runahead_secondary = Some(copy);
+                    if !self.cheats.is_empty() { self.apply_cheats(); }
                     if self.solar.is_some() {
                         let luminance = self.sun_luminance.unwrap_or_else(||
                             crate::emulation::lux_luminance(slot_retro::sensors::illuminance()));
@@ -2026,8 +2102,12 @@ impl GameSession {
         let mut error: Option<String> = None;
         match self.core.save_ram_verified()
             .map_err(|e| format!("Active battery snapshot: {e}"))? {
+            // A state from before the first in-game save holds an empty
+            // Flash: keep the save on disk as it is and let the cart eject.
+            // Refusing here left no way out of the game (issue #103).
             Some(bytes) if self.pokemon_flash_would_regress(&bytes) => {
-                error = Some("Pokémon Flash save is incomplete; previous save protected".into());
+                log_launch_timing("Pokémon Flash has no complete save; the save on disk is kept");
+                self.kept_flash_save = true;
             }
             Some(bytes) => match atomic_write(&self.save, &bytes) {
                 Ok(()) => wrote = true,
@@ -2071,6 +2151,9 @@ impl GameSession {
             return Err("Run-Ahead rollback failed; exit without saving instead".into());
         }
         let battery = self.save_sram_checked()?;
+        if !with_state && !self.in_multiplayer() {
+            self.mark_state_stale_if_saved();
+        }
         if !with_state || self.in_multiplayer() {
             return Ok(battery);
         }
@@ -2082,7 +2165,23 @@ impl GameSession {
             .map_err(|e| format!("RetroArch state encoding: {e}"))?;
         atomic_write(&self.retroarch_export, &container)
             .map_err(|e| format!("RetroArch state export: {e}"))?;
+        // The auto-state now matches this battery.
+        if self.stale_state.is_some() {
+            self.opening_battery = self.core.save_ram_verified().ok().flatten().map(|ram| battery_hash(&ram));
+        }
         Ok(true)
+    }
+
+    /// Ejected without a state after saving in-game: the auto-state on disk
+    /// is older than the battery, so the next resume must not bring it back.
+    fn mark_state_stale_if_saved(&mut self) {
+        let Some(marker) = self.stale_state.as_ref() else { return };
+        let now = self.core.save_ram_verified().ok().flatten().map(|ram| battery_hash(&ram));
+        if now.is_none() || now == self.opening_battery { return; }
+        match atomic_write(marker, b"battery newer than the auto-state") {
+            Ok(()) => log_launch_timing("Saved in-game without a state: the older auto-state won't resume"),
+            Err(error) => log_launch_timing(&format!("Stale auto-state guard not written: {error}")),
+        }
     }
 
     pub fn save(&mut self, with_state: bool) -> bool {

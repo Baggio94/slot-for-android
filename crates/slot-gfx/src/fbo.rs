@@ -252,6 +252,30 @@ impl Compositor {
         self.game.set_paper(size, rgba);
     }
 
+    pub fn has_paper(&self) -> bool {
+        self.game.has_paper()
+    }
+
+    pub fn set_lcd_effect(&mut self, lcd: crate::LcdEffect) {
+        self.game.set_lcd_effect(lcd);
+    }
+
+    pub fn set_light(&mut self, x: f32, y: f32) {
+        self.game.set_light(x, y);
+    }
+
+    pub fn set_dot_palette(&mut self, colours: [u32; 4]) {
+        self.game.set_dot_palette(colours);
+    }
+
+    pub fn has_dot_background(&self) -> bool {
+        self.game.has_dot_background()
+    }
+
+    pub fn set_dot_background(&mut self, size: u32, rgba: &[u8]) {
+        self.game.set_dot_background(size, rgba);
+    }
+
     pub fn fit(&mut self, window: (u32, u32)) {
         let size = canvas_size(window);
         if size == self.size {
@@ -327,6 +351,26 @@ impl Compositor {
         let mut top_down = Vec::with_capacity(buf.len());
         for row in buf.chunks_exact(stride).rev() {
             top_down.extend_from_slice(row);
+        }
+        top_down
+    }
+
+    /// The screen as shown, after end_frame (bezel included), top row first:
+    /// a screenshot. Android's own framebuffer, `window` pixels.
+    pub fn read_window(&self, window: (u32, u32)) -> Vec<u8> {
+        let (w, h) = window;
+        let stride = w as usize * 4;
+        let mut buf = vec![0u8; stride * h as usize];
+        unsafe {
+            gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+            gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
+            gl::ReadPixels(0, 0, w as i32, h as i32, gl::RGBA, gl::UNSIGNED_BYTE,
+                buf.as_mut_ptr() as *mut std::ffi::c_void);
+        }
+        let mut top_down = Vec::with_capacity(buf.len());
+        for row in buf.chunks_exact(stride).rev() {
+            // Opaque: what is on screen, never the framebuffer's alpha.
+            top_down.extend(row.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2], 255]));
         }
         top_down
     }

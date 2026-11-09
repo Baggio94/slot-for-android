@@ -53,7 +53,15 @@ pub fn hint_row(legend: &[(&'static str, &'static str)]) -> Vec<Hint> {
         .collect()
 }
 
+/// Between the buttons of a pair hint ("L1 R1": both shoulders' art).
+const PAIR_GAP: u32 = 3;
+
 pub fn cap_width(key: &str) -> u32 {
+    if let Some((a, b)) = key.split_once(' ').filter(|(a, b)| {
+        crate::button_art::key_art(a).is_some() && crate::button_art::key_art(b).is_some()
+    }) {
+        return cap_width(a) + PAIR_GAP + cap_width(b);
+    }
     if let Some(art) = crate::button_art::key_art(key) {
         return art.w;
     }
@@ -92,6 +100,14 @@ pub fn hint_face_ink(key: &str, label: &str, ink: [u8; 3]) -> UndoFace {
 /// The button art for `key`, or the classic keycap, vertically centred in
 /// the hint band at logical `x`.
 fn stamp_key(face: &mut Canvas, key: &str, cap_w: u32, x: u32) {
+    if let Some((a, b)) = key.split_once(' ').filter(|(a, b)| {
+        crate::button_art::key_art(a).is_some() && crate::button_art::key_art(b).is_some()
+    }) {
+        let first = cap_width(a);
+        stamp_key(face, a, first, x);
+        stamp_key(face, b, cap_width(b), x + first + PAIR_GAP);
+        return;
+    }
     if let Some(art) = crate::button_art::key_art(key) {
         let (aw, ah) = art.texels();
         let y = (face.th as i32 - ah as i32) / 2;

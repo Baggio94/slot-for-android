@@ -15,6 +15,8 @@ const BLANK: [u8; 3] = [0x3a, 0x3a, 0x3e];
 
 pub const DOT: f32 = 6.0;
 const DOT_GAP: f32 = 10.0;
+/// The least room between the dots and the keys either side.
+const DOT_ROOM: f32 = 12.0;
 const DOT_DIM: f32 = 0.35;
 
 const MARGIN: f32 = 16.0;
@@ -246,24 +248,39 @@ impl Polaroids {
         let tail = &widths[ways_out.min(widths.len())..];
         let tail_w = tail.iter().sum::<f32>() + HINT_GAP * tail.len().saturating_sub(1) as f32;
         let mut x = MARGIN;
+        let mut left_end = MARGIN;
         for (i, w) in widths.iter().enumerate() {
             if i == ways_out {
                 x = out_w() as f32 - MARGIN - tail_w;
             }
             out.push(hint_quad(x, y, *w, faces.get(i).copied()));
             x += w + HINT_GAP;
+            if i < ways_out { left_end = x - HINT_GAP; }
         }
-        self.draw_dots(top, out);
+        let right_start = if widths.len() > ways_out { out_w() as f32 - MARGIN - tail_w } else { out_w() as f32 - MARGIN };
+        self.draw_dots(top, left_end, right_start, out);
     }
 
-    fn draw_dots(&self, top: f32, out: &mut Vec<Draw>) {
+    /// The dots between the two groups of keys, or, where a narrow screen
+    /// leaves them no room, on a small plate just above the bar (Siham
+    /// 2026-11-09).
+    fn draw_dots(&self, top: f32, left_end: f32, right_start: f32, out: &mut Vec<Draw>) {
         let n = self.entries.len();
         let row = n as f32 * DOT + (n as f32 - 1.0).max(0.0) * DOT_GAP;
         let mut x = (out_w() as f32 - row) / 2.0;
+        let fits = x >= left_end + DOT_ROOM && x + row <= right_start - DOT_ROOM;
+        let dot_y = if fits {
+            top + (PLATE_H - DOT) / 2.0
+        } else {
+            let (pad, h) = (DOT_GAP, DOT + 2.0 * DOT_GAP);
+            let plate_y = top - h;
+            out.push(Draw::Rect { x: x - pad, y: plate_y, w: row + 2.0 * pad, h, colour: PLATE });
+            plate_y + DOT_GAP
+        };
         for i in 0..n {
             out.push(Draw::Rect {
                 x,
-                y: top + (PLATE_H - DOT) / 2.0,
+                y: dot_y,
                 w: DOT,
                 h: DOT,
                 colour: [1.0, 1.0, 1.0, if i == self.index { 1.0 } else { DOT_DIM }],

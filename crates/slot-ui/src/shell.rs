@@ -7,7 +7,28 @@ use slot_store::{Cart, Platform, ShellFinish};
 pub enum Finish {
     Solid,
     Translucent,
+    /// The system's own glitter plastic: clear on a Game Boy or a Game Boy
+    /// Advance cart, opaque on a home console's.
     Glitter,
+    SolidGlitter,
+    ClearGlitter,
+}
+
+impl Finish {
+    /// The finish as a shell choice (`cart_shell.txt`, Studio files) saves it.
+    pub fn stored(self) -> ShellFinish {
+        match self {
+            Finish::Solid => ShellFinish::Solid,
+            Finish::Translucent => ShellFinish::Clear,
+            Finish::Glitter => ShellFinish::Glitter,
+            Finish::SolidGlitter => ShellFinish::SolidGlitter,
+            Finish::ClearGlitter => ShellFinish::ClearGlitter,
+        }
+    }
+
+    pub fn has_flecks(self) -> bool {
+        matches!(self, Finish::Glitter | Finish::SolidGlitter | Finish::ClearGlitter)
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -97,6 +118,8 @@ pub fn shell_for(cart: &Cart) -> Shell {
             ShellFinish::Solid => Finish::Solid,
             ShellFinish::Clear => Finish::Translucent,
             ShellFinish::Glitter => Finish::Glitter,
+            ShellFinish::SolidGlitter => Finish::SolidGlitter,
+            ShellFinish::ClearGlitter => Finish::ClearGlitter,
         };
         return shell(choice.colour, finish);
     }
@@ -249,4 +272,100 @@ pub fn shell_presets() -> Vec<(&'static str, Shell)> {
         }),
     );
     out
+}
+
+/// One colour of Cart Studio's colour chart: its name, its plastic and the
+/// finish the real cart had in it.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct Swatch {
+    pub name: &'static str,
+    pub shell: Shell,
+}
+
+const fn swatch(name: &'static str, colour: [u8; 3], finish: Finish) -> Swatch {
+    Swatch { name, shell: Shell { colour, finish } }
+}
+
+const GB_SWATCHES: &[Swatch] = &[
+    swatch("Game Boy grey", DMG_SHELL.colour, Finish::Solid),
+    swatch("Black", DUAL_MODE_SHELL.colour, Finish::Solid),
+    swatch("Clear", GB_CLEAR_SHELL.colour, Finish::Translucent),
+    swatch("Gold", [0xb3, 0x8b, 0x3a], Finish::Solid),
+    swatch("Silver", [0xa9, 0xaa, 0xa7], Finish::Solid),
+    swatch("Crystal", CRYSTAL.colour, Finish::Glitter),
+    swatch("Kirby pink", KIRBY.colour, Finish::Translucent),
+    swatch("Turquoise", [0x1f, 0x9f, 0xb6], Finish::Translucent),
+    swatch("Orange", [0xf0, 0xa9, 0x5e], Finish::Translucent),
+    swatch("Pinball yellow", PINBALL.colour, Finish::Solid),
+    swatch("Banana yellow", [0xf2, 0xc4, 0x1b], Finish::Solid),
+];
+
+const GBA_SWATCHES: &[Swatch] = &[
+    swatch("Charcoal", DEFAULT_SHELL.colour, Finish::Solid),
+    swatch("Video grey", [0xc6, 0xc6, 0xc9], Finish::Solid),
+    swatch("Ruby", [0xc2, 0x33, 0x2e], Finish::Translucent),
+    swatch("Sapphire", [0x2f, 0x5c, 0xc0], Finish::Translucent),
+    swatch("Emerald", [0x24, 0x9c, 0x60], Finish::Translucent),
+    swatch("FireRed", [0xd8, 0x52, 0x24], Finish::Solid),
+    swatch("LeafGreen", [0x63, 0xb0, 0x44], Finish::Solid),
+    swatch("Clear", CLEAR.colour, Finish::Translucent),
+    swatch("Brick red", [0xa9, 0x51, 0x3b], Finish::Solid),
+    swatch("Yoshi green", YOSHI.colour, Finish::Solid),
+    swatch("Smoke", [0x5f, 0x62, 0x64], Finish::Translucent),
+    swatch("White", [0xec, 0xee, 0xe8], Finish::Solid),
+    swatch("NES grey", CLASSIC_NES.colour, Finish::Solid),
+    swatch("Famicom red", FAMICOM_MINI.colour, Finish::Solid),
+    swatch("Disk yellow", DISK_SYSTEM.colour, Finish::Solid),
+];
+
+const NES_SWATCHES: &[Swatch] = &[
+    swatch("NES grey", [126, 126, 128], Finish::Solid),
+    swatch("Zelda gold", [158, 133, 54], Finish::Glitter),
+    swatch("Black", [16, 16, 16], Finish::Solid),
+    swatch("White", [0xd7, 0xd7, 0xd7], Finish::Solid),
+    swatch("Mario orange", [196, 125, 8], Finish::Solid),
+    swatch("Navy", [0x13, 0x32, 0x66], Finish::Solid),
+    swatch("Yellow", [0xde, 0xd5, 0x01], Finish::Solid),
+    swatch("Dark grey", [0x5a, 0x5a, 0x5a], Finish::Solid),
+    swatch("Wine", [0x8d, 0x28, 0x42], Finish::Solid),
+    swatch("Mint", [0x57, 0xb3, 0x9f], Finish::Solid),
+    swatch("Blue", [0x34, 0x73, 0xa1], Finish::Solid),
+    swatch("Green", [0x01, 0x9f, 0x56], Finish::Solid),
+    swatch("Sky", [0x9e, 0xf0, 0xf0], Finish::Solid),
+    swatch("Rose", [0xbb, 0x71, 0x81], Finish::Solid),
+    swatch("Red", [0x89, 0x22, 0x22], Finish::Solid),
+];
+
+const SNES_SWATCHES: &[Swatch] = &[
+    swatch("Super Nintendo grey", [162, 157, 163], Finish::Solid),
+    swatch("Killer black", [17, 16, 17], Finish::Solid),
+];
+
+const MD_SWATCHES: &[Swatch] = &[
+    swatch("Mega Drive black", [18, 18, 19], Finish::Solid),
+];
+
+/// Colours no real cart came in, for fun, on every system.
+pub const FUN_SWATCHES: &[Swatch] = &[
+    swatch("Cherry", [0xe0, 0x28, 0x3a], Finish::Solid),
+    swatch("Tangerine", [0xf5, 0x7f, 0x17], Finish::Solid),
+    swatch("Lemon", [0xf5, 0xd9, 0x0a], Finish::Solid),
+    swatch("Lime", [0x8b, 0xc3, 0x4a], Finish::Solid),
+    swatch("Teal", [0x00, 0xa5, 0xa8], Finish::Solid),
+    swatch("Ocean", [0x1e, 0x63, 0xc9], Finish::Solid),
+    swatch("Grape", [0x6a, 0x3e, 0xa8], Finish::Solid),
+    swatch("Bubblegum", [0xf0, 0x6a, 0xa8], Finish::Solid),
+    swatch("Snow", [0xf2, 0xf1, 0xec], Finish::Solid),
+    swatch("Midnight", [0x1c, 0x1c, 0x24], Finish::Solid),
+];
+
+/// The colours real carts of this system came in, the commonest first.
+pub fn system_swatches(platform: Platform) -> &'static [Swatch] {
+    match platform {
+        Platform::Gb | Platform::Gbc => GB_SWATCHES,
+        Platform::Gba => GBA_SWATCHES,
+        Platform::Nes => NES_SWATCHES,
+        Platform::Snes => SNES_SWATCHES,
+        Platform::Md => MD_SWATCHES,
+    }
 }

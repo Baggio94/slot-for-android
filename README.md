@@ -33,7 +33,7 @@ Everything you love about the original slot., now on Android handhelds — with 
 - **A cartridge-first experience** — Browse your games as beautifully rendered physical cartridges, complete with satisfying insertion and ejection animations and sounds.
 - **Made for Game Boy Advance** — GBA takes center stage, with dedicated shelves for Game Boy and Game Boy Color games.
 - **Pick a cartridge and play** — No complicated menus or unnecessary distractions. Insert a cartridge and jump straight into your game.
-- **Cart Studio** — Customize your cartridges with authentic artwork, labels and shell colors.
+- **Cart Studio** — Customize your cartridges with authentic labels, shell colours and finishes, right inside slot.
 - **All the essentials** — Save states, automatic saving, rewind, fast-forward, turbo buttons and rumble.
 - **Make it yours** — Light and dark themes, wallpapers, favorites, recently played games, shaders, color correction and screen bezels.
 - **Multiplayer** — The original slot.'s Link Cable and Wireless Adapter experience, adapted for Android.
@@ -44,6 +44,7 @@ Everything you love about the original slot., now on Android handhelds — with 
 - **Two emulation cores per system** — mGBA or gpSP for GBA, mGBA or Gambatte for GB and GBC, FCEUmm or Nestopia for NES, Snes9x or bsnes for SNES, Genesis Plus GX or PicoDrive for Mega Drive. Choose a default core per system, or a different one for any game.
 - **Made for every Android handheld** — The interface fills any screen shape, from square (1:1) to widescreen, at the panel's native resolution. Screen sizes, overlays and frame pacing get sensible defaults for each handheld.
 - **SLOT button** — On the KONKR, use the round top button to insert a cartridge, or hold it while playing to save and eject it. The Retroid Pocket's centre key works the same way, and on every handheld SELECT + X opens the in-game menu and SELECT + START saves and ejects the cartridge.
+- **slot.'s own labels** — Your cartridges get their real labels automatically, from slot. for Android's own label collection for every system, rom hacks included.
 - **Easy library setup** — Choose your ROM folder directly from Android, with optional BIOS, saves and save states folders. ES-DE style folders are recognised.
 - **RetroArch save compatibility** — Share SRAM saves, RTC data and compatible save states with RetroArch, using the same folders and matching emulation cores.
 - **Share Core Saves** — Switch any game to its other core and keep your in-game save, on every system.
@@ -53,7 +54,10 @@ Everything you love about the original slot., now on Android handhelds — with 
 - **Your controls, your way** — Choose the controller of each player, remap its buttons, give each system or game its own layout, and pick your own hotkeys. With a second controller, two players can share one handheld on NES, Super Nintendo and Mega Drive.
 - **Screen menu** — Change the shader, color correction, palette, overlay and screen size while you watch your game. Press SELECT + Y to open it straight from the game.
 - **Frame Blending** — Off, Mix or Ghosting for each system, for games that flicker their sprites to draw shadows or transparency.
-- **Shaders for every system** — Ten GBA shader presets, Game Boy LCD shaders, and CRT shaders for the home consoles (zfast-crt, fakelottes, crt-aperture, GDV Trinitron, CRT Geom Deluxe, crt-pi), plus Pixel AA for clean pixels at any scale.
+- **Shaders for every system** — Ten GBA shader presets, Game Boy LCD shaders with Dot Matrix in your palette's colours, and eleven shaders for the home consoles (zfast-crt, fakelottes, crt-aperture, GDV Trinitron, CRT Geom Deluxe, crt-pi, crt-easymode, crt-hyllian, SABR, Super Eagle, xBR-lv2), plus Pixel AA for clean pixels at any scale.
+- **LCD Effect** — Matt Akins' Pixel Transparency and Sunlight Shimmer on the Game Boy, Game Boy Color and Game Boy Advance: the backing shows through the pixels, and with Sunlight Shimmer the light follows the handheld as you tilt it.
+- **Cheats** — Every cheat of RetroArch's database comes with slot. for the Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive: open **Cheats** in the game menu and turn each one on or off. slot. remembers them for each game.
+- **Dither Blending** — On the Mega Drive, the striped dithering games used for water, shadows and glass blends into the see-through colour a TV showed.
 - **Independent system settings** — Configure the default core, shader, color correction, screen size, overlay, frame blending and controls of each system separately in **START → Settings → Systems**.
 - **Screen sizes and overlays** — Integer, Original Ratio or Stretch, with [Watomsk](https://github.com/Watomsk/Overlays)'s overlays for every system.
 - **Optimized cartridge browsing** — Background artwork loading, persistent caching and GPU texture management designed to keep large libraries responsive.
@@ -100,7 +104,7 @@ The KONKR's round top button is called **slot. cap** in this port. Since it cont
 In **START → Settings → Controls**:
 
 - **Port 1 / Port 2** — Choose each player's controller and remap its buttons. Port 2 is player 2 on NES, Super Nintendo and Mega Drive.
-- **Hotkeys** — Change any shortcut below, and choose SELECT, L3 or R3 as the Hotkey Button. Fast-forward, rewind and the Boktai sun keep their buttons.
+- **Hotkeys** — Change any shortcut below, and choose SELECT, L3 or R3 as the Hotkey Button. Fast-forward, rewind and the Boktai sun keep their buttons. A **Screenshot** hotkey (none by default) saves the screen as shown in Pictures/Screenshots.
 - **Reset to Default** — Back to slot.'s own controls.
 
 Each system has its own layout in **START → Settings → Systems → [system] → Controls**: which button plays each console button, and what X / Y and L1 / R1 do on consoles without them. In a game, **Settings → Controls** changes it for that game only.
@@ -183,26 +187,23 @@ The shortcuts go through every setting in order: 0, 1 … 8 or 10, SENSOR, AUTO,
 
 Your cartridges dress themselves: slot. fetches their labels automatically while you're online, for every system.
 
-Want a different label or cartridge style? slot. also includes the original **[Cart Studio](https://studio.slot-cfw.fyi/)**, integrated directly into the app. It's optional, and no computer is required.
+Want a different label or cartridge style? Cart Studio is built into slot. No computer is required.
 
-### Changing cartridge artwork
+### One cartridge
 
-1. Press **START → Cart Studio** from the carousel.
-2. Wait for Cart Studio to load your library.
-3. Select a cartridge to open its editor.
-4. Search for the game, select the correct match, and choose your preferred label and cartridge style.
-5. Tap the **✕ in the top-right corner of the editor** to return to the cartridge list.
-6. Repeat for any other games, then press **Save to slot.** to apply your changes.
+Highlight a cartridge on the carousel and press **X**. Choose:
 
-**Important:** Don't press **B / BACK** until you've finished editing and saved your artwork. Use the editor's **✕** to return to the cartridge list without leaving Cart Studio.
+- **Label** — Current, Real Label, Logo Only, slot. label, **Search game…** (another game's label, found by name) or **Picture…** (one of your own pictures).
+- **Background** — The colour behind a logo.
+- **Colour** — Press **A** for a chart of the system's real shell colours, then fun ones.
+- **Finish** — Original, Solid, Clear, Solid glitter or Clear glitter.
+- **Shape** — For systems with several cartridge moulds.
 
-### Quick editing
+Press **A** to save. The cartridge changes on the carousel right away.
 
-Want to customize just one cartridge? Highlight it on the carousel and press **X** to open it directly in Cart Studio.
+### A whole system
 
-You can also use **Fill unlabelled** to speed up artwork selection for cartridges without labels.
-
-Once saved, your customized cartridges will appear in the slot. carousel.
+Press **START → Cart Studio** to see every cartridge of a system. **L1 / R1** change the system, **L2 / R2** jump from letter to letter, and **A** edits a cartridge. Edited cartridges wait on the page until **Y** saves them all; **B** asks before dropping unsaved changes.
 
 ## Saves, RetroArch & Syncthing
 
@@ -265,9 +266,12 @@ Special thanks to:
 - **[Markus](https://github.com/MarkusMaribu)** — The beautiful skeuomorphic artwork that gives slot. its unique identity.
 - **[pvaibhav](https://github.com/pvaibhav/slot)** — Contributions and improvements inherited from the Slot fork.
 - **[Watomsk](https://github.com/Watomsk/Overlays)** — The screen overlays for every system, used with permission.
+- **[Matt Akins](https://github.com/mattakins/Pixel_Transparency)** — Pixel Transparency and Sunlight Shimmer, adapted with his permission.
 - **[mGBA](https://mgba.io/), [gpSP](https://github.com/libretro/gpsp), [Gambatte](https://github.com/libretro/gambatte-libretro), [FCEUmm](https://github.com/libretro/libretro-fceumm), [Nestopia](https://github.com/libretro/nestopia), [Snes9x](https://github.com/libretro/snes9x), [bsnes](https://github.com/libretro/bsnes-libretro), [Genesis Plus GX](https://github.com/libretro/Genesis-Plus-GX), [PicoDrive](https://github.com/libretro/picodrive), [libretro](https://www.libretro.com/) and [RetroAchievements](https://retroachievements.org/)** — The projects and contributors powering emulation and achievements.
-- **The libretro shader authors** — LCD and CRT shaders by Gigaherz, Themaister, Greg Hogan, jdgleaver, cgwg, hunterk, Pokefan531, endrift, davej, guest(r), Timothy Lottes and EasyMode.
+- **The libretro shader authors** — LCD and CRT shaders by Gigaherz, Themaister, Greg Hogan, jdgleaver, cgwg, hunterk, Pokefan531, endrift, davej, guest(r), Timothy Lottes, EasyMode, Hyllian, Joshua Street, the DOSBox Team and Derek Liauw Kie Fa, LuigiRa and Harlequin, and Sp00kyFox.
+- **Sp00kyFox** — GDAPT, the Mega Drive's Dither Blending, used with the author's permission.
 - **[ScreenScraper](https://www.screenscraper.fr/)** — Cartridge labels and artwork.
+- **[libretro-database](https://github.com/libretro/libretro-database)** — The cheat codes (CC BY-SA 4.0).
 
 This is an **unofficial community port**, not affiliated with or endorsed by the original Slot developers or any handheld manufacturer.
 

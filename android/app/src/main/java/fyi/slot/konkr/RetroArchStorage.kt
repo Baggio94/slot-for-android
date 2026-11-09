@@ -177,7 +177,9 @@ internal object RetroArchStorage {
         val coreLower = coreLower(target.core)
         val guardRoot = File(context.filesDir, "Saves")
         val skipped = File(guardRoot,
-            "${target.romIdentity}.$coreLower.skip-resume.once").isFile
+            "${target.romIdentity}.$coreLower.skip-resume.once").isFile ||
+            // Saved in-game, then ejected without a state: the auto-state is older.
+            File(guardRoot, "${target.romIdentity}.$coreLower.state-stale.once").isFile
         val stateProtected = File(guardRoot,
             "${target.romIdentity}.$coreLower.state-export-protected").isFile
         if (skipped || (stateProtected && !retroArchAutoIsNewer(context, target))) {

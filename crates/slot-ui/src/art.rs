@@ -44,7 +44,7 @@ pub(crate) fn fit_label_rgba(src: &[u8], sw: u32, sh: u32, w: u32, h: u32) -> Op
     Some(crate::native_assets::resample(&part, cw, ch, w, h))
 }
 
-fn cover_rgba(src: &[u8], sw: u32, sh: u32, w: u32, h: u32) -> Option<Vec<u8>> {
+pub(crate) fn cover_rgba(src: &[u8], sw: u32, sh: u32, w: u32, h: u32) -> Option<Vec<u8>> {
     if sw == 0 || sh == 0 {
         return None;
     }
