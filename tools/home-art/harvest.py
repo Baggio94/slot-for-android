@@ -50,6 +50,20 @@ API = 'https://api.screenscraper.fr/api2'
 LIBRETRO = 'https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/no-intro/'
 
 LIBRETRO_HACKS = 'https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/hacks/'
+LIBRETRO_HOMEBREW = 'https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/homebrew/'
+LIBRETRO_SERIAL = 'https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/serial/'
+
+# Game Boy Advance Video carts: No-Intro keeps them in a dat of their own that libretro doesn't
+# carry. Their CRCs come from libretro's serial dat (AGB-M... serials) and from ScreenScraper's
+# search, asked these words; the list found is kept VIDEO_DAYS days in .state/GBA.video.json.
+VIDEO = re.compile(r'(game ?boy advance|gba)[ -]?video', re.I)
+VIDEO_SEARCH = (
+    'Game Boy Advance Video', 'GBA Video', 'Cartoon Network', 'Nicktoons', 'SpongeBob', 'Pokemon',
+    'Disney Channel', 'Shrek', 'Shark Tale', 'Dora the Explorer', 'Sonic X', 'Yu-Gi-Oh',
+    'Dragon Ball GT', 'Fairly OddParents', 'Jimmy Neutron', 'Strawberry Shortcake', 'Proud Family',
+    'Teenage Mutant Ninja Turtles', 'Super Robot Monkey Team', 'All Grown Up', 'Kids Next Door',
+)
+VIDEO_DAYS = 28
 
 # slot.'s platform names, libretro's dat for each, and ScreenScraper's system id
 # (HomeCartLabels.systemId for the home consoles). The ids are checked against ScreenScraper's
@@ -396,10 +410,12 @@ def read_dat(platform, local=None, base=LIBRETRO):
 
 
 def dat_texts(platform, local=None, hacks=True):
-    """The dats to read for a platform: No-Intro's (or a local one), then libretro's rom hacks."""
+    """The dats to read for a platform: No-Intro's (or a local one), then libretro's rom hacks
+    and homebrew."""
     texts = [read_dat(platform, local)]
     if hacks and not local:
         texts.append(read_dat(platform, base=LIBRETRO_HACKS))
+        texts.append(read_dat(platform, base=LIBRETRO_HOMEBREW))
     return texts
 
 
@@ -412,6 +428,112 @@ def entries_for(platform, local=None, hacks=True, texts=None):
         for crc, entry in parse_dat(text).items():
             entries.setdefault(crc, entry)
     return entries
+
+
+# ----------------------------------------------------------- GBA Video ---
+
+def serial_videos(text):
+    """CRC32 -> (name, 0) for the Game Boy Advance Video carts of libretro's serial dat, whose
+    games carry a comment for a name and an AGB-M... serial."""
+    out = {}
+    for block in re.finditer(r'game\s*\((.*?)\n\)', text, re.S):
+        body = block.group(1)
+        name = re.search(r'^\s*(?:comment|name)\s+"([^"]+)"', body, re.M)
+        serial = re.search(r'\bserial\s+"([^"]+)"', body)
+        crc = re.search(r'\bcrc\s+([0-9A-Fa-f]{8})\b', re.sub(r'"[^"]*"', '""', body))
+        if name and crc and (VIDEO.search(name.group(1)) or (serial and re.match(r'AGB-M', serial.group(1)))):
+            out.setdefault(crc.group(1).upper(), (name.group(1), 0))
+    return out
+
+
+def game_names(jeu):
+    names = jeu.get('noms') or []
+    if isinstance(names, dict):
+        names = [{'text': v} for v in names.values()]
+    return [str(n.get('text', '')) for n in names if isinstance(n, dict)]
+
+
+def game_roms(jeu):
+    roms = jeu.get('roms') or []
+    if isinstance(roms, dict):
+        roms = [roms]
+    if isinstance(jeu.get('rom'), dict):
+        roms = roms + [jeu['rom']]
+    return [r for r in roms if isinstance(r, dict)]
+
+
+def video_roms(jeu):
+    """CRC32 -> (name, size) for the roms of a ScreenScraper game that is a Game Boy Advance
+    Video cart, named after the dump's file when it says so, else after the game."""
+    names = game_names(jeu)
+    out = {}
+    for rom in game_roms(jeu):
+        crc = str(rom.get('romcrc') or '').strip().upper()
+        if not re.fullmatch(r'[0-9A-F]{8}', crc):
+            continue
+        file = re.sub(r'\.[A-Za-z0-9]{1,4}$', '', str(rom.get('romfilename') or '').strip())
+        if VIDEO.search(file):
+            name = file
+        else:
+            title = next((n for n in names if VIDEO.search(n)), None)
+            if not title:
+                continue
+            name = title if title.lower().startswith('game boy advance video') else f'Game Boy Advance Video - {title}'
+        try:
+            size = int(str(rom.get('romsize') or 0))
+        except ValueError:
+            size = 0
+        out.setdefault(crc, (name, size))
+    return out
+
+
+def discover_videos(c):
+    """Every Game Boy Advance Video cart ScreenScraper's search finds: CRC32 -> (name, size)."""
+    found, seen = {}, set()
+    for words in VIDEO_SEARCH:
+        data = call('jeuRecherche.php',
+                    dict(c, systemeid=SS_SYSTEM['GBA'], recherche=words))
+        games = ((data or {}).get('response') or {}).get('jeux') or []
+        for jeu in games:
+            if not isinstance(jeu, dict) or not jeu.get('id') or jeu['id'] in seen:
+                continue
+            if not any(VIDEO.search(n) for n in game_names(jeu)) and not any(
+                    VIDEO.search(str(r.get('romfilename') or '')) for r in game_roms(jeu)):
+                continue
+            seen.add(jeu['id'])
+            if not game_roms(jeu):  # the search gave the game without its dumps: ask for them
+                more = call('jeuInfos.php', dict(c, gameid=jeu['id']))
+                jeu = dict(jeu, **(((more or {}).get('response') or {}).get('jeu') or {}))
+            got = video_roms(jeu)
+            print(f"  GBA Video: {', '.join(game_names(jeu)[:1]) or jeu['id']}: {len(got)} dump(s)", flush=True)
+            for crc, entry in got.items():
+                found.setdefault(crc, entry)
+    return found
+
+
+def video_entries(c, out, today, local=None):
+    """The Game Boy Advance Video carts to ask about, from libretro's serial dat and
+    ScreenScraper's search, the search kept VIDEO_DAYS days."""
+    path = out / '.state' / 'GBA.video.json'
+    kept = load(path, {})
+    found = {crc: tuple(e) for crc, e in (kept.get('entries') or {}).items()}
+    stale = time.strftime('%Y-%m-%d', time.gmtime(time.time() - VIDEO_DAYS * 86400))
+    if not found or kept.get('when', '') < stale:
+        try:
+            found = discover_videos(c) or found
+            write_json(path, {'when': today, 'entries': {k: list(v) for k, v in found.items()}})
+        except Exception as e:  # the search is a bonus: the serial dat still names most
+            print(f'GBA Video search failed: {type(e).__name__}: {e}', flush=True)
+    try:
+        serial = serial_videos(Path(local).read_text('utf-8', 'replace') if local
+                               else read_dat('GBA', base=LIBRETRO_SERIAL))
+    except Exception as e:
+        print(f'GBA Video serial dat unread: {type(e).__name__}: {e}', flush=True)
+        serial = {}
+    # The serial dat's No-Intro names win over ScreenScraper's, its sizes lose to them.
+    for crc, (name, size) in serial.items():
+        found[crc] = (name, found.get(crc, (name, 0))[1])
+    return found
 
 
 # --------------------------------------------------------------- parents ---
@@ -477,7 +599,10 @@ def main():
     ap.add_argument('--limit', type=int, help='stop after this many games, for a trial run')
     ap.add_argument('--match', help='only dumps whose No-Intro name matches this regex')
     ap.add_argument('--dat', help='a local dat instead of libretro\'s (one platform only)')
-    ap.add_argument('--no-hacks', action='store_true', help='No-Intro dumps only, not libretro\'s rom hacks')
+    ap.add_argument('--no-hacks', action='store_true',
+                    help='No-Intro dumps only, not libretro\'s rom hacks and homebrew')
+    ap.add_argument('--no-videos', action='store_true', help='no Game Boy Advance Video discovery')
+    ap.add_argument('--video-dat', help='a local serial dat for the Game Boy Advance Video carts')
     ap.add_argument('--max-minutes', type=float,
                     help='stop asking after this long, leaving a complete index (CI time limits)')
     ap.add_argument('--keep-png', action='store_true',
@@ -578,6 +703,12 @@ def main():
             # A stopped run still rewrites every platform's names (no lookups).
             texts = dat_texts(platform, args.dat, hacks=not args.no_hacks)
             entries = entries_for(platform, texts=texts)
+            if platform == 'GBA' and not args.no_videos:
+                videos = video_entries(c, out, today, args.video_dat)
+                fresh = sum(1 for crc in videos if crc not in entries)
+                for crc, entry in videos.items():
+                    entries.setdefault(crc, entry)
+                print(f'GBA: {len(videos)} Game Boy Advance Video dumps, {fresh} not in the dats', flush=True)
             stems = {}
             for text in texts:
                 for crc, stem in rom_stems(text).items():

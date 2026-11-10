@@ -483,5 +483,117 @@ game (
             self.assertEqual([], self.lookups)
 
 
+class VideoTests(unittest.TestCase):
+    """Game Boy Advance Video carts, which no dat libretro reads for No-Intro names."""
+
+    SERIAL = '''game (
+\tcomment "Game Boy Advance Video - Shrek (USA)"
+\tserial "AGB-MSKE-USA"
+\trom (
+\t\tcrc 0000000c
+\t)
+)
+
+game (
+\tcomment "Famicom Mini 01 - Super Mario Bros. (Japan)"
+\tserial "AGB-FSMJ-JPN"
+\trom (
+\t\tcrc 0000000D
+\t)
+)
+'''
+
+    def test_the_serial_dat_names_the_video_carts_only(self):
+        self.assertEqual({'0000000C': ('Game Boy Advance Video - Shrek (USA)', 0)},
+                         harvest.serial_videos(self.SERIAL))
+
+    def test_a_search_hit_is_named_after_its_dump(self):
+        jeu = {'id': '5', 'noms': [{'region': 'us', 'text': 'GBA Video : Pokemon Vol. 1'}],
+               'roms': [{'romcrc': 'abcdef01', 'romsize': '33554432',
+                         'romfilename': 'Game Boy Advance Video - Pokemon - Volume 1 (USA).gba'},
+                        {'romcrc': 'ABCDEF02', 'romsize': '', 'romfilename': 'pokevid.gba'},
+                        {'romcrc': 'nothex!!', 'romfilename': 'x.gba'}]}
+        self.assertEqual({'ABCDEF01': ('Game Boy Advance Video - Pokemon - Volume 1 (USA)', 33554432),
+                          'ABCDEF02': ('Game Boy Advance Video - GBA Video : Pokemon Vol. 1', 0)},
+                         harvest.video_roms(jeu))
+        self.assertEqual({}, harvest.video_roms({'noms': [{'text': 'Pokemon Emerald'}],
+                                                 'roms': [{'romcrc': '00000001', 'romfilename': 'p.gba'}]}))
+
+    def test_homebrew_dats_are_read_with_the_hacks(self):
+        asked = []
+
+        def read_dat(platform, local=None, base=harvest.LIBRETRO):
+            asked.append(base)
+            return ''
+        with unittest.mock.patch.object(harvest, 'read_dat', read_dat):
+            harvest.dat_texts('GBA')
+            self.assertEqual([harvest.LIBRETRO, harvest.LIBRETRO_HACKS, harvest.LIBRETRO_HOMEBREW], asked)
+            asked.clear()
+            harvest.dat_texts('GBA', hacks=False)
+            self.assertEqual([harvest.LIBRETRO], asked)
+
+    def test_a_run_finds_the_video_carts_once_a_month(self):
+        import json
+        searches, infos, lookups = [], [], []
+        game = {'medias': [{'type': 'support-texture', 'region': 'us', 'url': 'https://ss/m?media=tex-us'}]}
+
+        def call(endpoint, params, tries=4):
+            if endpoint == 'systemesListe.php':
+                return {'response': {'systemes': [{'id': 12, 'noms': {'nom_eu': 'Game Boy Advance'}}]}}
+            if endpoint == 'jeuRecherche.php':
+                searches.append(params['recherche'])
+                if params['recherche'] != 'Cartoon Network':
+                    return {'response': {'jeux': [{}]}}
+                return {'response': {'jeux': [
+                    {'id': '7', 'noms': [{'region': 'us',
+                                          'text': 'Game Boy Advance Video - Cartoon Network Collection Vol. 1'}]},
+                    {'id': '8', 'noms': [{'region': 'us', 'text': 'Cartoon Network Speedway'}]}]}}
+            if endpoint == 'jeuInfos.php' and 'gameid' in params:
+                infos.append(params['gameid'])
+                return {'response': {'jeu': {'id': '7', 'roms': [
+                    {'romcrc': '0000000A', 'romsize': '16777216',
+                     'romfilename': 'Game Boy Advance Video - Cartoon Network Collection - Volume 1 (USA).gba'}]}}}
+            lookups.append(params['crc'])
+            return {'response': {'jeu': game}}
+
+        png = FilesTests.png(self, 400, 300)
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(harvest, 'call', call), \
+                unittest.mock.patch.object(harvest, 'fetch', lambda url, tries=3: png), \
+                unittest.mock.patch.dict(harvest.os.environ, SS_DEVID='id', SS_DEVPASSWORD='pw'):
+            out, dat, serial = Path(d) / 'set', Path(d) / 'gba.dat', Path(d) / 'serial.dat'
+            dat.write_text('game (\n\tname "Alpha (USA)"\n\trom ( name "Alpha (USA).gba" size 1024 crc 00000001 )\n)\n')
+            serial.write_text(self.SERIAL)
+
+            def run():
+                argv = sys.argv
+                sys.argv = ['harvest.py', '--platform', 'GBA', '--out', str(out), '--dat', str(dat),
+                            '--video-dat', str(serial)]
+                try:
+                    with unittest.mock.patch('sys.stdout', new=io.StringIO()):
+                        harvest.main()
+                finally:
+                    sys.argv = argv
+
+            run()
+            self.assertEqual(list(harvest.VIDEO_SEARCH), searches)
+            self.assertEqual(['7'], infos)  # the speedway game isn't a video cart
+            self.assertEqual(['00000001', '0000000A', '0000000C'], sorted(lookups))
+            names = json.loads((out / 'GBA.names.json').read_text())
+            self.assertEqual('Game Boy Advance Video - Cartoon Network Collection - Volume 1 (USA)',
+                             names['0000000A'])
+            self.assertEqual('Game Boy Advance Video - Shrek (USA)', names['0000000C'])
+
+            searches.clear()
+            run()
+            self.assertEqual([], searches)  # kept for a month
+            state = out / '.state' / 'GBA.video.json'
+            kept = json.loads(state.read_text())
+            kept['when'] = '2000-01-01'
+            state.write_text(json.dumps(kept))
+            run()
+            self.assertEqual(list(harvest.VIDEO_SEARCH), searches)
+
+
 if __name__ == '__main__':
     unittest.main()
