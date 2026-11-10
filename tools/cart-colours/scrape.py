@@ -172,6 +172,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="max new ROMs per system (0 = all)")
     ap.add_argument("--pause", type=float, default=1.2)
     ap.add_argument("--systems", default="GB,GBC,GBA")
+    ap.add_argument("--print", default="", help="systems whose rows go to the log (default: --systems)")
     ap.add_argument("--only", default="", help="regex of ROM names to re-check, printing their media")
     args = ap.parse_args()
     cache, out = Path(args.cache), Path(args.out)
@@ -276,9 +277,11 @@ def main():
         for row in results:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     # Artifacts can't be fetched from everywhere the table is reviewed; the log can.
+    # The log viewer keeps only the last lines: print just what this run is for.
+    shown = set((args.print or args.systems).split(","))
     for row in results:
         m = row.get("measure") or {}
-        if not row.get("image"):
+        if not row.get("image") or row["platform"] not in shown:
             continue
         print("ROW", json.dumps({
             "p": row["platform"], "crc": row["crc"], "serial": row["serial"], "n": row["name"],
