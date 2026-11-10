@@ -199,8 +199,17 @@ def main():
             if args.only:
                 roms = [r for r in roms if re.search(args.only, r["name"])]
                 seen = {k: v for k, v in seen.items() if not re.search(args.only, v["name"])}
+            # The DATs list the same game several times (headered dumps, re-releases under
+            # one name); one lookup per name is enough.
+            by_name = {(v["platform"], v["name"]): v for v in seen.values() if not v.get("error")}
             for rom in roms:
                 if (platform, rom["crc"]) in seen:
+                    continue
+                twin = by_name.get((platform, rom["name"]))
+                if twin:
+                    row = {**twin, **rom}
+                    log.write(json.dumps(row) + "\n")
+                    seen[(platform, rom["crc"])] = row
                     continue
                 if stopped or time.time() > deadline or (args.limit and new >= args.limit):
                     break
@@ -249,6 +258,8 @@ def main():
                 log.write(json.dumps(row) + "\n")
                 log.flush()
                 seen[(platform, rom["crc"])] = row
+                if not row.get("error"):
+                    by_name[(platform, rom["name"])] = row
             if stopped:
                 break
     print("stopped:", stopped or "no")

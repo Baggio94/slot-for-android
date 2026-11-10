@@ -25,6 +25,12 @@ jobs:
 
   scrape:
     needs: check
+    # Two jobs = the two ScreenScraper threads the account allows; never run this while
+    # the weekly Cart art harvest is running.
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [NES-MD, SNES]
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
@@ -41,20 +47,22 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: cache
-          key: cart-colours-${{ github.run_id }}
-          restore-keys: cart-colours-
+          key: cart-colours-${{ matrix.group }}-${{ github.run_id }}
+          restore-keys: |
+            cart-colours-${{ matrix.group }}-
+            cart-colours-
       - if: hashFiles('tools/cart-colours/probe.json') != ''
         run: cd tools/cart-colours && python3 -u probe.py probe.json
       - if: hashFiles('tools/cart-colours/probe.json') == ''
-        run: python3 -u tools/cart-colours/scrape.py --limit "$(cat tools/cart-colours/limit.txt)" --only "$(cat tools/cart-colours/only.txt 2>/dev/null)" --systems "$(cat tools/cart-colours/systems.txt 2>/dev/null || echo GB,GBC,GBA)"
+        run: python3 -u tools/cart-colours/scrape.py --limit "$(cat tools/cart-colours/limit.txt)" --only "$(cat tools/cart-colours/only.txt 2>/dev/null)" --systems "${{ matrix.group == 'SNES' && 'SNES' || 'NES,MD' }}"
       - uses: actions/cache/save@v4
         if: always()
         with:
           path: cache
-          key: cart-colours-${{ github.run_id }}
+          key: cart-colours-${{ matrix.group }}-${{ github.run_id }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: cart-colours-measures
+          name: cart-colours-measures-${{ matrix.group }}
           path: out/
           retention-days: 30
