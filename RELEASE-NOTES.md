@@ -2,6 +2,11 @@
 
 This update brings a native Cart Studio built into slot. for Android, labels from slot.'s own database, cheats and new shaders.
 
+### Fixed in 2.2.1
+
+- Simpletex on the Game Boy Advance no longer has its own colour correction: Color Correction can now be turned on or off with it, as with every other shader.
+- Refresh Library's progress keeps the width of its text, top right.
+
 ### What's New
 
 - **Native Cart Studio** — Cart Studio is now built directly into slot. for Android. Press **X** on a cartridge to change its label (Real Label, Logo Only, Search label, or your own picture), shell colour, finish and shape. **START → Cart Studio** shows every cartridge of a system: **L1 / R1** change the system, **L2 / R2** jump between letters, **Y** saves all changes. It replaces the web Cart Studio.
@@ -22,8 +27,6 @@ This update brings a native Cart Studio built into slot. for Android, labels fro
 - An older auto-state no longer resumes over a newer in-game save.
 - A clear cartridge's lid no longer lifts with the board drawn on it.
 - Simpletex shows its paper texture again.
-- Simpletex on the Game Boy Advance no longer has its own colour correction: Color Correction can now be turned on or off with it, as with every other shader.
-- Refresh Library's progress keeps the width of its text, top right.
 
 ### Installation
 
