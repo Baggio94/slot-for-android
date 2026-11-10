@@ -1,0 +1,21 @@
+name: cart-refs
+
+on:
+  push:
+    branches: [tools/cart-colours]
+    paths: [tools/cart-colours/refs.txt, tools/cart-colours/refs.py, .github/workflows/cart-refs.yml]
+
+jobs:
+  refs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: cart-colours-NES-MD-none
+          restore-keys: cart-colours-NES-MD-
+      - run: pip install numpy pillow scipy spandrel torch --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+      - run: curl -sL -o x4.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+      - run: python3 -u tools/cart-colours/refs.py x4.pth
