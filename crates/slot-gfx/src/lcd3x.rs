@@ -38,6 +38,9 @@ pub enum ScreenEffect {
     Sabr,
     SuperEagle,
     XbrLv2,
+    /// Game Boy Color Dot Matrix: the Dot Matrix with the game's own
+    /// colours (Siham 2026-11-10).
+    DotMatrixColour,
 }
 
 impl ScreenEffect {

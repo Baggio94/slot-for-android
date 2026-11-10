@@ -636,7 +636,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 113] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 114] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -663,7 +663,8 @@ const SETTING_VALUE_NAMES: [&str; 113] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "BOTTOM", "TOP", "BOTH", "WI-FI", "BLUETOOTH", "ALL", "RUNNING",
                                "Dot Matrix", "crt-easymode", "crt-hyllian", "SABR",
                                "Super Eagle", "xBR-lv2",
-                               "Pixel Transparency", "Sunlight Shimmer"];
+                               "Pixel Transparency", "Sunlight Shimmer",
+                               "Dot Matrix Color"];
 
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
@@ -685,6 +686,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
          Shader::DotMatrix => 105, Shader::CrtEasymode => 106,
          Shader::CrtHyllian => 107, Shader::Sabr => 108,
          Shader::SuperEagle => 109, Shader::XbrLv2 => 110,
+         Shader::DotMatrixColor => 113,
     };
     Some(match key {
         0 => shader(scoped.shader_gba),
@@ -754,25 +756,25 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             {35}else{36},
         29..=31 | 41..=43 => core_value(Engine::core_key_platform(key)
             .map_or(Core::Mgba, |platform| cores[platform as usize])),
-        // Frame Blending is the system's, in game too.
+        // Frame Blending, LCD Effect and Dither Blending: the game's own in
+        // game, the system's default in Settings > Systems.
         60..=65 => {
             use slot_store::Platform::*;
-            match settings.blending_for([Gba, Gbc, Gb, Nes, Snes, Md][key - 60]) {
+            match scoped.blending_for([Gba, Gbc, Gb, Nes, Snes, Md][key - 60]) {
                 crate::settings::Blending::Off => 5,
                 crate::settings::Blending::Mix => 96,
                 crate::settings::Blending::Ghosting => 97,
             }
         }
-        // LCD Effect and Dither Blending are the system's too.
         66..=68 => {
             use slot_store::Platform::*;
-            match settings.lcd_effect_for([Gba, Gbc, Gb][key - 66]) {
+            match scoped.lcd_effect_for([Gba, Gbc, Gb][key - 66]) {
                 crate::settings::LcdEffect::Off => 5,
                 crate::settings::LcdEffect::Transparency => 111,
                 crate::settings::LcdEffect::Sunlight => 112,
             }
         }
-        69 => if settings.dither_blend_md { 4 } else { 5 },
+        69 => if scoped.dither_blend_md { 4 } else { 5 },
         _ => return None,
     })
 }
@@ -2138,6 +2140,7 @@ impl Engine {
                      crate::settings::Shader::Sabr => Toast::ShaderSabr,
                      crate::settings::Shader::SuperEagle => Toast::ShaderSuperEagle,
                      crate::settings::Shader::XbrLv2 => Toast::ShaderXbrLv2,
+                     crate::settings::Shader::DotMatrixColor => Toast::ShaderDotMatrixColor,
                 }, time);
             }
             100 => {
@@ -4601,6 +4604,24 @@ impl Engine {
         }
         effective
     }
+    /// Frame Blending, LCD Effect and Dither Blending of the game played:
+    /// its own when changed in game, else the system's (Siham 2026-11-10).
+    /// Read every frame, so without cloning the settings.
+    fn game_blending(&self, platform: Platform) -> crate::settings::Blending {
+        self.game_emulation.and_then(|p| p.blending_override)
+            .unwrap_or_else(|| self.settings.blending_for(platform))
+    }
+    fn game_lcd_effect(&self, platform: Platform) -> crate::settings::LcdEffect {
+        if !matches!(platform, Platform::Gba | Platform::Gbc | Platform::Gb) {
+            return crate::settings::LcdEffect::Off;
+        }
+        self.game_emulation.and_then(|p| p.lcd_effect_override)
+            .unwrap_or_else(|| self.settings.lcd_effect_for(platform))
+    }
+    fn game_dither(&self) -> bool {
+        self.game_emulation.and_then(|p| p.dither_override)
+            .unwrap_or(self.settings.dither_blend_md)
+    }
     fn live_game_options(&self) -> LiveGameOptions {
         LiveGameOptions::from_profile(&self.settings, self.game_emulation)
     }
@@ -4616,7 +4637,7 @@ impl Engine {
         if matches!(effect, E::Simpletex | E::SimpletexGba) && !self.gpu.has_paper() {
             if let Some((size, rgba)) = shader_texture(PAPER_PNG) { self.gpu.set_paper(size, &rgba); }
         }
-        if effect == E::DotMatrix {
+        if matches!(effect, E::DotMatrix | E::DotMatrixColour) {
             if !self.gpu.has_dot_background() {
                 if let Some((size, rgba)) = shader_texture(DOT_MATRIX_PNG) {
                     self.gpu.set_dot_background(size, &rgba);
@@ -4625,7 +4646,7 @@ impl Engine {
             self.gpu.set_dot_palette(dot_matrix_colours(&self.game_settings()));
         }
         self.gpu.set_screen_effect(effect);
-        let lcd = self.settings.lcd_effect_for(self.current_cart_platform());
+        let lcd = self.game_lcd_effect(self.current_cart_platform());
         self.gpu.set_lcd_effect(lcd.gpu());
         let sunlight = lcd == crate::settings::LcdEffect::Sunlight && self.game.is_some();
         if sunlight != self.tilt_on {
@@ -5059,8 +5080,8 @@ impl Engine {
     /// 2026-11-06).
     fn redraw_paused_game(&mut self) {
         let platform = self.current_cart_platform();
-        let blending = self.settings.blending_for(platform);
-        let dither = platform == Platform::Md && self.settings.dither_blend_md;
+        let blending = self.game_blending(platform);
+        let dither = platform == Platform::Md && self.game_dither();
         let Some(session) = self.game.as_mut() else { return };
         session.set_frame_blending(blending);
         if !session.redraw_paused() { return; }
@@ -5076,12 +5097,6 @@ impl Engine {
     }
 
     fn change_game_screen_or_gameplay(&mut self, key: usize, right: bool) {
-        // Frame Blending, LCD Effect and Dither Blending are the system's:
-        // the in-game row changes them.
-        if (60..=69).contains(&key) {
-            self.change_setting(key, right);
-            return;
-        }
         if key == SCREEN_SIZE_KEY {
             let mode = if right { self.video_mode.bigger() } else { self.video_mode.smaller() };
             if mode != self.video_mode {
@@ -5103,7 +5118,7 @@ impl Engine {
         let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
-        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49)) {
+        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=69)) {
             set_message("Not available during Multiplayer.".into());
             return;
         }
@@ -5133,7 +5148,7 @@ impl Engine {
         self.game_emulation=Some(profile);
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
-        if matches!(key,0|1|3|21|47|48|49) {
+        if matches!(key,0|1|3|21|47|48|49|66..=68) {
             self.apply_game_look();
         }
         // A shader change can switch to/from a preset with its own GBA Color.
@@ -6994,9 +7009,9 @@ impl Engine {
         let a12_native_started = Instant::now();
         let mut frame_phases = crate::frame_phases::FramePhaseSample::default();
         self.apply_layouts(live.turbo);
-        let blending = self.settings.blending_for(cart_platform);
+        let blending = self.game_blending(cart_platform);
         if let Some(game) = self.game.as_mut() { game.set_frame_blending(blending); }
-        let dither = cart_platform == Platform::Md && self.settings.dither_blend_md;
+        let dither = cart_platform == Platform::Md && self.game_dither();
         if self.tilt_on {
             let [x, y] = self.tilt.step(slot_retro::sensors::gravity());
             self.gpu.set_light(x, y);

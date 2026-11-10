@@ -113,7 +113,12 @@ vec3 simpletex(vec3 c, vec2 f, float bias) {
     float luma = dot(c, luma_coeff);
     w = w * (luma + (1.0 - luma) * (1.0 - bias));
     c = mix(c, vec3(1.0 - 0.15), w);
-    vec3 bg = texture2D(u_paper, (floor(gl_FragCoord.xy) + 0.5) / u_paper_size).rgb * c;
+    // The paper's grain as big next to the game as on the KPA's 640 rows,
+    // on any screen: one texel per screen pixel made it vanish on denser
+    // ones like the Retroid Pocket Classic's 1080 (Siham 2026-11-10).
+    // u_fbo: screen pixels per canvas pixel (480 rows), 4/3 on the KPA.
+    float grain = max(1.0, u_fbo.y * 0.75);
+    vec3 bg = texture2D(u_paper, (floor(gl_FragCoord.xy / grain) + 0.5) / u_paper_size).rgb * c;
     return mix(c, bg, dot(c, luma_coeff) * 0.80);
 }
 vec3 lcd_grid_v2(vec2 uv, bool bgr) {
@@ -582,22 +587,47 @@ uniform vec3 u_dm_fg;
 uniform vec3 u_dm_bgc;
 uniform vec2 u_dm_lum;
 vec2 dm_out() { return u_rect.zw * u_fbo; }
-float dm_alpha(vec2 px) {
+// A dot's opacity where the cell is lit, and how much of screen pixel `px`
+// the dot covers (the rest is the gap before it).
+float dm_dot(vec2 px, out float on) {
     vec2 tp = (u_uv.xy + px / dm_out() * u_uv.zw) * u_src;
     vec2 cell = floor(tp);
     vec2 s = dm_out() / (u_uv.zw * u_src);
-    vec2 inside = fract(tp) * s;
-    float on = (inside.x >= 1.0 && inside.y >= 1.0) ? 1.0 : 0.0;
+    // The gap is one screen pixel at the start of each cell. Each pixel
+    // takes the share of it that it covers, seen through a window one
+    // screen pixel wide at a whole scale (exactly the old one-pixel gap)
+    // and two wide at a scale that is not whole (Original Ratio), so that
+    // every gap there is as light as the next, whether it falls on one
+    // pixel or across two (Siham 2026-11-10).
+    // Shares within 2% of none or all are none or all: rounding in the
+    // picture's size must not light a sliver of a gap at a whole scale.
+    vec2 h = 0.5 / s;                           // half a screen pixel, in texels
+    vec2 d = abs(fract(tp - h + 0.5) - 0.5) * s; // from the nearest gap's middle, in screen pixels
+    vec2 f = mix(vec2(2.0), vec2(1.0), step(abs(s - floor(s + 0.5)), vec2(0.01)));
+    vec2 gap = clamp((min(d + f * 0.5, vec2(0.5)) - max(d - f * 0.5, vec2(-0.5))) / f, 0.0, 1.0);
+    gap = clamp((gap - 0.02) / 0.96, 0.0, 1.0);
+    on = (1.0 - gap.x) * (1.0 - gap.y);
     float l = dot(texture2D(u_game, (cell + 0.5) / u_src).rgb, vec3(0.299, 0.587, 0.114));
     float dark = clamp((u_dm_lum.x - l) / max(u_dm_lum.x - u_dm_lum.y, 0.001), 0.0, 1.0);
-    return clamp((dark + on * 0.10) * on, 0.0, 1.0);
+    // Dot Matrix Color: every dot shows, its colour the game's, the more
+    // opaque the darker it is.
+    if (u_mode > 24.5) dark = 0.55 + 0.45 * clamp(1.0 - l, 0.0, 1.0);
+    return clamp(dark + 0.10, 0.0, 1.0);
 }
+float dm_alpha(vec2 px) {
+    float on;
+    float a = dm_dot(px, on);
+    return a * on;
+}
+// Blending mode 0: a gap takes the mean of the dots around it; a pixel
+// part dot, part gap, a share of each.
 float dm_blend(vec2 px) {
-    float a = dm_alpha(px);
-    if (a > 0.0) return a;                      // blending mode 0: gaps only
+    float on;
+    float a = dm_dot(px, on);
+    if (on >= 1.0) return a;
     float n = dm_alpha(px + vec2(0.0, 1.0)) + dm_alpha(px - vec2(0.0, 1.0))
             + dm_alpha(px + vec2(1.0, 0.0)) + dm_alpha(px - vec2(1.0, 0.0));
-    return clamp(n * 0.25, 0.0, 1.0);
+    return mix(clamp(n * 0.25, 0.0, 1.0), a, on);
 }
 vec3 dot_matrix() {
     vec2 px = floor(v_uv * dm_out()) + 0.5;
@@ -607,6 +637,22 @@ vec3 dot_matrix() {
     float sa = dm_blend(px - vec2(1.0)) * contrast * 0.5;
     vec3 bg = texture2D(u_dm_bg, v_uv).rgb;
     bg = clamp(u_dm_bgc + mix(vec3(-1.0), vec3(1.0), bg), 0.0, 1.0);
+    vec3 o = col * sa + bg * (1.0 - sa);
+    return col * fa * (1.0 - fa * fa * contrast) + o * (light - fa * contrast * opacity);
+}
+/* Game Boy Color Dot Matrix: the same dots, gaps, shadow and background,
+   each dot in its pixel's colour (a little softened, as on the LCD) over a
+   light background (Siham 2026-11-10). */
+vec3 dot_matrix_colour() {
+    vec2 px = floor(v_uv * dm_out()) + 0.5;
+    const float contrast = 0.8, light = 0.8, opacity = 0.9;
+    vec2 tp = (u_uv.xy + px / dm_out() * u_uv.zw) * u_src;
+    vec3 rgb = texture2D(u_game, (floor(tp) + 0.5) / u_src).rgb;
+    vec3 col = mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), 0.2);
+    float fa = dm_blend(px);
+    float sa = dm_blend(px - vec2(1.0)) * contrast * 0.5;
+    vec3 bg = texture2D(u_dm_bg, v_uv).rgb;
+    bg = clamp(vec3(0.93, 0.93, 0.90) + mix(vec3(-1.0), vec3(1.0), bg), 0.0, 1.0);
     vec3 o = col * sa + bg * (1.0 - sa);
     return col * fa * (1.0 - fa * fa * contrast) + o * (light - fa * contrast * opacity);
 }
@@ -884,6 +930,8 @@ void main() {
         // Outside the picture (a home console's side bands at Integer or
         // Original Ratio): black, as RetroArch, never the edge texel smeared.
         c = vec3(0.0);
+    } else if (u_mode > 24.5) {
+        c = dot_matrix_colour();
     } else if (u_mode > 23.5) {
         c = xbr_lv2(uv);
     } else if (u_mode > 22.5) {

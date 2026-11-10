@@ -183,6 +183,10 @@ const FAMICOM_BLACK: [u8; 3] = [16, 16, 16];
 const FAMICOM_SMB: [u8; 3] = [196, 125, 8];
 
 const FAMICOM_TSV: &str = include_str!("../../../assets/home/famicom.tsv");
+/// Carts outside Japan whose shell is not the console's grey (Tengen, Color
+/// Dreams, Camerica, Wisdom Tree, red Doom...), read from ScreenScraper's
+/// support-2D: system, mould, title key, region (us, eu or any), colour, finish.
+const SHELLS_TSV: &str = include_str!("../../../assets/home/shells.tsv");
 
 /// A game's title as the shell tables key it: the No-Intro name without its
 /// tags, lowercased, letters and digits only.
@@ -225,6 +229,37 @@ fn famicom_table() -> &'static HashMap<&'static str, ([u8; 3], HomeMould)> {
             })
             .collect()
     })
+}
+
+/// A game's own shell on a mould, from `shells.tsv`: colour and glitter.
+/// Some titles differ by region (Camerica's US carts, Codemasters' in Europe).
+fn own_shell(mould: HomeMould, key: &str, usa: bool) -> Option<([u8; 3], bool)> {
+    type Table = HashMap<(&'static str, &'static str, &'static str), ([u8; 3], bool)>;
+    static TABLE: OnceLock<Table> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        SHELLS_TSV
+            .lines()
+            .filter_map(|line| {
+                let mut cols = line.split('\t');
+                let _system = cols.next()?;
+                let mould = cols.next()?;
+                let key = cols.next()?;
+                let region = cols.next()?;
+                let hex = cols.next()?;
+                let glitter = cols.next()? == "glitter";
+                if hex.len() != 6 {
+                    return None;
+                }
+                let colour = [0, 2, 4].map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0));
+                Some(((mould, key, region), (colour, glitter)))
+            })
+            .collect()
+    });
+    let region = if usa { "us" } else { "eu" };
+    table
+        .get(&(mould.name(), key, region))
+        .or_else(|| table.get(&(mould.name(), key, "any")))
+        .copied()
 }
 
 /// Which regions a No-Intro / GoodTools name lists: (Japan, USA, Europe),
@@ -273,11 +308,18 @@ pub fn home_pick(system: HomeSystem, stem: &str, region: &str, maker: &str) -> (
             (mould, colour, false)
         }
         HomeSystem::Nes if ZELDA_GOLD_KEYS.contains(&key.as_str()) => (HomeMould::Nes, ZELDA_GOLD, true),
-        HomeSystem::Nes => (HomeMould::Nes, HomeMould::Nes.art().colour, false),
+        HomeSystem::Nes => {
+            let (colour, glitter) = own_shell(HomeMould::Nes, &key, usa).unwrap_or((HomeMould::Nes.art().colour, false));
+            (HomeMould::Nes, colour, glitter)
+        }
         HomeSystem::Snes => {
             let mould = if usa { HomeMould::SnesUs } else { HomeMould::Snes };
-            let colour = if key == "killerinstinct" { KILLER_INSTINCT } else { mould.art().colour };
-            (mould, colour, false)
+            let (colour, glitter) = if key == "killerinstinct" {
+                (KILLER_INSTINCT, false)
+            } else {
+                own_shell(mould, &key, usa).unwrap_or((mould.art().colour, false))
+            };
+            (mould, colour, glitter)
         }
         HomeSystem::Md => {
             let maker = maker.to_ascii_uppercase();

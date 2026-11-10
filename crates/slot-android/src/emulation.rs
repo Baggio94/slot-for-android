@@ -1,7 +1,7 @@
 //! Per-cartridge opt-in latency profiles. Never touch the ROM or RetroArch saves.
 use std::{fs, io, path::{Path, PathBuf}};
 use serde::{Deserialize, Serialize};
-use crate::{core_selection, settings::{self, Settings, Shader, Bezel}};
+use crate::{core_selection, settings::{self, Settings, Shader, Bezel, Blending, LcdEffect}};
 use slot_store::{Core, Platform};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +31,12 @@ pub struct EmulationProfile {
     // for the light sensor. None follows the handheld (sensor if it has
     // one).
     pub sun: Option<u8>,
+    // Frame Blending, LCD Effect and Dither Blending changed in game are
+    // this game's; Settings > Systems keeps each system's default (Siham
+    // 2026-11-10).
+    pub blending_override: Option<Blending>,
+    pub lcd_effect_override: Option<LcdEffect>,
+    pub dither_override: Option<bool>,
 }
 
 pub const SUN_SENSOR: u8 = 11;
@@ -111,7 +117,8 @@ impl EmulationProfile {
             ff_sound_override: None, rewind_override: None,
             rewind_speed_override: None,
             turbo_override: None, rumble_override: None,
-            eject_save_override: None, sun: None }
+            eject_save_override: None, sun: None,
+            blending_override: None, lcd_effect_override: None, dither_override: None }
     }
     /// Materialise the *current* game's per-ROM settings without mutating
     /// Settings.json or any other game's configured defaults.
@@ -136,6 +143,11 @@ impl EmulationProfile {
         if let Some(value)=self.turbo_override { settings.turbo=value; }
         if let Some(value)=self.rumble_override { settings.rumble=value; }
         if let Some(value)=self.eject_save_override { settings.eject_save=value; }
+        if let Some(value)=self.blending_override { *settings.blending_mut(platform)=value; }
+        if let Some(value)=self.lcd_effect_override { settings.set_lcd_effect_for(platform,value); }
+        if let Some(value)=self.dither_override {
+            if platform==Platform::Md { settings.dither_blend_md=value; }
+        }
     }
 
     /// Screen/Gameplay pause edits are scoped to the current cart and core.
@@ -178,6 +190,9 @@ impl EmulationProfile {
             7 => self.turbo_override=Some(view.turbo),
             8 => self.rumble_override=Some(view.rumble),
             9 => self.eject_save_override=Some(view.eject_save),
+            60..=65 => self.blending_override=Some(view.blending_for(platform)),
+            66..=68 => self.lcd_effect_override=Some(view.lcd_effect_for(platform)),
+            69 if platform==Platform::Md => self.dither_override=Some(view.dither_blend_md),
             _ => return false,
         }
         true
@@ -415,6 +430,28 @@ mod tests {
         assert_eq!(restored, profile);
         assert!(!globals.responsive_loop);
         assert!(profile.change(11, false) && !profile.responsive_loop);
+    }
+
+    #[test]
+    fn in_game_lcd_effect_blending_and_dither_stay_the_games() {
+        let globals = Settings::first_install_defaults();
+        let mut profile = EmulationProfile::from_settings(&globals);
+        assert!(profile.change_visual_and_gameplay(&globals, Platform::Gbc, 67, true));
+        assert!(profile.change_visual_and_gameplay(&globals, Platform::Gbc, 61, true));
+        assert!(profile.change_visual_and_gameplay(&globals, Platform::Md, 69, true));
+        assert!(!profile.change_visual_and_gameplay(&globals, Platform::Gb, 69, true));
+        assert_eq!(globals.lcd_effect_gbc, settings::LcdEffect::Off);
+        assert_eq!(globals.blending_gbc, settings::Blending::Off);
+        let mut view = globals.clone();
+        profile.apply_visual_and_gameplay(&mut view, Platform::Gbc);
+        assert_eq!(view.lcd_effect_gbc, settings::LcdEffect::Transparency);
+        assert_eq!(view.blending_gbc, settings::Blending::Mix);
+        assert_eq!(view.lcd_effect_gba, globals.lcd_effect_gba);
+        let json = serde_json::to_string(&profile).unwrap();
+        assert_eq!(serde_json::from_str::<EmulationProfile>(&json).unwrap(), profile);
+        let legacy: EmulationProfile = serde_json::from_str("{}").unwrap();
+        assert_eq!((legacy.lcd_effect_override, legacy.blending_override, legacy.dither_override),
+            (None, None, None));
     }
 
     #[test]

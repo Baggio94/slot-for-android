@@ -181,6 +181,27 @@ mod tests {
     }
 
     #[test]
+    fn publishers_own_shells_outside_japan() {
+        let colour = |p, stem| home_shell(p, stem, "", "").unwrap().colour;
+        let grey = HomeMould::Nes.art().colour;
+        assert_eq!(colour(Platform::Nes, "Crystal Mines (USA)"), [0x9d, 0xc1, 0xd3]); // Color Dreams
+        assert_eq!(colour(Platform::Nes, "Gauntlet (USA) (V1.1)"), [0x29, 0x2c, 0x30]); // Tengen
+        assert_eq!(colour(Platform::Nes, "Bible Adventures (USA) (v1.5)"), [0x14, 0x14, 0x14]); // Wisdom Tree
+        // Camerica in the US, Codemasters' black in Europe.
+        assert_eq!(colour(Platform::Nes, "Micro Machines (USA)"), [0x62, 0x5e, 0x57]);
+        assert_eq!(colour(Platform::Nes, "Micro Machines (Europe)"), [0x14, 0x14, 0x14]);
+        // Nintendo's own Volleyball stays grey, though a Spanish one is black.
+        assert_eq!(colour(Platform::Nes, "Volleyball (USA, Europe)"), grey);
+        assert_eq!(colour(Platform::Nes, "Super Mario Bros. (World)"), grey);
+        let nwc = home_shell(Platform::Nes, "Nintendo World Championships 1990 (USA)", "", "").unwrap();
+        assert_eq!((nwc.colour, nwc.finish), (ZELDA_GOLD, ShellFinish::Glitter));
+        // Red in the US only.
+        assert_eq!(colour(Platform::Snes, "Doom (USA)"), [0xc9, 0x2b, 0x2b]);
+        assert_eq!(colour(Platform::Snes, "Doom (Europe)"), HomeMould::Snes.art().colour);
+        assert_eq!(colour(Platform::Snes, "Super Noah's Ark 3D (USA)"), [0x12, 0x12, 0x12]);
+    }
+
+    #[test]
     fn mould_names_are_the_shell_file_outlines() {
         for m in HomeMould::ALL {
             assert_eq!(m.name(), m.outline().name(), "{m:?}");

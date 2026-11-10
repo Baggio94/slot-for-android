@@ -43,6 +43,7 @@ pub enum Toast {
     ShaderSabr,
     ShaderSuperEagle,
     ShaderXbrLv2,
+    ShaderDotMatrixColor,
     ScreenInteger,
     ScreenRatio,
     ScreenStretch,
@@ -62,7 +63,7 @@ const SUN_TEXT: [&str; 11] = [
 ];
 
 impl Toast {
-    const FIXED: [Toast; 42] = [
+    const FIXED: [Toast; 43] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::NeedsGpsp,
@@ -97,6 +98,7 @@ impl Toast {
         Toast::ShaderSabr,
         Toast::ShaderSuperEagle,
         Toast::ShaderXbrLv2,
+        Toast::ShaderDotMatrixColor,
         Toast::ScreenInteger,
         Toast::ScreenRatio,
         Toast::ScreenStretch,
@@ -160,6 +162,7 @@ impl Toast {
             Toast::ShaderSabr => "Shader: SABR",
             Toast::ShaderSuperEagle => "Shader: Super Eagle",
             Toast::ShaderXbrLv2 => "Shader: xBR-lv2",
+            Toast::ShaderDotMatrixColor => "Shader: Dot Matrix Color",
             Toast::ScreenInteger => "Screen: Integer",
             Toast::ScreenRatio => "Screen: Original Ratio",
             Toast::ScreenStretch => "Screen: Stretch",

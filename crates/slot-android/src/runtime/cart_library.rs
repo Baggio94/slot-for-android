@@ -42,8 +42,8 @@ pub(super) struct CartLibrary {
     grown: (usize, usize),
     shrinking: Option<(usize, usize)>,
     grown_at: Option<Instant>,
-    /// SELECT: big carts, one row of two (kept in the settings).
-    big: bool,
+    /// SELECT: the size step, one for every system (kept in the settings).
+    size: u8,
 }
 
 /// The chosen cart 5% over its room, growing upward into the margin above
@@ -51,8 +51,8 @@ pub(super) struct CartLibrary {
 /// the cart above in two-row grids.
 const CHOSEN: f32 = 1.05;
 const RESTING: f32 = 0.9;
-/// Big carts: closer to one another, the chosen one at its room, the others
-/// at 92% (Siham 2026-11-09).
+/// Two big carts (the first size step): closer to one another, the chosen
+/// one at its room, the others at 92% (Siham 2026-11-09).
 const BIG_CHOSEN: f32 = 1.0;
 const BIG_RESTING: f32 = 0.92;
 /// Between a cart's bottom and its name, chosen or not: it grows upward.
@@ -63,23 +63,45 @@ const GROW_S: f32 = 0.12;
 /// Columns and rows of the grid for the screen's width, and its cells.
 struct Grid { x: f32, cols: usize, rows: usize, cell_w: f32, cell_h: f32 }
 
-/// The grid for a system on the screen's width. Carts taller than wide (GB,
-/// GBC, NES) sit in one row: a second one would shrink them by 40%. Wide
-/// ones (GBA, SNES, MD) sit in two rows at about the same size as one.
-/// The columns grow with the width: a square screen, 4:3 and 3:2, 5:3 to
-/// 2:1, then 21:9 (Siham 2026-11-08). Big carts (SELECT): one row, a
-/// column fewer than the tall carts' (two on most screens; Siham 2026-11-09).
-fn grid(platform: Platform, big: bool) -> Grid {
+/// SELECT's size steps for a system on the screen's width, as (rows,
+/// columns), the first always two big carts (Siham 2026-11-10). Carts taller
+/// than wide (GB, GBC, NES) take a second row only in the last step, where
+/// they are about half their one-row size; wide ones (GBA, SNES, MD) sit in
+/// two rows well. Widths: square (480), Retroid Pocket Classic (551), 4:3
+/// (640), 3:2 like the KPA (720), 16:9 and wider.
+fn size_steps(platform: Platform) -> &'static [(usize, usize)] {
+    let width = out_w() as f32;
+    let tall = matches!(platform, Platform::Gb | Platform::Gbc | Platform::Nes);
+    match (tall, width) {
+        (true, w) if w < 520.0 => &[(1, 2), (1, 3), (2, 3)],
+        (true, w) if w < 680.0 => &[(1, 2), (1, 3), (2, 4)],
+        (true, w) if w < 790.0 => &[(1, 2), (1, 4), (2, 5)],
+        (true, _) => &[(1, 2), (1, 4), (2, 6)],
+        (false, w) if w < 600.0 => &[(1, 2), (2, 2)],
+        (false, w) if w < 790.0 => &[(1, 2), (1, 3), (2, 3)],
+        (false, _) => &[(1, 2), (1, 3), (2, 4)],
+    }
+}
+
+/// The step a system shows: the one kept, or its last when it has fewer
+/// (wide carts on narrow screens have two).
+fn size_step(platform: Platform, size: u8) -> usize {
+    (size as usize).min(size_steps(platform).len() - 1)
+}
+
+/// The grid for a system at its size step, and its cells.
+fn grid(platform: Platform, step: usize) -> Grid {
     let width = out_w() as f32;
     let x = 18.0;
     let room = (width - 2.0 * x).max(200.0);
-    let one_row = if width < 560.0 { 2 } else if width <= 900.0 { 3 } else { 4 };
-    let (rows, cols) = match platform {
-        _ if big => (1, (one_row - 1).max(2)),
-        Platform::Gb | Platform::Gbc | Platform::Nes => (1, one_row),
-        _ => (2, if width < 560.0 { 2 } else if width < 780.0 { 3 } else if width < 1040.0 { 4 } else { 5 }),
-    };
+    let layouts = size_steps(platform);
+    let (rows, cols) = layouts[step.min(layouts.len() - 1)];
     Grid { x, cols, rows, cell_w: room / cols as f32, cell_h: (GRID_BOTTOM - GRID_TOP) / rows as f32 }
+}
+
+impl CartLibrary {
+    fn step(&self) -> usize { size_step(Platform::ALL[self.system], self.size) }
+    fn grid(&self) -> Grid { grid(Platform::ALL[self.system], self.step()) }
 }
 
 /// L2/R2: the first cart of the previous or next letter, as Up/Down on the
@@ -121,24 +143,19 @@ fn visuals_root() -> Option<std::path::PathBuf> {
 impl Engine {
     /// Menu > Cart Studio: the library page, on the shelf's system.
     pub(super) fn open_cart_library(&mut self) -> bool {
+        // Always the first tab with carts, on its first cart: X on the
+        // carousel edits the cart in hand (Siham 2026-11-10).
         let systems = Platform::ALL.len().min(self.shelves.len());
-        let system = if self.active < systems && !self.shelves[self.active].carts.is_empty() {
-            self.active
-        } else {
-            match (0..systems).find(|&s| !self.shelves[s].carts.is_empty()) {
-                Some(s) => s,
-                None => {
-                    set_message("No cartridges yet.".into());
-                    return false;
-                }
-            }
+        let Some(system) = (0..systems).find(|&s| !self.shelves[s].carts.is_empty()) else {
+            set_message("No cartridges yet.".into());
+            return false;
         };
-        let cursor = if system == self.active { self.shelves[system].index } else { 0 };
+        let cursor = 0;
         self.cart_library = Some(CartLibrary {
             system, cursor, first_row: 0, labelled: Vec::new(), flags_stale: true,
             drafts: HashMap::new(), confirm: false, letter: None, letter_at: None,
             grown: (system, cursor), shrinking: None, grown_at: None,
-            big: self.settings.cart_studio_big,
+            size: self.settings.cart_studio_size,
         });
         self.keep_library_cursor_visible();
         self.overlay = ShelfOverlay::CartLibrary;
@@ -185,7 +202,7 @@ impl Engine {
 
     fn keep_library_cursor_visible(&mut self) {
         let Some(library) = self.cart_library.as_mut() else { return };
-        let g = grid(Platform::ALL[library.system], library.big);
+        let g = library.grid();
         let row = library.cursor / g.cols;
         if row < library.first_row { library.first_row = row; }
         if row >= library.first_row + g.rows { library.first_row = row + 1 - g.rows; }
@@ -195,7 +212,7 @@ impl Engine {
     pub(super) fn cart_library_cells(&self) -> Vec<(usize, usize)> {
         if !matches!(self.overlay, ShelfOverlay::CartLibrary) { return Vec::new(); }
         let Some(library) = self.cart_library.as_ref() else { return Vec::new() };
-        let g = grid(Platform::ALL[library.system], library.big);
+        let g = library.grid();
         let n = self.shelves[library.system].carts.len();
         let first = library.first_row * g.cols;
         // The page, then the next row down.
@@ -246,7 +263,7 @@ impl Engine {
             return;
         }
         let n = self.shelves[library.system].carts.len();
-        let cols = grid(Platform::ALL[library.system], library.big).cols;
+        let cols = library.grid().cols;
         match code {
             21 if library.cursor > 0 => library.cursor -= 1,
             22 if library.cursor + 1 < n => library.cursor += 1,
@@ -281,10 +298,15 @@ impl Engine {
                 return;
             }
             109 => {
-                library.big = !library.big;
+                // The next size step, back to two big carts after the last.
+                let count = size_steps(Platform::ALL[library.system]).len();
+                let next = (library.step() + 1) % count;
+                // Every system moves to it together (Siham 2026-11-10).
+                library.size = next as u8;
                 library.first_row = 0;
-                self.settings.cart_studio_big = library.big;
+                self.settings.cart_studio_size = library.size;
                 self.persist_settings();
+                self.keep_library_cursor_visible();
             }
             96 => {
                 let Some(saved) = self.shelves[library.system].carts.get(library.cursor) else { return };
@@ -392,7 +414,7 @@ impl Engine {
         }
         let shelf = &self.shelves[library.system];
         // The carts, the whole width.
-        let g = grid(Platform::ALL[library.system], library.big);
+        let g = library.grid();
         let first = library.first_row * g.cols;
         for i in first..(first + g.cols * g.rows).min(shelf.carts.len()) {
             let cart = &shelf.carts[i];
@@ -498,7 +520,7 @@ fn label_count(labelled: &[bool]) -> Option<String> {
 fn cart_size(library: &CartLibrary, i: usize) -> f32 {
     let t = library.grown_at.map_or(1.0, |at| slot_ui::ease((at.elapsed().as_secs_f32() / GROW_S).clamp(0.0, 1.0)));
     let me = (library.system, i);
-    let (chosen, resting) = if library.big { (BIG_CHOSEN, BIG_RESTING) } else { (CHOSEN, RESTING) };
+    let (chosen, resting) = if library.step() == 0 { (BIG_CHOSEN, BIG_RESTING) } else { (CHOSEN, RESTING) };
     if library.confirm { resting }
     else if me == library.grown { resting + (chosen - resting) * t }
     else if Some(me) == library.shrinking { chosen - (chosen - resting) * t }

@@ -67,7 +67,7 @@ fn game_frag(effect: ScreenEffect, lcd: LcdEffect) -> String {
         &format!("const float u_mode = {:.1};", effect.mode()))
 }
 
-const EFFECTS: usize = ScreenEffect::XbrLv2 as usize + 1;
+const EFFECTS: usize = ScreenEffect::DotMatrixColour as usize + 1;
 const LCD_EFFECTS: usize = 3;
 
 fn program_slot(effect: ScreenEffect, lcd: LcdEffect) -> usize {
@@ -496,14 +496,14 @@ mod tests {
     #[test]
     fn each_effect_gets_its_own_constant_mode() {
         for effect in [ScreenEffect::None, ScreenEffect::ZfastLcd, ScreenEffect::SharpBilinear,
-                       ScreenEffect::DotMatrix, ScreenEffect::XbrLv2] {
+                       ScreenEffect::DotMatrix, ScreenEffect::XbrLv2, ScreenEffect::DotMatrixColour] {
             let frag = game_frag(effect, LcdEffect::SunlightShimmer);
             assert!(!frag.contains("uniform float u_mode;"));
             assert!(frag.contains(&format!("const float u_mode = {:.1};", effect.mode())));
             assert!(frag.starts_with("#define LCD_FX 2\n"));
         }
-        assert_eq!(EFFECTS, 25);
-        assert_eq!(program_slot(ScreenEffect::XbrLv2, LcdEffect::SunlightShimmer), EFFECTS * LCD_EFFECTS - 1);
+        assert_eq!(EFFECTS, 26);
+        assert_eq!(program_slot(ScreenEffect::DotMatrixColour, LcdEffect::SunlightShimmer), EFFECTS * LCD_EFFECTS - 1);
     }
 
     #[test]

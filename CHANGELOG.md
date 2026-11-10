@@ -2,6 +2,15 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v2.2.2 — 10 November 2026
+
+- In game, Frame Blending, LCD Effect and Dither Blending are the game's own (per-game profile); Settings → Systems keeps the system's default.
+- Dot Matrix Color for the Game Boy Color: Dot Matrix's dots, gaps, shadow and background, each dot in its pixel's colour. Dot Matrix gaps are anti-aliased by coverage (even at Original Ratio, unchanged at Integer).
+- Simpletex's paper grain is sized to the screen, so it shows on dense screens (Retroid Pocket Classic).
+- Cart Studio: SELECT cycles cartridge sizes, one step for every system, tiers by screen width; opens on the first system with carts, on its first cart.
+- Home carts: original shell colours for NES and SNES carts released in other colours outside Japan (Tengen, Color Dreams, Camerica, Wisdom Tree, red Doom…).
+- Refresh Library: SCANNING done/total top right without a bar, like the labels' indicator.
+
 ## v2.2.1 — 10 November 2026
 
 - Simpletex on the GBA without its own GBA Color: Color Correction (mGBA/gpSP core option) works with it; players who used it get Color Correction ON once. "Grid V2 + GBA" unchanged. Simpletex GB/GBC/GBA share one GLSL function with Russ's settings and 2.2.0's grid.

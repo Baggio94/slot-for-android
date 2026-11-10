@@ -1,6 +1,12 @@
-# slot. for Android — v2.2.1
+# slot. for Android — v2.2.2
 
 This update brings a native Cart Studio built into slot. for Android, labels from slot.'s own database, cheats and new shaders.
+
+### Fixed in 2.2.2
+
+- In game, Frame Blending, LCD Effect and Dither Blending now change that game only. Settings → Systems keeps the default for the whole system.
+- Dot Matrix draws even lines, at Integer and at Original Ratio.
+- Simpletex shows its paper texture on high-resolution screens such as the Retroid Pocket Classic's.
 
 ### Fixed in 2.2.1
 
@@ -9,17 +15,18 @@ This update brings a native Cart Studio built into slot. for Android, labels fro
 
 ### What's New
 
-- **Native Cart Studio** — Cart Studio is now built directly into slot. for Android. Press **X** on a cartridge to change its label (Real Label, Logo Only, Search label, or your own picture), shell colour, finish and shape. **START → Cart Studio** shows every cartridge of a system: **L1 / R1** change the system, **L2 / R2** jump between letters, **Y** saves all changes. It replaces the web Cart Studio.
+- **Native Cart Studio** — Cart Studio is now built directly into slot. for Android. Press **X** on a cartridge to change its label (Real Label, Logo Only, Search label, or your own picture), shell colour, finish and shape. **START → Cart Studio** shows every cartridge of a system: **L1 / R1** change the system, **L2 / R2** jump between letters, **Y** saves all changes, **SELECT** changes the cartridge size. It replaces the web Cart Studio.
 - **Our own label database** — Labels now come from slot. for Android's own database, art.slot-android.app, for every system, rom hacks included. ScreenScraper only fills in what it doesn't have yet. Labels now download about five times faster.
 - **Cheats** — RetroArch's cheat database is built in for the Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive. Open **Cheats** in the game menu.
 - **LCD Effect** — Matt Akins' Pixel Transparency and Sunlight Shimmer on the Game Boy, Game Boy Color and Game Boy Advance.
-- **New shaders** — Dot Matrix on the Game Boy. crt-easymode, crt-hyllian, SABR, Super Eagle and xBR-lv2 on the NES, Super Nintendo and Mega Drive.
+- **New shaders** — Dot Matrix on the Game Boy, Dot Matrix Color on the Game Boy Color. crt-easymode, crt-hyllian, SABR, Super Eagle and xBR-lv2 on the NES, Super Nintendo and Mega Drive.
 - **Dither Blending** — Mega Drive dithering blends as it did on a TV.
 - **Status Bar** — Clock and battery at the top or bottom, Wi-Fi and Bluetooth in one row, apps All, Running or Off, New installs show the clock and battery at the top.
 - **Screenshot hotkey** — Set it in **Settings → Controls → Hotkeys**. Screenshots go to Pictures/Screenshots. ([#86](https://github.com/Baggio94/slot-for-android/issues/86))
 - **Scan progress** — The first library scan shows a progress bar and a count; Refresh Library shows its progress top right. ([#102](https://github.com/Baggio94/slot-for-android/issues/102))
 - **Interface** — Settings → General is now Interface. With the Shelf wallpaper, choose which shelf each wallpaper goes to.
 - **Console slots** — The NES, Famicom, Super Nintendo and Mega Drive slots fit their cartridges.
+- **Original shell colours** — NES and Super Nintendo cartridges released in other colours (Tengen, Color Dreams, Camerica, Wisdom Tree, red Doom…) show their real shell colour.
 
 ### Fixed
 

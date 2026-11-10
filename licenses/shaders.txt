@@ -54,6 +54,9 @@ Changes: its three passes drawn as one; the DMG preset's colours are the
 player's Game Boy palette (its lightest shade behind, a dark one for the dots).
 Source: https://github.com/libretro/glsl-shaders/tree/master/handheld
 
+Dot Matrix Color (Game Boy Color): the same Dot Matrix, each dot in the
+game's own colour over a light background, in one pass. Same licence.
+
 Dither Blending (Mega Drive): Genesis Dithering and Pseudo Transparency
 (GDAPT) v1.3 by Sp00kyFox, 2014, from the libretro shader collection.
 Its two passes run on the picture before it is drawn, MODE 0, PWR 2, STEPS 1.

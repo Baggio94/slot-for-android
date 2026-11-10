@@ -279,6 +279,9 @@ pub enum Shader {
     Sabr,
     SuperEagle,
     XbrLv2,
+    // Game Boy Color only: Dot Matrix in the game's colours (Siham
+    // 2026-11-10).
+    DotMatrixColor,
 }
 impl Shader {
     // Exactly ten GBA RetroArch shaders plus Off, preserving the backward
@@ -292,6 +295,13 @@ impl Shader {
     pub const GB: [Self; 9] = [
         Self::Off, Self::Lcd3x, Self::Grid, Self::Simpletex,
         Self::ZfastLcd, Self::Lcd1x, Self::LcdGridV2, Self::SharpBilinear, Self::Dot,
+    ];
+    /// Game Boy Color: the GB/GBC list plus Dot Matrix Color, the Dot
+    /// Matrix in the game's own colours (Siham 2026-11-10).
+    pub const GBC: [Self; 10] = [
+        Self::Off, Self::Lcd3x, Self::Grid, Self::Simpletex,
+        Self::ZfastLcd, Self::Lcd1x, Self::LcdGridV2, Self::SharpBilinear, Self::Dot,
+        Self::DotMatrixColor,
     ];
     /// Game Boy (DMG) only: the GB/GBC list plus Dot Matrix, a shader made
     /// for the original Game Boy's greens (Siham 2026-11-09).
@@ -334,6 +344,7 @@ impl Shader {
             Self::Sabr => ScreenEffect::Sabr,
             Self::SuperEagle => ScreenEffect::SuperEagle,
             Self::XbrLv2 => ScreenEffect::XbrLv2,
+            Self::DotMatrixColor => ScreenEffect::DotMatrixColour,
         }
     }
     pub fn includes_gba_color(self) -> bool {
@@ -425,10 +436,10 @@ pub struct Settings {
     /// Apps: only the running ones, instead of the stopped ones dimmed.
     #[serde(default)]
     pub apps_running_only: bool,
-    /// Cart Studio's library in big carts, one row of two (SELECT), the
-    /// default (Siham 2026-11-09).
-    #[serde(default = "big_carts")]
-    pub cart_studio_big: bool,
+    /// Cart Studio's size step (SELECT), the same for every system; 0, two
+    /// big carts, is the default (Siham 2026-11-10).
+    #[serde(default)]
+    pub cart_studio_size: u8,
     #[serde(default)]
     pub status_opt_in_v2: bool,
     // Slot v1.7 visual settings; independent of saved emulation profiles.
@@ -497,7 +508,7 @@ impl Default for Settings {
             show_wifi: false, show_bluetooth: false, show_integrations: false,
             time_format: TimeFormat::TwentyFourHour,
             clock_on_top: false, icons_on_bottom: false, apps_running_only: false,
-            cart_studio_big: true,
+            cart_studio_size: 0,
             status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
             show_recents: false, show_titles: false, home_bezel_three_two: false,
@@ -601,7 +612,7 @@ impl Settings {
                 if s.shader_gba == Shader::Grid { s.shader_gba = Shader::LcdGridV2; }
                 if !Shader::GBA.contains(&s.shader_gba) { s.shader_gba = Shader::Off; }
                 if !Shader::DMG.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
-                if !Shader::GB.contains(&s.shader_gbc) { s.shader_gbc = Shader::Off; }
+                if !Shader::GBC.contains(&s.shader_gbc) { s.shader_gbc = Shader::Off; }
                 for shader in [&mut s.shader_nes, &mut s.shader_snes, &mut s.shader_md] {
                     if !Shader::HOME.contains(shader) { *shader = Shader::ZfastCrt; }
                 }
@@ -703,7 +714,7 @@ impl Settings {
         match platform { Gba => 60, Gbc => 61, Gb => 62, Nes => 63, Snes => 64, Md => 65 }
     }
 
-    fn blending_mut(&mut self, platform: slot_store::Platform) -> &mut Blending {
+    pub(crate) fn blending_mut(&mut self, platform: slot_store::Platform) -> &mut Blending {
         use slot_store::Platform::*;
         match platform {
             Gba => &mut self.blending_gba, Gbc => &mut self.blending_gbc, Gb => &mut self.blending_gb,
@@ -723,6 +734,14 @@ impl Settings {
         match platform {
             Gba => self.lcd_effect_gba, Gbc => self.lcd_effect_gbc, Gb => self.lcd_effect_gb,
             _ => LcdEffect::Off,
+        }
+    }
+
+    pub fn set_lcd_effect_for(&mut self, platform: slot_store::Platform, value: LcdEffect) {
+        use slot_store::Platform::*;
+        match platform {
+            Gba => self.lcd_effect_gba = value, Gbc => self.lcd_effect_gbc = value,
+            Gb => self.lcd_effect_gb = value, _ => {}
         }
     }
 
@@ -795,7 +814,7 @@ impl Settings {
                 !self.colour_correction_gbc),
             24 => self.set_colour_for(slot_store::Platform::Gb,
                 !self.colour_correction_gb),
-            21 => self.shader_gbc=self.shader_gbc.step(&Shader::GB,right),
+            21 => self.shader_gbc=self.shader_gbc.step(&Shader::GBC,right),
             60..=65 => {
                 use slot_store::Platform::*;
                 let platform = [Gba, Gbc, Gb, Nes, Snes, Md][key - 60];
@@ -1322,6 +1341,8 @@ mod tests {
     fn new_shaders_lcd_effects_and_dither_blending_roundtrip() {
         assert_eq!(Shader::HOME.len(), 12);
         assert!(Shader::DMG.contains(&Shader::DotMatrix) && !Shader::GB.contains(&Shader::DotMatrix));
+        assert!(Shader::GBC.contains(&Shader::DotMatrixColor) && !Shader::DMG.contains(&Shader::DotMatrixColor)
+            && !Shader::GBA.contains(&Shader::DotMatrixColor));
         let mut s = Settings::default();
         assert_eq!(s.lcd_effect_for(slot_store::Platform::Gb), LcdEffect::Off);
         assert!(s.change(68, true) && s.lcd_effect_gb == LcdEffect::Transparency);
@@ -1624,4 +1645,3 @@ mod tests {
     }
 }
 
-fn big_carts() -> bool { true }
