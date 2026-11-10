@@ -16,6 +16,5 @@ jobs:
           path: cache
           key: cart-colours-NES-MD-none
           restore-keys: cart-colours-NES-MD-
-      - run: pip install numpy pillow scipy spandrel torch --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
-      - run: curl -sL -o x4.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
-      - run: python3 -u tools/cart-colours/refs.py x4.pth
+      # The x1 renders only: the x4 upscale is too big for the log.
+      - run: python3 -u tools/cart-colours/refs.py
