@@ -38,7 +38,9 @@ if len(sys.argv) > 1:
         o = up(rgb)
         al = up(np.repeat(a[:, :, 3:4], 3, 2))[:, :, 0]
         buf = io.BytesIO()
-        Image.fromarray(np.dstack([o, al])).save(buf, "PNG", optimize=True)
+        # The moulds only use the shell's light and its outline: grey + alpha.
+        grey = (o.astype(np.float32) @ np.array([.299, .587, .114], np.float32) + .5).astype(np.uint8)
+        Image.fromarray(np.dstack([grey, al]), "LA").save(buf, "PNG", optimize=True)
         return buf.getvalue()
 
 for platform, crc in wanted:
@@ -48,6 +50,7 @@ for platform, crc in wanted:
         print("MISSING", platform, crc)
         continue
     print("NAME", crc, r["name"])
-    emit(f"{crc}-x1", img.read_bytes())
-    if upscale:
+    if not upscale:
+        emit(f"{crc}-x1", img.read_bytes())
+    else:
         emit(f"{crc}-x4", upscale(img))
