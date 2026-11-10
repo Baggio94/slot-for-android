@@ -144,7 +144,7 @@ impl Toast {
             Toast::ShaderLcdGridV2Gba => "Shader: Grid V2 + GBA",
             Toast::ShaderZfastLcd => "Shader: zfast LCD",
             Toast::ShaderLcd1x => "Shader: LCD1x",
-            Toast::ShaderSimpletexGba => "Shader: Simpletex + GBA",
+            Toast::ShaderSimpletexGba => "Shader: Simpletex",
             Toast::ShaderAgb001 => "Shader: AGB-001",
             Toast::ShaderAgs001 => "Shader: AGS-001",
             Toast::ShaderSharpBilinear => "Shader: Sharp Bilinear",

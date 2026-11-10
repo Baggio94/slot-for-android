@@ -52,6 +52,13 @@ internal class SlotLibraryRefreshIndicator(context: Context, rail: LinearLayout)
     private var total = 0
     private val bar = object : View(context) {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = SlotUi.ink }
+        // As wide as the caption, never the rail: a plain View asks for all
+        // the room it is offered, which stretched the bar across the screen.
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val w = if (View.MeasureSpec.getMode(widthMeasureSpec) == View.MeasureSpec.EXACTLY)
+                View.MeasureSpec.getSize(widthMeasureSpec) else 0
+            setMeasuredDimension(w, View.MeasureSpec.getSize(heightMeasureSpec))
+        }
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             if (root.visibility != View.VISIBLE || visibility != View.VISIBLE) return

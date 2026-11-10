@@ -2,6 +2,11 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v2.2.1 — 10 November 2026
+
+- Simpletex on the GBA without its own GBA Color: Color Correction (mGBA/gpSP core option) works with it; players who used it get Color Correction ON once. "Grid V2 + GBA" unchanged. Simpletex GB/GBC/GBA share one GLSL function with Russ's settings and 2.2.0's grid.
+- Refresh Library: the scan bar stays as wide as its caption, top right.
+
 ## v2.2.0 — 9 November 2026
 
 - Native Cart Studio in slot. replaces the web Studio (WebView activity, WASM build and staging scripts removed; third_party/slot-cart-studio keeps dat.rs): X on a cart opens the editor (Label: Current, Real Label, Logo Only, slot. label, Search game…, Picture…; Background; Colour chart of real and fun shell colours; Finish: Original, Solid, Clear, Solid glitter, Clear glitter; Shape), START → Cart Studio opens the library page per system (L1/R1 system, L2/R2 letter, SELECT full grid, Y saves every edited cart, B asks before dropping edits), live label count.

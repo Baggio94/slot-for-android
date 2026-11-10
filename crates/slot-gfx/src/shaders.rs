@@ -96,10 +96,25 @@ vec3 gba_color(vec3 c) {
     c = mat3(0.82,0.125,0.195, 0.24,0.665,0.075, -0.06,0.21,0.73)*(c*0.94);
     return pow(clamp(c,0.0,1.0),vec3(1.0/2.2));
 }
-vec3 gba_simpletex_color(vec3 c) {
-    c = pow(max(c,vec3(0.0)),vec3(3.25));
-    c = mat3(0.82,0.125,0.195, 0.24,0.665,0.075, -0.06,0.21,0.73)*(c*0.94);
-    return clamp(pow(max(c,vec3(0.0)),vec3(1.0/2.2)),0.0,1.0);
+vec3 simpletex(vec3 c, vec2 f, float bias) {
+    // jdgleaver simpletex_lcd with Russ (RetroGameCorps) settings, Siham
+    // 2026-11-04: Background Intensity 0.80, Darken Colours 0.25, Darken
+    // Grid 0.15, Grid Intensity 0.65. Grid Width 0.65 and Grid Bias (1.0
+    // GB/GBC, 0.6 GBA) as in 2.2.0: RetroArch's defaults (1.0, 0.0) lay
+    // the light grid over dark colours and wash the picture out (Siham
+    // 2026-11-10, 2.2.1-beta1 on device).
+    c = pow(c, vec3(1.0 + 0.25));
+    vec2 d = abs(f - 0.5);
+    float x2 = max(d.x, d.y);
+    x2 = x2 * x2;
+    float x4 = x2 * x2;
+    float w = 48.0 * (x4 - (8.0 / 3.0) * x4 * x2);
+    w = w * (w + (1.0 - w) * 0.65) * 0.65;
+    float luma = dot(c, luma_coeff);
+    w = w * (luma + (1.0 - luma) * (1.0 - bias));
+    c = mix(c, vec3(1.0 - 0.15), w);
+    vec3 bg = texture2D(u_paper, (floor(gl_FragCoord.xy) + 0.5) / u_paper_size).rgb * c;
+    return mix(c, bg, dot(c, luma_coeff) * 0.80);
 }
 vec3 lcd_grid_v2(vec2 uv, bool bgr) {
     // cgwg LCD Grid V2 coefficient integration, rewritten without GLSL130
@@ -856,7 +871,7 @@ void main() {
     vec2 f = fract(uv * u_src);
     vec3 c;
     // The LCD shaders (LCD3x, Grid, Dot, Simpletex, zfast LCD, LCD1x,
-    // Simpletex + GBA) read the game through Pixel AA. LCD Grid V2 and
+    // Simpletex on the GBA) read the game through Pixel AA. LCD Grid V2 and
     // AGB/AGS-001 filter the game themselves; the others as before.
     if (u_mode > 0.5 && u_mode < 9.5 && !(u_mode > 4.5 && u_mode < 6.5)) {
         c = pixel_aa(uv);
@@ -936,23 +951,10 @@ void main() {
         // endrift AGB-001: original non-backlit screen color subpixels.
         c=mgba_pass(uv,false);
     } else if (u_mode > 8.5) {
-        // jdgleaver simpletex_lcd+gba-color, using Slot's existing
-        // licensed paper texture crop. Russ (RetroGameCorps) settings,
-        // Siham 2026-11-04: Background Intensity 0.80, Darken Colours
-        // 0.25, Darken Grid 0.15, Grid Intensity 0.65.
-        c=gba_simpletex_color(c);
-        c=pow(c,vec3(1.25));
-        vec2 dd=abs(f-vec2(0.5));
-        float d2=max(dd.x,dd.y); d2*=d2;
-        float d4=d2*d2;
-        float weight=48.0*(d4-(8.0/3.0)*d4*d2);
-        weight=weight*(weight+(1.0-weight)*0.65)*0.65;
-        float lum=dot(c,luma_coeff);
-        weight*=lum+(1.0-lum)*0.4;
-        c=mix(c,vec3(0.85),weight);
-        vec3 paper=texture2D(u_paper,
-            (floor(gl_FragCoord.xy)+vec2(0.5))/u_paper_size).rgb;
-        c=mix(c,paper*c,dot(c,luma_coeff)*0.80);
+        // Simpletex on the GBA: the same shader as GB/GBC since 2.2.1,
+        // without its own GBA Color. Color Correction is the player's
+        // choice, as with every other shader (Siham 2026-11-10).
+        c = simpletex(c, f, 0.6);
     } else if (u_mode > 7.5) {
         // jdgleaver LCD1x: proper scanline alignment, no RGB separation.
         vec2 angle=6.283185307*(uv*u_src-vec2(0.25));
@@ -973,21 +975,7 @@ void main() {
     } else if (u_mode > 4.5) {
         c=lcd_grid_v2(uv,false);
     } else if (u_mode > 3.5) {
-        // simpletex_lcd with Russ (RetroGameCorps) settings, Siham
-        // 2026-11-04: Background Intensity 0.80, Darken Colours 0.25,
-        // Darken Grid 0.15, Grid Intensity 0.65.
-        c = pow(c, vec3(1.25));
-        vec2 d = abs(f - 0.5);
-        float x2 = max(d.x, d.y);
-        x2 = x2 * x2;
-        float x4 = x2 * x2;
-        float w = 48.0 * (x4 - (8.0 / 3.0) * x4 * x2);
-        w = w * (w + (1.0 - w) * 0.65) * 0.65;
-        float luma = dot(c, luma_coeff);
-        w = w * luma;
-        c = mix(c, vec3(0.85), w);
-        vec3 bg = texture2D(u_paper, (floor(gl_FragCoord.xy) + 0.5) / u_paper_size).rgb * c;
-        c = mix(c, bg, dot(c, luma_coeff) * 0.80);
+        c = simpletex(c, f, 1.0);
     } else if (u_mode > 2.5) {
         float bloom = mix(1.05, 0.95, dot(c, vec3(0.30, 0.59, 0.11)));
         float mid = dot_weight(f, vec2(0.0), bloom);
@@ -1007,11 +995,10 @@ void main() {
         c *= yfactor * xfactors;
     }
     if (inside) c = lcd_effect(c, uv);
-    // These two RetroArch presets already contain GBA Color. Never
-    // unintentionally apply the global correction twice.
+    // Grid V2 + GBA already contains GBA Color. Never unintentionally
+    // apply the global correction twice.
     if (u_colour_correct > 0.5 && inside &&
-        !(u_mode > 5.5 && u_mode < 6.5) &&
-        !(u_mode > 8.5 && u_mode < 9.5)) {
+        !(u_mode > 5.5 && u_mode < 6.5)) {
         // GBA-era display simulation: subtly warmer, lower-saturation
         // colours and a restrained luminance response. GPU only; libretro
         // framebuffer, SRAM and save states remain untouched.

@@ -337,7 +337,9 @@ impl Shader {
         }
     }
     pub fn includes_gba_color(self) -> bool {
-        matches!(self, Self::LcdGridV2Gba | Self::SimpletexGba)
+        // Simpletex on the GBA lost its own GBA Color in 2.2.1: Color
+        // Correction is an option there too (Siham 2026-11-10).
+        matches!(self, Self::LcdGridV2Gba)
     }
     pub fn core_colour(self, requested: bool) -> bool {
         // GBA Color is already in the shader; avoid applying it twice
@@ -445,6 +447,10 @@ pub struct Settings {
     /// One-time move of GB/GBC overlays left OFF to Watomsk's frames.
     #[serde(default)]
     pub gb_overlays_watomsk: bool,
+    /// One-time Color Correction ON for a GBA Simpletex chosen before 2.2.1,
+    /// when the shader still had its own GBA Color.
+    #[serde(default)]
+    pub simpletex_gba_colour: bool,
     /// Frame Blending of each system (Systems > [system] > Frame Blending).
     #[serde(default)]
     pub blending_gba: Blending,
@@ -496,6 +502,7 @@ impl Default for Settings {
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
             show_recents: false, show_titles: false, home_bezel_three_two: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
+            simpletex_gba_colour: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
             blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
             lcd_effect_gba: LcdEffect::Off, lcd_effect_gbc: LcdEffect::Off, lcd_effect_gb: LcdEffect::Off,
@@ -533,6 +540,7 @@ impl Settings {
             home_bezel_three_two: true,
             gb_palette_twb64: true,
             gb_overlays_watomsk: true,
+            simpletex_gba_colour: true,
             ..Self::default()
         }
     }
@@ -630,6 +638,14 @@ impl Settings {
                     if s.bezel_gb == Bezel::None { s.bezel_gb = Bezel::Gb; }
                     if s.bezel_gbc == Bezel::None { s.bezel_gbc = Bezel::Color; }
                     s.gb_overlays_watomsk = true;
+                }
+                // Once: Simpletex on the GBA no longer has its own GBA
+                // Color; a player who used it keeps colours close to before.
+                if !s.simpletex_gba_colour {
+                    if s.shader_gba == Shader::SimpletexGba {
+                        s.colour_correction_gba = true;
+                    }
+                    s.simpletex_gba_colour = true;
                 }
                 s
             }).unwrap_or_else(|| Self::first_install_defaults_for_device(device))
@@ -1276,9 +1292,31 @@ mod tests {
             assert_eq!(serde_json::from_str::<Shader>(&json).unwrap(),shader);
             assert_eq!(shader.core_colour(true), !shader.includes_gba_color());
         }
-        assert!(!Shader::SimpletexGba.core_colour(true));
+        // Simpletex on the GBA has no GBA Color of its own since 2.2.1.
+        assert!(Shader::SimpletexGba.core_colour(true));
         assert!(!Shader::LcdGridV2Gba.core_colour(true));
         assert!(Shader::Dot.core_colour(true));
+    }
+    #[test]
+    fn gba_simpletex_players_get_color_correction_once() {
+        let dir=std::env::temp_dir().join(format!(
+            "slot-simpletex-gba-colour-{}",std::process::id()));
+        let _=fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(NAME),
+            r#"{"shader_gba":"simpletexgba","colour_correction_gba":false}"#).unwrap();
+        let mut s=Settings::load(&dir);
+        assert_eq!(s.shader_gba,Shader::SimpletexGba);
+        assert!(s.colour_correction_gba && s.simpletex_gba_colour);
+        // A later OFF is kept.
+        s.colour_correction_gba=false;
+        s.save(&dir).unwrap();
+        assert!(!Settings::load(&dir).colour_correction_gba);
+        // Another shader keeps the player's choice.
+        fs::write(dir.join(NAME),
+            r#"{"shader_gba":"lcd3x","colour_correction_gba":false}"#).unwrap();
+        assert!(!Settings::load(&dir).colour_correction_gba);
+        fs::remove_dir_all(&dir).unwrap();
     }
     #[test]
     fn new_shaders_lcd_effects_and_dither_blending_roundtrip() {
@@ -1470,7 +1508,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("slot-konkr-dev14-{}", std::process::id()));
         // Already past the one-time 3:2 home overlay change.
         let mut s = Settings { home_bezel_three_two: true, gb_palette_twb64: true,
-            gb_overlays_watomsk: true, ..Settings::default() };
+            gb_overlays_watomsk: true, simpletex_gba_colour: true,
+            ..Settings::default() };
         s.change(0, true); s.change(6, true); s.gb_palette = 47;
         s.save(&dir).unwrap();
         assert_eq!(Settings::load(&dir), s);
