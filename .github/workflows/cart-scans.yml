@@ -1,0 +1,21 @@
+name: cart-scans
+
+on:
+  push:
+    branches: [tools/cart-colours]
+    paths: [tools/cart-colours/scans.txt, tools/cart-colours/scans.py, .github/workflows/cart-scans.yml]
+
+jobs:
+  scans:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
+      SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
+      SS_SOFTNAME: ${{ secrets.SCREENSCRAPER_SOFTNAME }}
+      SS_USER: ${{ secrets.SCREENSCRAPER_SSID }}
+      SS_PASSWORD: ${{ secrets.SCREENSCRAPER_SSPASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install numpy pillow scipy
+      - run: python3 -u tools/cart-colours/scans.py
