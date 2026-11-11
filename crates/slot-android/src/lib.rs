@@ -140,6 +140,10 @@ mod cable;
 mod link_state;
 #[cfg(any(target_os = "android", all(test, feature = "runtime-tests")))]
 mod game;
+// Emulation bench (slot. vs RetroArch), a Linux-only ignored test.
+#[cfg(all(test, feature = "runtime-tests"))]
+#[path = "../../../tools/emulation-bench/slot_bench.rs"]
+mod emulation_bench;
 #[cfg(any(target_os = "android", all(test, feature = "runtime-tests")))]
 mod cart_render;
 #[cfg(any(target_os = "android", all(test, feature = "runtime-tests")))]
