@@ -31,7 +31,7 @@ REAL="$ROOT/.build/bench/cores/${CORE}_libretro.so"
 [ -x "$RA" ] || { echo "No RetroArch at $RA (run setup.sh)" >&2; exit 1; }
 [ -s "$PROXY" ] || { echo "No proxy core; run setup.sh" >&2; exit 1; }
 [ -s "$REAL" ] || { echo "No $CORE core; run setup.sh $CORE" >&2; exit 1; }
-NAME="$(basename "${ROM%.*}")"
+NAME="$(basename "${ROM%.*}" | tr -c 'A-Za-z0-9._-' '_' | sed 's/_*$//')"
 OUT="${BENCH_OUT:-$ROOT/.build/bench/results}/$CORE/$NAME"
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -66,7 +66,7 @@ ra_run() {
   cp "$opts" "$dir/options.cfg"
   env BENCH_EXIT_AT="$FRAMES" BENCH_LOG="$dir/log.jsonl" BENCH_PCM="$dir/audio.raw" BENCH_KEEP="$dir" \
     ${BENCH_DUMP_EVERY:+BENCH_DUMP="$dir" BENCH_DUMP_EVERY="$BENCH_DUMP_EVERY"} \
-    timeout 600 "$RA" -c "$dir/retroarch.cfg" -L "$PROXY" "$ROM" --max-frames="$((FRAMES + 1))" \
+    timeout 600 "$RA" -c "$dir/retroarch.cfg" -L "$PROXY" "$ROM" --max-frames="$((FRAMES * 2))" \
     > "$dir/run.log" 2>&1 || { tail -30 "$dir/run.log" >&2; exit 1; }
 }
 
