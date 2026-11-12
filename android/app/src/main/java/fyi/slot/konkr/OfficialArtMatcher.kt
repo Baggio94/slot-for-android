@@ -50,6 +50,14 @@ internal object OfficialArtMatcher {
                 require(entries.isNotEmpty()) { "No games in No-Intro DAT" }
                 return Catalog(platform, entries)
             }
+
+            /** slot. for Android's art set names (CRC to No-Intro name), for
+             *  RomM's games: matched by title, region and revision as a DAT
+             *  is, with no game codes. */
+            fun fromNames(platform: String, names: Map<String, String>): Catalog =
+                Catalog(platform, names.map { (crc, name) ->
+                    Entry(name, crc.uppercase(Locale.ROOT), region(name), revision(name), null, titleKey(name))
+                })
         }
     }
 
@@ -144,6 +152,24 @@ internal object OfficialArtMatcher {
         header: ByteArray,
         catalog: Catalog,
         artworkPath: (String) -> String?,
+    ): String? = resolve(platform, romTitle, header, catalog, false, false, artworkPath)
+
+    /** A name against slot. for Android's own art set (Catalog.fromNames),
+     *  whose every entry has its label: [relaxed] settles a tie by region
+     *  (the name's, USA, World, Europe, Japan) then revision; [anyRegion]
+     *  lets another region's dump of the same game answer. */
+    fun inArtSet(platform: String, title: String, catalog: Catalog,
+                 relaxed: Boolean, anyRegion: Boolean = false): String? =
+        resolve(platform, title, ByteArray(0), catalog, relaxed, anyRegion) { it }
+
+    private fun resolve(
+        platform: String,
+        romTitle: String,
+        header: ByteArray,
+        catalog: Catalog,
+        relaxed: Boolean,
+        anyRegion: Boolean,
+        artworkPath: (String) -> String?,
     ): String? {
         if (platform != catalog.platform) return null
         val requested = titleKey(romTitle)
@@ -161,7 +187,7 @@ internal object OfficialArtMatcher {
             // DAT is loaded separately for each system by OfficialDatSource.
             // Never cross system boundaries or silently choose foreign-region
             // art for a ROM with a known region.
-            if (expectedRegion != null && entry.region != expectedRegion) continue
+            if (expectedRegion != null && entry.region != expectedRegion && !anyRegion) continue
             val edition = digitalEdition(entry.name)
             if (requestedEdition != null && edition != requestedEdition) continue
 
@@ -202,10 +228,24 @@ internal object OfficialArtMatcher {
             candidates.add(Candidate(entry, path, score))
         }
         val best = candidates.maxOfOrNull { it.score } ?: return null
-        val winners = candidates.filter { it.score == best }
+        var winners = candidates.filter { it.score == best }
         if (winners.map { it.path }.distinct().size == 1) {
             return winners.first().entry.crc
         }
+        if (relaxed) {
+            // slot. for Android's own art set, for a name that isn't a dump's
+            // (RomM, a hack, a region the set lacks): the dump's own region
+            // first, else USA, World, Europe, Japan, as the harvest orders
+            // them (Siham 2026-11-10).
+            val order = listOf(expectedRegion, "USA", "WORLD", "EUROPE", "JAPAN")
+            winners = order.firstNotNullOfOrNull { region ->
+                winners.filter { it.entry.region == region }.takeIf { it.isNotEmpty() }
+            } ?: winners
+            if (winners.map { it.path }.distinct().size == 1) return winners.first().entry.crc
+        }
+        fun fallback(): String? = if (!relaxed) null else winners.sortedWith(
+            compareByDescending<Candidate> { it.entry.revision ?: 0 }.thenBy { it.entry.name })
+            .first().entry.crc
         // All eligible entries describe the *same game* and differ only
         // by official aftermarket version (e.g. Apotris v3/v4). When a
         // patched soundpack has its own unrelated version tag, prefer the
@@ -214,16 +254,16 @@ internal object OfficialArtMatcher {
         if (winners.any { digitalEdition(it.entry.name) != null } ||
             winners.map { it.entry.revision }.distinct().size != 1 ||
             winners.map { it.entry.region }.distinct().size != 1 ||
-            winners.map { it.entry.titleKey }.distinct().size != 1) return null
+            winners.map { it.entry.titleKey }.distinct().size != 1) return fallback()
         val versioned = winners.map { it to sourceVersion(it.entry.name) }
-        if (versioned.any { it.second == null }) return null
+        if (versioned.any { it.second == null }) return fallback()
         val newest = versioned.maxWithOrNull { a, b ->
             compareSourceVersions(a.second!!, b.second!!)
-        } ?: return null
+        } ?: return fallback()
         val latest = versioned.filter {
             compareSourceVersions(it.second!!, newest.second!!) == 0
         }
-        if (latest.map { it.first.path }.distinct().size != 1) return null
+        if (latest.map { it.first.path }.distinct().size != 1) return fallback()
         return latest.first().first.entry.crc
     }
 }

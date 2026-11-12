@@ -41,6 +41,9 @@ pub enum ScreenEffect {
     /// Game Boy Color Dot Matrix: the Dot Matrix with the game's own
     /// colours (Siham 2026-11-10).
     DotMatrixColour,
+    /// crt-royale-fast, eight passes ahead of the game pass (royale.rs);
+    /// the game pass itself never runs this mode.
+    CrtRoyale,
 }
 
 impl ScreenEffect {

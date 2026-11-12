@@ -69,7 +69,7 @@ pub struct Shelf {
     shadow: Option<TexId>,
     gb_shadow: Option<TexId>,
     gbc_shadow: Option<TexId>,
-    home_shadows: [Option<TexId>; 9],
+    home_shadows: [Option<TexId>; HomeMould::ALL.len()],
     shells: Vec<Body>,
     starred: Vec<bool>,
     star: Option<(TexId, f32, f32)>,
@@ -79,7 +79,13 @@ pub struct Shelf {
     /// Up/Down repeat letter jumps like upstream Slot v1.7. Android drops
     /// framework key repeats; the native shelf clock owns this schedule.
     held_letter: Option<(i32, Millis, usize)>,
+    /// A cart was taken out of the middle: the carts on its right start one
+    /// place further right and slide into the gap (1 down to 0).
+    closing: f32,
 }
+
+/// Seconds the carts on the right take to close a deleted cart's gap.
+const CLOSE_S: f32 = 0.45;
 
 impl Shelf {
     pub fn new(carts: Vec<Cart>) -> Self {
@@ -87,7 +93,7 @@ impl Shelf {
             starred: vec![false; carts.len()],
             star: None,
             shells: carts.iter().map(body_of).collect(),
-            home_shadows: [None; 9],
+            home_shadows: [None; HomeMould::ALL.len()],
             faces: vec![None; carts.len()],
             carts,
             index: 0,
@@ -99,7 +105,26 @@ impl Shelf {
             vel: 0.0,
             held: None,
             held_letter: None,
+            closing: 0.0,
         }
+    }
+
+    /// Takes cart `i` out: the cart on its right becomes the selected one
+    /// and, with the others on that side, slides left into the gap. Returns
+    /// the old and new index of every cart kept (for face caches).
+    pub fn remove_closing(&mut self, i: usize) -> Vec<(usize, usize)> {
+        if i >= self.carts.len() { return (0..self.carts.len()).map(|k| (k, k)).collect(); }
+        self.carts.remove(i);
+        self.faces.remove(i);
+        self.shells.remove(i);
+        if i < self.starred.len() { self.starred.remove(i); }
+        let n = self.carts.len();
+        let moves = (0..=n).filter(|&old| old != i)
+            .map(|old| (old, if old > i { old - 1 } else { old })).collect();
+        self.select(if n == 0 || i < n { i.min(n.saturating_sub(1)) } else { 0 });
+        self.release_hold();
+        self.closing = if n > 1 { 1.0 } else { 0.0 };
+        moves
     }
 
     /// Reorder the Recents rack without discarding reusable GPU faces or
@@ -113,18 +138,35 @@ impl Shelf {
         self.shells = self.carts.iter().map(body_of).collect();
         self.starred = vec![false; self.carts.len()];
         let mut moves = Vec::new();
+        // Each cart's new place found at once (the first, if two share a
+        // ROM): looking it up along the shelf cost 270 ms for 2000 carts.
+        let places: std::collections::HashMap<&std::path::Path, usize> = self.carts.iter()
+            .enumerate().rev().map(|(i, item)| (item.rom.as_path(), i)).collect();
         for (old, cart) in before.iter().enumerate() {
-            if let Some(new) = self.carts.iter().position(|item| item.rom == cart.rom) {
+            if let Some(&new) = places.get(cart.rom.as_path()) {
                 self.faces[new] = faces[old];
                 moves.push((old, new));
             }
         }
         let next = previously_selected
-            .and_then(|rom| self.carts.iter().position(|cart| cart.rom == rom))
+            .and_then(|rom| places.get(rom.as_path()).copied())
             .unwrap_or(0);
         self.select(next);
         self.release_hold();
         moves
+    }
+
+    /// A library update: the carts at their new places. A cart keeps its
+    /// face only when it is unchanged (same ROM, title, code, shell...);
+    /// the moves returned are those kept faces' old and new places.
+    pub fn update_carts(&mut self, carts: Vec<Cart>) -> Vec<(usize, usize)> {
+        let before = self.carts.clone();
+        let moves = self.replace_carts_preserving_visuals(carts);
+        moves.into_iter().filter(|&(old, new)| {
+            let same = before.get(old) == self.carts.get(new);
+            if !same { self.faces[new] = None; }
+            same
+        }).collect()
     }
 
     pub fn select(&mut self, i: usize) {
@@ -137,6 +179,11 @@ impl Shelf {
     pub fn set_star(&mut self, tex: TexId, w: u32, h: u32) {
         self.star = Some((tex, w as f32, h as f32));
     }
+    /// Whether the cart at `i` wears its favourite star.
+    pub fn starred(&self, i: usize) -> bool {
+        self.starred.get(i).copied().unwrap_or(false)
+    }
+
     pub fn mark_starred(&mut self, mut is_favorite: impl FnMut(&Cart) -> bool) {
         self.starred = self.carts.iter().map(&mut is_favorite).collect();
     }
@@ -421,12 +468,32 @@ impl Shelf {
         (self.centre(0) - w * scale / 2.0, scale)
     }
 
+    /// Where the selected cart is drawn now: x, y, w, h.
+    pub fn selected_rect(&self) -> Option<(f32, f32, f32, f32)> {
+        let cart = self.carts.get(self.index)?;
+        let offset = self.scroll_target() - self.scroll + self.shift(0);
+        let scale = fit() * shrink(offset);
+        let (cw, ch) = shelf_box_for(cart);
+        let (w, h) = (cw * scale, ch * scale);
+        let body = self.shells.get(self.index).copied().unwrap_or_else(|| body_of(cart));
+        Some((self.centre(0) - w / 2.0, body_foot_y(body) - h, w, h))
+    }
+
     /// True while spring-driven shelf scrolling is visibly in flight.
     pub fn is_scrolling(&self) -> bool {
-        (self.scroll_target()-self.scroll).abs()>0.03 || self.vel.abs()>0.05
+        (self.scroll_target()-self.scroll).abs()>0.03 || self.vel.abs()>0.05 || self.closing > 0.0
+    }
+
+    /// How far right of their place the carts at and after the selected one
+    /// are drawn, in places, while a gap closes.
+    fn shift(&self, slot: i32) -> f32 {
+        if slot < 0 || self.closing <= 0.0 { return 0.0; }
+        let t = 1.0 - self.closing;
+        1.0 - t * t * (3.0 - 2.0 * t)
     }
 
     pub fn update(&mut self, dt: f32) {
+        self.closing = (self.closing - dt / CLOSE_S).max(0.0);
         let accel = -2.0 * OMEGA * self.vel - OMEGA * OMEGA * (self.scroll - self.scroll_target());
         self.vel += accel * dt;
         self.scroll += self.vel * dt;
@@ -471,14 +538,19 @@ impl Shelf {
             if hidden == Some(cart.stem.as_str()) {
                 continue;
             }
-            let offset = target + slot as f32 - self.scroll;
+            let shift = self.shift(slot);
+            let offset = target + slot as f32 - self.scroll + shift;
             let t = offset.abs().min(1.0);
             let scale = fit() * shrink(offset);
             let alpha = (1.0 + (SIDE_ALPHA - 1.0) * t) * (1.0 - recede);
             let (cw, ch) = shelf_box_for(cart);
             let (w, h) = (cw * scale, ch * scale);
             let away = offset.signum() * (1.0 + offset.abs());
-            let mut x = self.centre(slot) - w / 2.0 + away * PART * recede;
+            let centre = if shift > 0.0 {
+                let (here, next) = (self.centre(slot), self.centre(slot + 1));
+                here + (next - here) * shift
+            } else { self.centre(slot) };
+            let mut x = centre - w / 2.0 + away * PART * recede;
             if let Some([left, right]) = clear {
                 if offset < 0.0 {
                     x -= (x + w - (left - CLEAR_GAP)).max(0.0);
@@ -586,6 +658,26 @@ mod konkr_navigation_tests {
     }
 
     #[test]
+    fn a_deleted_cart_leaves_its_right_neighbour_selected_and_closing_in() {
+        let mut shelf = Shelf::new(vec![cart("Apple"), cart("Banana"), cart("Cherry")]);
+        shelf.select(1);
+        let moves = shelf.remove_closing(1);
+        assert_eq!(moves, vec![(0, 0), (2, 1)]);
+        assert_eq!(shelf.carts[shelf.index].stem, "Cherry");
+        assert!(shelf.is_scrolling());
+        assert_eq!(shelf.shift(0), 1.0);
+        assert_eq!(shelf.shift(-1), 0.0);
+        for _ in 0..60 { shelf.update(1.0 / 60.0); }
+        assert_eq!(shelf.shift(0), 0.0);
+        // The last cart: the first one is next, round the shelf.
+        let moves = shelf.remove_closing(1);
+        assert_eq!(moves, vec![(0, 0)]);
+        assert_eq!(shelf.carts[shelf.index].stem, "Apple");
+        shelf.remove_closing(0);
+        assert!(shelf.carts.is_empty());
+    }
+
+    #[test]
     fn held_letter_switch_cancels_old_horizontal_hold() {
         let mut shelf = Shelf::new(vec![
             cart("Apple"), cart("Banana"), cart("Cherry"),
@@ -615,5 +707,20 @@ mod home_fit_tests {
             let top = body_foot_y(body) - h;
             assert!(top >= 0.0, "{m:?} top at {top}");
         }
+    }
+
+    #[test]
+    fn a_library_update_keeps_the_faces_of_unchanged_carts_only() {
+        let cart = |stem: &str, code: &str| Cart { platform: slot_store::Platform::Gba,
+            stem: stem.into(), rom: format!("/r/{stem}.gba").into(), label: None,
+            title: stem.into(), code: code.into(), shell: None, battery: false };
+        let mut shelf = Shelf::new(vec![cart("a", "AAAE"), cart("b", "BBBE"), cart("c", "CCCE")]);
+        shelf.faces = vec![Some(TexId::from_raw(1)), Some(TexId::from_raw(2)), Some(TexId::from_raw(3))];
+        shelf.select(2);
+        let moves = shelf.update_carts(vec![cart("0", "ZZZE"), cart("a", "AAAE"),
+            cart("b", "BBBJ"), cart("c", "CCCE")]);
+        assert_eq!(moves, vec![(0, 1), (2, 3)]);
+        assert_eq!(shelf.faces, vec![None, Some(TexId::from_raw(1)), None, Some(TexId::from_raw(3))]);
+        assert_eq!(shelf.index, 3, "the selected cart stays selected");
     }
 }

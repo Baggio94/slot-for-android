@@ -55,15 +55,30 @@ internal object SlotArtSet {
         }
     }
 
-    private fun index(context: Context, platform: String): JSONObject? {
+    /** Whether the set's index for a platform could be read (fresh or
+     *  cached): a dump it doesn't list then really isn't in the set. */
+    @Synchronized
+    fun known(context: Context, platform: String): Boolean = index(context, platform) != null
+
+    /** Indexes and names older than [maxAgeMs] fetched again (RomM's page,
+     *  so labels published since show without waiting hours). */
+    @Synchronized
+    fun refresh(context: Context, maxAgeMs: Long) {
+        for (platform in platforms) {
+            index(context, platform, maxAgeMs)
+            writeNames(context, platform, maxAgeMs)
+        }
+    }
+
+    private fun index(context: Context, platform: String, fresh: Long = INDEX_FRESH_MS): JSONObject? {
         if (platform !in platforms) return null
         val now = System.currentTimeMillis()
-        loaded[platform]?.takeIf { now - it.at < INDEX_FRESH_MS }?.let { return it.index }
+        loaded[platform]?.takeIf { now - it.at < fresh }?.let { return it.index }
         val cache = File(dir(context), "$platform.json")
         fun cached(): JSONObject? = try {
             if (cache.isFile && cache.length() in 2L..MAX_INDEX.toLong()) JSONObject(cache.readText()) else null
         } catch (_: Exception) { null }
-        if (cache.isFile && now - cache.lastModified() < INDEX_FRESH_MS) {
+        if (cache.isFile && now - cache.lastModified() < fresh) {
             cached()?.let { loaded[platform] = Loaded(cache.lastModified(), it); return it }
         }
         return try {
@@ -81,10 +96,10 @@ internal object SlotArtSet {
 
     /** The names Cart Studio searches for a platform, written for slot. as
      *  ArtNames/<PLATFORM>.tsv (CRC, tab, name), refreshed every few hours. */
-    fun writeNames(context: Context, platform: String) {
+    fun writeNames(context: Context, platform: String, fresh: Long = INDEX_FRESH_MS) {
         if (platform !in platforms) return
         val out = File(File(context.filesDir, "ArtNames").apply { mkdirs() }, "$platform.tsv")
-        if (out.isFile && System.currentTimeMillis() - out.lastModified() < INDEX_FRESH_MS) return
+        if (out.isFile && System.currentTimeMillis() - out.lastModified() < fresh) return
         try {
             val bytes = get("$platform.names.json", MAX_INDEX) ?: return
             val json = JSONObject(String(bytes, Charsets.UTF_8))
@@ -109,6 +124,15 @@ internal object SlotArtSet {
         val bytes = get(entry.file, MAX_FILE) ?: return null
         try { write(cache, bytes) } catch (error: Exception) { Log.w(TAG, "Art cache write failed", error) }
         return bytes
+    }
+
+    /** Whether the set holds a label for a dump: the cart scan for the
+     *  Game Boy family, a scan or front render for the home systems. */
+    @Synchronized
+    fun labelled(context: Context, platform: String, crc: String): Boolean {
+        val types = entries(context, platform, crc)?.map { it.type } ?: return false
+        return "support-texture" in types ||
+            (platform in Systems.HOME_PLATFORMS && "support-2D" in types)
     }
 
     /** The label scan of a Game Boy family dump, as PNG, or null. */

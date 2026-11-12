@@ -44,7 +44,8 @@ fn the_banner_says_what_happened_and_never_what_is_on_screen() {
         ],
         "a banner was added or dropped: every face is uploaded by its place in this list"
     );
-    let suns = all.len() - 11;
+    let motions = all.len() - 10;
+    let suns = motions - 11;
     let palettes = suns - GbPalette::all().count();
     assert_eq!(
         all[palettes..suns],
@@ -52,9 +53,14 @@ fn the_banner_says_what_happened_and_never_what_is_on_screen() {
         "the palette banners do not follow the fixed ones in palette order"
     );
     assert_eq!(
-        all[suns..],
+        all[suns..motions],
         (0..=10).map(Toast::Sun).collect::<Vec<_>>()[..],
-        "the sun banners close the list, 0 to 10"
+        "the sun banners follow the palettes, 0 to 10"
+    );
+    assert_eq!(
+        all[motions..],
+        (1..=10).map(Toast::Motion).collect::<Vec<_>>()[..],
+        "the sensitivity banners close the list, 1 to 10"
     );
     for (i, t) in all.iter().enumerate() {
         assert_eq!(t.index(), i, "{t:?} does not answer to its own place");

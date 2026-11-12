@@ -42,10 +42,12 @@ Everything you love about the original slot., now on Android handhelds — with 
 
 - **NES, Super Nintendo and Mega Drive** — Three home consoles join the Game Boy family, each with its own shelf, cartridge shells (including Famicom and Japanese Mega Drive moulds), console slot, Cart Studio labels, RetroAchievements and multiplayer.
 - **Two emulation cores per system** — mGBA or gpSP for GBA, mGBA or Gambatte for GB and GBC, FCEUmm or Nestopia for NES, Snes9x or bsnes for SNES, Genesis Plus GX or PicoDrive for Mega Drive. Choose a default core per system, or a different one for any game.
+- **Game Boy Advance Video** — GBA Video cartridges get their own shelf behind the GBA shelf, with FSR or Anime4K upscaling.
 - **Made for every Android handheld** — The interface fills any screen shape, from square (1:1) to widescreen, at the panel's native resolution. Screen sizes, overlays and frame pacing get sensible defaults for each handheld.
 - **SLOT button** — On the KONKR, use the round top button to insert a cartridge, or hold it while playing to save and eject it. The Retroid Pocket's centre key works the same way, and on every handheld SELECT + X opens the in-game menu and SELECT + START saves and ejects the cartridge.
 - **slot.'s own labels** — Your cartridges get their real labels automatically, from slot. for Android's own label collection for every system, rom hacks included.
 - **Easy library setup** — Choose your ROM folder directly from Android, with optional BIOS, saves and save states folders. ES-DE style folders are recognised.
+- **RomM** — Download games from your own [RomM](https://github.com/rommapp/romm) server straight to their shelf, with their label: **START → Library → RomM**.
 - **RetroArch save compatibility** — Share SRAM saves, RTC data and compatible save states with RetroArch, using the same folders and matching emulation cores.
 - **Share Core Saves** — Switch any game to its other core and keep your in-game save, on every system.
 - **Syncthing-friendly** — Keep your saves synchronized across devices by sharing your RetroArch save and state folders.
@@ -54,12 +56,13 @@ Everything you love about the original slot., now on Android handhelds — with 
 - **Your controls, your way** — Choose the controller of each player, remap its buttons, give each system or game its own layout, and pick your own hotkeys. With a second controller, two players can share one handheld on NES, Super Nintendo and Mega Drive.
 - **Screen menu** — Change the shader, color correction, palette, overlay and screen size while you watch your game. Press SELECT + Y to open it straight from the game.
 - **Frame Blending** — Off, Mix or Ghosting for each system, for games that flicker their sprites to draw shadows or transparency.
-- **Shaders for every system** — Ten GBA shader presets, Game Boy LCD shaders with Dot Matrix in your palette's colours, and eleven shaders for the home consoles (zfast-crt, fakelottes, crt-aperture, GDV Trinitron, CRT Geom Deluxe, crt-pi, crt-easymode, crt-hyllian, SABR, Super Eagle, xBR-lv2), plus Pixel AA for clean pixels at any scale.
+- **Shaders for every system** — Ten GBA shader presets, Game Boy LCD shaders with Dot Matrix in your palette's colours, and twelve shaders for the home consoles (zfast-crt, fakelottes, crt-aperture, GDV Trinitron, CRT Geom Deluxe, crt-pi, crt-easymode, crt-hyllian, SABR, Super Eagle, xBR-lv2, crt-royale), plus Pixel AA for clean pixels at any scale.
 - **LCD Effect** — Matt Akins' Pixel Transparency and Sunlight Shimmer on the Game Boy, Game Boy Color and Game Boy Advance: the backing shows through the pixels, and with Sunlight Shimmer the light follows the handheld as you tilt it.
+- **Motion games on any handheld** — WarioWare: Twisted!, Yoshi Topsy-Turvy, Koro Koro Puzzle and Kirby Tilt 'n' Tumble use the handheld's motion sensors, with a Sensitivity setting for each game. Without a gyroscope, slot. works out the rotation from the accelerometer.
 - **Cheats** — Every cheat of RetroArch's database comes with slot. for the Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive: open **Cheats** in the game menu and turn each one on or off. slot. remembers them for each game.
 - **Dither Blending** — On the Mega Drive, the striped dithering games used for water, shadows and glass blends into the see-through colour a TV showed.
 - **Independent system settings** — Configure the default core, shader, color correction, screen size, overlay, frame blending and controls of each system separately in **START → Settings → Systems**.
-- **Screen sizes and overlays** — Integer, Original Ratio or Stretch, with [Watomsk](https://github.com/Watomsk/Overlays)'s overlays for every system.
+- **Screen sizes and overlays** — Integer, Original Ratio or Stretch, with [Watomsk](https://github.com/Watomsk/Overlays)'s overlays for every system. At Original Ratio, the NES, Super Nintendo and Mega Drive show in 4:3 as on a TV, or in 8:7 on near-square screens.
 - **Optimized cartridge browsing** — Background artwork loading, persistent caching and GPU texture management designed to keep large libraries responsive.
 - **Android app launcher** — Launch your other Android apps directly from slot., with the option to make slot. your HOME launcher.
 
@@ -104,7 +107,7 @@ The KONKR's round top button is called **slot. cap** in this port. Since it cont
 In **START → Settings → Controls**:
 
 - **Port 1 / Port 2** — Choose each player's controller and remap its buttons. Port 2 is player 2 on NES, Super Nintendo and Mega Drive.
-- **Hotkeys** — Change any shortcut below, and choose SELECT, L3 or R3 as the Hotkey Button. Fast-forward, rewind and the Boktai sun keep their buttons. A **Screenshot** hotkey (none by default) saves the screen as shown in Pictures/Screenshots.
+- **Hotkeys** — Change any shortcut below, and choose SELECT, L3 or R3 as the Hotkey Button. Fast-forward, rewind, the Boktai sun and the motion sensitivity keep their buttons. A **Screenshot** hotkey (none by default) saves the screen as shown in Pictures/Screenshots.
 - **Reset to Default** — Back to slot.'s own controls.
 
 Each system has its own layout in **START → Settings → Systems → [system] → Controls**: which button plays each console button, and what X / Y and L1 / R1 do on consoles without them. In a game, **Settings → Controls** changes it for that game only.
@@ -120,6 +123,8 @@ Each system has its own layout in **START → Settings → Systems → [system] 
 | Hold <img src=".github/resources/konkr-slot-keycap-v3.svg" alt="slot. button" height="24" align="middle" /> / <kbd>A</kbd> | Start a game fresh |
 | <kbd>Y</kbd> | Add or remove a favorite |
 | <kbd>X</kbd> | Open the selected cartridge in Cart Studio |
+| <kbd>L2</kbd> / <kbd>R2</kbd> | On the GBA shelf: switch to the Game Boy Advance Video shelf and back |
+| Hold <kbd>L2</kbd> + <kbd>R2</kbd> | Delete the selected game (saves and save states are kept) |
 | <kbd>SELECT</kbd> | Choose the emulator core for this game |
 | <kbd>START</kbd> | Open the main menu |
 
@@ -142,6 +147,7 @@ Each system has its own layout in **START → Settings → Systems → [system] 
 | <kbd>SELECT</kbd> + <kbd>B</kbd> / <kbd>A</kbd> | Previous / next shader |
 | <kbd>SELECT</kbd> + <kbd>Y</kbd> | Open or close the Screen menu |
 | <kbd>SELECT</kbd> + <kbd>L2</kbd> / <kbd>R2</kbd> | Change GB palette (Game Boy games, when enabled) |
+| <kbd>R3</kbd> / <kbd>L3</kbd> or <kbd>SELECT</kbd> + <kbd>R2</kbd> / <kbd>L2</kbd> | More / less motion sensitivity (motion games) |
 | <kbd>SELECT</kbd> + <kbd>Up</kbd> / <kbd>Down</kbd> | Bigger / smaller screen: Integer, Original Ratio, Stretch |
 | <kbd>SELECT</kbd> + <kbd>Left</kbd> / <kbd>Right</kbd> | Run-Ahead: Off, 1 frame, 2 frames |
 | <kbd>L1</kbd> / <kbd>R1</kbd> | Bigger / smaller screen (GB, GBC and NES, whose games don't use these buttons) |
@@ -183,6 +189,19 @@ Boktai 1, 2 and 3 read real sunlight through a sensor on the cartridge. In slot.
 
 The shortcuts go through every setting in order: 0, 1 … 8 or 10, SENSOR, AUTO, then back to 0. A banner shows the new setting. The Sun can't be changed during Multiplayer.
 
+### Motion games
+
+WarioWare: Twisted!, Yoshi Topsy-Turvy, Koro Koro Puzzle and Kirby Tilt 'n' Tumble read the handheld's motion. Hold the handheld up like a steering wheel to play WarioWare: Twisted!. On handhelds without a gyroscope, such as the KONKR Pocket Advance, slot. works out the rotation from the accelerometer.
+
+**Set the Sensitivity** in the in-game menu, **Settings → Emulation → Sensitivity**, from 1 to 10 (5 by default). It's saved for each game.
+
+| Button | Action |
+|---|---|
+| <kbd>R3</kbd> or <kbd>SELECT</kbd> + <kbd>R2</kbd> | More sensitive |
+| <kbd>L3</kbd> or <kbd>SELECT</kbd> + <kbd>L2</kbd> | Less sensitive |
+
+The "(Gyro Fix)" versions of WarioWare: Twisted! play with the D-pad instead and ignore the motion sensors.
+
 ## Cart Studio
 
 Your cartridges dress themselves: slot. fetches their labels automatically while you're online, for every system.
@@ -218,6 +237,16 @@ slot. is compatible with RetroArch's save files and save states, so you can pick
 **Note:** Save states are core-specific. Use the same emulator core in both apps for compatibility.
 
 **Share Core Saves:** turn it on in **START → Library**, and when you switch a game to its other core, slot. carries your in-game save over, so you can keep playing where you left off. It works on every system. If both cores already have a different save for a GBA game, slot. asks which one to keep.
+
+## RomM
+
+Download games from your own [RomM](https://github.com/rommapp/romm) server in **START → Library → RomM**.
+
+1. Enter your server's address (for example `http://192.168.1.20:8080` on your home network, or an https address).
+2. Sign in with a pairing code from RomM 5, or with your username and password.
+3. Pick a system with **L1 / R1**, select games with **A** and download them with **Y**. They land on their shelf with their label.
+
+**SELECT** filters the list (search, region, official releases only, games already on your shelves, RomM favorites) and **START** shows a game's details.
 
 ## RetroAchievements
 
@@ -268,8 +297,10 @@ Special thanks to:
 - **[Watomsk](https://github.com/Watomsk/Overlays)** — The screen overlays for every system, used with permission.
 - **[Matt Akins](https://github.com/mattakins/Pixel_Transparency)** — Pixel Transparency and Sunlight Shimmer, adapted with his permission.
 - **[mGBA](https://mgba.io/), [gpSP](https://github.com/libretro/gpsp), [Gambatte](https://github.com/libretro/gambatte-libretro), [FCEUmm](https://github.com/libretro/libretro-fceumm), [Nestopia](https://github.com/libretro/nestopia), [Snes9x](https://github.com/libretro/snes9x), [bsnes](https://github.com/libretro/bsnes-libretro), [Genesis Plus GX](https://github.com/libretro/Genesis-Plus-GX), [PicoDrive](https://github.com/libretro/picodrive), [libretro](https://www.libretro.com/) and [RetroAchievements](https://retroachievements.org/)** — The projects and contributors powering emulation and achievements.
-- **The libretro shader authors** — LCD and CRT shaders by Gigaherz, Themaister, Greg Hogan, jdgleaver, cgwg, hunterk, Pokefan531, endrift, davej, guest(r), Timothy Lottes, EasyMode, Hyllian, Joshua Street, the DOSBox Team and Derek Liauw Kie Fa, LuigiRa and Harlequin, and Sp00kyFox.
+- **The libretro shader authors** — LCD and CRT shaders by Gigaherz, Themaister, Greg Hogan, jdgleaver, cgwg, hunterk, Pokefan531, endrift, davej, guest(r), Timothy Lottes, EasyMode, Hyllian, TroggleMonkey (crt-royale), Joshua Street, the DOSBox Team and Derek Liauw Kie Fa, LuigiRa and Harlequin, and Sp00kyFox.
 - **Sp00kyFox** — GDAPT, the Mega Drive's Dither Blending, used with the author's permission.
+- **[Anime4K](https://github.com/bloc97/Anime4K)** by bloc97 and **FSR** by AMD — The Game Boy Advance Video upscalers (MIT).
+- **[RomM](https://github.com/rommapp/romm)** — The self-hosted game library slot. downloads from.
 - **[ScreenScraper](https://www.screenscraper.fr/)** — Cartridge labels and artwork.
 - **[libretro-database](https://github.com/libretro/libretro-database)** — The cheat codes (CC BY-SA 4.0).
 

@@ -36,9 +36,10 @@ mod slot_chrome;
 mod sticker;
 pub mod text;
 mod button_art;
+mod hold_ring;
 mod toast;
 
-pub use backdrop::{bezel_face, blur_background, blur_background_native, default_background, default_background_native, draw_backdrop, draw_ground_tinted, wallpaper_face, wallpaper_face_native};
+pub use backdrop::{bezel_face, blur_background, blur_background_native, default_background, default_background_native, draw_backdrop, draw_ground_tinted, top_line_luma, wallpaper_face, wallpaper_face_native, LIGHT_WALLPAPER};
 pub use barcode::{code39, CODE39_NARROW, CODE39_WIDE};
 pub use battery::{draw_gauge, BOLT_PX, GAUGE_H, GAUGE_W, WALL};
 pub use board::{
@@ -81,6 +82,7 @@ pub use polaroids::{
 };
 pub use power_menu::{menu_face, PowerChoice, MENU_PAD};
 pub use quick_menu::{
+    quick_value_width, quick_value_width_within, quick_value_face_within,
     quick_caret_face, quick_label_face, quick_legend_faces, quick_value_face, QuickMenu,
     QuickMenuFaces, QuickRow, QuickValue, QUICK_EDGE, QUICK_PITCH, QUICK_SPLIT, QUICK_TOP,
 };
@@ -106,4 +108,6 @@ pub use sticker::{
     draw_sticker, head_rows, sticker_face, sticker_face_handheld, sticker_face_konkr, sticker_lines, StickerFields, COPYRIGHT, CREDITS, DC,
     HOME, ORIGIN, STICKER_H, STICKER_W,
 };
+pub use button_art::{key_art, BUTTON_H};
+pub use hold_ring::{hold_ring_face, HOLD_RING};
 pub use toast::{toast_box, toast_face, toast_rect, Toast};

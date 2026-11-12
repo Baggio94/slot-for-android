@@ -28,6 +28,6 @@ internal object CartStudioBridge {
 
     private fun validShell(value: String): Boolean =
         Regex("(auto|notched|rounded|nes|famicom|famicom-namco|famicom-konami|snes|snes-us|" +
-            "megadrive|megadrive-jp|megadrive-ea) [0-9a-fA-F]{6} (solid|clear|glitter|solid-glitter|clear-glitter)")
+            "megadrive|megadrive-jp|megadrive-ea|megadrive-accolade|megadrive-codemasters|megadrive-vr|megadrive-sk) [0-9a-fA-F]{6} (solid|clear|glitter|solid-glitter|clear-glitter)")
             .matches(value)
 }

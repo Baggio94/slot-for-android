@@ -212,8 +212,6 @@ internal class RaPanelDialog(
         row("Status", when {
             !internet -> "Offline"
             engine == "Online" -> "Online"
-            engine == "Preparing" -> "Preparing…"
-            engine == "Needs attention" -> "Needs attention"
             engine == "Offline" -> "Waiting for RetroAchievements"
             engine == "Inactive" -> "Starting…"
             else -> engine

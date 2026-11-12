@@ -54,4 +54,29 @@ class RomLibraryCacheTest {
         assertFalse(RomLibrary.canReuseHeader("Game", 1024, 1234, "Game", -1, 1234))
         assertFalse(RomLibrary.canReuseHeader(null, 1024, 1234, "Game", 1024, 1234))
     }
+
+    @Test fun aDownloadedGameJoinsTheIndexWithoutDroppingOrDoublingAny() {
+        fun game(name: String, size: Long) = org.json.JSONObject()
+            .put("uri", "content://rom/$name").put("title", name)
+            .put("filename", "$name.gba").put("platform", "GBA")
+            .put("size", size).put("modified", 1700000000L)
+        val index = org.json.JSONArray().put(game("a", 1)).put(game("b", 2)).toString()
+        val added = RomLibrary.mergeGames(index, listOf(game("c", 3)))!!
+        val uris = RomLibrary.indexEntries(added).map { it.uri }
+        org.junit.Assert.assertEquals(
+            listOf("content://rom/a", "content://rom/b", "content://rom/c"), uris)
+        // Saved again: the new read replaces the old one.
+        val again = RomLibrary.indexEntries(RomLibrary.mergeGames(added, listOf(game("b", 9)))!!)
+        org.junit.Assert.assertEquals(3, again.size)
+        org.junit.Assert.assertEquals(9L, again.single { it.uri == "content://rom/b" }.size)
+    }
+
+    @Test fun aSavedGameAlreadyIndexedLeavesTheIndexTheSame() {
+        val game = org.json.JSONObject().put("uri", "content://rom/a").put("title", "a")
+            .put("filename", "a.gba").put("platform", "GBA").put("size", 1L)
+            .put("modified", 1700000000L)
+        val index = org.json.JSONArray().put(game).toString()
+        val merged = RomLibrary.mergeGames(index, listOf(org.json.JSONObject(game.toString())))!!
+        assertTrue(RomLibrary.sameIndex(index, merged))
+    }
 }

@@ -45,6 +45,168 @@ void main() {
 }
 "#;
 
+/// Shared by the LCD Effect caches below.
+const PT_HEAD: &str = r#"
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+float pt_hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+"#;
+
+/* Pixel Transparency's drop shadow cache, as the original's shadow cache
+   pass (v3.0): one texel per game pixel and x-phase (three across), the
+   three y-phases in r, g and b. The blur's taps fall in this cell or the
+   next one along each axis, depending on where the screen pixel sits in
+   the cell (before fract(r), between, after 1 - fract(r)), so every value
+   the 3x3 blur can take in a cell is worked out here once a frame, and
+   the screen pass reads one. Cells around the game (u_pad) are kept too,
+   as the shadow is offset. */
+pub const PT_CACHE_FRAG: &str = r#"
+uniform sampler2D u_game;
+uniform vec2 u_src;
+uniform vec4 u_pic;
+uniform vec2 u_pt_r;
+uniform float u_pad;
+float pt_caster(vec2 cell) {
+    if (any(lessThan(cell, floor(u_pic.xy * u_src + 0.5)))
+        || any(greaterThanEqual(cell, floor(u_pic.zw * u_src + 0.5))))
+        return 1.0; // screen edge shadow
+    return 1.0 - dot(texture2D(u_game, (cell + 0.5) / u_src).rgb, vec3(0.2126, 0.7152, 0.0722));
+}
+// The left, middle and right taps along row y.
+vec3 pt_row(vec3 xs, float y) {
+    return vec3(pt_caster(vec2(xs.x, y)), pt_caster(vec2(xs.y, y)), pt_caster(vec2(xs.z, y)));
+}
+void main() {
+    vec2 at = floor(gl_FragCoord.xy);
+    float phase = at.x - 3.0 * floor(at.x / 3.0);
+    vec2 cell = vec2(floor(at.x / 3.0), at.y) - u_pad;
+    vec2 whole = floor(u_pt_r);
+    vec2 lower_first = step(u_pt_r - whole, vec2(0.5));
+    float lx = phase > 1.5 ? 1.0 : (phase > 0.5 ? lower_first.x : 0.0);
+    float ux = phase > 1.5 ? 1.0 : (phase > 0.5 ? 1.0 - lower_first.x : 0.0);
+    vec3 xs = vec3(cell.x - whole.x - 1.0 + lx, cell.x, cell.x + whole.x + ux);
+    vec3 r0 = pt_row(xs, cell.y - whole.y - 1.0);
+    vec3 r1 = pt_row(xs, cell.y - whole.y);
+    vec3 mid = pt_row(xs, cell.y);
+    vec3 r3 = pt_row(xs, cell.y + whole.y);
+    vec3 r4 = pt_row(xs, cell.y + whole.y + 1.0);
+    const vec3 edge = vec3(1.0, 2.0, 1.0);
+    float m = dot(mid, vec3(2.0, 4.0, 2.0));
+    float v0 = (m + dot(r0, edge) + dot(r3, edge)) / 16.0;
+    float v1 = lower_first.y > 0.5 ? (m + dot(r1, edge) + dot(r3, edge)) / 16.0
+                                   : (m + dot(r0, edge) + dot(r4, edge)) / 16.0;
+    float v2 = (m + dot(r1, edge) + dot(r4, edge)) / 16.0;
+    FRAG_COLOR = vec4(v0, v1, v2, 1.0);
+}
+"#;
+
+/* Sunlight Shimmer's light cache, as the original's (v3.0): the rainbow
+   tint and the glare over the picture, 256x256, its first and last texel
+   centres on the picture's edges. Drawn again only when the light moves. */
+pub const LIGHT_CACHE_FRAG: &str = r#"
+uniform vec2 u_light;      // light position (0..1 over the picture)
+uniform float u_aspect;    // picture width / height on screen
+float sun_smooth(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(pt_hash(i), pt_hash(i + vec2(1.0, 0.0)), f.x),
+               mix(pt_hash(i + vec2(0.0, 1.0)), pt_hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float sun_film(vec2 uv) {
+    vec2 p = uv * 0.6 * 8.0;
+    return sun_smooth(p) * 0.5 + sun_smooth(p * 2.0) * 0.25 + sun_smooth(p * 4.0) * 0.125;
+}
+vec3 sun_qwp(float g) {
+    vec3 t = vec3(0.0); float k;
+    k = cos(0.031415927 * g); t += vec3(0.0, 0.0, 0.026075) * k * k;
+    k = cos(0.028399638 * g); t += vec3(0.141223, 0.0, 0.368894) * k * k;
+    k = cos(0.025874228 * g); t += vec3(0.0, 0.480861, 0.473477) * k * k;
+    k = cos(0.023809524 * g); t += vec3(0.081095, 0.812848, 0.339825) * k * k;
+    k = cos(0.021991149 * g); t += vec3(0.783356, 0.793891, 0.134941) * k * k;
+    k = cos(0.020462441 * g); t += vec3(0.972432, 0.423991, 0.215476) * k * k;
+    k = cos(0.019138570 * g); t += vec3(0.648322, 0.114430, 0.0) * k * k;
+    return t / max(max(t.r, max(t.g, t.b)), 0.001);
+}
+void main() {
+    vec2 uv = (floor(gl_FragCoord.xy) + 0.5 - 0.5) / 255.0;
+    vec2 to_light = (uv - u_light) * vec2(u_aspect, 1.0);
+    float ang = clamp(length(to_light) * 1.8, 0.0, 1.4);
+    float sr = sin(ang) / 1.5;
+    float g = 275.0 * sqrt(1.0 - sr * sr);
+    g *= 1.0 + (sun_film(vec2(uv.x * u_aspect, uv.y)) - 0.4375) * 0.5;
+    float glare = exp(-dot(to_light, to_light) / (2.0 * 0.25 * 0.25)) * 0.15;
+    FRAG_COLOR = vec4(sun_qwp(g), glare);
+}
+"#;
+
+/* Pixel Transparency's paper grain (r) and the final dither (g), one
+   texel a screen pixel of the picture: drawn again only when the picture
+   changes size on screen. */
+pub const GRAIN_FRAG: &str = r#"
+uniform vec2 u_size;       // picture size on screen, in pixels
+float pt_paper(vec2 uv) {
+    vec2 p = uv * 0.25 * 512.0;
+    return pt_hash(p) * 0.5 + pt_hash(p * 2.0) * 0.25 + pt_hash(p * 4.0) * 0.125;
+}
+void main() {
+    vec2 at = floor(gl_FragCoord.xy);
+    FRAG_COLOR = vec4(pt_paper((at + 0.5) / u_size), pt_hash(at + 0.5), 0.0, 1.0);
+}
+"#;
+
+/* The game, copied texel for texel into a texture the GPU filters
+   bilinearly: the shaders that read the game bilinear (sharp bilinear,
+   zfast CRT, CRT-Pi, Fakelottes, CRT Geom Deluxe's glow) then take one
+   filtered read instead of four reads mixed by hand. */
+pub const COPY_FRAG: &str = r#"
+uniform sampler2D u_game;
+uniform vec2 u_src;
+void main() {
+    FRAG_COLOR = texture2D(u_game, (floor(gl_FragCoord.xy) + 0.5) / u_src);
+}
+"#;
+
+/* CRT GDV Mini Ultra's glow, once per game pixel: the screen pass used to
+   read these 21 game pixels for every screen pixel, though the glow only
+   depends on the game pixel it falls in. Stored before its 0.35 strength,
+   for precision. */
+pub const GDV_GLOW_FRAG: &str = r#"
+uniform sampler2D u_game;
+uniform vec2 u_src;
+vec3 gdv_tap(vec2 at) {
+    return texture2D(u_game, at).rgb;
+}
+void main() {
+    vec2 tc = (floor(gl_FragCoord.xy) + 0.5) / u_src;
+    // Upstream squares nothing here (its "c*c;" lines are no-ops).
+    vec2 b = vec2(1.0)/u_src;
+    vec3 c11 = gdv_tap(tc);
+    vec3 ring1 = gdv_tap(tc+vec2(-b.x,0.0)) + gdv_tap(tc+vec2(b.x,0.0))
+        + gdv_tap(tc+vec2(-b.x,-b.y)) + gdv_tap(tc+vec2(b.x,b.y))
+        + gdv_tap(tc+vec2(-b.x,b.y)) + gdv_tap(tc+vec2(b.x,-b.y))
+        + gdv_tap(tc+vec2(0.0,-b.y)) + gdv_tap(tc+vec2(0.0,b.y));
+    vec3 ring2 = gdv_tap(tc+vec2(-2.0*b.x,0.0)) + gdv_tap(tc+vec2(2.0*b.x,0.0))
+        + gdv_tap(tc+vec2(-2.0*b.x,-b.y)) + gdv_tap(tc+vec2(-b.x,-2.0*b.y))
+        + gdv_tap(tc+vec2(b.x,2.0*b.y)) + gdv_tap(tc+vec2(2.0*b.x,b.y))
+        + gdv_tap(tc+vec2(-2.0*b.x,b.y)) + gdv_tap(tc+vec2(-b.x,2.0*b.y))
+        + gdv_tap(tc+vec2(b.x,-2.0*b.y)) + gdv_tap(tc+vec2(2.0*b.x,-b.y))
+        + gdv_tap(tc+vec2(0.0,-2.0*b.y)) + gdv_tap(tc+vec2(0.0,2.0*b.y));
+    FRAG_COLOR = vec4((3.0*c11 + 2.5*ring1 + 1.5*ring2)/45.0, 1.0);
+}
+"#;
+
+pub fn pt_frag(body: &str) -> String {
+    format!("{PT_HEAD}{body}")
+}
+
 pub const GAME_FRAG: &str = r#"
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -52,6 +214,7 @@ precision highp float;
 precision mediump float;
 #endif
 uniform sampler2D u_game;
+uniform sampler2D u_hires;
 uniform sampler2D u_paper;
 uniform vec2 u_src;
 uniform vec4 u_uv;
@@ -172,7 +335,17 @@ vec3 mgba_pass(vec2 uv, bool ags) {
     return mix(mix(mgba_sub_4x(b, ags), mgba_sub_4x(b + vec2(1.0,0.0), ags), t.x),
                mix(mgba_sub_4x(b + vec2(0.0,1.0), ags), mgba_sub_4x(b + vec2(1.0), ags), t.x), t.y);
 }
+uniform sampler2D u_game_linear;  // the game, bilinear filtered (COPY_FRAG)
+uniform sampler2D u_gdv_glow;     // GDV glow per game pixel (GDV_GLOW_FRAG)
+// Worked out once per game pixel ahead of this pass (CACHE_PASS below):
+uniform sampler2D u_edges;   // xBR-lv2 / SABR: which corners to blend
+uniform sampler2D u_gamma;   // crt-aperture / Geom Deluxe: the game in linear light
+uniform float u_cached;      // 1 when this effect's cache is drawn, else work it out here
 vec3 nearest_bilinear(vec2 uv) {
+    // The effects that read the game bilinear have a copy of it the GPU
+    // filters itself (the RetroArch presets' LINEAR filter).
+    if (u_mode > 11.5 && u_mode < 17.5 && !(u_mode > 14.5 && u_mode < 15.5))
+        return texture2D(u_game_linear, uv).rgb;
     // GPU sampler remains NEAREST for the other presets. Manually emulate
     // the RetroArch sharp-bilinear LINEAR filter using four source texels.
     vec2 coord=uv*u_src-vec2(0.5);
@@ -250,11 +423,17 @@ vec3 fakelottes(vec2 uv) {
 /* EasyMode's crt-aperture (GPL), already one pass: Gaussian glow, two
    Lanczos sharpness taps, beam-shaped scanlines and an aperture-grille
    mask, at its defaults. */
-vec3 aperture_tap(vec2 at) {
+vec3 game_gamma(vec2 at) {
     // pow(texel, 2.4) as GLSL defines pow, exp2(y*log2(x)): Mesa's llvmpipe
     // miscompiles a pow straight on a texture fetch in this program.
     vec3 t = texture2D(u_game, at).rgb;
     return exp2(log2(max(t, vec3(1e-5)))*2.4);
+}
+vec3 aperture_tap(vec2 at) {
+#ifndef CACHE_PASS
+    if (u_cached > 0.5) return texture2D(u_gamma, at).rgb;
+#endif
+    return game_gamma(at);
 }
 vec3 aperture_blur(vec3 a, vec3 b, vec3 c, float dist, float rad) {
     vec3 x = vec3(dist - 1.0, dist, dist + 1.0)/rad;
@@ -331,20 +510,8 @@ vec3 gdv_tap(vec2 at) {
     return texture2D(u_game, at).rgb;
 }
 vec3 gdv_glow(vec2 tc) {
-    // Upstream squares nothing here (its "c*c;" lines are no-ops).
-    vec2 b = vec2(1.0)/u_src;
-    vec3 c11 = gdv_tap(tc);
-    vec3 ring1 = gdv_tap(tc+vec2(-b.x,0.0)) + gdv_tap(tc+vec2(b.x,0.0))
-        + gdv_tap(tc+vec2(-b.x,-b.y)) + gdv_tap(tc+vec2(b.x,b.y))
-        + gdv_tap(tc+vec2(-b.x,b.y)) + gdv_tap(tc+vec2(b.x,-b.y))
-        + gdv_tap(tc+vec2(0.0,-b.y)) + gdv_tap(tc+vec2(0.0,b.y));
-    vec3 ring2 = gdv_tap(tc+vec2(-2.0*b.x,0.0)) + gdv_tap(tc+vec2(2.0*b.x,0.0))
-        + gdv_tap(tc+vec2(-2.0*b.x,-b.y)) + gdv_tap(tc+vec2(-b.x,-2.0*b.y))
-        + gdv_tap(tc+vec2(b.x,2.0*b.y)) + gdv_tap(tc+vec2(2.0*b.x,b.y))
-        + gdv_tap(tc+vec2(-2.0*b.x,b.y)) + gdv_tap(tc+vec2(-b.x,2.0*b.y))
-        + gdv_tap(tc+vec2(b.x,-2.0*b.y)) + gdv_tap(tc+vec2(2.0*b.x,-b.y))
-        + gdv_tap(tc+vec2(0.0,-2.0*b.y)) + gdv_tap(tc+vec2(0.0,2.0*b.y));
-    return (3.0*c11 + 2.5*ring1 + 1.5*ring2)/45.0*0.35;
+    // Worked out once per game pixel ahead of this pass (GDV_GLOW_FRAG).
+    return texture2D(u_gdv_glow, tc).rgb*0.35;
 }
 vec3 gdv_saturation(vec3 c) {
     float l = length(c)*0.5775;
@@ -386,14 +553,22 @@ vec3 crt_gdv_mini_ultra(vec2 uv) {
     c *= min(pow(max(v.x*v.y*45.0,0.0), 0.15), 1.0);
     return c;
 }
-vec4 geom_tex(vec2 at) {
+vec3 geom_tex(vec2 at) {
     vec2 under = step(0.0,at)*step(0.0,vec2(1.0)-at);
-    return pow(texture2D(u_game,at), vec4(2.4))*(under.x*under.y);
+#ifndef CACHE_PASS
+    if (u_cached > 0.5) return texture2D(u_gamma, at).rgb*(under.x*under.y);
+#endif
+    return pow(texture2D(u_game,at).rgb, vec3(2.4))*(under.x*under.y);
 }
-vec4 geom_weights(float dist, vec4 col) {
-    vec4 wid = 2.0 + 2.0*pow(col, vec4(4.0));
-    vec4 w = vec4(dist/0.3);
-    return 1.4*exp(-pow(w*inversesqrt(0.5*wid), wid))/(0.6+0.2*wid);
+/* The scanline profile, on the three colours shown (upstream also works
+   out alpha). Its width terms depend only on the row's colour, so they
+   are worked out once per row (geom_width) instead of once per sample. */
+vec3 geom_width(vec3 col) {
+    return 2.0 + 2.0*pow(col, vec3(4.0));
+}
+vec3 geom_weights(float dist, vec3 wid, vec3 isw, vec3 norm) {
+    vec3 w = vec3(dist/0.3);
+    return norm*exp(-pow(w*isw, wid));
 }
 vec3 geom_blur(vec2 at) {
     // Halation source: upstream blurs the frame in two extra passes; here a
@@ -427,20 +602,23 @@ vec3 crt_geom_deluxe(vec2 xy) {
     k = max(abs(k), 1e-5);
     k = 2.0*sin(k)*sin(k/2.0)/(k*k);
     k /= dot(k, vec4(1.0));
-    vec4 col = clamp(geom_tex(at+vec2(-one.x,0.0))*k.x + geom_tex(at)*k.y
+    vec3 col = clamp(geom_tex(at+vec2(-one.x,0.0))*k.x + geom_tex(at)*k.y
         + geom_tex(at+vec2(one.x,0.0))*k.z + geom_tex(at+vec2(2.0*one.x,0.0))*k.w, 0.0, 1.0);
-    vec4 col2 = clamp(geom_tex(at+vec2(-one.x,one.y))*k.x + geom_tex(at+vec2(0.0,one.y))*k.y
+    vec3 col2 = clamp(geom_tex(at+vec2(-one.x,one.y))*k.x + geom_tex(at+vec2(0.0,one.y))*k.y
         + geom_tex(at+one)*k.z + geom_tex(at+vec2(2.0*one.x,one.y))*k.w, 0.0, 1.0);
+    vec3 wid = geom_width(col), wid2 = geom_width(col2);
+    vec3 isw = inversesqrt(0.5*wid), isw2 = inversesqrt(0.5*wid2);
+    vec3 nrm = 1.4/(0.6+0.2*wid), nrm2 = 1.4/(0.6+0.2*wid2);
     // OVERSAMPLE: three samples a third of a screen row apart.
-    vec4 w = geom_weights(ur.y, col);
-    vec4 w2 = geom_weights(1.0-ur.y, col2);
+    vec3 w = geom_weights(ur.y, wid, isw, nrm);
+    vec3 w2 = geom_weights(1.0-ur.y, wid2, isw2, nrm2);
     float y = ur.y + over/3.0;
-    w = (w + geom_weights(y, col))/3.0;
-    w2 = (w2 + geom_weights(abs(1.0-y), col2))/3.0;
+    w = (w + geom_weights(y, wid, isw, nrm))/3.0;
+    w2 = (w2 + geom_weights(abs(1.0-y), wid2, isw2, nrm2))/3.0;
     y -= 2.0*over/3.0;
-    w += geom_weights(abs(y), col)/3.0;
-    w2 += geom_weights(abs(1.0-y), col2)/3.0;
-    vec3 m = (col*w + col2*w2).rgb;
+    w += geom_weights(abs(y), wid, isw, nrm)/3.0;
+    w2 += geom_weights(abs(1.0-y), wid2, isw2, nrm2)/3.0;
+    vec3 m = col*w + col2*w2;
     vec3 blur = geom_blur(xy);
     m = mix(m, blur, 0.1)*cval;
     m = mix(m, blur, 0.1)*cval;
@@ -469,61 +647,33 @@ vec3 grid_line(vec2 uv, vec3 c) {
 }
 /* LCD Effect: Pixel Transparency / Sunlight Shimmer v3.0 by Matt Akins
    (Soft grid placement, author defaults), adapted with his permission.
-   Every cache pass of the original (shadow, film noise, light field) is
-   computed in place: same maths, one pass. LCD_FX: 0 off, 1 Pixel
-   Transparency, 2 Sunlight Shimmer, fixed when the program is built. */
-uniform vec2 u_light;      // light position (0..1 over the picture)
+   As in the original, the costly parts are worked out ahead in small
+   caches (PT_CACHE_FRAG, LIGHT_CACHE_FRAG, GRAIN_FRAG) and this pass only
+   reads them: the drop shadow once per game pixel, the light once when it
+   moves, the paper grain and dither once per picture size. LCD_FX: 0 off,
+   1 Pixel Transparency, 2 Sunlight Shimmer, fixed when the program is
+   built. */
 uniform vec2 u_shadow;     // shadow offset in reference pixels (3,3)
+uniform sampler2D u_pt_cache;  // drop shadow, 3 x-phases by 3 y-phases a cell
+uniform vec4 u_pt_geo;     // cache: padding (cells), size (texels)
+uniform vec2 u_pt_r;       // blur radius, in game pixels
+uniform sampler2D u_light_cache; // rainbow tint (rgb) and glare (a)
+uniform sampler2D u_grain; // paper (r) and dither (g), one texel a screen pixel
 
 float pt_luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
-float pt_hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-float pt_paper(vec2 uv) {
-    vec2 p = uv * 0.25 * 512.0;
-    return pt_hash(p) * 0.5 + pt_hash(p * 2.0) * 0.25 + pt_hash(p * 4.0) * 0.125;
-}
-float pt_caster(vec2 cell) {
-    if (any(lessThan(cell, floor(u_pic.xy * u_src + 0.5)))
-        || any(greaterThanEqual(cell, floor(u_pic.zw * u_src + 0.5))))
-        return 1.0; // screen edge shadow
-    return 1.0 - pt_luma(texture2D(u_game, (cell + 0.5) / u_src).rgb);
-}
-float pt_shadow(vec2 native, vec2 r) {
-    float v = pt_caster(floor(native)) * 4.0;
-    v += pt_caster(floor(native - vec2(r.x, 0.0))) * 2.0;
-    v += pt_caster(floor(native + vec2(r.x, 0.0))) * 2.0;
-    v += pt_caster(floor(native - vec2(0.0, r.y))) * 2.0;
-    v += pt_caster(floor(native + vec2(0.0, r.y))) * 2.0;
-    v += pt_caster(floor(native - r));
-    v += pt_caster(floor(native + vec2(r.x, -r.y)));
-    v += pt_caster(floor(native + vec2(-r.x, r.y)));
-    v += pt_caster(floor(native + r));
-    return v / 16.0;
-}
-float sun_smooth(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(pt_hash(i), pt_hash(i + vec2(1.0, 0.0)), f.x),
-               mix(pt_hash(i + vec2(0.0, 1.0)), pt_hash(i + vec2(1.0, 1.0)), f.x), f.y);
-}
-float sun_film(vec2 uv) {
-    vec2 p = uv * 0.6 * 8.0;
-    return sun_smooth(p) * 0.5 + sun_smooth(p * 2.0) * 0.25 + sun_smooth(p * 4.0) * 0.125;
-}
-vec3 sun_qwp(float g) {
-    vec3 t = vec3(0.0); float k;
-    k = cos(0.031415927 * g); t += vec3(0.0, 0.0, 0.026075) * k * k;
-    k = cos(0.028399638 * g); t += vec3(0.141223, 0.0, 0.368894) * k * k;
-    k = cos(0.025874228 * g); t += vec3(0.0, 0.480861, 0.473477) * k * k;
-    k = cos(0.023809524 * g); t += vec3(0.081095, 0.812848, 0.339825) * k * k;
-    k = cos(0.021991149 * g); t += vec3(0.783356, 0.793891, 0.134941) * k * k;
-    k = cos(0.020462441 * g); t += vec3(0.972432, 0.423991, 0.215476) * k * k;
-    k = cos(0.019138570 * g); t += vec3(0.648322, 0.114430, 0.0) * k * k;
-    return t / max(max(t.r, max(t.g, t.b)), 0.001);
+// The shadow under native position `native`: the cache holds, for every
+// game pixel, the nine values the 3x3 blur can take inside it (the taps
+// cross into a neighbour at fract(r) and 1 - fract(r) along each axis).
+float pt_shadow(vec2 native) {
+    vec2 cell = floor(native);
+    vec2 fr = fract(u_pt_r);
+    vec2 ph = step(fr, native - cell) + step(1.0 - fr, native - cell);
+    vec2 at = cell + u_pt_geo.xy;
+    vec2 cells = vec2(u_pt_geo.z / 3.0, u_pt_geo.w);
+    // Far outside the game: every tap is screen edge.
+    if (any(lessThan(at, vec2(0.0))) || any(greaterThanEqual(at, cells))) return 1.0;
+    vec3 t = texture2D(u_pt_cache, vec2(at.x * 3.0 + ph.x + 0.5, at.y + 0.5) / u_pt_geo.zw).rgb;
+    return ph.y < 0.5 ? t.r : (ph.y < 1.5 ? t.g : t.b);
 }
 vec3 lcd_effect(vec3 lcd, vec2 uv) {
 #if LCD_FX > 0
@@ -533,12 +683,12 @@ vec3 lcd_effect(vec3 lcd, vec2 uv) {
     vec3 orig = texture2D(u_game, uv).rgb;
     float bright = pt_luma(orig);
     float alpha = clamp(0.20 * bright * 2.665, 0.0, 1.0);   // Bright mode, 0.20
-    vec3 bg = vec3(0.48) + (pt_paper(v_uv) - 0.4375) * 0.065;
+    vec2 grain = texture2D(u_grain, v_uv).rg;
+    vec3 bg = vec3(0.48) + (grain.r - 0.4375) * 0.065;
     // Drop shadow, 3 px at 640x480, blur 2, opacity 0.5, 9 taps.
     vec2 off = -u_shadow * scale * texel;
     vec2 native = (v_uv + off) * u_uv.zw * u_src + u_uv.xy * u_src;
-    vec2 radius = 2.0 * scale * texel * u_uv.zw * u_src;
-    float s = pt_shadow(native, radius) * 0.5;
+    float s = pt_shadow(native) * 0.5;
     float dz = (1.0 - 0.90) * 0.5;
     s = smoothstep(0.0, dz, s) * s;
     bg = mix(bg, bg * 0.2, s);
@@ -549,13 +699,10 @@ vec3 lcd_effect(vec3 lcd, vec2 uv) {
     vec3 c = mix(lcd, bg, alpha);
 #if LCD_FX > 1
     // Sunlight Shimmer: rainbow through the pixels, then glare on top.
-    float aspect = out_px.x / out_px.y;
-    vec2 to_light = (v_uv - u_light) * vec2(aspect, 1.0);
-    float ang = clamp(length(to_light) * 1.8, 0.0, 1.4);
-    float sr = sin(ang) / 1.5;
-    float g = 275.0 * sqrt(1.0 - sr * sr);
-    g *= 1.0 + (sun_film(vec2(v_uv.x * aspect, v_uv.y)) - 0.4375) * 0.5;
-    vec3 tint = sun_qwp(g) * orig * orig;
+    // The 256x256 light cache maps its first and last texel centres to
+    // the picture's edges, as the original's.
+    vec4 sun = texture2D(u_light_cache, (v_uv * 255.0 + 0.5) / 256.0);
+    vec3 tint = sun.rgb * orig * orig;
     float strength = 0.15 * mix(0.03, 1.0, bright);
     if (any(notEqual(c, vec3(0.0)))) {
         vec3 tinted = c * mix(vec3(1.0), tint, strength);
@@ -567,10 +714,9 @@ vec3 lcd_effect(vec3 lcd, vec2 uv) {
     c *= mix(vec3(1.0), vec3(0.94, 1.0, 0.865), 1.0);          // polarizer
     c = clamp(c * (1.0 + 0.05 * pt_luma(c)), 0.0, 1.0);       // highlights
 #if LCD_FX > 1
-    float glare = exp(-dot(to_light, to_light) / (2.0 * 0.25 * 0.25)) * 0.15;
-    c = mix(c, vec3(1.0), clamp(glare, 0.0, 0.85));
+    c = mix(c, vec3(1.0), clamp(sun.a, 0.0, 0.85));
 #endif
-    c += (pt_hash(floor(v_uv * out_px) + 0.5) - 0.5) / 255.0;  // dither
+    c += (grain.g - 0.5) / 255.0;                              // dither
     return c;
 #else
     return lcd;
@@ -587,26 +733,30 @@ uniform vec3 u_dm_fg;
 uniform vec3 u_dm_bgc;
 uniform vec2 u_dm_lum;
 vec2 dm_out() { return u_rect.zw * u_fbo; }
-// A dot's opacity where the cell is lit, and how much of screen pixel `px`
-// the dot covers (the rest is the gap before it).
-float dm_dot(vec2 px, out float on) {
-    vec2 tp = (u_uv.xy + px / dm_out() * u_uv.zw) * u_src;
-    vec2 cell = floor(tp);
-    vec2 s = dm_out() / (u_uv.zw * u_src);
-    // The gap is one screen pixel at the start of each cell. Each pixel
-    // takes the share of it that it covers, seen through a window one
-    // screen pixel wide at a whole scale (exactly the old one-pixel gap)
-    // and two wide at a scale that is not whole (Original Ratio), so that
-    // every gap there is as light as the next, whether it falls on one
-    // pixel or across two (Siham 2026-11-10).
-    // Shares within 2% of none or all are none or all: rounding in the
-    // picture's size must not light a sliver of a gap at a whole scale.
-    vec2 h = 0.5 / s;                           // half a screen pixel, in texels
-    vec2 d = abs(fract(tp - h + 0.5) - 0.5) * s; // from the nearest gap's middle, in screen pixels
-    vec2 f = mix(vec2(2.0), vec2(1.0), step(abs(s - floor(s + 0.5)), vec2(0.01)));
-    vec2 gap = clamp((min(d + f * 0.5, vec2(0.5)) - max(d - f * 0.5, vec2(-0.5))) / f, 0.0, 1.0);
-    gap = clamp((gap - 0.02) / 0.96, 0.0, 1.0);
-    on = (1.0 - gap.x) * (1.0 - gap.y);
+// The dot and the gap are separable: along each axis, a screen pixel
+// falls in one cell and covers some share of that cell's gap. So the four
+// screen columns and rows from px - 2 to px + 1 (all a pixel's blend and
+// its shadow's blend look at) are worked out once each, and the dots they
+// touch (two cells along each axis at most, a cell being several screen
+// pixels) are read once each: four texture reads instead of up to ten.
+//
+// The gap is one screen pixel at the start of each cell. Each pixel
+// takes the share of it that it covers, seen through a window one
+// screen pixel wide at a whole scale (exactly the old one-pixel gap)
+// and two wide at a scale that is not whole (Original Ratio), so that
+// every gap there is as light as the next, whether it falls on one
+// pixel or across two (Siham 2026-11-10).
+// Shares within 2% of none or all are none or all: rounding in the
+// picture's size must not light a sliver of a gap at a whole scale.
+vec4 dm_gap(vec4 tp, float s) {
+    float h = 0.5 / s;                          // half a screen pixel, in texels
+    vec4 d = abs(fract(tp - h + 0.5) - 0.5) * s; // from the nearest gap's middle, in screen pixels
+    float f = abs(s - floor(s + 0.5)) <= 0.01 ? 1.0 : 2.0;
+    vec4 gap = clamp((min(d + f * 0.5, vec4(0.5)) - max(d - f * 0.5, vec4(-0.5))) / f, 0.0, 1.0);
+    return clamp((gap - 0.02) / 0.96, 0.0, 1.0);
+}
+// A dot's opacity where the cell is lit.
+float dm_cell(vec2 cell) {
     float l = dot(texture2D(u_game, (cell + 0.5) / u_src).rgb, vec3(0.299, 0.587, 0.114));
     float dark = clamp((u_dm_lum.x - l) / max(u_dm_lum.x - u_dm_lum.y, 0.001), 0.0, 1.0);
     // Dot Matrix Color: every dot shows, its colour the game's, the more
@@ -614,27 +764,41 @@ float dm_dot(vec2 px, out float on) {
     if (u_mode > 24.5) dark = 0.55 + 0.45 * clamp(1.0 - l, 0.0, 1.0);
     return clamp(dark + 0.10, 0.0, 1.0);
 }
-float dm_alpha(vec2 px) {
-    float on;
-    float a = dm_dot(px, on);
-    return a * on;
-}
-// Blending mode 0: a gap takes the mean of the dots around it; a pixel
-// part dot, part gap, a share of each.
-float dm_blend(vec2 px) {
-    float on;
-    float a = dm_dot(px, on);
-    if (on >= 1.0) return a;
-    float n = dm_alpha(px + vec2(0.0, 1.0)) + dm_alpha(px - vec2(0.0, 1.0))
-            + dm_alpha(px + vec2(1.0, 0.0)) + dm_alpha(px - vec2(1.0, 0.0));
-    return mix(clamp(n * 0.25, 0.0, 1.0), a, on);
+// The blended dot under screen pixel `px` and under px - (1, 1) (the
+// shadow's). Blending mode 0: a gap takes the mean of the dots around it;
+// a pixel part dot, part gap, a share of each.
+vec2 dm_pair(vec2 px) {
+    vec2 s = dm_out() / (u_uv.zw * u_src);
+    // As the screen pass had it per pixel, so a pixel on a cell's edge
+    // keeps the same cell.
+    vec4 tx = (u_uv.x + (px.x + vec4(-2.0, -1.0, 0.0, 1.0)) / dm_out().x * u_uv.z) * u_src.x;
+    vec4 ty = (u_uv.y + (px.y + vec4(-2.0, -1.0, 0.0, 1.0)) / dm_out().y * u_uv.w) * u_src.y;
+    vec4 onx = 1.0 - dm_gap(tx, s.x);
+    vec4 ony = 1.0 - dm_gap(ty, s.y);
+    vec4 cx = floor(tx), cy = floor(ty);
+    vec4 rx = clamp(cx - cx.x, 0.0, 1.0), ry = clamp(cy - cy.x, 0.0, 1.0);
+    float a00 = dm_cell(vec2(cx.x, cy.x)), a10 = dm_cell(vec2(cx.x + 1.0, cy.x));
+    float a01 = dm_cell(vec2(cx.x, cy.x + 1.0)), a11 = dm_cell(vec2(cx.x + 1.0, cy.x + 1.0));
+    // Dot opacity a and coverage on at column i, row j (0..3 = px-2..px+1).
+    #define DM_A(i, j) mix(mix(a00, a10, rx[i]), mix(a01, a11, rx[i]), ry[j])
+    #define DM_LIT(i, j) (DM_A(i, j) * onx[i] * ony[j])
+    float on = onx[2] * ony[2];
+    float n = DM_LIT(2, 3) + DM_LIT(2, 1) + DM_LIT(3, 2) + DM_LIT(1, 2);
+    float fa = mix(clamp(n * 0.25, 0.0, 1.0), DM_A(2, 2), on);
+    float on1 = onx[1] * ony[1];
+    float n1 = DM_LIT(1, 2) + DM_LIT(1, 0) + DM_LIT(2, 1) + DM_LIT(0, 1);
+    float sa = mix(clamp(n1 * 0.25, 0.0, 1.0), DM_A(1, 1), on1);
+    #undef DM_A
+    #undef DM_LIT
+    return vec2(fa, sa);
 }
 vec3 dot_matrix() {
     vec2 px = floor(v_uv * dm_out()) + 0.5;
     const float contrast = 0.8, light = 0.8, opacity = 0.9;
     vec3 col = mix(u_dm_fg, vec3(dot(u_dm_fg, vec3(0.299, 0.587, 0.114))), 0.8);
-    float fa = dm_blend(px);
-    float sa = dm_blend(px - vec2(1.0)) * contrast * 0.5;
+    vec2 blend = dm_pair(px);
+    float fa = blend.x;
+    float sa = blend.y * contrast * 0.5;
     vec3 bg = texture2D(u_dm_bg, v_uv).rgb;
     bg = clamp(u_dm_bgc + mix(vec3(-1.0), vec3(1.0), bg), 0.0, 1.0);
     vec3 o = col * sa + bg * (1.0 - sa);
@@ -649,8 +813,9 @@ vec3 dot_matrix_colour() {
     vec2 tp = (u_uv.xy + px / dm_out() * u_uv.zw) * u_src;
     vec3 rgb = texture2D(u_game, (floor(tp) + 0.5) / u_src).rgb;
     vec3 col = mix(rgb, vec3(dot(rgb, vec3(0.299, 0.587, 0.114))), 0.2);
-    float fa = dm_blend(px);
-    float sa = dm_blend(px - vec2(1.0)) * contrast * 0.5;
+    vec2 blend = dm_pair(px);
+    float fa = blend.x;
+    float sa = blend.y * contrast * 0.5;
     vec3 bg = texture2D(u_dm_bg, v_uv).rgb;
     bg = clamp(vec3(0.93, 0.93, 0.90) + mix(vec3(-1.0), vec3(1.0), bg), 0.0, 1.0);
     vec3 o = col * sa + bg * (1.0 - sa);
@@ -740,6 +905,13 @@ vec3 crt_hyllian(vec2 uv) {
     return pow(max(col, vec3(0.0)), vec3(1.0 / 2.2));
 }
 
+/* The per-game-pixel half of each, drawn once per frame into u_edges
+   (CACHE_PASS): every flag is 0 or 1, four corners a channel, packed as
+   whole numbers. The screen pass only blends by its place in the pixel. */
+const vec4 edge_bit = vec4(1.0, 2.0, 4.0, 8.0);
+vec4 edge_bits(float n) { return mod(floor(n/edge_bit), 2.0); }
+vec4 edge_lo(float c) { float n = floor(c*255.0 + 0.5); return edge_bits(n - 16.0*floor(n/16.0)); }
+vec4 edge_hi(float c) { return edge_bits(floor(floor(c*255.0 + 0.5)/16.0)); }
 /* SABR v3.0 */
 const vec4 sAi = vec4(1.0, -1.0, -1.0, 1.0);
 const vec4 sB45 = vec4(1.0, 1.0, -1.0, -1.0), sC45 = vec4(1.5, 0.5, -0.5, 0.5);
@@ -755,9 +927,8 @@ vec4 s_wd(vec4 a, vec4 b, vec4 c, vec4 d, vec4 e, vec4 f, vec4 g, vec4 h) {
     return abs(a - b) + abs(a - c) + abs(d - e) + abs(d - f) + 4.0 * abs(g - h);
 }
 float s_cdf(vec3 a, vec3 b) { vec3 d = abs(a - b); return d.r + d.g + d.b; }
-vec3 sabr(vec2 uv) {
+void sabr_edges(vec2 tc, out vec4 f45, out vec4 f30, out vec4 f60, out vec4 f36, out vec4 frn, out vec4 px) {
     float x = 1.0 / u_src.x, y = 1.0 / u_src.y;
-    vec2 tc = uv * vec2(1.0004, 1.0);
     vec3 P1 = hs(tc + vec2(-x, -2.0*y)), P2 = hs(tc + vec2(0.0, -2.0*y)), P3 = hs(tc + vec2(x, -2.0*y));
     vec3 P6 = hs(tc + vec2(-x, -y)), P7 = hs(tc + vec2(0.0, -y)), P8 = hs(tc + vec2(x, -y));
     vec3 P11 = hs(tc + vec2(-x, 0.0)), P12 = hs(tc), P13 = hs(tc + vec2(x, 0.0));
@@ -769,11 +940,6 @@ vec3 sabr(vec2 uv) {
     vec4 p11 = p7.yzwx, p12 = s_lum(P12, P12, P12, P12), p13 = p7.wxyz;
     vec4 p14 = s_lum(P14, P2, P10, P22), p16 = p8.zwxy, p17 = p7.zwxy, p18 = p8.wxyz;
     vec4 p19 = s_lum(P19, P3, P5, P21), p22 = p14.wxyz, p23 = s_lum(P23, P9, P1, P15);
-    vec2 fp = fract(tc * u_src);
-    vec4 ma45 = smoothstep(sC45 - sM45, sC45 + sM45, sAi * fp.y + sB45 * fp.x);
-    vec4 ma30 = smoothstep(sC30 - sM30, sC30 + sM30, sAi * fp.y + sB30 * fp.x);
-    vec4 ma60 = smoothstep(sC60 - sM60, sC60 + sM60, sAi * fp.y + sB60 * fp.x);
-    vec4 marn = smoothstep(sC45 - sM45 + sMs, sC45 + sM45 + sMs, sAi * fp.y + sB45 * fp.x);
     vec4 e45 = s_wd(p12, p8, p16, p18, p22, p14, p17, p13);
     vec4 econt = s_wd(p17, p11, p23, p13, p7, p19, p12, p18);
     vec4 e30 = abs(p13 - p16), e60 = abs(p8 - p17);
@@ -790,12 +956,34 @@ vec3 sabr(vec2 uv) {
     bvec4 edrrn = lessThanEqual(e45, econt);
     bvec4 edr30 = s_and(lessThanEqual(2.0 * e30, e60), r30);
     bvec4 edr60 = s_and(lessThanEqual(2.0 * e60, e30), r60);
-    vec4 f45 = vec4(s_and(s_and(not(edr30), not(edr60)), edr45));
-    vec4 f30 = vec4(s_and(s_and(edr45, not(edr60)), edr30));
-    vec4 f60 = vec4(s_and(s_and(edr45, not(edr30)), edr60));
-    vec4 f36 = vec4(s_and(s_and(edr60, edr30), edr45));
-    vec4 frn = vec4(s_and(not(edr45), edrrn));
-    vec4 px = step(abs(p12 - p17), abs(p12 - p13));
+    f45 = vec4(s_and(s_and(not(edr30), not(edr60)), edr45));
+    f30 = vec4(s_and(s_and(edr45, not(edr60)), edr30));
+    f60 = vec4(s_and(s_and(edr45, not(edr30)), edr60));
+    f36 = vec4(s_and(s_and(edr60, edr30), edr45));
+    frn = vec4(s_and(not(edr45), edrrn));
+    px = step(abs(p12 - p17), abs(p12 - p13));
+}
+vec3 sabr(vec2 uv) {
+    float x = 1.0 / u_src.x, y = 1.0 / u_src.y;
+    vec2 tc = uv * vec2(1.0004, 1.0);
+    vec2 fp = fract(tc * u_src);
+    vec4 f45, f30, f60, f36, frn, px;
+#ifndef CACHE_PASS
+    if (u_cached > 0.5) {
+        // As xBR-lv2: from the centre of the game pixel.
+        tc = (floor(tc * u_src) + 0.5) / u_src;
+        vec4 fl = texture2D(u_edges, tc);
+        f45 = edge_lo(fl.r); f30 = edge_hi(fl.r); f60 = edge_lo(fl.g);
+        f36 = edge_hi(fl.g); frn = edge_lo(fl.b); px = edge_hi(fl.b);
+    } else
+#endif
+    sabr_edges(tc, f45, f30, f60, f36, frn, px);
+    vec3 P7 = hs(tc + vec2(0.0, -y)), P11 = hs(tc + vec2(-x, 0.0)), P12 = hs(tc);
+    vec3 P13 = hs(tc + vec2(x, 0.0)), P17 = hs(tc + vec2(0.0, y));
+    vec4 ma45 = smoothstep(sC45 - sM45, sC45 + sM45, sAi * fp.y + sB45 * fp.x);
+    vec4 ma30 = smoothstep(sC30 - sM30, sC30 + sM30, sAi * fp.y + sB30 * fp.x);
+    vec4 ma60 = smoothstep(sC60 - sM60, sC60 + sM60, sAi * fp.y + sB60 * fp.x);
+    vec4 marn = smoothstep(sC45 - sM45 + sMs, sC45 + sM45 + sMs, sAi * fp.y + sB45 * fp.x);
     vec4 mac = f36 * max(ma30, ma60) + f30 * ma30 + f60 * ma60 + f45 * ma45 + frn * marn;
     vec3 r1 = P12;
     r1 = mix(r1, mix(P13, P17, px.x), mac.x);
@@ -866,9 +1054,8 @@ vec4 x_neq(vec4 a, vec4 b) { return vec4(1.0) - x_eq(a, b); }
 vec4 x_wd(vec4 a, vec4 b, vec4 c, vec4 d, vec4 e, vec4 f, vec4 g, vec4 h) {
     return x_df(a,b) + x_df(a,c) + x_df(d,e) + x_df(d,f) + 4.0*x_df(g,h);
 }
-vec3 xbr_lv2(vec2 uv) {
+void xbr_edges(vec2 uv, out vec4 edr, out vec4 edr_l, out vec4 edr_u, out vec4 px) {
     float dx = 1.0 / u_src.x, dy = 1.0 / u_src.y;
-    vec2 fp = fract(uv * u_src);
     vec3 A1 = hs(uv + vec2(-dx, -2.0*dy)), B1 = hs(uv + vec2(0.0, -2.0*dy)), C1 = hs(uv + vec2(dx, -2.0*dy));
     vec3 A = hs(uv + vec2(-dx, -dy)), B = hs(uv + vec2(0.0, -dy)), C = hs(uv + vec2(dx, -dy));
     vec3 D = hs(uv + vec2(-dx, 0.0)), E = hs(uv), F = hs(uv + vec2(dx, 0.0));
@@ -883,26 +1070,43 @@ vec3 xbr_lv2(vec2 uv) {
     vec4 i5 = vec4(dot(I5, xw), dot(C4, xw), dot(A1, xw), dot(G0, xw));
     vec4 h5 = vec4(dot(H5, xw), dot(F4, xw), dot(B1, xw), dot(D0, xw));
     vec4 f4 = h5.yzwx;
-    const vec4 Ao = vec4(1.0, -1.0, -1.0, 1.0), Bo = vec4(1.0, 1.0, -1.0, -1.0), Co = vec4(1.5, 0.5, -0.5, 0.5);
-    const vec4 Bx = vec4(0.5, 2.0, -0.5, -2.0), Cx = vec4(1.0, 1.0, -0.5, 0.0);
-    const vec4 By = vec4(2.0, 0.5, -2.0, -0.5), Cy = vec4(2.0, 0.0, -1.0, 0.5);
-    vec4 delta = vec4(1.0 / 3.0), delta_l = vec4(0.5 / 3.0, 1.0 / 3.0, 0.5 / 3.0, 1.0 / 3.0), delta_u = delta_l.yxwz;
-    vec4 fx = Ao * fp.y + Bo * fp.x, fx_l = Ao * fp.y + Bx * fp.x, fx_u = Ao * fp.y + By * fp.x;
     vec4 irlv0 = x_diff(e, f) * x_diff(e, h);
     vec4 irlv1 = irlv0 * (x_neq(f, b) * x_neq(f, c) + x_neq(h, d) * x_neq(h, g)
         + x_eq(e, i) * (x_neq(f, f4) * x_neq(f, i4) + x_neq(h, h5) * x_neq(h, i5)) + x_eq(e, g) + x_eq(e, c));
     vec4 irlv2l = x_diff(e, g) * x_diff(d, g);
     vec4 irlv2u = x_diff(e, c) * x_diff(b, c);
+    vec4 wd1 = x_wd(e, c, g, i, h5, f4, h, f);
+    vec4 wd2 = x_wd(h, d, i5, f, i4, b, e, i);
+    edr = step(wd1 + vec4(0.1), wd2) * step(vec4(0.5), irlv1);
+    edr_l = step(2.0 * x_df(f, g), x_df(h, c)) * irlv2l * edr;
+    edr_u = step(2.0 * x_df(h, c), x_df(f, g)) * irlv2u * edr;
+    px = step(x_df(e, f), x_df(e, h));
+}
+vec3 xbr_lv2(vec2 uv) {
+    float dx = 1.0 / u_src.x, dy = 1.0 / u_src.y;
+    vec2 fp = fract(uv * u_src);
+    vec4 edr, edr_l, edr_u, px;
+#ifndef CACHE_PASS
+    if (u_cached > 0.5) {
+        // Flags and colours from the centre of the game pixel the screen
+        // pixel falls in, so they always agree on which pixel that is.
+        uv = (floor(uv * u_src) + 0.5) / u_src;
+        vec4 fl = texture2D(u_edges, uv);
+        edr = edge_lo(fl.r); edr_l = edge_lo(fl.g); edr_u = edge_lo(fl.b); px = edge_lo(fl.a);
+    } else
+#endif
+    xbr_edges(uv, edr, edr_l, edr_u, px);
+    vec3 B = hs(uv + vec2(0.0, -dy)), D = hs(uv + vec2(-dx, 0.0)), E = hs(uv);
+    vec3 F = hs(uv + vec2(dx, 0.0)), H = hs(uv + vec2(0.0, dy));
+    const vec4 Ao = vec4(1.0, -1.0, -1.0, 1.0), Bo = vec4(1.0, 1.0, -1.0, -1.0), Co = vec4(1.5, 0.5, -0.5, 0.5);
+    const vec4 Bx = vec4(0.5, 2.0, -0.5, -2.0), Cx = vec4(1.0, 1.0, -0.5, 0.0);
+    const vec4 By = vec4(2.0, 0.5, -2.0, -0.5), Cy = vec4(2.0, 0.0, -1.0, 0.5);
+    vec4 delta = vec4(1.0 / 3.0), delta_l = vec4(0.5 / 3.0, 1.0 / 3.0, 0.5 / 3.0, 1.0 / 3.0), delta_u = delta_l.yxwz;
+    vec4 fx = Ao * fp.y + Bo * fp.x, fx_l = Ao * fp.y + Bx * fp.x, fx_u = Ao * fp.y + By * fp.x;
     vec4 fx45 = clamp((fx + delta - Co) / (2.0 * delta), 0.0, 1.0);
     vec4 fx30 = clamp((fx_l + delta_l - Cx) / (2.0 * delta_l), 0.0, 1.0);
     vec4 fx60 = clamp((fx_u + delta_u - Cy) / (2.0 * delta_u), 0.0, 1.0);
-    vec4 wd1 = x_wd(e, c, g, i, h5, f4, h, f);
-    vec4 wd2 = x_wd(h, d, i5, f, i4, b, e, i);
-    vec4 edr = step(wd1 + vec4(0.1), wd2) * step(vec4(0.5), irlv1);
-    vec4 edr_l = step(2.0 * x_df(f, g), x_df(h, c)) * irlv2l * edr;
-    vec4 edr_u = step(2.0 * x_df(h, c), x_df(f, g)) * irlv2u * edr;
     fx45 = edr * fx45; fx30 = edr_l * fx30; fx60 = edr_u * fx60;
-    vec4 px = step(x_df(e, f), x_df(e, h));
     vec4 mx = max(max(fx30, fx60), fx45);
     vec3 r1 = E;
     r1 = mix(r1, mix(H, F, px.x), mx.x);
@@ -912,6 +1116,26 @@ vec3 xbr_lv2(vec2 uv) {
     r2 = mix(r2, mix(D, H, px.w), mx.w);
     return mix(r1, r2, step(s_cdf(E, r1), s_cdf(E, r2)));
 }
+#ifdef CACHE_PASS
+/* The caches above, one texel a game pixel, drawn ahead of the screen pass
+   (lcd_cache.rs) from this same source so both work out the same flags. */
+void main() {
+    vec2 tc = (floor(gl_FragCoord.xy) + 0.5) / u_src;
+    if (u_mode > 23.5 && u_mode < 24.5) {
+        vec4 edr, edr_l, edr_u, px;
+        xbr_edges(tc, edr, edr_l, edr_u, px);
+        FRAG_COLOR = vec4(dot(edr, edge_bit), dot(edr_l, edge_bit), dot(edr_u, edge_bit), dot(px, edge_bit))/255.0;
+    } else if (u_mode > 21.5 && u_mode < 22.5) {
+        vec4 f45, f30, f60, f36, frn, px;
+        sabr_edges(tc, f45, f30, f60, f36, frn, px);
+        FRAG_COLOR = vec4(dot(f45, edge_bit) + 16.0*dot(f30, edge_bit),
+                          dot(f60, edge_bit) + 16.0*dot(f36, edge_bit),
+                          dot(frn, edge_bit) + 16.0*dot(px, edge_bit), 0.0)/255.0;
+    } else {
+        FRAG_COLOR = vec4(game_gamma(tc), 1.0);
+    }
+}
+#else
 void main() {
     vec2 uv = u_uv.xy + v_uv * u_uv.zw;
     vec2 f = fract(uv * u_src);
@@ -919,11 +1143,18 @@ void main() {
     // The LCD shaders (LCD3x, Grid, Dot, Simpletex, zfast LCD, LCD1x,
     // Simpletex on the GBA) read the game through Pixel AA. LCD Grid V2 and
     // AGB/AGS-001 filter the game themselves; the others as before.
+#ifdef HIRES
+    // A GBA Video cart's upscaled picture (Screen > Upscaler): the shaders
+    // that take the game's colour as it is lay their grid over it, still
+    // one cell per GBA pixel (u_src stays 240x160).
+    c = clamp(texture2D(u_hires, uv).rgb, 0.0, 1.0);
+#else
     if (u_mode > 0.5 && u_mode < 9.5 && !(u_mode > 4.5 && u_mode < 6.5)) {
         c = pixel_aa(uv);
     } else {
         c = texture2D(u_game, uv).rgb;
     }
+#endif
     bool inside = all(greaterThanEqual(uv, u_pic.xy)) && all(lessThan(uv, u_pic.zw));
 
     if (!inside) {
@@ -1057,6 +1288,7 @@ void main() {
     }
     FRAG_COLOR = vec4(c * u_bright, 1.0);
 }
+#endif
 "#;
 
 pub const SPRITE_FRAG: &str = r#"

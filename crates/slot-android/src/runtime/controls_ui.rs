@@ -182,7 +182,7 @@ impl Engine {
         }
         // Another Hotkey Button: SELECT is only the game's button.
         if code == 109 { self.slot_bit(ButtonMask::SELECT, true); return true; }
-        let boktai = self.game.as_ref().is_some_and(GameSession::solar);
+        let boktai = self.game.as_ref().is_some_and(GameSession::dial);
         let action = self.controls.hotkeys.action_for(self.hk_mod_down, code, boktai)
             // A+B+START+SELECT is the Game Boy soft reset: leave it to the game.
             .filter(|a| !(*a == Action::SaveEject && self.buttons & (ButtonMask::A | ButtonMask::B) != 0));
@@ -235,6 +235,8 @@ impl Engine {
             Action::SunDown | Action::SunUp => {
                 if !linked && self.game.as_ref().is_some_and(GameSession::solar) {
                     self.nudge_sun(action == Action::SunUp);
+                } else if !linked && self.game.as_ref().is_some_and(GameSession::motion) {
+                    self.nudge_motion(action == Action::SunUp);
                 }
             }
         }
@@ -788,6 +790,25 @@ impl Engine {
         if lit { text.to_owned() } else { format!("\u{1}{text}") }
     }
 
+    /// A face up to `max_w` pixels wide (RomM's INFO card, drawn small).
+    pub(super) fn wide_face_key(text: &str, lit: bool) -> String {
+        format!("\u{2}{}", Self::face_key(text, lit))
+    }
+    pub(super) fn controls_face_within(&mut self, text: &str, lit: bool, max_w: u32) {
+        let key = Self::wide_face_key(text, lit);
+        if text.is_empty() || self.controls_faces.contains_key(&key) { return; }
+        if self.controls_faces.len() > 400 {
+            let reuse: Vec<slot_gfx::TexId> = self.controls_faces.drain().map(|(_, (tex, _, _))| tex).collect();
+            self.controls_spare_faces.extend(reuse);
+        }
+        let face = slot_ui::quick_value_face_within(text, lit, max_w);
+        let tex = match self.controls_spare_faces.pop() {
+            Some(tex) => { self.gpu.update_face(tex, &face); tex }
+            None => self.gpu.create_face(&face),
+        };
+        self.controls_faces.insert(key, (tex, face.w, face.h));
+    }
+
     pub(super) fn controls_face(&mut self, text: &str, lit: bool) {
         let key = Self::face_key(text, lit);
         if text.is_empty() || self.controls_faces.contains_key(&key) { return; }
@@ -807,7 +828,11 @@ impl Engine {
 
     pub(super) fn controls_hint(&mut self, key: &'static str, label: &'static str) -> (slot_gfx::TexId, u32) {
         if let Some(&hint) = self.controls_hint_faces.get(&(key, label)) { return hint; }
-        let face = if key == "SWAP" { arrows_hint_face(label) } else { hint_face(key, label) };
+        // A key with no word: the controller's button alone (L1 and R1 beside
+        // the system tabs, Siham 2026-11-10).
+        let face = if key == "SWAP" { arrows_hint_face(label) }
+            else if label.is_empty() { slot_ui::key_art(key).unwrap_or_else(|| hint_face(key, label)) }
+            else { hint_face(key, label) };
         let hint = (self.gpu.create_face(&face), face.w);
         self.controls_hint_faces.insert((key, label), hint);
         hint

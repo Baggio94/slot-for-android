@@ -29,11 +29,21 @@ fn store(root: &Path, list: &[String]) -> std::io::Result<()> {
     let bytes=serde_json::to_vec_pretty(list).map_err(std::io::Error::other)?;
     slot_store::atomic_write(&root.join(FILE),&bytes)
 }
+/// Every cart by its URI, the first one when two share it: found at once
+/// rather than by walking every shelf for each URI (thousands of carts).
+pub fn by_uri<'a>(sources: &[&'a [Cart]]) -> std::collections::HashMap<String, &'a Cart> {
+    let mut carts = std::collections::HashMap::new();
+    for cart in sources.iter().flat_map(|items| items.iter()) {
+        carts.entry(cart.rom.to_string_lossy().into_owned()).or_insert(cart);
+    }
+    carts
+}
+
 pub fn carts(ids: &[String], sources: &[&[Cart]]) -> Vec<Cart> {
+    let carts = by_uri(sources);
     let mut rows: Vec<Cart> = ids.iter()
-        .filter_map(|uri| sources.iter().flat_map(|items|items.iter())
-            .find(|cart|cart.rom.to_string_lossy()==uri.as_str()))
-        .cloned().collect();
+        .filter_map(|uri| carts.get(uri.as_str()).map(|cart| (*cart).clone()))
+        .collect();
     rows.sort_by(|a,b| {
         (slot_store::sort_key(&a.stem),a.platform as u8)
             .cmp(&(slot_store::sort_key(&b.stem),b.platform as u8))

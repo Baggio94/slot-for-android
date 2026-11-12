@@ -29,6 +29,12 @@ pub enum HomeMould {
     MegaDrive,
     MegaDriveJp,
     MegaDriveEa,
+    MegaDriveAccolade,
+    MegaDriveCodemasters,
+    /// Virtua Racing's big cart.
+    MegaDriveVr,
+    /// Sonic & Knuckles' lock-on cart.
+    MegaDriveSk,
 }
 
 /// A mould's art and where things sit on it, in its logical pixels.
@@ -75,7 +81,7 @@ macro_rules! art {
 }
 
 // Printed by nes-megadrive/export_app.py.
-static ARTS: [MouldArt; 9] = [
+static ARTS: [MouldArt; 13] = [
     art!("nes", 352, (126, 0, 145, 239),
         [(40.6, 234.6, 101.0, 46.5), (170.4, 234.6, 101.0, 46.5)],
         (166.3, 103.6, 121.6, 39.5), [126, 126, 128], None),
@@ -104,11 +110,24 @@ static ARTS: [MouldArt; 9] = [
         [(52.1, 149.8, 103.6, 58.3), (164.5, 149.8, 103.6, 58.3)],
         (153.2, 86.6, 108.6, 34.7), [14, 14, 15],
         Some(include_bytes!("../../../assets/home/md_ea_decal.png"))),
+    // Printed by nes-megadrive/export_new.py (2026-11-10).
+    art!("md_accolade", 285, (42, 0, 229, 221),
+        [(54.4, 144.9, 101.0, 56.9), (164.1, 144.9, 101.0, 56.9)],
+        (153.0, 83.2, 106.0, 33.9), [14, 14, 15], None),
+    art!("md_codemasters", 246, (52, 0, 214, 211),
+        [(74.7, 131.4, 81.3, 45.8), (163.0, 131.4, 81.3, 45.8)],
+        (154.0, 81.8, 85.3, 27.3), [14, 14, 15], None),
+    art!("md_vr", 306, (34, 48, 248, 118),
+        [(62.6, 175.1, 93.1, 52.5), (163.7, 175.1, 93.1, 52.5)],
+        (153.4, 118.3, 97.6, 31.2), [18, 19, 19], None),
+    art!("md_sk", 216, (17, 52, 276, 29),
+        [(66.3, 88.7, 88.6, 49.9), (162.5, 88.7, 88.6, 49.9)],
+        (152.8, 34.6, 93.0, 29.7), [14, 14, 15], None),
 ];
 
 
 impl HomeMould {
-    pub const ALL: [HomeMould; 9] = [
+    pub const ALL: [HomeMould; 13] = [
         HomeMould::Nes,
         HomeMould::Famicom,
         HomeMould::FamicomNamco,
@@ -118,6 +137,10 @@ impl HomeMould {
         HomeMould::MegaDrive,
         HomeMould::MegaDriveJp,
         HomeMould::MegaDriveEa,
+        HomeMould::MegaDriveAccolade,
+        HomeMould::MegaDriveCodemasters,
+        HomeMould::MegaDriveVr,
+        HomeMould::MegaDriveSk,
     ];
 
     pub fn index(self) -> usize {
@@ -138,7 +161,13 @@ impl HomeMould {
                 HomeSystem::Nes
             }
             HomeMould::Snes | HomeMould::SnesUs => HomeSystem::Snes,
-            HomeMould::MegaDrive | HomeMould::MegaDriveJp | HomeMould::MegaDriveEa => HomeSystem::Md,
+            HomeMould::MegaDrive
+            | HomeMould::MegaDriveJp
+            | HomeMould::MegaDriveEa
+            | HomeMould::MegaDriveAccolade
+            | HomeMould::MegaDriveCodemasters
+            | HomeMould::MegaDriveVr
+            | HomeMould::MegaDriveSk => HomeSystem::Md,
         }
     }
 
@@ -163,6 +192,10 @@ impl HomeMould {
             HomeMould::MegaDrive => "megadrive",
             HomeMould::MegaDriveJp => "megadrive-jp",
             HomeMould::MegaDriveEa => "megadrive-ea",
+            HomeMould::MegaDriveAccolade => "megadrive-accolade",
+            HomeMould::MegaDriveCodemasters => "megadrive-codemasters",
+            HomeMould::MegaDriveVr => "megadrive-vr",
+            HomeMould::MegaDriveSk => "megadrive-sk",
         }
     }
 
@@ -184,9 +217,9 @@ const FAMICOM_SMB: [u8; 3] = [196, 125, 8];
 
 const FAMICOM_TSV: &str = include_str!("../../../assets/home/famicom.tsv");
 /// Carts outside Japan whose shell is not the console's grey (Tengen, Color
-/// Dreams, Camerica, Wisdom Tree, red Doom...), read from ScreenScraper's
+/// Dreams, Camerica, Wisdom Tree, red Doom, EA's Mega Drive mould...), read from ScreenScraper's
 /// support-2D: system, mould, title key, region (us, eu or any), colour, finish.
-const SHELLS_TSV: &str = include_str!("../../../assets/home/shells.tsv");
+const SHELLS_TSV: &str = include_str!("../assets/home_shells.tsv");
 
 /// A game's title as the shell tables key it: the No-Intro name without its
 /// tags, lowercased, letters and digits only.
@@ -231,7 +264,7 @@ fn famicom_table() -> &'static HashMap<&'static str, ([u8; 3], HomeMould)> {
     })
 }
 
-/// A game's own shell on a mould, from `shells.tsv`: colour and glitter.
+/// A game's own shell on a mould, from `home_shells.tsv`: colour and glitter.
 /// Some titles differ by region (Camerica's US carts, Codemasters' in Europe).
 fn own_shell(mould: HomeMould, key: &str, usa: bool) -> Option<([u8; 3], bool)> {
     type Table = HashMap<(&'static str, &'static str, &'static str), ([u8; 3], bool)>;
@@ -329,9 +362,22 @@ pub fn home_pick(system: HomeSystem, stem: &str, region: &str, maker: &str) -> (
             } else if ea && usa {
                 HomeMould::MegaDriveEa
             } else {
-                HomeMould::MegaDrive
+                // EA's tall cart (also in Europe, and other publishers' games in
+                // it: Zool, James Pond...), Accolade's, Codemasters', Virtua
+                // Racing's and Sonic & Knuckles', as ScreenScraper shows them.
+                [
+                    HomeMould::MegaDriveEa,
+                    HomeMould::MegaDriveAccolade,
+                    HomeMould::MegaDriveCodemasters,
+                    HomeMould::MegaDriveVr,
+                    HomeMould::MegaDriveSk,
+                ]
+                .into_iter()
+                .find(|m| own_shell(*m, &key, usa).is_some())
+                .unwrap_or(HomeMould::MegaDrive)
             };
-            (mould, mould.art().colour, false)
+            let (colour, glitter) = own_shell(mould, &key, usa).unwrap_or((mould.art().colour, false));
+            (mould, colour, glitter)
         }
     }
 }

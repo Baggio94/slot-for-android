@@ -9,11 +9,14 @@ mod headless;
 #[cfg(feature = "host")]
 mod host;
 mod lcd3x;
+mod lcd_cache;
 mod pipeline;
 mod power;
 mod quad;
+mod royale;
 mod shaders;
 mod surface;
+mod upscale;
 
 pub use bezel::{framed, lifted_rect, screen_rect};
 pub use draw::{Draw, TexId};
@@ -25,6 +28,7 @@ pub use headless::HeadlessSurface;
 #[cfg(feature = "host")]
 pub use host::HostSurface;
 pub use lcd3x::{lcd3x_factors, lcd3x_mask, LcdEffect, ScreenEffect};
+pub use upscale::Upscaler;
 pub use pipeline::{fit_window, Fit, SCALE, SRC_H, SRC_W, WHOLE_TEXTURE, default_area};
 pub use power::{screen_brightness, screen_scale, screen_width};
 pub use surface::{blit_rect, blit_rect_fit, fit_rect, fit_scale, GfxError, Surface, OUT_H, out_w, canvas_w_for, set_canvas_for_panel, BASE_W};

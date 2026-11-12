@@ -222,11 +222,37 @@ pub fn quick_label_face(row: QuickRow) -> UndoFace {
     quick_text_face(row.label(), MENU_INK)
 }
 
+/// The width quick_value_face gives `text`, without drawing it (to wrap
+/// long lines, such as a file name, by words).
+pub fn quick_value_width(label: &str) -> u32 {
+    quick_value_width_within(label, out_w())
+}
+
+/// quick_value_width for a face up to `max_w` pixels wide.
+pub fn quick_value_width_within(label: &str, max_w: u32) -> u32 {
+    let Some(font) = text::label_font() else { return 0 };
+    let layout = text::fit(font, label, max_w as f32, 1, MENU_PX, MENU_PX);
+    let set = layout.lines.iter()
+        .map(|l| text::line_width(font, l, layout.px, layout.tracking))
+        .fold(0.0, f32::max);
+    set.ceil() as u32 + 2 * MENU_PAD
+}
+
 pub fn quick_value_face(text: &str, lit: bool) -> UndoFace {
     quick_text_face(text, if lit { MENU_INK } else { DIM_INK })
 }
 
+/// quick_value_face up to `max_w` pixels wide, for a line drawn smaller
+/// than the menu's (RomM's INFO card, Siham 2026-11-10).
+pub fn quick_value_face_within(text: &str, lit: bool, max_w: u32) -> UndoFace {
+    quick_text_face_within(text, if lit { MENU_INK } else { DIM_INK }, max_w)
+}
+
 fn quick_text_face(label: &str, colour: [u8; 3]) -> UndoFace {
+    quick_text_face_within(label, colour, out_w())
+}
+
+fn quick_text_face_within(label: &str, colour: [u8; 3], max_w: u32) -> UndoFace {
     let Some(font) = text::label_font() else {
         return UndoFace {
             rgba: Vec::new(),
@@ -234,7 +260,7 @@ fn quick_text_face(label: &str, colour: [u8; 3]) -> UndoFace {
             h: 0,
         };
     };
-    let layout = text::fit(font, label, out_w() as f32, 1, MENU_PX, MENU_PX);
+    let layout = text::fit(font, label, max_w as f32, 1, MENU_PX, MENU_PX);
     let set = layout
         .lines
         .iter()

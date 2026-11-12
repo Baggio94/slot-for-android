@@ -2,6 +2,20 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v2.3.0 — 13 November 2026
+
+- RomM: START → Library → RomM (row after Choose ROM Folder) lists the carts of the player's own RomM server per system (L1/R1), A selects, Y downloads into the system's folder with its label, SELECT filters (search, region, official only, hide carts already on the shelves, RomM favorites), START shows a game's info. Sign-in with a RomM 5 pairing code or username/password, http on the LAN or https; the list is cached and refreshed in parallel; downloads join their shelf without a folder rescan.
+- Game Boy Advance Video shelf behind the GBA shelf (L2/R2 tap), GBA code 'M' detected, hidden when empty; plays on mGBA (Game Boy Player off); Screen → Upscaler: Off, FSR (default), Anime4K Fast, Anime4K (OpenGL ES 3, bilinear fallback).
+- Carousel: hold L2 + R2 for 1.5 s to delete the cart in hand (red ring, eject animation, ROM deleted through Android, saves and states kept). Library changes update the shelves in place.
+- Motion games (#106): without TYPE_GYROSCOPE, gyro Z is worked out from the accelerometer (rate of the gravity angle in the screen plane, soft deadzone ~7°/s, clamped). Per-game Sensitivity 1-10 (0.25x to 4x, 5 = sensors as read) for WarioWare: Twisted!, Yoshi Topsy-Turvy, Koro Koro Puzzle and Kirby Tilt 'n' Tumble (MBC7): Settings → Emulation, R3/L3 or SELECT+R2/L2 with a toast.
+- Picture: NES, SNES and Mega Drive in 4:3 at Original Ratio whatever the core reports; on near-square screens NES and SNES in 8:7, FCEUmm and Nestopia hiding 8 lines top and bottom (224 lines like the SNES).
+- Shaders: crt-royale for NES/SNES/Mega Drive; lighter LCD Effect, Dot Matrix and CRT shaders (per-frame caches, same look); new shader order on every system.
+- Fast Forward MAX (Settings → Gameplay): up to 120 frames or 11 ms per refresh.
+- RetroAchievements (#105): status names what is happening (Caching games, Caching badges, Retrying, Check login, Storage error, Server error, Offline, Online); a missing badge is given up after 3 tries instead of keeping "Needs attention".
+- Mega Drive: Accolade, Codemasters, Virtua Racing and Sonic & Knuckles moulds; EA's cart for every game ScreenScraper shows in it. Home labels: title key without extension, cut again when the shell changes.
+- Status Bar: icons centred on the digits, even gaps, each line inked for its wallpaper (black on light ones), SleepManager moon filled when running.
+- Steadier game launches: recently played games kept warm.
+
 ## v2.2.2 — 10 November 2026
 
 - In game, Frame Blending, LCD Effect and Dither Blending are the game's own (per-game profile); Settings → Systems keeps the system's default.

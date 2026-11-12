@@ -104,6 +104,14 @@ internal object AutoCartLabels {
         }, "slot-gb-labels").apply { isDaemon = true }
     }
 
+    /** A cart's label scan from our own set: by its CRC, else by its name
+     *  (ArtNames: a hack, a translation, another region's dump). */
+    private fun ownScan(context: Context, rom: CartStudioCatalog.Rom, crc: String): ByteArray? =
+        SlotArtSet.scanPng(context, rom.platform, crc)
+            ?: ArtNames.crcFor(context, rom.platform, rom.filename.ifBlank { rom.title })
+                ?.takeIf { !it.equals(crc, ignoreCase = true) }
+                ?.let { SlotArtSet.scanPng(context, rom.platform, it) }
+
     /** The carts' label scans from our own set, as PNG: a cart is left out
      *  when it couldn't be asked (the pass asks again), null when the set
      *  doesn't hold one. */
@@ -115,7 +123,7 @@ internal object AutoCartLabels {
                 try {
                     val crc = CartStudioCatalog.cached(context, rom)
                         ?: CartStudioCatalog.identify(context, rom)
-                    true to SlotArtSet.scanPng(context, rom.platform, crc.hex)
+                    true to ownScan(context, rom, crc.hex)
                 } catch (error: Exception) {
                     false to null
                 }
@@ -209,7 +217,7 @@ internal object AutoCartLabels {
                 // slot. for Android's own art set first (art.slot-android.app),
                 // then slot.'s, matched as before.
                 var bytes: ByteArray? = if (pre.containsKey(rom.uri)) pre[rom.uri] else try {
-                    SlotArtSet.scanPng(context, rom.platform, crc.hex)
+                    ownScan(context, rom, crc.hex)
                 } catch (error: Exception) {
                     Log.w(TAG, "Own art set lookup failed; trying slot.'s", error)
                     null

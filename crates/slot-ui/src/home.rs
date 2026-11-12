@@ -24,7 +24,13 @@ impl HomeMould {
                 Platform::Nes
             }
             HomeMould::Snes | HomeMould::SnesUs => Platform::Snes,
-            HomeMould::MegaDrive | HomeMould::MegaDriveJp | HomeMould::MegaDriveEa => Platform::Md,
+            HomeMould::MegaDrive
+            | HomeMould::MegaDriveJp
+            | HomeMould::MegaDriveEa
+            | HomeMould::MegaDriveAccolade
+            | HomeMould::MegaDriveCodemasters
+            | HomeMould::MegaDriveVr
+            | HomeMould::MegaDriveSk => Platform::Md,
         }
     }
 
@@ -49,6 +55,10 @@ impl HomeMould {
             HomeMould::MegaDrive => Outline::MegaDrive,
             HomeMould::MegaDriveJp => Outline::MegaDriveJp,
             HomeMould::MegaDriveEa => Outline::MegaDriveEa,
+            HomeMould::MegaDriveAccolade => Outline::MegaDriveAccolade,
+            HomeMould::MegaDriveCodemasters => Outline::MegaDriveCodemasters,
+            HomeMould::MegaDriveVr => Outline::MegaDriveVr,
+            HomeMould::MegaDriveSk => Outline::MegaDriveSk,
         }
     }
 
@@ -80,7 +90,7 @@ fn decoded(bytes: &'static [u8], w: u32, h: u32) -> Vec<u8> {
 
 /// The neutral front shell at its logical size.
 pub(crate) fn neutral(m: HomeMould) -> &'static [u8] {
-    static CACHE: [OnceLock<Vec<u8>>; 9] = [const { OnceLock::new() }; 9];
+    static CACHE: [OnceLock<Vec<u8>>; HomeMould::ALL.len()] = [const { OnceLock::new() }; HomeMould::ALL.len()];
     CACHE[m.index()].get_or_init(|| {
         let (w, h) = m.size();
         decoded(m.art().neutral, w, h)
@@ -95,7 +105,7 @@ pub(crate) fn dense_decal(m: HomeMould) -> Option<Arc<Vec<u8>>> {
 
 /// The outline at 1x: the neutral shell's own alpha.
 pub(crate) fn mask(m: HomeMould) -> &'static [u8] {
-    static CACHE: [OnceLock<Vec<u8>>; 9] = [const { OnceLock::new() }; 9];
+    static CACHE: [OnceLock<Vec<u8>>; HomeMould::ALL.len()] = [const { OnceLock::new() }; HomeMould::ALL.len()];
     CACHE[m.index()].get_or_init(|| neutral(m).iter().skip(3).step_by(4).copied().collect())
 }
 
@@ -166,7 +176,8 @@ mod tests {
         assert_eq!(mould(Platform::Snes, "smw", "U", ""), HomeMould::SnesUs);
         assert_eq!(mould(Platform::Md, "Sonic (Japan)", "", ""), HomeMould::MegaDriveJp);
         assert_eq!(mould(Platform::Md, "Road Rash (USA, Europe)", "", "(C)T-50 1991.SEP"), HomeMould::MegaDriveEa);
-        assert_eq!(mould(Platform::Md, "Road Rash (Europe)", "", "(C)T-50 1991.SEP"), HomeMould::MegaDrive);
+        // ScreenScraper shows EA's cart in Europe too (EA Hockey, Populous, FIFA 98).
+        assert_eq!(mould(Platform::Md, "Road Rash (Europe)", "", "(C)T-50 1991.SEP"), HomeMould::MegaDriveEa);
         assert_eq!(mould(Platform::Md, "Sonic (USA, Europe)", "", "(C)SEGA 1991.APR"), HomeMould::MegaDrive);
     }
 
@@ -199,6 +210,35 @@ mod tests {
         assert_eq!(colour(Platform::Snes, "Doom (USA)"), [0xc9, 0x2b, 0x2b]);
         assert_eq!(colour(Platform::Snes, "Doom (Europe)"), HomeMould::Snes.art().colour);
         assert_eq!(colour(Platform::Snes, "Super Noah's Ark 3D (USA)"), [0x12, 0x12, 0x12]);
+        assert_eq!(colour(Platform::Md, "Spider-Man - Venom - Maximum Carnage (World)"), [0xea, 0x03, 0x03]);
+    }
+
+    #[test]
+    fn ea_mould_beyond_the_ea_header() {
+        // EA's own, sold in Europe too, and other publishers in EA's cart.
+        assert_eq!(mould(Platform::Md, "Road Rash (USA, Europe)", "", ""), HomeMould::MegaDriveEa);
+        assert_eq!(mould(Platform::Md, "FIFA 98 - Road to World Cup (Europe)", "", ""), HomeMould::MegaDriveEa);
+        assert_eq!(mould(Platform::Md, "Zool (World)", "", ""), HomeMould::MegaDriveEa);
+        // Japan keeps its own mould; Sega's games keep Sega's.
+        assert_eq!(mould(Platform::Md, "Road Rash (Japan)", "", ""), HomeMould::MegaDriveJp);
+        assert_eq!(mould(Platform::Md, "Sonic The Hedgehog (USA, Europe)", "", ""), HomeMould::MegaDrive);
+        // Carmen Sandiego came in EA's cart in the US only.
+        assert_eq!(mould(Platform::Md, "Where in Time Is Carmen Sandiego (USA)", "", ""), HomeMould::MegaDriveEa);
+        assert_eq!(mould(Platform::Md, "Where in Time Is Carmen Sandiego (Europe)", "", ""), HomeMould::MegaDrive);
+    }
+
+    #[test]
+    fn publishers_own_mega_drive_moulds() {
+        assert_eq!(mould(Platform::Md, "Bubsy II (USA, Europe)", "", ""), HomeMould::MegaDriveAccolade);
+        assert_eq!(mould(Platform::Md, "Gods (Europe)", "", ""), HomeMould::MegaDriveAccolade);
+        assert_eq!(mould(Platform::Md, "Gods (USA)", "", ""), HomeMould::MegaDrive);
+        assert_eq!(
+            mould(Platform::Md, "Micro Machines 2 - Turbo Tournament (Europe) (J-Cart)", "", ""),
+            HomeMould::MegaDriveCodemasters
+        );
+        assert_eq!(mould(Platform::Md, "Virtua Racing (USA)", "", ""), HomeMould::MegaDriveVr);
+        assert_eq!(mould(Platform::Md, "Sonic & Knuckles (World)", "", ""), HomeMould::MegaDriveSk);
+        assert_eq!(mould(Platform::Md, "Virtua Racing (Japan)", "", ""), HomeMould::MegaDriveJp);
     }
 
     #[test]

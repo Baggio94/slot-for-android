@@ -153,12 +153,31 @@ pub fn square_pixels(platform: Platform, panel: (u32, u32)) -> bool {
     matches!(platform, Platform::Nes | Platform::Snes) && narrow(panel)
 }
 
+/// NES on screens narrower than 4:3: the cores hide 8 lines at the top and
+/// 8 at the bottom, as a television did, so the square-pixel picture is
+/// 256x224, 8:7 like the SNES (Siham, 2026-11-12). Wider screens keep all
+/// 240 lines, shown at 4:3.
+pub fn nes_overscan_lines(panel: (u32, u32)) -> Option<&'static str> {
+    square_pixels(Platform::Nes, panel).then_some("8")
+}
+
 /// A frame's shape in its console's own pixels: SNES hi-res and interlaced
 /// frames (512 wide, 448 tall) count their pixels double.
 pub fn square_aspect(frame: (u32, u32)) -> f32 {
     let w = if frame.0 >= 400 { frame.0 / 2 } else { frame.0 };
     let h = if frame.1 >= 400 { frame.1 / 2 } else { frame.1 };
     w.max(1) as f32 / h.max(1) as f32
+}
+
+/// The shape a home console's picture is shown at: 4:3 for NES, SNES and
+/// Mega Drive, whatever aspect the core reports (FCEUmm and Nestopia report
+/// 8:7 PAR, bsnes and Genesis Plus GX their own), except NES and SNES on
+/// screens narrower than 4:3, which keep square pixels (Siham, 2026-11-12).
+pub fn home_aspect(platform: Platform, core: f32, panel: (u32, u32)) -> f32 {
+    match platform {
+        Platform::Nes | Platform::Snes | Platform::Md if !square_pixels(platform, panel) => 4.0 / 3.0,
+        _ => core,
+    }
 }
 
 /// How a home console frame fills the screen in `mode`.
@@ -173,6 +192,7 @@ pub fn home_fit(platform: Platform, mode: VideoMode, aspect: f32, frame: (u32, u
             VideoMode::Stretch => slot_gfx::Fit::Stretch,
         };
     }
+    let aspect = home_aspect(platform, aspect, panel);
     match mode {
         VideoMode::Actual => slot_gfx::Fit::Integer(aspect),
         VideoMode::Aspect => slot_gfx::Fit::Aspect(aspect),
@@ -456,6 +476,44 @@ mod tests {
             Fit::Aspect(256.0 / 240.0));
         assert_eq!(home_fit(Platform::Nes, VideoMode::Actual, 4.0 / 3.0, (256, 240), (960, 640)),
             Fit::Integer(4.0 / 3.0));
+    }
+
+    #[test]
+    fn home_consoles_show_4_3_whatever_the_core_reports() {
+        use slot_gfx::Fit;
+        let par = 256.0 * 8.0 / 7.0 / 240.0; // FCEUmm and Nestopia "8:7 PAR"
+        for panel in [(960, 640), (1024, 768), (1920, 1080)] {
+            for platform in [Platform::Nes, Platform::Snes, Platform::Md] {
+                assert_eq!(home_fit(platform, VideoMode::Aspect, par, (256, 240), panel),
+                    Fit::Aspect(4.0 / 3.0), "{platform:?} {panel:?}");
+                assert_eq!(home_fit(platform, VideoMode::Actual, 1.5238, (320, 224), panel),
+                    Fit::Integer(4.0 / 3.0), "{platform:?} {panel:?}");
+            }
+        }
+        // Narrow screens: NES and SNES keep square pixels, the Mega Drive 4:3.
+        let rpc = (1240, 1080);
+        assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, par, (256, 240), rpc),
+            Fit::Aspect(256.0 / 240.0));
+        assert_eq!(home_fit(Platform::Md, VideoMode::Aspect, 1.5238, (320, 224), rpc),
+            Fit::Aspect(4.0 / 3.0));
+        assert_eq!(home_aspect(Platform::Gba, 1.5, (960, 640)), 1.5);
+    }
+
+    #[test]
+    fn nes_hides_its_overscan_only_on_narrow_screens() {
+        use slot_gfx::Fit;
+        for narrow in [(1240, 1080), (720, 720), (1280, 1024)] {
+            assert_eq!(nes_overscan_lines(narrow), Some("8"), "{narrow:?}");
+        }
+        for wide in [(960, 640), (1024, 768), (1920, 1080), (2400, 1080)] {
+            assert_eq!(nes_overscan_lines(wide), None, "{wide:?}");
+        }
+        // The cropped 256x224 frame is 8:7, the same picture as the SNES.
+        let rpc = (1240, 1080);
+        assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, 1.0, (256, 224), rpc),
+            Fit::Aspect(256.0 / 224.0));
+        assert_eq!(home_fit(Platform::Nes, VideoMode::Actual, 1.0, (256, 224), rpc),
+            home_fit(Platform::Snes, VideoMode::Actual, 1.0, (256, 224), rpc));
     }
 
     #[test]

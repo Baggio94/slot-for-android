@@ -81,13 +81,20 @@ fn pokemon_gen3_flash_code(code: &[u8; 4]) -> bool {
 /// rumble for this ROM can interfere with mGBA's one-frame speculative path.
 /// Limit the experimental bypass to physical cartridge header V49*, not titles
 /// or filenames; gpSP and all other mGBA games retain their current options.
+///
+/// GBA Video carts (game code M...) show the Game Boy Player screen and wait
+/// there forever when mGBA says it is one: they never get it (Siham
+/// 2026-11-10, Pokémon Vol. 1), and they have no rumble to lose.
 fn drill_dozer_mgba_gbp_bypass(rom: &Path, which: Core, platform: Platform) -> bool {
     if which != Core::Mgba || platform != Platform::Gba { return false; }
     let Ok(mut file) = std::fs::File::open(rom) else { return false; };
     if file.seek(SeekFrom::Start(0xAC)).is_err() { return false; }
     let mut code = [0u8; 4];
-    file.read_exact(&mut code).is_ok()
-        && code.starts_with(b"V49") && code[3].is_ascii_uppercase()
+    file.read_exact(&mut code).is_ok() && no_game_boy_player(&code)
+}
+fn no_game_boy_player(code: &[u8; 4]) -> bool {
+    let video = code[0] == b'M' && code[1..].iter().all(u8::is_ascii_alphanumeric);
+    video || (code.starts_with(b"V49") && code[3].is_ascii_uppercase())
 }
 
 /// The core's own PCM rate, never altered except for absurd values. mGBA
@@ -133,6 +140,27 @@ fn solar_cart(rom: &Path, which: Core, platform: Platform) -> Option<Solar> {
     if code.starts_with(b"U3I") { Some(Solar::Boktai1) }
     else if code.starts_with(b"U32") || code.starts_with(b"U33") { Some(Solar::Later) }
     else { None }
+}
+
+/// Tilt and gyro cartridges, which only mGBA emulates: Yoshi Topsy-Turvy
+/// and Koro Koro Puzzle (tilt), WarioWare: Twisted! (gyro), and the Game
+/// Boy Color MBC7 carts, Kirby Tilt 'n' Tumble's.
+fn motion_cart(rom: &Path, which: Core, platform: Platform) -> bool {
+    if which != Core::Mgba { return false; }
+    let Ok(mut file) = std::fs::File::open(rom) else { return false; };
+    match platform {
+        Platform::Gba => {
+            let mut code = [0u8; 3];
+            file.seek(SeekFrom::Start(0xAC)).is_ok() && file.read_exact(&mut code).is_ok()
+                && [b"KYG", b"KHP", b"RZW"].contains(&&code)
+        }
+        Platform::Gb | Platform::Gbc => {
+            let mut cart = [0u8; 1];
+            file.seek(SeekFrom::Start(0x147)).is_ok() && file.read_exact(&mut cart).is_ok()
+                && cart[0] == 0x22
+        }
+        _ => false,
+    }
 }
 
 fn sma4_runahead_guard(rom: &Path, platform: Platform) -> bool {
@@ -320,6 +348,7 @@ pub struct GameSession {
     kept_flash_save: bool,
     sma4_runahead_guard: bool,
     solar: Option<Solar>,
+    motion: bool,
     // The light handed to a solar cart; None while the light sensor decides.
     sun_luminance: Option<u8>,
     // AUTO: the minute of day the sun was last set for.
@@ -637,6 +666,7 @@ impl GameSession {
             }).unwrap_or(false);
         let palette_live = dmg_only && gb_palette.is_some();
         let solar = solar_cart(rom, which, platform);
+        let motion = motion_cart(rom, which, platform);
         slot_retro::sensors::set_light_wanted(false);
         slot_retro::sensors::set_tilt_inverted(platform != Platform::Gba);
         match which {
@@ -664,7 +694,7 @@ impl GameSession {
                 let force_gbp = !drill_dozer_mgba_gbp_bypass(rom, which, platform);
                 core.set_option("mgba_force_gbp", if force_gbp { "ON" } else { "OFF" });
                 if !force_gbp {
-                    log_launch_timing("Drill Dozer mGBA: GBP rumble OFF; Run-Ahead remains enabled for testing");
+                    log_launch_timing("Drill Dozer or GBA Video on mGBA: Game Boy Player OFF");
                 }
                 if let Some(name) = gb_palette.filter(|_| dmg_only) {
                     core.set_option("mgba_gb_model", "Game Boy");
@@ -712,7 +742,15 @@ impl GameSession {
             }
             // The home console cores run on their own defaults, exactly as
             // RetroArch starts them: region, palette and pads automatic.
-            Core::Fceumm | Core::Nestopia | Core::Snes9x | Core::Bsnes => {}
+            // On a near-square screen the NES hides its overscan lines.
+            Core::Fceumm | Core::Nestopia => {
+                if let Some(lines) = crate::video_mode::nes_overscan_lines(crate::runtime::panel_size()) {
+                    let key = if which == Core::Fceumm { "fceumm" } else { "nestopia" };
+                    core.set_option(&format!("{key}_overscan_v_top"), lines);
+                    core.set_option(&format!("{key}_overscan_v_bottom"), lines);
+                }
+            }
+            Core::Snes9x | Core::Bsnes => {}
             Core::GenesisPlusGx => {
                 // Sega CD and the lock-on adapters are not carts slot. shows.
                 core.set_option("genesis_plus_gx_lock_on", "disabled");
@@ -983,7 +1021,7 @@ impl GameSession {
             mgba_flash_runahead_guard: flash_guard,
             kept_flash_save: false,
             sma4_runahead_guard: sma4_guard,
-            solar, sun_luminance: None, sun_auto_minutes: None,
+            solar, motion, sun_luminance: None, sun_auto_minutes: None,
             pending_undo: None, last_sram: Instant::now(), battery_writer,
             cheat_file: linked_boot.is_none()
                 .then(|| crate::cheats::saved_path(storage, platform, rom_stem)),
@@ -1909,6 +1947,13 @@ impl GameSession {
 
     pub fn solar(&self) -> bool { self.solar.is_some() }
 
+    /// A tilt or gyro cartridge: its Sensitivity row and shortcuts.
+    pub fn motion(&self) -> bool { self.motion }
+
+    /// A game whose own row the sun shortcuts (L3 / R3, SELECT + L2 / R2)
+    /// set: Boktai's sun, or a motion game's sensitivity.
+    pub fn dial(&self) -> bool { self.solar() || self.motion }
+
     /// The highest manual sun of this solar game, one per gauge bar.
     pub fn sun_top(&self) -> u8 {
         crate::emulation::sun_top(self.solar == Some(Solar::Boktai1))
@@ -2575,5 +2620,14 @@ mod xy_mapping_tests {
         let both = xy_buttons(ButtonMask(ButtonMask::A | ButtonMask::B |
             ButtonMask::X | ButtonMask::Y | ButtonMask::RIGHT), false, 5);
         assert_eq!(both.0, ButtonMask::A | ButtonMask::B | ButtonMask::RIGHT);
+    }
+
+    #[test]
+    fn gba_video_and_drill_dozer_are_not_told_of_a_game_boy_player() {
+        assert!(super::no_game_boy_player(b"MPAE"));
+        assert!(super::no_game_boy_player(b"MCNF"));
+        assert!(super::no_game_boy_player(b"V49E"));
+        assert!(!super::no_game_boy_player(b"AXVE"));
+        assert!(!super::no_game_boy_player(b"M\0\0\0"));
     }
 }

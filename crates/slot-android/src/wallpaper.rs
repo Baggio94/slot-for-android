@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
 /// Upstream Slot v1.13 Shelf wallpaper names, in this port's shelf order:
-/// the six platform shelves (Platform::ALL), then Recents and Favorites.
-pub const SHELF_KEYS: [&str; slot_store::Platform::ALL.len() + 2] = [
-    "GBA", "GB", "GBC", "NES", "SNES", "MD", "Recents", "Favorites",
+/// the six platform shelves (Platform::ALL), then Recents, Favorites and
+/// GBA Video (upstream's GBAV).
+pub const SHELF_KEYS: [&str; slot_store::Platform::ALL.len() + 3] = [
+    "GBA", "GB", "GBC", "NES", "SNES", "MD", "Recents", "Favorites", "GBAV",
 ];
 
 /// Shelf wallpapers are picked by shelf, never offered as a single wallpaper

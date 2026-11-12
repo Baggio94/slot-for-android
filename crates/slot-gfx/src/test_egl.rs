@@ -18,6 +18,15 @@ impl Default for TestEgl {
 
 impl TestEgl {
     pub fn new() -> Self {
+        Self::with_api(false)
+    }
+
+    /// OpenGL ES 3, as Android gives slot.
+    pub fn new_es() -> Self {
+        Self::with_api(true)
+    }
+
+    fn with_api(es: bool) -> Self {
         unsafe {
             let lib = Library::new("libEGL.so.1").expect("Mesa EGL must be installed");
             let platform = lib
@@ -36,14 +45,17 @@ impl TestEgl {
             let bind = lib
                 .get::<unsafe extern "C" fn(u32) -> u32>(b"eglBindAPI\0")
                 .unwrap();
-            assert_ne!(bind(0x30a2), 0); // Desktop GL matches Linux compositor upload format.
+            // Desktop GL matches Linux compositor upload format; ES as Android.
+            assert_ne!(bind(if es { 0x30a0 } else { 0x30a2 }), 0);
             let choose = lib
                 .get::<unsafe extern "C" fn(Ptr, *const i32, *mut Ptr, i32, *mut i32) -> u32>(
                     b"eglChooseConfig\0",
                 )
                 .unwrap();
+            // EGL_RENDERABLE_TYPE: OpenGL (8), or OpenGL ES 3 (0x40).
             let attrs = [
-                0x3033, 1, 0x3040, 8, 0x3024, 8, 0x3023, 8, 0x3022, 8, 0x3021, 8, 0x3038,
+                0x3033, 1, 0x3040, if es { 0x40 } else { 8 }, 0x3024, 8, 0x3023, 8, 0x3022, 8,
+                0x3021, 8, 0x3038,
             ];
             let mut config = std::ptr::null_mut();
             let mut count = 0;
@@ -57,11 +69,13 @@ impl TestEgl {
                     b"eglCreateContext\0",
                 )
                 .unwrap();
+            let context_attrs: [i32; 5] =
+                if es { [0x3098, 3, 0x3038, 0, 0] } else { [0x3098, 3, 0x30fb, 3, 0x3038] };
             let context = create(
                 display,
                 config,
                 std::ptr::null_mut(),
-                [0x3098, 3, 0x30fb, 3, 0x3038].as_ptr(),
+                context_attrs.as_ptr(),
             );
             assert!(!context.is_null());
             let pbuffer = lib

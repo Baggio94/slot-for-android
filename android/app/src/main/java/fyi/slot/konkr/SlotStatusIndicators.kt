@@ -59,7 +59,7 @@ internal class SlotStatusIndicators(
     private val spacing = (5f * scale).roundToInt()
     private val margin = (24f * scale).roundToInt()
     // Move only the shelf status row up; preserve its horizontal padding.
-    private val statusTop = ((12f + (24f - ICON) / 2f) * scale).roundToInt()
+    private val statusTop = ((12f + (24f - ICON) / 2f + TOP_DROP) * scale).roundToInt()
     private val left = LinearLayout(host).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
@@ -133,8 +133,8 @@ internal class SlotStatusIndicators(
     }
 
     init {
-        // All shelf icons remain white in both themes: they sit on the
-        // wallpaper, not on the themed footer band.
+        // White or black, as the clock and battery on their line: the
+        // renderer inks each line for what is behind it (flag 256).
         add(left, sleep)
         add(left, basicsync)
         add(left, syncthing)
@@ -172,18 +172,18 @@ internal class SlotStatusIndicators(
         }
         left.layoutParams = (left.layoutParams as FrameLayout.LayoutParams).apply {
             gravity = vertical or Gravity.START
-            leftMargin = ((edge + if (grouped) clockW + SHARED_GAP else 0f) * scale).roundToInt()
+            leftMargin = ((edge + if (grouped) clockW + CLOCK_GAP else 0f) * scale).roundToInt()
             line()
         }
         right.layoutParams = (right.layoutParams as FrameLayout.LayoutParams).apply {
             gravity = vertical or Gravity.END
-            rightMargin = ((edge + if (grouped) batteryW + SHARED_GAP else 0f) * scale).roundToInt() - spacing
+            rightMargin = ((edge + if (grouped) batteryW + BATTERY_GAP else 0f) * scale).roundToInt() - spacing
             line()
         }
     }
     /** From the bottom of the screen to the bottom of an icon centred on the
      * bar's clock line (17 to the line's bottom). */
-    private val barLine = ((17f + (24f - ICON) / 2f) * scale).roundToInt()
+    private val barLine = ((17f + (24f - ICON) / 2f + LIFT) * scale).roundToInt()
 
     /**
      * Read-only SleepManager events are cheap notifications; actual provider
@@ -412,7 +412,7 @@ internal class SlotStatusIndicators(
      * throttled; a hidden indicator never triggers extra health traffic.
      */
     fun refresh(flags: Int) {
-        // Radio and integration glyphs stay pure white on ALL themes.
+        // The glyphs take their line's ink (flag 256), white or black.
         // The library/label task captions still follow Slot's native ink.
         val visible = flags and 1 != 0
         if (!visible) {
@@ -439,6 +439,8 @@ internal class SlotStatusIndicators(
         if (integrations) {
             // Apps: ALL dims a stopped app, RUNNING hides it.
             show(sleep, installedSleep && (!runningOnly || observedSleepRunning), observedSleepRunning)
+            // SleepManager at work: its crescent filled (Siham 2026-11-11).
+            sleep.glyph = if (observedSleepRunning) StatusGlyph.MOON_FILLED else StatusGlyph.MOON
             val basicUp = basicRunning && basicStateKnown && now - lastBasicResponse < 45000L
             show(basicsync, installedBasic && (!runningOnly || basicUp), basicUp)
             // BasicSync and Syncthing-Fork may expose a local Syncthing
@@ -486,20 +488,33 @@ internal class SlotStatusIndicators(
 
     private companion object {
         const val STOPPED_ALPHA = 0.4f
-        /** Between the icons and the clock or battery sharing their line. */
-        const val SHARED_GAP = 10f
+        /** Between the icons and the clock or battery sharing their line: 12
+         * screen pixels of ink to ink on both sides on the KPA (Siham
+         * 2026-11-12; it was 16 after the clock, 11 before the battery). */
+        const val CLOCK_GAP = 7f
+        const val BATTERY_GAP = 10.75f
         /** The icons' square, in canvas pixels. */
         const val ICON = 20f
+        /** Measured on Siham's KPA screenshots (2026-11-12), each line on its
+         * own: on the bar the glyphs sat 2 screen pixels below the digits and
+         * the battery, so they are lifted; at the top they sat 1 pixel above,
+         * so they go down. Both lines then centre on the digits exactly. */
+        const val LIFT = 1.5f
+        const val TOP_DROP = 0.75f
     }
 }
 
 /**
  * Line icons on a 24px grid, stroked with the weight of the footer clock and
- * battery. A faint offset shadow keeps the white glyph legible on a pale
- * wallpaper. Neither colour changes when the shelf switches Dark/Light.
+ * battery. White with a faint offset shadow, or black without one where
+ * the line's background is light (a light console bar or wallpaper).
  * Only the Wi-Fi glyph has a level: inactive arcs are drawn at 30%.
  */
-internal class StatusGlyph(context: Context, private val glyph: Glyph) : View(context) {
+internal class StatusGlyph(context: Context, glyph: Glyph) : View(context) {
+    var glyph = glyph
+        set(value) {
+            if (field !== value) { field = value; invalidate() }
+        }
     /** Stroked paths, filled paths, and the minimum level each one needs. */
     class Glyph(val strokes: List<Pair<String, Int>>, val fills: List<Pair<String, Int>>) {
         internal val strokePaths = strokes.map { (d, l) -> PathParser.createPathFromPathData(d) to l }
@@ -510,7 +525,7 @@ internal class StatusGlyph(context: Context, private val glyph: Glyph) : View(co
         set(value) {
             if (field != value) { field = value; invalidate() }
         }
-    /** Black, shadowless, on a light console bar (icons on the bar). */
+    /** Black, shadowless, on a light console bar or a light wallpaper. */
     var darkInk = false
         set(value) {
             if (field != value) { field = value; invalidate() }
@@ -530,18 +545,19 @@ internal class StatusGlyph(context: Context, private val glyph: Glyph) : View(co
         canvas.save()
         canvas.scale(width / 24f, height / 24f)
         if (darkInk) {
-            layer(canvas, Color.BLACK, 1f, STROKE)
+            // No shadow to thicken it: as bold as the battery's outline.
+            layer(canvas, Color.BLACK, 1f, STROKE * DARK_WEIGHT, 0f)
         } else {
             canvas.save()
             canvas.translate(0f, SHADOW_DY)
-            layer(canvas, Color.BLACK, SHADOW_ALPHA, STROKE + SHADOW_SPREAD)
+            layer(canvas, Color.BLACK, SHADOW_ALPHA, STROKE + SHADOW_SPREAD, SHADOW_SPREAD)
             canvas.restore()
-            layer(canvas, Color.WHITE, 1f, STROKE)
+            layer(canvas, Color.WHITE, 1f, STROKE, 0f)
         }
         canvas.restore()
     }
 
-    private fun layer(canvas: Canvas, color: Int, opacity: Float, stroke: Float) {
+    private fun layer(canvas: Canvas, color: Int, opacity: Float, stroke: Float, spread: Float) {
         ink.color = color
         ink.strokeWidth = stroke
         fun alpha(minLevel: Int) =
@@ -552,8 +568,8 @@ internal class StatusGlyph(context: Context, private val glyph: Glyph) : View(co
             canvas.drawPath(path, ink)
         }
         // The shadow of a filled dot is spread like a stroke.
-        ink.style = if (color == Color.BLACK) Paint.Style.FILL_AND_STROKE else Paint.Style.FILL
-        ink.strokeWidth = stroke - STROKE
+        ink.style = if (spread > 0f) Paint.Style.FILL_AND_STROKE else Paint.Style.FILL
+        ink.strokeWidth = spread
         for ((path, minLevel) in glyph.fillPaths) {
             ink.alpha = alpha(minLevel)
             canvas.drawPath(path, ink)
@@ -563,6 +579,8 @@ internal class StatusGlyph(context: Context, private val glyph: Glyph) : View(co
     companion object {
         const val MAX_LEVEL = 4
         private const val STROKE = 1.9f
+        /** Black glyphs, shadowless, drawn 25% bolder (Siham 2026-11-12). */
+        private const val DARK_WEIGHT = 1.25f
         private const val SHADOW_DY = 0.9f
         private const val SHADOW_SPREAD = 0.9f
         private const val SHADOW_ALPHA = 0.38f
@@ -584,10 +602,10 @@ internal class StatusGlyph(context: Context, private val glyph: Glyph) : View(co
             strokes = listOf("M7.2 9.4L16.6 16.4L12 20V5.6L16.6 9.2L7.2 16.2" to 0),
             fills = emptyList()
         )
-        val MOON = Glyph(
-            strokes = listOf("M17.9 14.6A7.1 7.1 0 1 1 10.2 5.1A5.6 5.6 0 0 0 17.9 14.6Z" to 0),
-            fills = emptyList()
-        )
+        private const val MOON_PATH = "M17.9 14.6A7.1 7.1 0 1 1 10.2 5.1A5.6 5.6 0 0 0 17.9 14.6Z"
+        val MOON = Glyph(strokes = listOf(MOON_PATH to 0), fills = emptyList())
+        /** SleepManager running: the same crescent, filled. */
+        val MOON_FILLED = Glyph(strokes = listOf(MOON_PATH to 0), fills = listOf(MOON_PATH to 0))
         val SYNC = Glyph(
             strokes = listOf(
                 "M5.6 11A6.6 6.6 0 0 1 16.9 7.1L18.4 8.6" to 0,

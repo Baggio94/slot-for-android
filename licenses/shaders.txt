@@ -72,3 +72,15 @@ Source: https://github.com/mattakins/Pixel_Transparency
 Simpletex paper texture: slot.'s own paper texture, drawn again since 2.2.
 
 slot itself is GNU General Public License version 3 or later, which these licenses permit.
+
+Upscalers for Game Boy Advance Video carts (Screen > Upscaler):
+Anime4K v3.2/v4.0 by bloc97 (Restore CNN Soft and Upscale CNN x2, S and M),
+copyright (c) 2019-2021 bloc97. MIT License.
+Source: https://github.com/bloc97/Anime4K (commit 7684e95)
+Anime4K Fast = Restore CNN Soft S, then Upscale CNN x2 S twice; Anime4K =
+the same with the M networks. Run unchanged from their mpv hook files.
+FSR (EASU and RCAS, sharpening 0.2), the libretro glsl-shaders port of
+AMD FidelityFX Super Resolution 1.0 (MIT License, copyright (c) 2021
+Advanced Micro Devices, Inc.), ported from https://www.shadertoy.com/view/stXSWB
+(MIT License). Source: https://github.com/libretro/glsl-shaders/tree/master/fsr
+(commit f277bd8)

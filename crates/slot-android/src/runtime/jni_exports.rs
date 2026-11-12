@@ -238,18 +238,25 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                         shelf.carts.get(shelf.index).map(|cart| cart.rom.clone())
                     ).collect::<Vec<_>>(),
                 ));
-            // Destruct old GL resources on the GL thread before recreating them.
-            let size = holder.borrow().as_ref().map(|engine| engine.size).unwrap_or_else(panel_size);
-            *holder.borrow_mut() = None;
-            match Engine::new(version, snapshot.as_deref()) {
-                Ok(mut engine) => {
-                    engine.size = size;
-                    if let Some((active, uris)) = selected_uris {
-                        engine.active = restore_shelf_focus(&mut engine.shelves, active, &uris);
+            // Other ROMs: the shelves take them in place, their faces kept.
+            let in_place = holder.borrow_mut().as_mut()
+                .is_some_and(|engine| engine.shelves.iter().any(|s| !s.carts.is_empty())
+                    && engine.update_library(version, snapshot.as_deref()));
+            if !in_place {
+                // Destruct old GL resources on the GL thread before recreating them.
+                let size = holder.borrow().as_ref().map(|engine| engine.size).unwrap_or_else(panel_size);
+                *holder.borrow_mut() = None;
+                match Engine::new(version, snapshot.as_deref()) {
+                    Ok(mut engine) => {
+                        engine.size = size;
+                        if let Some((active, uris)) = selected_uris {
+                            let active = restore_shelf_focus(&mut engine.shelves, active, &uris);
+                            engine.active = super::gba_before_video(&engine.shelves, active);
+                        }
+                        *holder.borrow_mut() = Some(engine);
                     }
-                    *holder.borrow_mut() = Some(engine);
+                    Err(error) => eprintln!("slot-konkr: could not reload library: {error}"),
                 }
-                Err(error) => eprintln!("slot-konkr: could not reload library: {error}"),
             }
         }
         if let Some(engine) = holder.borrow_mut().as_mut() {
@@ -654,14 +661,16 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSensorsWanted(
     jint::from(slot_retro::sensors::wanted())
 }
 
-/// One Android SensorEvent, raw: m/s², rad/s or lux in `x`.
+/// One Android SensorEvent, raw: m/s², rad/s or lux in `x`, with its
+/// monotonic measurement timestamp (nanoseconds since boot).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSensorEvent(
     _env: *mut c_void, _this: *mut c_void, sensor: jint, x: f32, y: f32, z: f32,
+    timestamp_ns: jni::sys::jlong,
 ) {
     use slot_retro::sensors;
     match sensor as u8 {
-        sensors::ACCELEROMETER => sensors::push_accelerometer(x, y, z),
+        sensors::ACCELEROMETER => sensors::push_accelerometer(x, y, z, timestamp_ns.max(0) as u64),
         sensors::GYROSCOPE => sensors::push_gyroscope(x, y, z),
         sensors::ILLUMINANCE => sensors::push_illuminance(x),
         _ => {}
@@ -959,5 +968,105 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeControllers(
     if let Ok(value) = env.get_string(&json) {
         let devices = crate::controls::devices(&value.to_string_lossy());
         INPUT.lock().unwrap_or_else(|e| e.into_inner()).push_back(Input::Controllers(devices));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Library > RomM (runtime/romm.rs, RommPage.kt).
+
+/// The page's next request to Android, or null.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollRommRequest(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    let request = romm::ROMM_REQUEST.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
+    request.and_then(|s| env.new_string(s).ok())
+        .map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+/// The server's games: [{id, platform, title, label}].
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRommCatalog(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, json: JString<'_>,
+) {
+    let Ok(text) = env.get_string(&json).map(|s| s.to_string_lossy().into_owned()) else { return };
+    match serde_json::from_str::<Vec<romm::RommEntry>>(&text) {
+        Ok(entries) => push(Input::RommCatalog(entries)),
+        Err(error) => push(Input::RommStatus(1, format!("RomM's list wasn't understood ({error}).")
+            .chars().take(100).collect())),
+    }
+}
+
+/// One game again, with its header read from the server: {id, platform,
+/// title, label, code, gb_title, gb_code, gb_japan, gb_cgb_flag}.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRommHeader(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, json: JString<'_>,
+) {
+    let Ok(text) = env.get_string(&json).map(|s| s.to_string_lossy().into_owned()) else { return };
+    if let Ok(entry) = serde_json::from_str::<romm::RommEntry>(&text) {
+        push(Input::RommHeader(entry));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRommStatus(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, kind: jint, text: JString<'_>,
+) {
+    let text = env.get_string(&text).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    push(Input::RommStatus(kind, text));
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRommLabel(
+    _env: *mut c_void, _this: *mut c_void, id: jni::sys::jlong,
+) {
+    push(Input::RommLabel(id));
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRommProgress(
+    _env: *mut c_void, _this: *mut c_void, done: jint, total: jint, percent: jint,
+) {
+    push(Input::RommProgress(done, total, percent));
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRommDownloaded(
+    _env: *mut c_void, _this: *mut c_void, id: jni::sys::jlong, ok: jboolean,
+) {
+    push(Input::RommDownloaded(id, ok != 0));
+}
+
+// ---------------------------------------------------------------------------
+// L2 + R2 held on the carousel: a game to delete (carousel_delete.rs).
+
+/// The next game's URI to delete, or null.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollDeleteRequest(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    let request = carousel_delete::DELETE_REQUEST.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
+    request.and_then(|s| env.new_string(s).ok())
+        .map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+/// Android's answer: the ROM file was deleted, or not.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGameDeleted(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, uri: JString<'_>, ok: jboolean,
+) {
+    let uri = env.get_string(&uri).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    push(Input::GameDeleted(uri, ok != 0));
+}
+
+/// Library > RomM's filters: {search, region, official, hide_shelf, favorites}.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRommFilter(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, json: JString<'_>,
+) {
+    let Ok(text) = env.get_string(&json).map(|s| s.to_string_lossy().into_owned()) else { return };
+    if let Ok(filter) = serde_json::from_str::<romm::RommFilter>(&text) {
+        push(Input::RommFilter(filter));
     }
 }

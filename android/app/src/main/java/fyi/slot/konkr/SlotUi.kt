@@ -188,6 +188,9 @@ internal object SlotUi {
             "B" to "BACK" -> "back.png"
             "START" to "REFRESH" -> "refresh.png"
             "X" to "SIGN OUT" -> "sign-out.png"
+            "L1" to "PAIRING CODE" -> "l1-pairing-code.png"
+            "R1" to "ACCOUNT" -> "r1-account.png"
+            "LEFT RIGHT" to "CHANGE" -> "change.png"
             else -> return hint(context, key, action)
         }
         val image = runCatching {

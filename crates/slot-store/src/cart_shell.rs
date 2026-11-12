@@ -21,10 +21,15 @@ pub enum Outline {
     MegaDrive,
     MegaDriveJp,
     MegaDriveEa,
+    // Mega Drive carts in other publishers' moulds (2026-11-10).
+    MegaDriveAccolade,
+    MegaDriveCodemasters,
+    MegaDriveVr,
+    MegaDriveSk,
 }
 
 impl Outline {
-    pub const NAMES: [(Outline, &'static str); 12] = [
+    pub const NAMES: [(Outline, &'static str); 16] = [
         (Outline::Auto, "auto"),
         (Outline::Notched, "notched"),
         (Outline::Rounded, "rounded"),
@@ -37,6 +42,10 @@ impl Outline {
         (Outline::MegaDrive, "megadrive"),
         (Outline::MegaDriveJp, "megadrive-jp"),
         (Outline::MegaDriveEa, "megadrive-ea"),
+        (Outline::MegaDriveAccolade, "megadrive-accolade"),
+        (Outline::MegaDriveCodemasters, "megadrive-codemasters"),
+        (Outline::MegaDriveVr, "megadrive-vr"),
+        (Outline::MegaDriveSk, "megadrive-sk"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -57,7 +66,13 @@ impl Outline {
                 Some(Platform::Nes)
             }
             Outline::Snes | Outline::SnesUs => Some(Platform::Snes),
-            Outline::MegaDrive | Outline::MegaDriveJp | Outline::MegaDriveEa => Some(Platform::Md),
+            Outline::MegaDrive
+            | Outline::MegaDriveJp
+            | Outline::MegaDriveEa
+            | Outline::MegaDriveAccolade
+            | Outline::MegaDriveCodemasters
+            | Outline::MegaDriveVr
+            | Outline::MegaDriveSk => Some(Platform::Md),
         }
     }
 }

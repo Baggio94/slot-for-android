@@ -119,6 +119,20 @@ enum Input {
     LinkPeerRomConsent(i32),
     RaPrefetchHash(String, u32),
     ExternalReturn,
+    /// Library > RomM (runtime/romm.rs): the server's games, a status (0
+    /// loading, 1 a message, 3 close), a label fetched, a download's
+    /// progress and each download's end; a Game Boy family game's header,
+    /// read from the server, for its shell.
+    RommCatalog(Vec<romm::RommEntry>),
+    RommStatus(i32, String),
+    RommLabel(i64),
+    RommHeader(romm::RommEntry),
+    RommProgress(i32, i32, i32),
+    RommDownloaded(i64, bool),
+    /// Library > RomM: SELECT's filters.
+    RommFilter(romm::RommFilter),
+    /// Android deleted (or couldn't delete) a game's ROM file.
+    GameDeleted(String, bool),
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -163,7 +177,7 @@ fn is_konkr() -> bool {
         DEVICE_NAME.lock().unwrap_or_else(|e| e.into_inner()).1.eq_ignore_ascii_case("GT78-VN")
 }
 
-fn panel_size() -> (u32, u32) {
+pub(crate) fn panel_size() -> (u32, u32) {
     let packed = PANEL_SIZE.load(Ordering::Acquire);
     let (w, h) = ((packed >> 32) as u32, packed as u32);
     if w == 0 || h == 0 { (960, 640) } else { (w.max(h), w.min(h)) }
@@ -283,6 +297,10 @@ static MGBA_CABLE_RECOVERY: AtomicBool = AtomicBool::new(true);
 // Android AudioTrack time-stretches 2x game audio while preserving pitch.
 // Expose the current transport speed separately from libretro's sample rate.
 static AUDIO_SPEED_PERMILLE: AtomicI32 = AtomicI32::new(1000);
+/// Fast Forward MAX: at most this many frames, for at most this long, in
+/// one refresh (about two thirds of a 60 Hz one).
+const FF_MAX_FRAMES: usize = 120;
+const FF_MAX_BUDGET_US: u64 = 11_000;
 static FF_AUDIO_SUPPORTED: AtomicBool = AtomicBool::new(true);
 static FF_AUDIO_ENABLED: AtomicBool = AtomicBool::new(true);
 static RUMBLE_STRENGTH: AtomicI32 = AtomicI32::new(0);
@@ -485,9 +503,11 @@ enum ShelfOverlay {
     /// X on a cart: its label and shell (runtime/cart_studio.rs).
     CartStudio,
     CartLibrary,
+    /// Library > RomM: the server's games to download (runtime/romm.rs).
+    Romm,
 }
 
-const MENU_TEXT: [&str; 135] = [
+const MENU_TEXT: [&str; 138] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -623,6 +643,9 @@ const MENU_TEXT: [&str; 135] = [
     "Dither Blending",                    // 132, Mega Drive GDAPT
     "Shelf",                              // 133, Interface: whose wallpaper
     "Cheats",                             // 134, game menu (Siham 2026-11-09)
+    "RomM Server",                        // 135, Library, after Choose ROM Folder
+    "Upscaler",                           // 136, GBA Video Screen (Siham 2026-11-10)
+    "Sensitivity",                        // 137, tilt and gyro games (Siham 2026-11-12)
 ];
 
 /// Settings > Systems, top to bottom.
@@ -636,7 +659,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 114] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 120] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -664,7 +687,9 @@ const SETTING_VALUE_NAMES: [&str; 114] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Dot Matrix", "crt-easymode", "crt-hyllian", "SABR",
                                "Super Eagle", "xBR-lv2",
                                "Pixel Transparency", "Sunlight Shimmer",
-                               "Dot Matrix Color"];
+                               "Dot Matrix Color",
+                               "Bilinear", "FSR", "Anime4K Fast", "Anime4K",
+                               "MAX", "crt-royale"];
 
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
@@ -686,7 +711,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
          Shader::DotMatrix => 105, Shader::CrtEasymode => 106,
          Shader::CrtHyllian => 107, Shader::Sabr => 108,
          Shader::SuperEagle => 109, Shader::XbrLv2 => 110,
-         Shader::DotMatrixColor => 113,
+         Shader::DotMatrixColor => 113, Shader::CrtRoyale => 119,
     };
     Some(match key {
         0 => shader(scoped.shader_gba),
@@ -694,7 +719,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         2 => if scoped.shader_for(cart).includes_gba_color() {42}
              else if scoped.colour_for(cart) {4}else{5},
         3 => if scoped.gb_palettes { 4 } else { 5 },
-        4 => match scoped.ff_speed { 0 => 5, 2 => 0, 3 => 1, 4 => 2, _ => 3 },
+        4 => match scoped.ff_speed { 0 => 5, 2 => 0, 3 => 1, 4 => 2,
+            crate::settings::FF_MAX => 118, _ => 3 },
         5 => if scoped.ff_sound { 4 } else { 5 },
         6 => if !scoped.rewind { 5 } else {
             match scoped.rewind_speed { 1 => 38, 2 => 39, 3 => 40, _ => 41 }
@@ -775,8 +801,41 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             }
         }
         69 => if scoped.dither_blend_md { 4 } else { 5 },
+        70 => match scoped.upscaler_gbav {
+            crate::settings::Upscaler::Off => 5,
+            crate::settings::Upscaler::Bilinear => 114,
+            crate::settings::Upscaler::Fsr => 115,
+            crate::settings::Upscaler::Anime4kFast => 116,
+            crate::settings::Upscaler::Anime4k => 117,
+        },
         _ => return None,
     })
+}
+
+/// The library's carts by system shelf, and the GBA Video carts (their own
+/// shelf, behind the GBA's, as slot. original 1.15), each with its
+/// app-private label path.
+fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
+    -> (Vec<Vec<slot_store::Cart>>, Vec<slot_store::Cart>)
+{
+    let mut grouped = library.map(carts_by_platform)
+        .unwrap_or_else(|| std::array::from_fn(|_| Vec::new()));
+    let (video, gba): (Vec<slot_store::Cart>, Vec<slot_store::Cart>) =
+        std::mem::take(&mut grouped[Platform::Gba as usize]).into_iter()
+            .partition(carousel_delete::is_gba_video);
+    grouped[Platform::Gba as usize] = gba;
+    let mut systems: Vec<Vec<slot_store::Cart>> = grouped.into_iter().collect();
+    systems.push(video);
+    if let Some(root) = root {
+        for cart in systems.iter_mut().flatten() {
+            let uri = cart.rom.to_string_lossy();
+            let filename = format!("{}.png", core_selection::key(&uri));
+            // Only app-private labels are used; never rewrite ROMs.
+            cart.label = Some(root.join("Labels").join(filename));
+        }
+    }
+    let video = systems.pop().unwrap_or_default();
+    (systems, video)
 }
 
 /// Simpletex's paper (slot.'s own, restored in 2.1.2) and Dot Matrix's
@@ -824,10 +883,21 @@ fn core_value(core: Core) -> usize {
 
 /// Pause Emulation's Sun row, drawn with the sun values, not a Settings key.
 const SUN_KEY: usize = 100;
+/// Pause Emulation's Sensitivity row (tilt and gyro games), drawn with the
+/// number values 1 to 10.
+const MOTION_KEY: usize = 102;
 /// The longest a core picker waits for a clear cart's lid before opening.
 const PICKER_LID_WAIT_MS: u64 = 600;
 /// Interface > Shelf's value: a shelf name, no Settings key.
 const SHELF_PICK_KEY: usize = 101;
+
+/// Hand a motion game's sensitivity to the sensors; every other game
+/// reads them as they are.
+fn apply_motion(game: Option<&GameSession>, level: u8) {
+    let motion = game.is_some_and(GameSession::motion);
+    slot_retro::sensors::set_sensitivity(
+        if motion { crate::emulation::motion_factor(level) } else { 1.0 });
+}
 
 fn light_sensor() -> bool {
     slot_retro::sensors::available() & slot_retro::sensors::ILLUMINANCE != 0
@@ -854,6 +924,11 @@ fn bezel_value(bezel: crate::settings::Bezel) -> usize {
 /// Settings: General, Systems, Controls, Gameplay, Emulation, Status Bar.
 // General, Systems, Gameplay, Emulation, Controls, Status Bar.
 const SETTINGS_ROWS: [usize; 6] = [81, 117, 33, 49, 125, 58];
+
+/// Library: ROM folder, RomM, BIOS, Save and State folders, Share Saves,
+/// Refresh. Seven rows: the page scrolls, six shown (Siham 2026-11-09).
+const LIBRARY_ROWS: [usize; 7] = [6, 135, 24, 7, 8, 79, 9];
+const LIBRARY_SHARE_ROW: usize = 5;
 
 /// X/Y Buttons (38, key 7) moved to Systems > Controls (X / Y), where its
 /// old value is the default until a system or game chooses.
@@ -1031,6 +1106,12 @@ struct Engine {
     overlay: ShelfOverlay,
     studio: Option<cart_studio::Studio>,
     cart_library: Option<cart_library::CartLibrary>,
+    /// Library > RomM's page, kept between visits (the server's list).
+    romm: Option<romm::RommPage>,
+    /// L2 / R2 on the carousel: delete held, GBA Video tapped.
+    triggers: carousel_delete::Triggers,
+    /// The GBA Video shelf was the one of the two used last.
+    gba_video: bool,
     /// Textures Cart Studio drew its small carts in, free to draw again.
     studio_pool: Vec<slot_gfx::TexId>,
     settings: Settings,
@@ -1039,10 +1120,13 @@ struct Engine {
     video_mode: VideoMode,
     wallpaper_texture: Option<slot_gfx::TexId>,
     wallpaper_personal: bool,
+    /// How light the wallpaper is behind the status bar's top line.
+    wallpaper_top_luma: Option<f32>,
     /// Shelf wallpaper: one texture per shelf, decoded off the GL thread.
     shelf_wallpaper_texs: Vec<Option<slot_gfx::TexId>>,
     shelf_wallpaper_ready: Vec<bool>,
-    shelf_wallpaper_rx: Option<std::sync::mpsc::Receiver<(usize, Vec<u8>)>>,
+    shelf_wallpaper_luma: Vec<Option<f32>>,
+    shelf_wallpaper_rx: Option<std::sync::mpsc::Receiver<(usize, Vec<u8>, f32)>>,
     wallpaper_name_face: Option<(slot_gfx::TexId, u32, u32)>,
     /// Interface > Shelf: the shelf (SHELF_KEYS) whose wallpaper Import and
     /// Delete act on while the Shelf wallpaper is picked, and its names.
@@ -1165,6 +1249,7 @@ struct Engine {
     platform_faces: [Printed; Platform::ALL.len()],
     recents_platform_face: Printed,
     favorites_platform_face: Printed,
+    video_platform_face: Printed,
     focus_seen: Option<(usize, String)>,
     focus_dirty_since: Option<Instant>,
     // Upstream v1.7 menu key-repeat belongs to the UI clock, never libretro.
@@ -1274,6 +1359,8 @@ impl Engine {
         let user_wallpaper_stamp = visuals_root.as_deref().and_then(user_wallpaper_stamp);
         let (wallpaper_pixels, wallpaper_personal) =
             wallpaper_pixels(visuals_root.as_deref(), &settings.wallpaper);
+        let wallpaper_top_luma = wallpaper_pixels.as_deref()
+            .map(|rgba| slot_ui::top_line_luma(rgba, slot_ui::native_w()));
         let wallpaper_texture = wallpaper_pixels.map(|rgba|
             gpu.create_texture(slot_ui::native_w(), slot_ui::native_h(), &rgba));
         // Preserve existing Config/theme.txt custom colours as an opt-out.
@@ -1328,25 +1415,15 @@ impl Engine {
         let mut shelves = Vec::new();
 
         // First-run empty shelf: never synthesize fake demo cartridges.
-        let grouped = library.map(carts_by_platform)
-            .unwrap_or_else(|| std::array::from_fn(|_| Vec::new()));
-        for mut carts in grouped {
-            if let Some(root) = visuals_root.as_deref() {
-                for cart in &mut carts {
-                    let uri = cart.rom.to_string_lossy();
-                    let filename = format!("{}.png", core_selection::key(&uri));
-                    // Only app-private labels are used; never rewrite ROMs.
-                    cart.label = Some(root.join("Labels").join(filename));
-                }
-            }
-            shelves.push(Shelf::new(carts));
-        }
+        let (systems, video_carts) = library_carts(library, visuals_root.as_deref());
+        for carts in systems { shelves.push(Shelf::new(carts)); }
         // The rack following all supported systems mirrors ten recent ROMs.
         // Do not modify the system shelves or their ROM roots.
         let recent_ids=visuals_root.as_deref().map(crate::recents::load)
             .unwrap_or_default();
         let system_carts: Vec<&[slot_store::Cart]> = shelves.iter()
-            .take(Platform::ALL.len()).map(|shelf| shelf.carts.as_slice()).collect();
+            .take(Platform::ALL.len()).map(|shelf| shelf.carts.as_slice())
+            .chain(std::iter::once(video_carts.as_slice())).collect();
         let recent_carts=crate::recents::carts(&recent_ids, &system_carts);
         shelves.push(Shelf::new(if settings.show_recents {
             recent_carts
@@ -1356,9 +1433,12 @@ impl Engine {
         let favorite_ids=visuals_root.as_deref().map(crate::favorites::load)
             .unwrap_or_default();
         let system_carts: Vec<&[slot_store::Cart]> = shelves.iter()
-            .take(Platform::ALL.len()).map(|shelf| shelf.carts.as_slice()).collect();
+            .take(Platform::ALL.len()).map(|shelf| shelf.carts.as_slice())
+            .chain(std::iter::once(video_carts.as_slice())).collect();
         let favorite_carts=crate::favorites::carts(&favorite_ids, &system_carts);
         shelves.push(Shelf::new(favorite_carts));
+        debug_assert_eq!(shelves.len(), VIDEO_RACK);
+        shelves.push(Shelf::new(video_carts));
 
         // Original Slot names, not abbreviations: Game Boy Advance,
         // Game Boy, Game Boy Color. Keep the existing 3x antialiased 16px
@@ -1378,6 +1458,8 @@ impl Engine {
         let favorites_platform_face=Printed::new(
             gpu.create_face(&favorites_label),
             favorites_label.w);
+        let video_label=platform_name_face("Game Boy Advance Video");
+        let video_platform_face=Printed::new(gpu.create_face(&video_label), video_label.w);
 
         let shadow = cart_shadow();
         let gba = gpu.create_face(&shadow);
@@ -1602,6 +1684,7 @@ impl Engine {
         let saved_focus=visuals_root.as_deref().and_then(crate::selection::load);
         let active=saved_focus.as_ref().and_then(|focus|restore_saved_focus(&mut shelves,focus))
             .unwrap_or_else(||shelves.iter().position(|s|!s.carts.is_empty()).unwrap_or(0));
+        let active = gba_before_video(&shelves, active);
         let now = Instant::now();
         let has_multiple_systems = shelves.iter().filter(|s| !s.carts.is_empty()).count() > 1;
         Ok(Self {
@@ -1709,6 +1792,9 @@ impl Engine {
             overlay: ShelfOverlay::None,
             studio: None,
             cart_library: None,
+            romm: None,
+            triggers: Default::default(),
+            gba_video: false,
             studio_pool: Vec::new(),
             settings,
             game_emulation: None,
@@ -1716,8 +1802,10 @@ impl Engine {
             video_mode: VideoMode::Actual,
             wallpaper_texture,
             wallpaper_personal,
+            wallpaper_top_luma,
             shelf_wallpaper_texs: Vec::new(),
             shelf_wallpaper_ready: Vec::new(),
+            shelf_wallpaper_luma: Vec::new(),
             shelf_wallpaper_rx: None,
             wallpaper_name_face,
             wallpaper_shelf: 0,
@@ -1813,6 +1901,7 @@ impl Engine {
             platform_faces,
             recents_platform_face,
             favorites_platform_face,
+            video_platform_face,
             focus_seen: None,
             focus_dirty_since: None,
             menu_held: None,
@@ -1835,6 +1924,7 @@ impl Engine {
         let count = self.shelves.len();
         self.shelf_wallpaper_texs.resize(count, None);
         self.shelf_wallpaper_ready = vec![false; count];
+        self.shelf_wallpaper_luma = vec![None; count];
         self.shelf_wallpaper_rx = None;
         let (crate::settings::WallpaperPick::Shelf, Some(root)) = (&self.settings.wallpaper, root)
             else { return };
@@ -1849,7 +1939,8 @@ impl Engine {
         let spawned = std::thread::Builder::new().name("slot-wallpaper".into()).spawn(move || {
             for (index, path) in files {
                 if let Some(rgba) = slot_ui::wallpaper_face_native(&path) {
-                    if tx.send((index, rgba)).is_err() { return; }
+                    let luma = slot_ui::top_line_luma(&rgba, slot_ui::native_w());
+                    if tx.send((index, rgba, luma)).is_err() { return; }
                 }
             }
         });
@@ -1862,7 +1953,7 @@ impl Engine {
     /// Upload at most one decoded shelf wallpaper per frame.
     fn poll_shelf_wallpapers(&mut self) {
         let Some(rx) = self.shelf_wallpaper_rx.as_ref() else { return };
-        let Ok((index, rgba)) = rx.try_recv() else { return };
+        let Ok((index, rgba, luma)) = rx.try_recv() else { return };
         let Some(slot) = self.shelf_wallpaper_texs.get_mut(index) else { return };
         *slot = Some(if let Some(tex) = *slot {
             self.gpu.update_texture(tex, slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba);
@@ -1871,6 +1962,28 @@ impl Engine {
             self.gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba)
         });
         self.shelf_wallpaper_ready[index] = true;
+        if let Some(slot) = self.shelf_wallpaper_luma.get_mut(index) { *slot = Some(luma); }
+    }
+
+    /// The status bar's top line is inked black on a light wallpaper, white
+    /// on a dark one, whatever the theme: the ground the carousel draws
+    /// (the shelf's own wallpaper, else the chosen one, darkened by Wallpaper
+    /// Tint; None is the dark ground). Siham 2026-11-11.
+    fn top_line_dark_ink(&self) -> bool {
+        use crate::settings::WallpaperPick;
+        if self.settings.wallpaper == WallpaperPick::None { return false; }
+        let shelf = (self.settings.wallpaper == WallpaperPick::Shelf
+            && self.shelf_wallpaper_ready.get(self.active).copied().unwrap_or(false))
+            .then(|| self.shelf_wallpaper_luma.get(self.active).copied().flatten()).flatten();
+        let luma = match shelf {
+            Some(luma) => luma,
+            None if self.wallpaper_texture.is_some() => self.wallpaper_top_luma.unwrap_or(0.0),
+            None => return false,
+        };
+        let tint = if self.wallpaper_personal || shelf.is_some() {
+            self.settings.wallpaper_tint.alpha()
+        } else { 0.0 };
+        luma * (1.0 - tint) > slot_ui::LIGHT_WALLPAPER
     }
 
     /// Whether Delete Wallpaper has a file to remove: the current shelf's own
@@ -2141,6 +2254,7 @@ impl Engine {
                      crate::settings::Shader::SuperEagle => Toast::ShaderSuperEagle,
                      crate::settings::Shader::XbrLv2 => Toast::ShaderXbrLv2,
                      crate::settings::Shader::DotMatrixColor => Toast::ShaderDotMatrixColor,
+                     crate::settings::Shader::CrtRoyale => Toast::ShaderCrtRoyale,
                 }, time);
             }
             100 => {
@@ -2210,6 +2324,10 @@ impl Engine {
             // Boktai's sun, like L3 / R3, for handhelds without stick clicks.
             104 | 105 if self.game.as_ref().is_some_and(GameSession::solar) => {
                 self.nudge_sun(code == 105);
+            }
+            // A tilt or gyro game's sensitivity, on the same keys.
+            104 | 105 if self.game.as_ref().is_some_and(GameSession::motion) => {
+                self.nudge_motion(code == 105);
             }
             // Also valid for GB-compatible .gbc ROMs (CGB flag bit 7 unset).
             104 | 105 if self.game_settings().gb_palettes
@@ -2310,7 +2428,8 @@ impl Engine {
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
         AUDIO_SPEED_PERMILLE.store(
             if self.ff_latched || self.ff_held {
-                i32::from(self.live_game_options().ff_speed) * 1000
+                // MAX: Android stretches sound up to 6x at most.
+                i32::from(self.live_game_options().ff_speed.min(6)) * 1000
             } else { 1000 },
             Ordering::Release);
         self.hud.set_ff(match (self.ff_latched, self.ff_held) {
@@ -3131,6 +3250,14 @@ impl Engine {
             }
             Input::StudioArt { uri, real, logo, kind, name } => self.studio_art(uri, real, logo, kind, name),
             Input::ReloadCartLabel { uri } => self.reload_cart_label(&uri),
+            Input::RommCatalog(entries) => self.romm_catalog(entries),
+            Input::RommStatus(kind, text) => self.romm_status(kind, text),
+            Input::RommLabel(id) => self.romm_label(id),
+            Input::RommHeader(entry) => self.romm_header(entry),
+            Input::RommProgress(done, total, percent) => self.romm_progress(done, total, percent),
+            Input::RommDownloaded(id, ok) => self.romm_downloaded(id, ok),
+            Input::GameDeleted(uri, ok) => self.game_deleted(uri, ok),
+            Input::RommFilter(filter) => self.romm_filter(filter),
             Input::ExternalReturn => {
                 if self.external_pending {
                     self.external_pending = false;
@@ -3731,6 +3858,8 @@ impl Engine {
                                 19 | 20 => self.overlay = ShelfOverlay::PauseEmulationSettings {
                                     row: move_menu_row(row, code, self.pause_emulation_rows().len()),
                                 },
+                                21 | 22 if row == 3 && self.game.as_ref().is_some_and(GameSession::motion) =>
+                                    self.change_game_motion(code == 22),
                                 21 | 22 if row == 3 => self.change_game_sun(code == 22),
                                 21 | 22 => self.change_game_emulation(row + 10, code == 22),
                                 97 => self.overlay = ShelfOverlay::PauseSettings { row: 2 },
@@ -3778,6 +3907,8 @@ impl Engine {
                     if code == 106 || code == 107 {
                         if pressed && self.game.as_ref().is_some_and(GameSession::solar) {
                             self.nudge_sun(code == 107);
+                        } else if pressed && self.game.as_ref().is_some_and(GameSession::motion) {
+                            self.nudge_motion(code == 107);
                         }
                         return;
                     }
@@ -3881,26 +4012,27 @@ impl Engine {
                             },
                             ShelfOverlay::Library { row } => match code {
                                 19 | 20 => {
-                                    let next = if code == 19 { (row + 5) % 6 } else { (row + 1) % 6 };
+                                    let n = LIBRARY_ROWS.len();
+                                    let next = if code == 19 { (row + n - 1) % n } else { (row + 1) % n };
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
                                 // Identical left/right + A toggle to Settings.
                                 // Keep the selected row and refresh value in place.
-                                21 | 22 | 96 if row == 4 => {
+                                21 | 22 | 96 if row == LIBRARY_SHARE_ROW => {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                         .push_back(17);
                                 }
-                                96 => if let 0..=5 = row {
-                                    // ROM, BIOS, SRAM root, State root,
-                                    // Share Saves OFF/ON, Refresh.
-                                    let action = match row {
-                                        0 => 1,
-                                        1 => 4,
-                                        2 => 5,
-                                        3 => 6,
-                                        4 => 17,
-                                        _ => 2,
-                                    };
+                                // RomM, right after the ROM folder (Siham 2026-11-09).
+                                96 if row == 1 && !self.external_pending => self.open_romm(),
+                                96 => if let Some(action) = match row {
+                                    // ROM, BIOS, SRAM root, State root, Refresh.
+                                    0 => Some(1),
+                                    2 => Some(4),
+                                    3 => Some(5),
+                                    4 => Some(6),
+                                    6 => Some(2),
+                                    _ => None,
+                                } {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                         .push_back(action);
                                     self.overlay = ShelfOverlay::None;
@@ -3915,6 +4047,7 @@ impl Engine {
                                 self.controls_menu_key(code),
                             ShelfOverlay::CartStudio => self.cart_studio_key(code),
                             ShelfOverlay::CartLibrary => self.cart_library_key(code),
+                            ShelfOverlay::Romm => self.romm_key(code),
                             ShelfOverlay::Settings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Settings {
                                     row: move_menu_row(row, code, SETTINGS_ROWS.len()),
@@ -4075,6 +4208,12 @@ impl Engine {
                     }
                     return;
                 }
+                // L2 / R2 on the carousel: a tap shows the GBA Video shelf,
+                // both held delete the game (Siham 2026-11-10).
+                if matches!(code, 104 | 105) {
+                    if !self.inserted && self.progress == 0.0 { self.carousel_trigger(code, pressed); }
+                    return;
+                }
                 if pressed {
                     match code {
                         // X edits the current cartridge directly without insertion.
@@ -4122,7 +4261,7 @@ impl Engine {
                         102 | 103 if !self.inserted => {
                             let delta = if code == 102 { -1 } else { 1 };
                             // An empty platform is never a visible stop.
-                            let next = next_nonempty_shelf(&self.shelves, self.active, delta);
+                            let next = self.next_shelf(self.active, delta);
                             if next != self.active {
                                 self.shelves[self.active].release_hold();
                                 self.active = next;
@@ -4277,6 +4416,8 @@ impl Engine {
         for _ in 0..limit {
             if upload_started.elapsed()>=CART_GPU_UPLOAD_BUDGET {break}
             let Some(((shelf_id,index),face,layers))=self.cart_render.ready() else {break};
+            // Library > RomM's carts live on its page, not on a shelf.
+            if shelf_id==romm::ROMM_RACK { self.romm_face(index,&face); continue; }
             let Some(shelf)=self.shelves.get(shelf_id) else {continue};
             if index>=shelf.carts.len(){continue}
             if let Some(layers)=layers {
@@ -4368,7 +4509,16 @@ impl Engine {
             cells.extend(rest);
             priority = cells;
         }
-        self.cart_render.prioritize(&priority);
+        // Library > RomM: its page's carts before anything else.
+        let romm = if matches!(self.overlay, ShelfOverlay::Romm) { self.romm_render_wants() } else { Vec::new() };
+        if !romm.is_empty() {
+            let mut first: Vec<(usize,usize)> = romm.iter().map(|(key, _)| *key).collect();
+            first.extend(priority.iter().copied());
+            self.cart_render.prioritize(&first);
+            for (key, cart) in &romm { self.cart_render.request(*key, cart, false); }
+        } else {
+            self.cart_render.prioritize(&priority);
+        }
         for (sid, index) in priority {
             // Clear-cart composite is expensive: delay its three material
             // uploads until the carousel has settled.
@@ -4536,6 +4686,16 @@ impl Engine {
         }
     }
 
+    /// The selected cart is a GBA Video one (game code M...).
+    fn playing_video(&self) -> bool {
+        self.shelves[self.active].carts.get(self.shelves[self.active].index)
+            .is_some_and(carousel_delete::is_gba_video)
+    }
+    /// The global Settings the selected cart starts from: a GBA Video
+    /// cart's own Screen in place of the GBA one.
+    fn cart_globals(&self) -> crate::settings::Settings {
+        if self.playing_video() { self.settings.as_gba_video() } else { self.settings.clone() }
+    }
     fn current_cart_platform(&self) -> Platform {
         self.shelves[self.active].carts
             .get(self.shelves[self.active].index)
@@ -4598,7 +4758,7 @@ impl Engine {
     /// Merge this ROM+core's optional visual/gameplay overrides on top of
     /// globally persisted Settings without mutating them or another ROM.
     fn game_settings(&self) -> crate::settings::Settings {
-        let mut effective = self.settings.clone();
+        let mut effective = self.cart_globals();
         if let Some(profile) = self.game_emulation {
             profile.apply_visual_and_gameplay(&mut effective, self.current_cart_platform());
         }
@@ -4608,11 +4768,12 @@ impl Engine {
     /// its own when changed in game, else the system's (Siham 2026-11-10).
     /// Read every frame, so without cloning the settings.
     fn game_blending(&self, platform: Platform) -> crate::settings::Blending {
+        if self.playing_video() { return crate::settings::Blending::Off; }
         self.game_emulation.and_then(|p| p.blending_override)
             .unwrap_or_else(|| self.settings.blending_for(platform))
     }
     fn game_lcd_effect(&self, platform: Platform) -> crate::settings::LcdEffect {
-        if !matches!(platform, Platform::Gba | Platform::Gbc | Platform::Gb) {
+        if !matches!(platform, Platform::Gba | Platform::Gbc | Platform::Gb) || self.playing_video() {
             return crate::settings::LcdEffect::Off;
         }
         self.game_emulation.and_then(|p| p.lcd_effect_override)
@@ -4645,6 +4806,10 @@ impl Engine {
             }
             self.gpu.set_dot_palette(dot_matrix_colours(&self.game_settings()));
         }
+        let upscaler = if self.playing_video() {
+            self.game_settings().upscaler_gbav.gpu()
+        } else { slot_gfx::Upscaler::Off };
+        self.gpu.set_upscaler(upscaler);
         self.gpu.set_screen_effect(effect);
         let lcd = self.game_lcd_effect(self.current_cart_platform());
         self.gpu.set_lcd_effect(lcd.gpu());
@@ -4665,7 +4830,11 @@ impl Engine {
         let uneven = fitted_canvas() && self.video_mode != VideoMode::Stretch
             && !video_mode::whole_scale(platform,
                 video_mode::picture_rect(platform, self.video_mode, panel_size()));
-        if effect == slot_gfx::ScreenEffect::None && (uneven || !whole_game_scale(panel_size())) {
+        // An upscaled GBA Video picture is already smooth.
+        let upscaled = self.playing_video()
+            && self.game_settings().upscaler_gbav != crate::settings::Upscaler::Off;
+        if effect == slot_gfx::ScreenEffect::None && !upscaled
+            && (uneven || !whole_game_scale(panel_size())) {
             slot_gfx::ScreenEffect::SharpBilinear
         } else { effect }
     }
@@ -4702,8 +4871,10 @@ impl Engine {
 
     /// The home console's display aspect and frame size, for its overlay.
     fn home_shape(&self) -> (f32, (u32, u32)) {
-        self.game.as_ref().map_or((4.0 / 3.0, (256, 224)),
-            |session| (session.display_aspect(), session.frame_size()))
+        let platform = self.current_cart_platform();
+        self.game.as_ref().map_or((4.0 / 3.0, (256, 224)), |session| (
+            video_mode::home_aspect(platform, session.display_aspect(), panel_size()),
+            session.frame_size()))
     }
 
     /// Native 3:2 KONKR: GBA fills the panel and has no overlay. GB/GBC
@@ -4862,12 +5033,16 @@ impl Engine {
     /// Blending, then Frame Blending.
     fn pause_screen_page_rows(&self) -> Vec<usize> {
         let mut rows = self.pause_screen_rows().to_vec();
-        rows.extend(Self::look_rows(self.current_cart_platform()).0);
+        // A GBA Video cart has no LCD Effect and no Frame Blending.
+        if !self.playing_video() {
+            rows.extend(Self::look_rows(self.current_cart_platform()).0);
+        }
         rows
     }
     fn pause_screen_page_key(&self, row: usize) -> Option<usize> {
         let own = self.pause_screen_rows().len();
         if row < own { self.pause_screen_key(row) }
+        else if self.playing_video() { None }
         else { Self::look_rows(self.current_cart_platform()).1.get(row - own).copied() }
     }
     fn system_rows(platform: Platform)-> &'static [usize] {
@@ -4975,6 +5150,13 @@ impl Engine {
     fn pause_screen_rows(&self) -> &'static [usize] {
         // GB/GBC resize with L1/R1; GBA's shoulders belong to the game.
         let bezel=video_mode::bezel_offered(self.current_cart_platform(),panel_size());
+        // GBA Video: Shader, Upscaler, Color Correction (Siham 2026-11-10).
+        if self.playing_video() {
+            return match (fitted_canvas(),bezel) {
+                (true,true)=>&[34,136,29,120,90], (true,false)=>&[34,136,29,120],
+                (false,true)=>&[34,136,29,90], (false,false)=>&[34,136,29],
+            };
+        }
         if self.current_cart_platform()==Platform::Gba && fitted_canvas() {
             return if bezel {&[34,29,120,90]} else {&[34,29,120]};
         }
@@ -4986,6 +5168,12 @@ impl Engine {
         }
     }
     fn pause_screen_key(&self,row:usize)->Option<usize> {
+        if self.playing_video() {
+            let rows=self.pause_screen_rows();
+            return rows.get(row).map(|label| match label {
+                34=>0, 136=>70, 29=>22, 120=>SCREEN_SIZE_KEY, _=>25,
+            });
+        }
         if self.current_cart_platform()==Platform::Gba && fitted_canvas() {
             return [0,22,SCREEN_SIZE_KEY,25].get(row).copied();
         }
@@ -4999,6 +5187,8 @@ impl Engine {
     fn pause_emulation_rows(&self) -> &'static [usize] {
         if self.game.as_ref().is_some_and(GameSession::solar) {
             &[51,52,55,119]
+        } else if self.game.as_ref().is_some_and(GameSession::motion) {
+            &[51,52,55,137]
         } else {
             &[51,52,55]
         }
@@ -5118,7 +5308,7 @@ impl Engine {
         let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
-        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=69)) {
+        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70)) {
             set_message("Not available during Multiplayer.".into());
             return;
         }
@@ -5132,7 +5322,7 @@ impl Engine {
             view.change(3,right);
             view.gb_palette
         });
-        if !profile.change_visual_and_gameplay(&self.settings,platform,key,right) { return; }
+        if !profile.change_visual_and_gameplay(&self.cart_globals(),platform,key,right) { return; }
         if let Some(index)=palette {
             if self.settings.gb_palette!=index {
                 self.settings.gb_palette=index;
@@ -5148,7 +5338,7 @@ impl Engine {
         self.game_emulation=Some(profile);
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
-        if matches!(key,0|1|3|21|47|48|49|66..=68) {
+        if matches!(key,0|1|3|21|47|48|49|66..=68|70) {
             self.apply_game_look();
         }
         // A shader change can switch to/from a preset with its own GBA Color.
@@ -5255,6 +5445,36 @@ impl Engine {
         }, time);
         self.save_game_sun(profile, &uri, core);
     }
+    fn change_game_motion(&mut self, up: bool) {
+        let Some(uri) = self.selected_rom_uri() else { return; };
+        let core = self.selected_emulation_core();
+        let mut profile = self.game_emulation
+            .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
+        profile.change_motion(up);
+        self.save_game_motion(profile, &uri, core);
+    }
+    /// L3 / R3 (and SELECT + L2 / R2) in a tilt or gyro game, as for
+    /// Boktai's sun: one step of its sensitivity, with the banner.
+    fn nudge_motion(&mut self, up: bool) {
+        let Some(uri) = self.selected_rom_uri() else { return; };
+        let core = self.selected_emulation_core();
+        let mut profile = self.game_emulation
+            .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
+        let time = self.born.elapsed().as_millis() as u64;
+        profile.change_motion(up);
+        self.hud.toast(Toast::Motion(profile.motion()), time);
+        self.save_game_motion(profile, &uri, core);
+    }
+    fn save_game_motion(&mut self, profile: EmulationProfile, uri: &str, core: Core) {
+        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Err(error) = profile.save(root, uri, core) {
+                set_error_message("Couldn't save this game's settings.", &error);
+                return;
+            }
+        } else { return; }
+        self.game_emulation = Some(profile);
+        apply_motion(self.game.as_ref(), profile.motion());
+    }
     fn save_game_sun(&mut self, profile: EmulationProfile, uri: &str, core: Core) {
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             if let Err(error) = profile.save(root, uri, core) {
@@ -5284,6 +5504,7 @@ impl Engine {
         if let Some(session) = self.game.as_mut() {
             session.set_sun(crate::emulation::default_sun(light_sensor()));
         }
+        apply_motion(self.game.as_ref(), crate::emulation::MOTION_DEFAULT);
         let globals=self.game_settings();
         let platform=self.current_cart_platform();
         self.apply_game_look();
@@ -5307,6 +5528,9 @@ impl Engine {
     fn reload_wallpaper(&mut self, root: Option<&Path>) {
         let (image, personal) = wallpaper_pixels(root, &self.settings.wallpaper);
         self.wallpaper_personal = personal;
+        if let Some(rgba) = image.as_deref() {
+            self.wallpaper_top_luma = Some(slot_ui::top_line_luma(rgba, slot_ui::native_w()));
+        }
         if let Some(rgba) = image {
             self.wallpaper_texture = Some(if let Some(tex) = self.wallpaper_texture {
                 self.gpu.update_texture(tex, slot_ui::native_w(), slot_ui::native_h(), &rgba);
@@ -5369,6 +5593,13 @@ impl Engine {
             }
         }
     }
+    /// Every system's carts, GBA Video's included (Recents and Favorites
+    /// draw from them).
+    fn system_carts(&self) -> Vec<&[slot_store::Cart]> {
+        self.shelves.iter().take(Platform::ALL.len())
+            .chain(self.shelves.get(VIDEO_RACK))
+            .map(|shelf| shelf.carts.as_slice()).collect()
+    }
     fn toggle_favorite(&mut self) {
         let Some(uri)=self.selected_rom_uri() else {return};
         let Some(root)=Self::recents_root() else {return};
@@ -5377,18 +5608,52 @@ impl Engine {
             Err(error)=>set_error_message("Couldn't save this favorite.", &error),
         }
     }
+    /// A new library with other ROMs (a scan after RomM downloads, Refresh
+    /// Library): the shelves take it in place, every unchanged cart keeping
+    /// its face, so no shelf has to be drawn again (Siham 2026-11-10: L1/R1
+    /// froze after RomM downloads). False when the ROMs are the same ones
+    /// (Cart Studio's art): the caller then builds everything again.
+    pub(super) fn update_library(&mut self, version: u64, library: Option<&[RomEntry]>) -> bool {
+        let (systems, video) = library_carts(library, Self::recents_root().as_deref());
+        let roms = |carts: &mut dyn Iterator<Item = &slot_store::Cart>| {
+            let mut roms: Vec<PathBuf> = carts.map(|c| c.rom.clone()).collect();
+            roms.sort();
+            roms
+        };
+        let before = roms(&mut self.system_carts().into_iter().flatten());
+        let after = roms(&mut systems.iter().flatten().chain(video.iter()));
+        if before == after || self.shelves.len() <= VIDEO_RACK { return false; }
+        let racks = (0..Platform::ALL.len()).chain(std::iter::once(VIDEO_RACK));
+        for (rack, carts) in racks.zip(systems.into_iter().chain(std::iter::once(video))) {
+            // A shelf the download left alone keeps its faces being drawn.
+            if self.shelves[rack].carts == carts { continue; }
+            self.cart_render.invalidate_shelf(rack);
+            let moves = self.shelves[rack].update_carts(carts);
+            self.rekey_rack_visuals(rack, &moves);
+        }
+        self.rebuild_recents();
+        self.rebuild_favorites();
+        self.library_version = version;
+        if self.shelves.get(self.active).is_none_or(|s| s.carts.is_empty()) {
+            self.active = self.next_shelf(self.active.min(Platform::ALL.len()), 1);
+            self.platform_shown_at = Some(Instant::now());
+        }
+        self.focus_dirty_since = Some(Instant::now());
+        true
+    }
     fn rebuild_favorites(&mut self) {
         let Some(root)=Self::recents_root() else {return};
         let ids=crate::favorites::load(&root);
-        let system_carts: Vec<&[slot_store::Cart]> = self.shelves.iter()
-            .take(Platform::ALL.len()).map(|shelf| shelf.carts.as_slice()).collect();
+        let system_carts = self.system_carts();
         let carts=crate::favorites::carts(&ids, &system_carts);
         let was_favorite=self.active==FAVORITES_RACK;
         let previous_index=self.shelves[FAVORITES_RACK].index;
         let previous_uri=self.shelves[FAVORITES_RACK].carts.get(previous_index).map(|c|c.rom.clone());
-        self.cart_render.invalidate_shelf(FAVORITES_RACK);
-        let moves=self.shelves[FAVORITES_RACK].replace_carts_preserving_visuals(carts);
-        self.rekey_rack_visuals(FAVORITES_RACK,&moves);
+        if self.shelves[FAVORITES_RACK].carts != carts {
+            self.cart_render.invalidate_shelf(FAVORITES_RACK);
+            let moves=self.shelves[FAVORITES_RACK].update_carts(carts);
+            self.rekey_rack_visuals(FAVORITES_RACK,&moves);
+        }
         // Unstarring from Favorites selects the next cart, exactly as upstream.
         if was_favorite && !self.shelves[FAVORITES_RACK].carts.is_empty() &&
             previous_uri.as_ref().is_some_and(|uri|
@@ -5396,20 +5661,21 @@ impl Engine {
             let last=self.shelves[FAVORITES_RACK].carts.len()-1;
             self.shelves[FAVORITES_RACK].select(previous_index.min(last));
         }
+        let starred: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
         for shelf in &mut self.shelves {
-            shelf.mark_starred(|cart|ids.iter()
-                .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
+            shelf.mark_starred(|cart|starred.contains(cart.rom.to_string_lossy().as_ref()));
         }
         if was_favorite && self.shelves[FAVORITES_RACK].carts.is_empty() {
-            self.active=next_nonempty_shelf(&self.shelves,0,1);
+            self.active=self.next_shelf(0,1);
             self.platform_shown_at=Some(Instant::now());
         }
     }
     // Preserve cart textures/material across Recents or Favorites reorder.
     fn rekey_rack_visuals(&mut self, rack:usize, moves:&[(usize,usize)]) {
+        let moved: std::collections::HashMap<usize,usize> = moves.iter().copied().collect();
         for (shelf,index,_) in &mut self.texture_cache {
             if *shelf!=rack {continue;}
-            if let Some((_,new))=moves.iter().find(|(old,_)|*old==*index) {
+            if let Some(new)=moved.get(index) {
                 *index=*new;
             } else {
                 *shelf=usize::MAX;
@@ -5418,7 +5684,7 @@ impl Engine {
         }
         if let Some(material)=self.clear_material.as_mut() {
             if material.key.0==rack {
-                if let Some((_,new))=moves.iter().find(|(old,_)|*old==material.key.1) {
+                if let Some(new)=moved.get(&material.key.1) {
                     material.key.1=*new;
                 } else {
                     material.key=(usize::MAX,usize::MAX);
@@ -5429,22 +5695,23 @@ impl Engine {
     fn rebuild_recents(&mut self) {
         let Some(root)=Self::recents_root() else { return };
         let ids=crate::recents::load(&root);
-        let system_carts: Vec<&[slot_store::Cart]> = self.shelves.iter()
-            .take(Platform::ALL.len()).map(|shelf| shelf.carts.as_slice()).collect();
+        let system_carts = self.system_carts();
         let carts=crate::recents::carts(&ids, &system_carts);
         let was_recent=self.active==RECENTS_RACK;
-        // Reject completed worker art from the previous URI->index mapping.
-        self.cart_render.invalidate_shelf(RECENTS_RACK);
-        let moves=self.shelves[RECENTS_RACK].replace_carts_preserving_visuals(
-            if self.settings.show_recents { carts } else { Vec::new() });
-        self.rekey_rack_visuals(RECENTS_RACK,&moves);
+        let carts=if self.settings.show_recents { carts } else { Vec::new() };
+        if self.shelves[RECENTS_RACK].carts != carts {
+            // Reject completed worker art from the previous URI->index mapping.
+            self.cart_render.invalidate_shelf(RECENTS_RACK);
+            let moves=self.shelves[RECENTS_RACK].update_carts(carts);
+            self.rekey_rack_visuals(RECENTS_RACK,&moves);
+        }
         // Restocking Recents must not erase Favorite stars: its Shelf rebuild
         // necessarily reconstructs the per-cart starred flags from scratch.
         let favorites=crate::favorites::load(&root);
         self.shelves[RECENTS_RACK].mark_starred(|cart|favorites.iter()
             .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
         if was_recent && self.shelves[RECENTS_RACK].carts.is_empty() {
-            self.active=next_nonempty_shelf(&self.shelves,0,1);
+            self.active=self.next_shelf(0,1);
         }
     }
     fn record_recent(&mut self) {
@@ -5701,8 +5968,8 @@ impl Engine {
         }
         if matches!(key,0|1|21|2|22|23|24) {
             let platform=self.current_cart_platform();
-            let colour=self.settings.shader_for(platform)
-                .core_colour(self.settings.colour_for(platform));
+            let view=self.game_settings();
+            let colour=view.shader_for(platform).core_colour(view.colour_for(platform));
             if let Some(game) = self.game.as_mut() {
                 game.set_colour_correction(colour);
             }
@@ -5741,11 +6008,16 @@ impl Engine {
     fn draw_library_share_value(&self, row: usize, out: &mut Vec<Draw>) {
         let which = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
         let (tex, width, height) = self.setting_values[which];
-        let y = settings_row_top(6) + 4.0 * QUICK_PITCH + 8.0;
+        // Its row among the six shown while Library scrolls.
+        let offset = crate::controls::scroll_offset(row, LIBRARY_ROWS.len());
+        let Some(shown) = LIBRARY_SHARE_ROW.checked_sub(offset)
+            .filter(|&r| r < crate::controls::VISIBLE_ROWS) else { return };
+        let y = self.menu_rows_top(LIBRARY_ROWS.len().min(crate::controls::VISIBLE_ROWS))
+            + shown as f32 * QUICK_PITCH + 8.0;
         let scale = 0.79f32;
         let w = width as f32 * scale;
         let right = out_w() as f32 - 34.0;
-        let selected = row == 4;
+        let selected = row == LIBRARY_SHARE_ROW;
         let x = right - w - if selected { 22.0 } else { 0.0 };
         out.push(Draw::Tex { x, y, w, h: height as f32 * scale, tex,
             alpha: if selected { 1.0 } else { 0.62 } });
@@ -5763,7 +6035,9 @@ impl Engine {
     fn value_face(&self, key: usize) -> Option<(slot_gfx::TexId, u32, u32)> {
         // Only action rows (usize::MAX) have no value: setting_face
         // answers every other key, so a new key can't go blank.
-        Some(if key == SUN_KEY {
+        Some(if key == MOTION_KEY {
+                    self.setting_values[54 + usize::from(self.current_emulation().motion())]
+                } else if key == SUN_KEY {
                     let sun = self.current_emulation().sun(light_sensor(), self.sun_top());
                     self.setting_values[match sun {
                         crate::emulation::SUN_SENSOR => 53,
@@ -6207,7 +6481,7 @@ impl Engine {
                 }
             }
             ShelfOverlay::Library { row } => {
-                self.draw_original_style_menu(5, &[6, 24, 7, 8, 79, 9], row, out);
+                self.draw_original_style_menu(5, &LIBRARY_ROWS, row, out);
                 self.draw_library_share_value(row, out);
             }
             ShelfOverlay::Settings { row } => {
@@ -6230,9 +6504,11 @@ impl Engine {
                 // One value per visible row: an extra action sentinel
                 // displaced ALL value glyphs by half a row and
                 // desynchronised them from their carets.
-                let keys: &[usize] = if self.pause_emulation_rows().len() == 4 {
-                    &[10, 11, 12, SUN_KEY]
-                } else { &[10, 11, 12] };
+                let keys: &[usize] = if self.pause_emulation_rows().len() < 4 {
+                    &[10, 11, 12]
+                } else if self.game.as_ref().is_some_and(GameSession::motion) {
+                    &[10, 11, 12, MOTION_KEY]
+                } else { &[10, 11, 12, SUN_KEY] };
                 self.draw_settings_menu(50, self.pause_emulation_rows(), row, keys, out);
                 // Identify the selected core without changing Slot's menu
                 // layout or existing keycap typography.
@@ -6355,6 +6631,7 @@ impl Engine {
             ShelfOverlay::Multiplayer => self.draw_multiplayer(out),
             ShelfOverlay::CartStudio => self.draw_cart_studio(out),
             ShelfOverlay::CartLibrary => self.draw_cart_library(out),
+            ShelfOverlay::Romm => self.draw_romm(out),
             ShelfOverlay::ControlsSettings { .. } | ShelfOverlay::ControlsPort { .. }
             | ShelfOverlay::LayoutPorts { .. } | ShelfOverlay::LayoutPort { .. }
             | ShelfOverlay::Hotkeys { .. } | ShelfOverlay::Cheats { .. } =>
@@ -6598,16 +6875,19 @@ impl Engine {
         // touches JNI, an Activity, the renderer or the filesystem here.
         if let Some(service) = self.ra_service.as_ref() {
             let status = service.sync_status();
+            let detail = service.sync_detail();
             let progress = service.sync_progress();
             let pending = service.sync_pending();
             let unsaved = service.has_unsaved_awards();
             let key = u64::from(status as u8)
                 | (u64::from(progress.map_or(256u16, u16::from)) << 8)
                 | ((pending as u64) << 24)
-                | ((unsaved as u64) << 25);
+                | ((unsaved as u64) << 25)
+                | (u64::from(detail as u8) << 26);
             if RA_STATUS_KEY.swap(key, Ordering::AcqRel) != key {
                 let snapshot = serde_json::json!({
                     "state": format!("{status:?}"),
+                    "detail": format!("{detail:?}"),
                     "pending": pending,
                     "unsaved": unsaved,
                     "progress": progress,
@@ -6759,11 +7039,12 @@ impl Engine {
         self.prepare_controls();
         self.prepare_cart_studio();
         self.prepare_cart_library();
+        self.prepare_romm();
         // Update full-screen menus and spring-smooth the selection bar.
         // Keep animation entirely in rendering: never delay controller input.
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
-            ShelfOverlay::Library { row } => (2u8, row, 6usize),
+            ShelfOverlay::Library { row } => (2u8, row, LIBRARY_ROWS.len()),
             ShelfOverlay::GameMenu { row } => (3u8, row, pause_rows(
                 self.game.as_ref().is_some_and(GameSession::linked),
                 self.game.as_ref().is_some_and(GameSession::requires_relaunch)).len()),
@@ -6790,6 +7071,7 @@ impl Engine {
             ShelfOverlay::GameplaySettings { row } => (6u8, row, GAMEPLAY_KEYS.len()),
             ShelfOverlay::CartStudio => (30u8, 0, 0),
             ShelfOverlay::CartLibrary => (31u8, 0, 0),
+            ShelfOverlay::Romm => (32u8, 0, 0),
             _ => (0, 0, 0),
         };
         // A page of more than six rows shows six and scrolls: the bar
@@ -6893,6 +7175,7 @@ impl Engine {
                     let mut session = session;
                     let top = session.sun_top();
                     session.set_sun(self.current_emulation().sun(light_sensor(), top));
+                    apply_motion(Some(&session), self.current_emulation().motion());
                     self.game = Some(session);
                     // Focus and Recents were persisted during core
                     // preparation; avoid synchronous IO/rebuilding the
@@ -7062,6 +7345,10 @@ impl Engine {
             } else {
                 // Original Slot offers 2/3/4/6x, independent of display Hz.
                 let fast = self.ff_held || self.ff_latched;
+                // MAX: as many frames as fit in most of one refresh, leaving
+                // the rest to draw and to read the keys (Siham 2026-11-11).
+                let ff_max = fast && live.ff_speed == crate::settings::FF_MAX;
+                let ff_max_until = Instant::now() + Duration::from_micros(FF_MAX_BUDGET_US);
                 let multiplier = if fast { f64::from(live.ff_speed) } else { 1.0 };
                 let period = 1.0 / session.fps;
                 // RETROARCH: the display refresh clocks the core whenever the
@@ -7132,6 +7419,8 @@ impl Engine {
                     self.ra_sync_steps.reset();
                     self.game_accum = crate::settings::frame_debt_mgba_cable(
                         self.game_accum, f64::from(dt), period);
+                } else if ff_max {
+                    self.game_accum = period * FF_MAX_FRAMES as f64;
                 } else if ra_clock {
                     self.game_accum = crate::settings::frame_debt_ra_clock(
                         self.game_accum, ra_elapsed, multiplier, period);
@@ -7142,6 +7431,7 @@ impl Engine {
                 // RA CLOCK commits strictly one frame per callback: two-frame
                 // catch-up measured worse motion and controls on the KONKR.
                 let frame_limit = if ra_display_clocked || mgba_cable_pacing { 2 }
+                    else if ff_max { FF_MAX_FRAMES }
                     else if fast { usize::from(live.ff_speed) * 4 }
                     else if ra_clock { 1 } else { 4 };
                 // A13.1: revert the experimental second-frame budget.
@@ -7188,6 +7478,7 @@ impl Engine {
                     frame_phases.core_steps = frame_phases.core_steps.saturating_add(1);
                     self.game_accum -= period;
                     stepped += 1;
+                    if ff_max && Instant::now() >= ff_max_until { self.game_accum = 0.0; }
                     let samples = session.take_audio();
                     let queue_pcm = (!fast || (live.ff_sound &&
                         FF_AUDIO_SUPPORTED.load(Ordering::Acquire)))
@@ -7232,8 +7523,9 @@ impl Engine {
                     // speculative Run-Ahead frame ordering.
                     session.recycle_audio(samples);
                 }
-                // RETROARCH never carries fractional time between refreshes.
-                if ra_display_clocked { self.game_accum = 0.0; }
+                // RETROARCH never carries fractional time between refreshes;
+                // MAX starts each refresh afresh.
+                if ra_display_clocked || ff_max { self.game_accum = 0.0; }
             }
             if stepped > 0 && !self.rewind_held && !self.ff_held && !self.ff_latched
                 && profile.run_ahead_frames > 0 && !preemptive {
@@ -7383,6 +7675,7 @@ impl Engine {
         };
         if repeated_letter { self.show_selected_letter(); }
         self.shelves[self.active].update(dt);
+        self.tick_triggers();
         self.prepare_visible();
         self.start_waiting_picker();
         // Only warm a settled carousel selection. Actual ROM I/O takes place
@@ -7406,6 +7699,10 @@ impl Engine {
         // Resolve the optional transparent material before mutably borrowing
         // the selected rack, otherwise Rust rejects the overlapping borrows.
         let (selected_clear_back, selected_clear_front) = self.clear_layers();
+        // L2 + R2: the cart leaving, the ring while held (over the slot).
+        let ejecting_stem = self.ejecting_stem().map(str::to_owned);
+        let mut trigger_draws = Vec::new();
+        self.draw_triggers(&mut trigger_draws);
         let shelf = &mut self.shelves[self.active];
 
         // Original Slot: 450ms seating + 280ms hold. Start the original
@@ -7460,10 +7757,11 @@ impl Engine {
                 // Match upstream Refusal: only the shelf carts shake.
                 // The physical slot stays fixed; no input delay or layout changes.
                 let shake = self.refusal.map_or(0.0, |r| r.offset(ms));
-                shelf.draw_row(None, shake, 0.0, 1.0, &mut commands);
+                shelf.draw_row(ejecting_stem.as_deref(), shake, 0.0, 1.0, &mut commands);
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),
                     pick_closer(self.slot_faces, self.home_closers, shelf.carts.get(shelf.index)), &mut commands);
+                commands.append(&mut trigger_draws);
                 // Official v1.7.0 shelf: system (L1/R1) or letter
                 // (D-pad Up/Down) uses a 200/1200/800 ms full-opacity name.
                 // Game Titles crossfade back in during the last 800ms, and
@@ -7475,6 +7773,7 @@ impl Engine {
                         let face=match self.active {
                                 RECENTS_RACK=>self.recents_platform_face,
                                 FAVORITES_RACK=>self.favorites_platform_face,
+                                VIDEO_RACK=>self.video_platform_face,
                                 index=>self.platform_faces[index],
                             };
                         Some((face,elapsed,true))
@@ -7498,7 +7797,8 @@ impl Engine {
                         else {draw_slot_name(face,alpha,&mut commands);}
                     }
                 }
-                if self.settings.show_titles {
+                // HOLD TO DELETE takes the title's place while L2 + R2 are held.
+                if self.settings.show_titles && self.triggers.hold.is_none() && self.triggers.ejecting.is_none() {
                     let alpha=name.map_or(1.0,|(_,elapsed,_)|slot_title_alpha(elapsed));
                     slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
                 }
@@ -7624,10 +7924,13 @@ impl Engine {
             if icons_bottom { indicator_flags |= 32; }
             if grouped { indicator_flags |= 64; }
             if self.settings.apps_running_only { indicator_flags |= 128; }
-            // On a light console bar the icons are inked black, as its clock.
-            if icons_bottom && self.footer_dark_ink() { indicator_flags |= 256; }
-            // On the bar the ink follows the bar; at the top, the theme.
-            let dark_ink = if clock_top { light } else { self.footer_dark_ink() };
+            // Each line is inked for what is behind it, the icons as the
+            // clock and battery: on the console bar, the bar's own ink; at
+            // the top, black on a light wallpaper, white on a dark one.
+            let top_dark = self.top_line_dark_ink();
+            let line_dark = |bottom: bool| if bottom { self.footer_dark_ink() } else { top_dark };
+            if line_dark(icons_bottom) { indicator_flags |= 256; }
+            let dark_ink = line_dark(!clock_top);
             if dark_ink != self.footer_inked_dark { self.recolour_footer_text_to(dark_ink); }
             let (clock_w, battery_w) = slot_ui::draw_status_clock(clock_top,
                 self.battery, self.battery_face,
@@ -7656,6 +7959,9 @@ impl Engine {
             && self.last_cart_navigation.elapsed() >= Duration::from_millis(3200)
             && self.menu_opened.elapsed() >= Duration::from_millis(1200)
             && !self.shelves[self.active].is_scrolling()
+            // The delete hold and the eject animate with no key held down
+            // anew: dozing there made them stutter (Siham 2026-11-10).
+            && self.triggers.hold.is_none() && self.triggers.ejecting.is_none()
             && self.cart_render.is_idle();
         CAROUSEL_QUIET.store(quiet, Ordering::Release);
     }
@@ -7881,7 +8187,7 @@ fn restore_saved_focus(shelves:&mut [Shelf], focus:&crate::selection::Focus)->Op
         shelves[focus.rack].select(index);
         return Some(focus.rack);
     }
-    for rack in 0..Platform::ALL.len() {
+    for rack in (0..Platform::ALL.len()).chain(std::iter::once(VIDEO_RACK)) {
         if let Some(index)=shelves.get(rack).and_then(|shelf|
             shelf.carts.iter().position(|cart|cart.rom.to_string_lossy()==focus.uri.as_str())) {
             shelves[rack].select(index);
@@ -7889,6 +8195,12 @@ fn restore_saved_focus(shelves:&mut [Shelf], focus:&crate::selection::Focus)->Op
         }
     }
     None
+}
+
+/// A rebuilt carousel (launch, update, scan) opens on the GBA shelf rather
+/// than GBA Video behind it, when the GBA shelf has carts (Siham 2026-11-10).
+pub(super) fn gba_before_video(shelves: &[Shelf], active: usize) -> usize {
+    if active == VIDEO_RACK && shelves.first().is_some_and(|s| !s.carts.is_empty()) { 0 } else { active }
 }
 
 /// Preserve stable ROM identity and platform on a Cart Studio shelf rebuild.
@@ -7981,7 +8293,13 @@ fn advance_cart(progress: f32, inserted: bool, dt: f32) -> f32 {
 /// Return the current shelf if it is the only populated one, and never
 /// select an empty GB/GBC/GBA shelf. Safe even if all libraries are empty.
 fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
-    let counts: Vec<usize> = shelves.iter().map(|s| s.carts.len()).collect();
+    let mut counts: Vec<usize> = shelves.iter().map(|s| s.carts.len()).collect();
+    // GBA Video sits behind the GBA shelf: never a stop of its own, the
+    // GBA's place one even when only GBA Video has carts.
+    let current = if current == VIDEO_RACK { 0 } else { current };
+    if let Some(video) = counts.get_mut(VIDEO_RACK).map(std::mem::take) {
+        if let Some(gba) = counts.first_mut() { *gba += video; }
+    }
     crate::library::next_populated(current, delta, &counts)
 }
 
@@ -8032,6 +8350,9 @@ mod controls_ui;
 mod cheats_ui;
 mod cart_studio;
 mod cart_library;
+mod romm;
+mod carousel_delete;
+use carousel_delete::VIDEO_RACK;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) use jni_exports::exercise_session_graphics_recovery;
 
@@ -8109,6 +8430,10 @@ mod settings_value_tests {
                 keys.push(("Interface/Emulation/General".into(), key, platform));
             }
         }
+        // A GBA Video cart's Screen: Shader, Upscaler, Color Correction.
+        for key in [0, 70, 22] {
+            keys.push(("GBA Video game menu > Screen".into(), key, Platform::Gba));
+        }
         assert_eq!(GAMEPLAY_ROWS.len(), GAMEPLAY_KEYS.len());
         assert_eq!(INTERFACE_ROWS.len(), INTERFACE_KEYS.len());
         keys
@@ -8153,5 +8478,33 @@ mod settings_value_tests {
             .chain(Bezel::NES).chain(Bezel::SNES).chain(Bezel::MD) {
             assert!(bezel_value(bezel) < SETTING_VALUE_NAMES.len(), "{bezel:?}");
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod library_update_tests {
+    use super::*;
+
+    fn entries(names: &[&str]) -> Vec<RomEntry> {
+        let json: Vec<String> = names.iter().map(|n| format!(
+            r#"{{"title":"{n}","platform":"GBA","uri":"content://roms/{n}.gba","code":"A{n}E"}}"#)).collect();
+        serde_json::from_str(&format!("[{}]", json.join(","))).unwrap()
+    }
+
+    #[test]
+    fn new_roms_join_the_shelves_in_place_and_the_same_roms_rebuild() {
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries(&["AA", "CC"]))).unwrap();
+        let gba = Platform::Gba as usize;
+        assert_eq!(engine.shelves[gba].carts.len(), 2);
+        engine.shelves[gba].select(1);
+        assert!(engine.update_library(2, Some(&entries(&["AA", "BB", "CC"]))));
+        assert_eq!(engine.library_version, 2);
+        let stems: Vec<&str> = engine.shelves[gba].carts.iter().map(|c| c.stem.as_str()).collect();
+        assert_eq!(stems.len(), 3);
+        assert_eq!(engine.shelves[gba].carts[engine.shelves[gba].index].rom,
+                   PathBuf::from("content://roms/CC.gba"), "the selected cart stays selected");
+        assert!(!engine.update_library(3, Some(&entries(&["CC", "BB", "AA"]))),
+                "the same ROMs (Cart Studio's art) build everything again");
     }
 }

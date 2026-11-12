@@ -158,7 +158,9 @@ fn outlines(platform: Platform) -> Vec<(&'static str, Outline)> {
             ("Famicom Namco", Outline::FamicomNamco), ("Famicom Konami", Outline::FamicomKonami)][..],
         Platform::Snes => &[("Super Nintendo", Outline::Snes), ("Super Nintendo US", Outline::SnesUs)][..],
         Platform::Md => &[("Mega Drive", Outline::MegaDrive), ("Mega Drive Japan", Outline::MegaDriveJp),
-            ("Mega Drive EA", Outline::MegaDriveEa)][..],
+            ("Mega Drive EA", Outline::MegaDriveEa), ("Mega Drive Accolade", Outline::MegaDriveAccolade),
+            ("Mega Drive Codemasters", Outline::MegaDriveCodemasters), ("Virtua Racing", Outline::MegaDriveVr),
+            ("Sonic & Knuckles", Outline::MegaDriveSk)][..],
         Platform::Gba => &[][..],
     });
     out

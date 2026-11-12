@@ -74,9 +74,30 @@ pub enum SyncStatus {
     Attention,
 }
 
+/// What the HTTP worker is doing or waiting on, in one or two words.
+/// Read with [`Service::sync_detail`]; it refines [`SyncStatus`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SyncDetail {
+    None,
+    /// Game metadata for the library is being cached.
+    Games,
+    /// Badge and game icon images are being cached.
+    Badges,
+    /// A download failed for a moment; it is retried automatically.
+    Retrying,
+    /// The account is missing or the server refused the login.
+    Login,
+    /// The server answered with an error.
+    Server,
+    /// Config, cache files or saved unlocks could not be read or written.
+    Storage,
+}
+
 #[derive(Default)]
 struct Status {
     network: AtomicU8,
+    detail: AtomicU8,
     unsaved: AtomicBool,
     reconnect: AtomicBool,
     // Zero means unknown; otherwise percent + 1, keeping Default valid.
@@ -89,6 +110,26 @@ struct Status {
 impl Status {
     fn set(&self, value: SyncStatus) {
         self.network.store(value as u8, Ordering::Release);
+    }
+
+    fn explain(&self, value: SyncStatus, detail: SyncDetail) {
+        self.detail.store(detail as u8, Ordering::Release);
+        self.set(value);
+    }
+
+    fn detail(&self) -> SyncDetail {
+        if self.unsaved.load(Ordering::Acquire) {
+            return SyncDetail::Storage;
+        }
+        match self.detail.load(Ordering::Acquire) {
+            1 => SyncDetail::Games,
+            2 => SyncDetail::Badges,
+            3 => SyncDetail::Retrying,
+            4 => SyncDetail::Login,
+            5 => SyncDetail::Server,
+            6 => SyncDetail::Storage,
+            _ => SyncDetail::None,
+        }
     }
 
     fn get(&self) -> SyncStatus {
@@ -260,6 +301,10 @@ impl Service {
         self.status.get()
     }
 
+    pub fn sync_detail(&self) -> SyncDetail {
+        self.status.detail()
+    }
+
     /// The Wi-Fi worker observed a new connection. Wake retries without blocking the UI.
     pub fn network_available(&self) {
         self.status.reconnect.store(true, Ordering::Release);
@@ -366,7 +411,7 @@ fn run(
     let config = match Config::read(&config_path) {
         Ok(config) => config,
         Err(_) => {
-            status.set(SyncStatus::Attention);
+            status.explain(SyncStatus::Attention, SyncDetail::Storage);
             let _ = notices.send(Notice::status(0, "Invalid RetroAchievements config"));
             return;
         }
@@ -375,14 +420,14 @@ fn run(
         return;
     }
     if config.username.trim().is_empty() {
-        status.set(SyncStatus::Attention);
+        status.explain(SyncStatus::Attention, SyncDetail::Login);
         let _ = notices.send(Notice::status(0, "Achievements need an account"));
         return;
     }
     let store = match Store::open(&root, &config.username) {
         Ok(store) => Arc::new(Mutex::new(store)),
         Err(error) => {
-            status.set(SyncStatus::Attention);
+            status.explain(SyncStatus::Attention, SyncDetail::Storage);
             let _ = notices.send(Notice::status(0, &error));
             return;
         }

@@ -30,11 +30,8 @@ pub fn store(root: &Path, list: &[String]) -> std::io::Result<()> {
 /// Ignore missing library entries rather than reintroducing ghost cartridges;
 /// duplicate ROM URIs always select the same existing source cart.
 pub fn carts(ids: &[String], base: &[&[Cart]]) -> Vec<Cart> {
-    ids.iter().filter_map(|uri|
-        base.iter().flat_map(|row|row.iter())
-            .find(|cart|cart.rom.to_string_lossy()==uri.as_str())
-            .cloned()
-    ).collect()
+    let carts = crate::favorites::by_uri(base);
+    ids.iter().filter_map(|uri| carts.get(uri.as_str()).map(|cart| (*cart).clone())).collect()
 }
 #[cfg(test)]
 mod tests {

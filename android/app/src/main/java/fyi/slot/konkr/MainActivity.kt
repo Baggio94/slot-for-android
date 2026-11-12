@@ -182,11 +182,22 @@ class MainActivity : Activity() {
     external fun nativeWallpaperTarget(): String?
     external fun nativeReloadCartLabel(uri: String)
     external fun nativeStudioArt(uri: String, real: ByteArray?, logo: ByteArray?, kind: Int, name: String)
+    // Library > RomM (RommPage.kt and runtime/romm.rs).
+    external fun nativePollRommRequest(): String?
+    external fun nativeRommCatalog(json: String)
+    external fun nativeRommStatus(kind: Int, text: String)
+    external fun nativeRommLabel(id: Long)
+    external fun nativeRommHeader(json: String)
+    external fun nativeRommProgress(done: Int, total: Int, percent: Int)
+    external fun nativeRommDownloaded(id: Long, ok: Boolean)
+    external fun nativeRommFilter(json: String)
+    external fun nativePollDeleteRequest(): String?
+    external fun nativeGameDeleted(uri: String, ok: Boolean)
     external fun nativePollCartSfx(): Int
     external fun nativePollRumbleStrength(): Int
     external fun nativeSensorsAvailable(mask: Int)
     external fun nativeSensorsWanted(): Int
-    external fun nativeSensorEvent(sensor: Int, x: Float, y: Float, z: Float)
+    external fun nativeSensorEvent(sensor: Int, x: Float, y: Float, z: Float, timestampNs: Long)
     external fun nativeCoreForUri(uri: String): String
     external fun nativePollSaveFlush(): String?
     external fun nativeSetShareSaves(enabled: Boolean)
@@ -205,6 +216,8 @@ class MainActivity : Activity() {
     private var pendingCartLabelUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
+    /** Folder scans asked and not finished. */
+    private val scansRunning = AtomicInteger()
     private data class PendingLibraryIndex(
         val root: Uri, val json: String, val prepared: String,
         val serial: Int, val quiet: Boolean
@@ -241,6 +254,152 @@ class MainActivity : Activity() {
     private val autoLabelUpdates = java.util.concurrent.ConcurrentLinkedQueue<String>()
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
+    private val romm: RommPage by lazy {
+        RommPage(this) {
+            // The ROM folder, when slot. may still write into it.
+            getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)?.let(Uri::parse)
+                ?.takeIf { uri -> contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission } }
+        }
+    }
+
+    /** Games came from RomM: the shelf learns them once the page is left,
+     *  quietly (no scan bar, no toast: RomM said how many it saved). */
+    internal fun refreshLibraryAfterDownloads() {
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) ?: return
+        val uri = Uri.parse(saved)
+        if (contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) {
+            scanFolder(uri, quiet = true)
+        }
+    }
+
+    /** Games RomM saved: only they are read and added to their shelves,
+     *  the rest of the index stays as it is (no folder rescan). A scan on
+     *  its way knows more than the saved index: then the folder is read
+     *  again, as before, and so it is whenever the files can't be read. */
+    internal fun addDownloadedGames(files: List<RomLibrary.SavedFile>) {
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) ?: return
+        val root = Uri.parse(saved)
+        if (contentResolver.persistedUriPermissions.none { it.uri == root && it.isReadPermission }) return
+        if (scansRunning.get() > 0 || pendingLibraryIndex != null) {
+            scanFolder(root, quiet = true)
+            return
+        }
+        val serial = scanSerial.incrementAndGet()
+        scanner.execute {
+            if (scanSerial.get() != serial) return@execute
+            val previous = cachedLibraryGames(root)
+            val json = try {
+                previous?.let { RomLibrary.withSavedFiles(this, root, it, files) }
+            } catch (error: Exception) {
+                Log.w(TAG, "Downloaded games not read; scanning the folder", error)
+                null
+            }
+            if (previous == null || json == null) {
+                runOnUiThread {
+                    if (!isDestroyed && scanSerial.get() == serial) scanFolder(root, quiet = true)
+                }
+                return@execute
+            }
+            if (RomLibrary.sameIndex(previous, json)) return@execute
+            giveRommLabels(root, json, files)
+            val prepared = CartStudioCatalog.withOverrides(this, json)
+            Log.i(TAG, "RomM: ${files.size} game(s) added without a folder scan")
+            runOnUiThread {
+                if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
+                pendingLibraryIndex = PendingLibraryIndex(root, json, prepared, serial, quiet = true)
+                publishPendingLibraryIfIdle()
+            }
+        }
+    }
+
+    /** A downloaded cart wears the label RomM's page showed for it at once,
+     *  rather than waiting for the label search: the same art set, cut as
+     *  the shelf's. Only when it has no label yet and its system is the one
+     *  the label was cut for. On the scanner thread, before the shelf. */
+    private fun giveRommLabels(root: Uri, json: String, files: List<RomLibrary.SavedFile>) {
+        val platforms = try {
+            RomLibrary.indexEntries(json).associate { it.uri to it.platform }
+        } catch (_: Exception) { return }
+        for (file in files) {
+            val label = file.label ?: continue
+            try {
+                val uri = RomLibrary.indexUri(root, file.uri).toString()
+                if (platforms[uri] != file.labelPlatform) continue
+                val target = CartLabelPaths.file(filesDir, uri)
+                if (target.exists() || !label.isFile) continue
+                target.parentFile?.mkdirs()
+                val atomic = AtomicFile(target)
+                val out = atomic.startWrite()
+                try {
+                    label.inputStream().use { it.copyTo(out) }
+                    atomic.finishWrite(out)
+                } catch (error: Exception) {
+                    atomic.failWrite(out)
+                    throw error
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "RomM label not given to its cart; the label search will", error)
+            }
+        }
+    }
+
+    /** L2 + R2 held on a cart (Siham 2026-11-10): its ROM file goes, its
+     *  saves and save states stay. The shelf already took it off. */
+    private fun deleteRequestedGames() {
+        while (true) {
+            val uri = nativePollDeleteRequest() ?: return
+            scanner.execute { deleteGame(uri) }
+        }
+    }
+
+    private fun deleteGame(uri: String) {
+        val ok = try {
+            DocumentsContract.deleteDocument(contentResolver, Uri.parse(uri))
+        } catch (error: Exception) {
+            Log.w(TAG, "Couldn't delete a ROM", error)
+            false
+        }
+        if (ok) {
+            // The cached index forgets it too: no rescan.
+            val root = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)?.let(Uri::parse)
+            if (root != null) try {
+                val games = cachedLibraryGames(root)?.let { JSONArray(it) }
+                if (games != null) {
+                    val kept = JSONArray()
+                    for (i in 0 until games.length()) {
+                        val game = games.optJSONObject(i) ?: continue
+                        if (game.optString("uri") != uri) kept.put(game)
+                    }
+                    storeCachedLibrary(root, kept.toString())
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "ROM cache not updated after a delete", error)
+            }
+        }
+        runOnUiThread {
+            if (isDestroyed) return@runOnUiThread
+            nativeGameDeleted(uri, ok)
+            if (ok) {
+                shelfCarts = (shelfCarts - 1).coerceAtLeast(0)
+                SlotToast.makeText(this, "Game deleted. Saves kept.", Toast.LENGTH_SHORT).show()
+            } else {
+                // Read-only folder (chosen before 2.3) or the file is gone:
+                // the shelf is read again, the cart comes back if it's there.
+                SlotToast.makeText(this, "Couldn't delete this game. Choose your ROM folder again.",
+                    Toast.LENGTH_LONG).show()
+                refreshLibraryAfterDownloads()
+            }
+        }
+    }
+
+    /** Whether a ROM folder was ever chosen (writable or not). */
+    internal fun hasRomFolder(): Boolean =
+        getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) != null
+
+    /** RomM needs the ROM folder writable: the picker, on the folder chosen
+     *  before when Android allows it. */
+    internal fun chooseRomFolderForRomm() = openRomFolderPicker()
+
     private val slotUpdater: SlotUpdater by lazy {
         SlotUpdater(this) { status, version ->
             if (!isDestroyed) {
@@ -288,7 +447,9 @@ class MainActivity : Activity() {
         override fun onSensorChanged(event: SensorEvent) {
             val sensor = sensorTypes.firstOrNull { it.second == event.sensor.type }?.first ?: return
             val v = event.values
-            nativeSensorEvent(sensor, v[0], v.getOrElse(1) { 0f }, v.getOrElse(2) { 0f })
+            // Differentiate motion using the sample time, not the UI thread's
+            // delivery time: Android can deliver several readings together.
+            nativeSensorEvent(sensor, v[0], v.getOrElse(1) { 0f }, v.getOrElse(2) { 0f }, event.timestamp)
         }
         override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
     }
@@ -434,9 +595,9 @@ class MainActivity : Activity() {
         if (warmedCandidate.getAndSet(next) == next || next == null) return
         try {
             romWarmWorker.execute {
-                RomWarmCache.prepare(applicationContext, next) {
-                    resumed && !nativeIsPlaying() && warmedCandidate.get() == next
-                }
+                RomWarmCache.prepare(applicationContext, next,
+                    shouldContinue = { resumed && !nativeIsPlaying() && warmedCandidate.get() == next },
+                    superseded = { warmedCandidate.get().let { it != null && it != next } })
             }
         } catch (_: java.util.concurrent.RejectedExecutionException) { /* shutting down */ }
     }
@@ -703,6 +864,8 @@ class MainActivity : Activity() {
                 raPendingGameNotice = null
                 loadGameFromSaf(request)
             }
+            romm.poll()
+            deleteRequestedGames()
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
@@ -1592,6 +1755,8 @@ class MainActivity : Activity() {
             return
         }
         val queuedAt = SystemClock.elapsedRealtime()
+        // Its warm copy, when one is under way, goes on for this launch.
+        RomWarmCache.launching.set(rawUri)
         gameLoader.execute {
             val launchStart = SystemClock.elapsedRealtime()
             val queueWait = launchStart - queuedAt
@@ -1618,6 +1783,8 @@ class MainActivity : Activity() {
                 val dir = File(cacheDir, "rom-cache").apply { mkdirs() }
                 val target = File(dir, "$digest.$ext")
                 // Always open via Android SAF; no assumptions about physical filesystem paths.
+                // A warm copy of this ROM under way is waited for, not made twice.
+                if (!target.isFile || target.length() < 0x150) RomWarmCache.awaitCopy(rawUri, target)
                 if (!target.isFile || target.length() < 0x150) {
                     val temp = File(dir, "$digest.tmp")
                     try {
@@ -1643,6 +1810,8 @@ class MainActivity : Activity() {
                         check(temp.renameTo(target)) { "Cannot cache ROM" }
                     } finally { temp.delete() }
                 }
+                RomWarmCache.launching.compareAndSet(rawUri, null)
+                RomWarmCache.played(target)
                 val romReadyAt = SystemClock.elapsedRealtime()
                 val savedCore = nativeCoreForUri(rawUri)
                 // The native pick when it runs this system, else its default core.
@@ -1759,6 +1928,8 @@ class MainActivity : Activity() {
             } catch (error: Exception) {
                 Log.e(TAG, "Could not prepare ROM", error)
                 nativeGameError(rawUri, error.message ?: "Cannot open ROM")
+            } finally {
+                RomWarmCache.launching.compareAndSet(rawUri, null)
             }
         }
     }
@@ -2307,13 +2478,26 @@ class MainActivity : Activity() {
 
     /** Snapshot provided by the native renderer, never a network operation. */
     private fun retroAchievementsStatus(): String {
-        val raw = nativeRaStatus() ?: return "Preparing"
+        val raw = nativeRaStatus() ?: return "Syncing"
         return try {
-            when (JSONObject(raw).optString("state", "Disabled")) {
+            val json = JSONObject(raw)
+            // One or two words saying exactly what the worker is doing.
+            val detail = json.optString("detail", "None")
+            when (json.optString("state", "Disabled")) {
                 "Ready" -> "Online"
-                "Syncing" -> "Preparing"
+                "Syncing" -> when (detail) {
+                    "Games" -> "Caching games"
+                    "Badges" -> "Caching badges"
+                    "Retrying" -> "Retrying"
+                    else -> "Syncing"
+                }
                 "Offline" -> "Offline"
-                "Attention" -> "Needs attention"
+                "Attention" -> when (detail) {
+                    "Login" -> "Check login"
+                    "Server" -> "Server error"
+                    "Storage" -> "Storage error"
+                    else -> "Needs attention"
+                }
                 else -> "Inactive"
             }
         } catch (_: Exception) { "Unknown" }
@@ -2681,10 +2865,21 @@ class MainActivity : Activity() {
 
     private fun openRomFolderPicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            // Writable since 2.3: RomM saves the games it downloads there.
             addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
             )
+            // Opens on the folder chosen before, to choose it again.
+            getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)?.let { saved ->
+                try {
+                    val tree = Uri.parse(saved)
+                    putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+                        android.provider.DocumentsContract.buildDocumentUriUsingTree(tree,
+                            android.provider.DocumentsContract.getTreeDocumentId(tree)))
+                } catch (_: Exception) {}
+            }
         }
         try {
             @Suppress("DEPRECATION")
@@ -3038,22 +3233,36 @@ class MainActivity : Activity() {
             if (resultCode == RESULT_OK) data?.data?.let { importVisualFile(requestCode, it) }
             return
         }
+        if (requestCode == FOLDER_REQUEST && (resultCode != RESULT_OK || data?.data == null)) {
+            romm.folderCancelled()
+        }
         if (requestCode !in setOf(FOLDER_REQUEST, BIOS_REQUEST,
                 SAVE_REQUEST, STATE_REQUEST) || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         try {
-            val writable = requestCode == SAVE_REQUEST || requestCode == STATE_REQUEST
+            val writable = requestCode == SAVE_REQUEST || requestCode == STATE_REQUEST ||
+                requestCode == FOLDER_REQUEST
             val flags = if (writable) {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             } else {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
             }
-            contentResolver.takePersistableUriPermission(uri, flags)
+            try {
+                contentResolver.takePersistableUriPermission(uri, flags)
+            } catch (error: SecurityException) {
+                // A ROM folder Android only lets slot. read still plays.
+                if (requestCode != FOLDER_REQUEST) throw error
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
             when (requestCode) {
                 FOLDER_REQUEST -> {
-                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                        .putString(ROM_ROOT, uri.toString()).apply()
-                    scanFolder(uri)
+                    val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                    val same = prefs.getString(ROM_ROOT, null) == uri.toString()
+                    prefs.edit().putString(ROM_ROOT, uri.toString()).apply()
+                    // The same folder chosen again for RomM: only the right
+                    // to write changed, the shelf stays as it is.
+                    val forRomm = romm.folderChosen()
+                    if (!(same && forRomm)) scanFolder(uri)
                 }
                 BIOS_REQUEST -> importBiosFolder(uri, persistSelection = true)
                 SAVE_REQUEST, STATE_REQUEST -> {
@@ -3270,6 +3479,7 @@ class MainActivity : Activity() {
                 }
             }
         }
+        scansRunning.incrementAndGet()
         scanner.execute {
             try {
                 val previous = cachedLibraryGames(uri)
@@ -3320,6 +3530,9 @@ class MainActivity : Activity() {
                         nativeSetShelfStatus(shelfReadError)
                     }
                 }
+            } finally {
+                // After the result above reached the UI thread.
+                runOnUiThread { scansRunning.decrementAndGet() }
             }
         }
     }

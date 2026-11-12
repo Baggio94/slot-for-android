@@ -89,6 +89,38 @@ pub enum Blending {
     Ghosting,
 }
 
+/// The upscaler of GBA Video carts, drawn before their shader: Bilinear,
+/// AMD's FSR 1 or bloc97's Anime4K (Siham 2026-11-10).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Upscaler {
+    Off,
+    Bilinear,
+    #[default]
+    Fsr,
+    Anime4kFast,
+    Anime4k,
+}
+
+impl Upscaler {
+    pub const ALL: [Upscaler; 5] = [Upscaler::Off, Upscaler::Bilinear, Upscaler::Fsr,
+        Upscaler::Anime4kFast, Upscaler::Anime4k];
+    pub fn step(self, right: bool) -> Upscaler {
+        let n = Self::ALL.len();
+        let at = Self::ALL.iter().position(|u| *u == self).unwrap_or(0);
+        Self::ALL[if right { (at + 1) % n } else { (at + n - 1) % n }]
+    }
+    pub fn gpu(self) -> slot_gfx::Upscaler {
+        match self {
+            Upscaler::Off => slot_gfx::Upscaler::Off,
+            Upscaler::Bilinear => slot_gfx::Upscaler::Bilinear,
+            Upscaler::Fsr => slot_gfx::Upscaler::Fsr,
+            Upscaler::Anime4kFast => slot_gfx::Upscaler::Anime4kFast,
+            Upscaler::Anime4k => slot_gfx::Upscaler::Anime4k,
+        }
+    }
+}
+
 /// LCD Effect of the Game Boy family: Matt Akins' Pixel Transparency or
 /// Sunlight Shimmer over the shader (Siham 2026-11-09).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -258,7 +290,9 @@ const GB_PALETTE_GBC_GREEN: u8 = 13;
 const GB_PALETTE_TWB64_GAME_COM: u8 = 48;
 
 /// Original Slot 1.8.1 (#123): 0 means Fast Forward Off.
-pub const SPEEDS: [u8; 5] = [0, 2, 3, 4, 6];
+/// Fast Forward MAX: as fast as the handheld goes (Siham 2026-11-11).
+pub const FF_MAX: u8 = u8::MAX;
+pub const SPEEDS: [u8; 6] = [0, 2, 3, 4, 6, FF_MAX];
 const NAME: &str = "slot-konkr-settings.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,40 +316,46 @@ pub enum Shader {
     // Game Boy Color only: Dot Matrix in the game's colours (Siham
     // 2026-11-10).
     DotMatrixColor,
+    // crt-royale (fast), flat, for NES, Super Nintendo and Mega Drive
+    // (Siham 2026-11-11).
+    CrtRoyale,
 }
 impl Shader {
-    // Exactly ten GBA RetroArch shaders plus Off, preserving the backward
-    // cycling shortcut (Left from Off selects Dot).
+    // Siham's order (2026-11-11): Off, then the lightest and the most used
+    // first, the heaviest last. LCD3x stays the first-install default.
+    // Choices are saved by name, so a new order changes nobody's.
     pub const GBA: [Self; 11] = [
-        Self::Off, Self::Lcd3x, Self::LcdGridV2, Self::LcdGridV2Gba,
-        Self::ZfastLcd, Self::Lcd1x, Self::SimpletexGba,
-        Self::Agb001, Self::Ags001, Self::SharpBilinear, Self::Dot,
+        Self::Off, Self::SharpBilinear, Self::Lcd1x, Self::Lcd3x, Self::ZfastLcd,
+        Self::SimpletexGba, Self::Dot, Self::LcdGridV2, Self::LcdGridV2Gba,
+        Self::Agb001, Self::Ags001,
     ];
-    // GB/GBC: their own four, then the GBA presets without GBA colours.
+    // GB/GBC: their own Grid among the GBA presets without GBA colours.
     pub const GB: [Self; 9] = [
-        Self::Off, Self::Lcd3x, Self::Grid, Self::Simpletex,
-        Self::ZfastLcd, Self::Lcd1x, Self::LcdGridV2, Self::SharpBilinear, Self::Dot,
+        Self::Off, Self::SharpBilinear, Self::Grid, Self::Lcd1x, Self::Lcd3x,
+        Self::ZfastLcd, Self::Simpletex, Self::Dot, Self::LcdGridV2,
     ];
     /// Game Boy Color: the GB/GBC list plus Dot Matrix Color, the Dot
     /// Matrix in the game's own colours (Siham 2026-11-10).
     pub const GBC: [Self; 10] = [
-        Self::Off, Self::Lcd3x, Self::Grid, Self::Simpletex,
-        Self::ZfastLcd, Self::Lcd1x, Self::LcdGridV2, Self::SharpBilinear, Self::Dot,
+        Self::Off, Self::SharpBilinear, Self::Grid, Self::Lcd1x, Self::Lcd3x,
+        Self::ZfastLcd, Self::Simpletex, Self::Dot, Self::LcdGridV2,
         Self::DotMatrixColor,
     ];
     /// Game Boy (DMG) only: the GB/GBC list plus Dot Matrix, a shader made
     /// for the original Game Boy's greens (Siham 2026-11-09).
     pub const DMG: [Self; 10] = [
-        Self::Off, Self::Lcd3x, Self::Grid, Self::Simpletex,
-        Self::ZfastLcd, Self::Lcd1x, Self::LcdGridV2, Self::SharpBilinear, Self::Dot,
+        Self::Off, Self::SharpBilinear, Self::Grid, Self::Lcd1x, Self::Lcd3x,
+        Self::ZfastLcd, Self::Simpletex, Self::Dot, Self::LcdGridV2,
         Self::DotMatrix,
     ];
-    /// NES / Super Nintendo / Mega Drive: Off, then Siham's CRT list with
-    /// zfast-crt first (the default), fakelottes second, crt-aperture third.
-    pub const HOME: [Self; 12] = [
-        Self::Off, Self::ZfastCrt, Self::Fakelottes, Self::CrtAperture,
-        Self::CrtGdvTrinitron, Self::CrtGeomDeluxe, Self::CrtPi,
-        Self::CrtEasymode, Self::CrtHyllian, Self::Sabr, Self::SuperEagle, Self::XbrLv2,
+    /// NES / Super Nintendo / Mega Drive: Off, the CRTs from the lightest
+    /// to the heaviest (zfast-crt, the default, first), then the pixel art
+    /// smoothers (Siham 2026-11-11).
+    pub const HOME: [Self; 13] = [
+        Self::Off, Self::ZfastCrt, Self::Fakelottes, Self::CrtPi,
+        Self::CrtEasymode, Self::CrtHyllian, Self::CrtAperture,
+        Self::CrtGdvTrinitron, Self::CrtGeomDeluxe, Self::CrtRoyale,
+        Self::SuperEagle, Self::XbrLv2, Self::Sabr,
     ];
     pub fn effect(self) -> ScreenEffect {
         match self {
@@ -345,6 +385,7 @@ impl Shader {
             Self::SuperEagle => ScreenEffect::SuperEagle,
             Self::XbrLv2 => ScreenEffect::XbrLv2,
             Self::DotMatrixColor => ScreenEffect::DotMatrixColour,
+            Self::CrtRoyale => ScreenEffect::CrtRoyale,
         }
     }
     pub fn includes_gba_color(self) -> bool {
@@ -486,7 +527,20 @@ pub struct Settings {
     /// transparency (Systems > Mega Drive > Dither Blending).
     #[serde(default)]
     pub dither_blend_md: bool,
+    /// GBA Video carts (game code M...) have their own Screen: Shader,
+    /// Upscaler, Color Correction, and no LCD Effect or Frame Blending
+    /// (Siham 2026-11-10).
+    #[serde(default = "shader_gbav_default")]
+    pub shader_gbav: Shader,
+    #[serde(default)]
+    pub upscaler_gbav: Upscaler,
+    #[serde(default)]
+    pub colour_correction_gbav: bool,
+    /// One-time move of 2.3.0-beta7's Anime4K Fast default to FSR.
+    #[serde(default)]
+    pub gbav_fsr: bool,
 }
+fn shader_gbav_default() -> Shader { Shader::Lcd3x }
 impl Default for Settings {
     fn default() -> Self {
         // Historical defaults for serde's partial legacy JSON. Do not change:
@@ -517,7 +571,9 @@ impl Default for Settings {
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
             blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
             lcd_effect_gba: LcdEffect::Off, lcd_effect_gbc: LcdEffect::Off, lcd_effect_gb: LcdEffect::Off,
-            dither_blend_md: false }
+            dither_blend_md: false,
+            shader_gbav: Shader::Lcd3x, upscaler_gbav: Upscaler::Fsr,
+            colour_correction_gbav: false, gbav_fsr: false }
     }
 }
 impl Settings {
@@ -552,6 +608,7 @@ impl Settings {
             gb_palette_twb64: true,
             gb_overlays_watomsk: true,
             simpletex_gba_colour: true,
+            gbav_fsr: true,
             ..Self::default()
         }
     }
@@ -611,6 +668,7 @@ impl Settings {
                 if !SPEEDS.contains(&s.ff_speed) { s.ff_speed = 2; }
                 if s.shader_gba == Shader::Grid { s.shader_gba = Shader::LcdGridV2; }
                 if !Shader::GBA.contains(&s.shader_gba) { s.shader_gba = Shader::Off; }
+                if !Shader::GBA.contains(&s.shader_gbav) { s.shader_gbav = Shader::Lcd3x; }
                 if !Shader::DMG.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
                 if !Shader::GBC.contains(&s.shader_gbc) { s.shader_gbc = Shader::Off; }
                 for shader in [&mut s.shader_nes, &mut s.shader_snes, &mut s.shader_md] {
@@ -642,6 +700,12 @@ impl Settings {
                         s.gb_palette = GB_PALETTE_TWB64_GAME_COM;
                     }
                     s.gb_palette_twb64 = true;
+                }
+                // Once: GBA Video's Upscaler default is FSR, not 2.3.0-beta7's
+                // Anime4K Fast (Siham 2026-11-10); a game's own choice stays.
+                if !s.gbav_fsr {
+                    s.upscaler_gbav = Upscaler::Fsr;
+                    s.gbav_fsr = true;
                 }
                 // Once: GB/GBC overlays left OFF take Watomsk's frames, the
                 // new default; a later OFF is kept.
@@ -753,6 +817,16 @@ impl Settings {
         }
     }
 
+    /// What a GBA Video cart plays with: its own Shader and Color
+    /// Correction in the GBA fields, no LCD Effect, no Frame Blending.
+    pub fn as_gba_video(&self) -> Settings {
+        let mut video = self.clone();
+        video.shader_gba = self.shader_gbav;
+        video.set_colour_for(slot_store::Platform::Gba, self.colour_correction_gbav);
+        video.lcd_effect_gba = LcdEffect::Off;
+        video.blending_gba = Blending::Off;
+        video
+    }
     pub fn set_colour_for(&mut self,platform:slot_store::Platform,value:bool) {
         match platform {
             slot_store::Platform::Gba=>{
@@ -822,6 +896,7 @@ impl Settings {
                 *blending = blending.step(right);
             }
             66 => self.lcd_effect_gba = self.lcd_effect_gba.step(right),
+            70 => self.upscaler_gbav = self.upscaler_gbav.step(right),
             67 => self.lcd_effect_gbc = self.lcd_effect_gbc.step(right),
             68 => self.lcd_effect_gb = self.lcd_effect_gb.step(right),
             69 => self.dither_blend_md = !self.dither_blend_md,
@@ -1339,7 +1414,12 @@ mod tests {
     }
     #[test]
     fn new_shaders_lcd_effects_and_dither_blending_roundtrip() {
-        assert_eq!(Shader::HOME.len(), 12);
+        assert_eq!(Shader::HOME.len(), 13);
+        assert_eq!(Shader::HOME[..2], [Shader::Off, Shader::ZfastCrt]);
+        assert_eq!(Shader::HOME.last(), Some(&Shader::Sabr));
+        assert!(Shader::HOME.contains(&Shader::CrtRoyale));
+        assert!(!Shader::GBA.contains(&Shader::CrtRoyale) && !Shader::GB.contains(&Shader::CrtRoyale));
+        assert_eq!(serde_json::to_string(&Shader::CrtRoyale).unwrap(), "\"crtroyale\"");
         assert!(Shader::DMG.contains(&Shader::DotMatrix) && !Shader::GB.contains(&Shader::DotMatrix));
         assert!(Shader::GBC.contains(&Shader::DotMatrixColor) && !Shader::DMG.contains(&Shader::DotMatrixColor)
             && !Shader::GBA.contains(&Shader::DotMatrixColor));
@@ -1417,11 +1497,13 @@ mod tests {
     #[test]
     fn screen_gameplay_original_choices_cycle() {
         let mut s = Settings::default();
-        s.change(0, false); assert_eq!(s.shader_gba, Shader::Dot);
+        s.change(0, false); assert_eq!(s.shader_gba, Shader::Ags001);
         s.change(1, false); assert_eq!(s.shader_gb, Shader::DotMatrix);
         // 2x wraps left to Off (original Slot 1.8.1), then back to 6x.
         s.change(4, false); assert_eq!(s.ff_speed, 0);
+        s.change(4, false); assert_eq!(s.ff_speed, FF_MAX);
         s.change(4, false); assert_eq!(s.ff_speed, 6);
+        s.change(4, true); assert_eq!(s.ff_speed, FF_MAX);
         s.change(4, true); assert_eq!(s.ff_speed, 0);
         s.change(4, true); assert_eq!(s.ff_speed, 2);
         for i in [2, 3, 5, 7, 8, 9] { assert!(s.change(i, true)); }
@@ -1529,7 +1611,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("slot-konkr-dev14-{}", std::process::id()));
         // Already past the one-time 3:2 home overlay change.
         let mut s = Settings { home_bezel_three_two: true, gb_palette_twb64: true,
-            gb_overlays_watomsk: true, simpletex_gba_colour: true,
+            gb_overlays_watomsk: true, simpletex_gba_colour: true, gbav_fsr: true,
             ..Settings::default() };
         s.change(0, true); s.change(6, true); s.gb_palette = 47;
         s.save(&dir).unwrap();
@@ -1642,6 +1724,43 @@ mod tests {
         s.save(&root).unwrap();
         assert_eq!(Settings::load_for_device(&root, Device::KONKR).bezel_md,Bezel::MegaDrive);
         let _=fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_gba_video_cart_has_its_own_screen() {
+        let mut s = Settings::default();
+        assert_eq!((s.shader_gbav, s.upscaler_gbav, s.colour_correction_gbav),
+            (Shader::Lcd3x, Upscaler::Fsr, false));
+        s.shader_gba = Shader::Dot;
+        s.set_colour_for(slot_store::Platform::Gba, true);
+        s.lcd_effect_gba = LcdEffect::Sunlight;
+        s.blending_gba = Blending::Mix;
+        let video = s.as_gba_video();
+        assert_eq!(video.shader_gba, Shader::Lcd3x);
+        assert!(!video.colour_for(slot_store::Platform::Gba));
+        assert_eq!((video.lcd_effect_gba, video.blending_gba), (LcdEffect::Off, Blending::Off));
+        let mut seen = vec![s.upscaler_gbav];
+        for _ in 0..5 { assert!(s.change(70, true)); seen.push(s.upscaler_gbav); }
+        assert_eq!(seen.first(), seen.last());
+        assert!(s.change(70, false) && s.upscaler_gbav == Upscaler::Bilinear);
+    }
+
+    #[test]
+    fn old_settings_get_the_gba_video_defaults() {
+        let dir = std::env::temp_dir().join(format!("slot-gbav-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(NAME), r#"{"shader_gba":"dot"}"#).unwrap();
+        let s = Settings::load(&dir);
+        assert_eq!((s.shader_gbav, s.upscaler_gbav), (Shader::Lcd3x, Upscaler::Fsr));
+        // beta7's saved Anime4K Fast moves to FSR once; a later choice stays.
+        fs::write(dir.join(NAME), r#"{"upscaler_gbav":"anime4kfast"}"#).unwrap();
+        let mut s = Settings::load(&dir);
+        assert_eq!(s.upscaler_gbav, Upscaler::Fsr);
+        s.upscaler_gbav = Upscaler::Anime4k;
+        s.save(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).upscaler_gbav, Upscaler::Anime4k);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

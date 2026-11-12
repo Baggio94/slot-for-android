@@ -37,8 +37,10 @@ struct WorkQueue {
     closing: bool,
 }
 
-/// Every shelf a face can be asked for: each system's, then Recents and Favorites.
-const RACKS: usize = slot_store::Platform::ALL.len() + 2;
+/// Every shelf a face can be asked for: each system's, then Recents and
+/// Favorites, then Library > RomM's page (runtime/romm.rs ROMM_RACK).
+/// The systems, Recents, Favorites, GBA Video and Library > RomM's page.
+const RACKS: usize = slot_store::Platform::ALL.len() + 4;
 
 pub(crate) struct CartRender {
     // A short-held priority queue lets rapid D-pad / L1-R1 changes discard

@@ -88,8 +88,16 @@ pub(crate) struct Queue {
     known: BTreeSet<String>,
     pending: VecDeque<String>,
     retry: Instant,
+    /// The last download failed; the queue pauses and tries again.
     pub waiting: bool,
+    /// Failed attempts per image still in the queue.
+    failures: std::collections::BTreeMap<String, u8>,
 }
+
+/// An image the server is missing, or that never decodes, is dropped after
+/// this many attempts so the rest of the cache can finish. It is asked for
+/// again only after slot. restarts.
+const GIVE_UP_AFTER: u8 = 3;
 
 impl Queue {
     pub fn new(dir: &Path) -> Self {
@@ -100,6 +108,7 @@ impl Queue {
             pending: VecDeque::new(),
             retry: Instant::now(),
             waiting: false,
+            failures: std::collections::BTreeMap::new(),
         };
         queue.scan();
         queue
@@ -184,15 +193,30 @@ impl Queue {
                 slot_store::atomic_write(&target, &bytes).map_err(|_| Failure::Invalid)
             })
         };
-        if result.is_ok() {
-            self.names.remove(&name);
-            if self.pending.is_empty() {
+        match result {
+            Ok(()) => {
+                self.names.remove(&name);
+                self.failures.remove(&name);
                 self.waiting = false;
             }
-        } else {
-            self.pending.push_back(name);
-            self.waiting = true;
-            self.retry = Instant::now() + Duration::from_secs(30);
+            // Offline or a timeout: nothing is wrong with this image.
+            Err(Failure::Network) => {
+                self.pending.push_back(name);
+                self.waiting = true;
+                self.retry = Instant::now() + Duration::from_secs(30);
+            }
+            Err(_) => {
+                let tries = self.failures.entry(name.clone()).or_default();
+                *tries += 1;
+                if *tries >= GIVE_UP_AFTER {
+                    // Kept in `names` so a rescan does not queue it again.
+                    self.failures.remove(&name);
+                    eprintln!("slot: achievements badge {name} unavailable, skipped");
+                } else {
+                    self.pending.push_back(name);
+                }
+                self.waiting = false;
+            }
         }
     }
 }

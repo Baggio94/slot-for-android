@@ -115,6 +115,31 @@ fn auto_shell(entry: &RomEntry, platform: Platform) -> Option<ShellChoice> {
     }
 }
 
+/// The automatic shell of a cart known only by its name (a RomM game, not
+/// downloaded yet): the home systems' region mould and colour; the Game
+/// Boys' from their header once slot. read it from the server, their plain
+/// grey or dark plastic until then.
+pub fn remote_shell(platform: Platform, title: &str, gb: Option<RemoteGbHeader>) -> Option<ShellChoice> {
+    let gb = gb.unwrap_or_default();
+    let entry = RomEntry {
+        title: title.to_owned(), platform: String::new(), uri: String::new(), code: String::new(),
+        color_only: gb.cgb_flag == Some(0xc0), shell_override: None, gb_title: gb.title,
+        gb_code: gb.code, gb_japan: gb.japan, gb_cgb_flag: gb.cgb_flag, home_title: String::new(),
+        home_region: String::new(), home_battery: false, home_maker: String::new(),
+    };
+    auto_shell(&entry, platform)
+}
+
+/// A Game Boy cart's header fields, as RomLibrary reads them (0x134 title,
+/// 0x13F code, 0x14A destination, 0x143 CGB flag).
+#[derive(Clone, Debug, Default)]
+pub struct RemoteGbHeader {
+    pub title: String,
+    pub code: String,
+    pub japan: bool,
+    pub cgb_flag: Option<i32>,
+}
+
 /// The shell a cart wears with a Cart Studio choice over its automatic one.
 pub fn chosen_shell(platform: Platform, auto: Option<ShellChoice>, chosen: Option<ShellChoice>) -> Option<ShellChoice> {
     chosen

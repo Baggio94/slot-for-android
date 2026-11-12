@@ -260,6 +260,30 @@ impl Compositor {
         self.game.set_lcd_effect(lcd);
     }
 
+    /// Screen > Upscaler (GBA Video carts).
+    pub fn set_upscaler(&mut self, upscaler: crate::Upscaler) {
+        self.game.set_upscaler(upscaler);
+    }
+
+    pub fn upscaler_running(&self) -> crate::Upscaler {
+        self.game.upscaler_running()
+    }
+
+    /// The context's pending GL error (tests only).
+    #[cfg(feature = "test-support")]
+    pub fn gl_error(&self) -> u32 {
+        unsafe { gl::GetError() }
+    }
+
+    pub fn upscaler_runs(&self) -> u64 {
+        self.game.upscaler_runs()
+    }
+
+    /// Whether crt-royale drew the last frame (false: zfast-crt stood in).
+    pub fn crt_royale_running(&self) -> bool {
+        self.game.crt_royale_running()
+    }
+
     pub fn set_light(&mut self, x: f32, y: f32) {
         self.game.set_light(x, y);
     }
@@ -380,6 +404,8 @@ impl Compositor {
             self.size.0 as f32 / out_w() as f32,
             self.size.1 as f32 / OUT_H as f32,
         );
+        // LCD Effect caches first, before the canvas is bound.
+        self.game.prepare(&self.quad);
         unsafe {
             gl::BindFramebuffer(gl::FRAMEBUFFER, self.fbo);
             gl::Viewport(0, 0, self.size.0 as i32, self.size.1 as i32);

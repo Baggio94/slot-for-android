@@ -171,6 +171,7 @@ fn session(root: &Path, failure: Failure) -> (GameSession, Arc<Mutex<Calls>>) {
         kept_flash_save: false,
         sma4_runahead_guard: false,
         solar: None,
+        motion: false,
         sun_luminance: None,
         sun_auto_minutes: None,
         palette_live: false,

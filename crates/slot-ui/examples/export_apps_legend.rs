@@ -36,6 +36,11 @@ fn export(destination: &std::path::Path) -> Result<(), Box<dyn std::error::Error
         ("select.png", hint_face("A", "Select")),
         ("refresh.png", hint_face("START", "Refresh")),
         ("sign-out.png", hint_face("X", "Sign Out")),
+        // Library > RomM's forms: the sign-in's two modes on the shoulders
+        // (the controller's own L1 / R1 art), a filter's value on Left/Right.
+        ("l1-pairing-code.png", hint_face("L1", "Pairing Code")),
+        ("r1-account.png", hint_face("R1", "Account")),
+        ("change.png", arrows_hint_face("Change")),
         // Pixel-identical to Rust's Library/Settings heading textures.
         ("heading-apps.png", quick_value_face("APPS", true)),
         ("heading-ra.png", quick_value_face("RETROACHIEVEMENTS", true)),

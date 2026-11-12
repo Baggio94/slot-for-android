@@ -173,142 +173,212 @@ internal object RomLibrary {
             }
             val (id, name, extension, size, modified, dir) = candidate
             val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
-            // Keep the shelf title identical to the RetroArch save basename.
-            val title = name.substringBeforeLast('.').trim().take(200)
-            if (title.isEmpty()) continue
-            val uriText = fileUri.toString()
-            val old = previous[uriText]
-            val reuse = old != null && canReuseHeader(
-                old.optString("title"), old.optLong("size", -1),
-                old.optLong("modified", -1), title, size, modified) &&
-                // Old indexes lack the GB header metadata used by
-                // Cart Studio. Read only 0x150 bytes once to migrate.
-                // Older ones also lack whether a GB/GBA cart has a
-                // battery (2026-11): read once more to learn it.
-                (old.has("home_battery") && (old.optString("platform") == "GBA" ||
-                    old.has("gb_cgb_flag") || old.has("home_maker")))
-            // ZIP archives remain a single shelf cartridge identified
-            // by the ZIP's SAF URI and filename. Resolve the embedded
-            // ROM header/extension only on cache misses.
-            val zipped = extension == "zip"
-            val zipHeader = if (zipped && !reuse) {
-                try {
-                    resolver.openInputStream(fileUri)?.use { input ->
-                        RomSource.inspect(input, name)
-                    }
-                } catch (error: Exception) {
-                    android.util.Log.w("SlotKonkr",
-                        "Skipping unsupported/corrupt cartridge ZIP: " +
-                            name.take(80), error)
-                    null
-                }
-            } else null
-            if (zipped && !reuse && zipHeader == null) continue
-            val embeddedExtension = zipHeader?.extension
-                ?: if (zipped) old?.optString("rom_ext")?.takeIf { it.isNotEmpty() }
-                    ?: when (old?.optString("platform")) {
-                    "GBA" -> "gba"
-                    "GBC" -> "gbc"
-                    else -> "gb"
-                } else extension
-            val gba = embeddedExtension == "gba"
-            val home = Systems.isHome(embeddedExtension)
-            var homeHeader = Systems.HomeHeader("", "", false)
-            var code: String
-            var colorOnly: Boolean
-            var platform: String
-            var gbTitle = ""
-            var gbCode = ""
-            var gbJapan = false
-            var gbCgbFlag = -1
-            if (reuse && old != null) {
-                headersReused++
-                code = old.optString("code")
-                colorOnly = old.optBoolean("color_only")
-                platform = old.optString("platform")
-                gbTitle = old.optString("gb_title")
-                gbCode = old.optString("gb_code")
-                gbJapan = old.optBoolean("gb_japan")
-                gbCgbFlag = old.optInt("gb_cgb_flag", -1)
-                homeHeader = Systems.HomeHeader(old.optString("home_title"),
-                    old.optString("home_region"), old.optBoolean("home_battery"),
-                    old.optString("home_maker"))
-            } else {
-                headersRead++
-                val header = zipHeader?.bytes
-                    ?: cartridgeHeader(context, fileUri, Systems.headerBytes(embeddedExtension))
-                // A .bin is a Mega Drive cart only with a SEGA header.
-                if (!Systems.acceptsHeader(embeddedExtension, header)) continue
-                if (home) homeHeader = Systems.homeHeader(embeddedExtension, header, name)
-                else if (!gba) homeHeader = Systems.HomeHeader("", "", Systems.gbBattery(header))
-                else homeHeader = Systems.HomeHeader("", "", try {
-                    resolver.openInputStream(fileUri)?.use { input ->
-                        RomSource.useRom(input, name) { rom, _ -> Systems.gbaBattery(rom) }
-                    } ?: false
-                } catch (_: Exception) { false })
-                // Use the exact Nintendo GB header fields read by
-                // Cart Studio's automatic shell selector. Never infer
-                // colours from the ROM filename or download artwork.
-                if (!gba && !home && header.size >= 0x14b) {
-                    gbTitle = String(header, 0x134, 11, Charsets.US_ASCII)
-                        .substringBefore('\u0000').trim()
-                    gbCode = String(header, 0x13f, 4, Charsets.US_ASCII)
-                        .takeIf { value -> value.all { it in 'A'..'Z' || it in '0'..'9' } }
-                        ?: ""
-                    gbJapan = header[0x14a].toInt() == 0
-                    gbCgbFlag = header[0x143].toInt() and 0xff
-                }
-                code = if (gba && header.size >= 0xb0) {
-                    String(header, 0xac, 4, Charsets.US_ASCII)
-                        .takeIf { it.all { c -> c in 'A'..'Z' || c in '0'..'9' } }
-                        ?: ""
-                } else ""
-                colorOnly = !gba && !home && (embeddedExtension == "gbc" ||
-                    (header.size > 0x143 && (header[0x143].toInt() and 0xff) == 0xc0))
-                val container = dir.folder.lowercase(Locale.ROOT)
-                val gbColor = !gba && !home && (embeddedExtension == "gbc" || colorOnly ||
-                    container == "gbc" || container == "game boy color")
-                platform = when {
-                    home -> Systems.platformFor(embeddedExtension)!!
-                    gba -> "GBA"
-                    gbColor -> "GBC"
-                    else -> "GB"
-                }
-            }
-            val game = JSONObject()
-                .put("title", title)
-                .put("filename", name)
-                .put("platform", platform)
-                .put("uri", uriText)
-                .put("code", code)
-                .put("color_only", colorOnly)
-                .put("size", size)
-                .put("modified", modified)
-            if (home) {
-                // The home console shells, labels and battery read
-                // these; rom_ext lets a cached ZIP keep its system.
-                game.put("rom_ext", embeddedExtension)
-                    .put("home_title", homeHeader.title)
-                    .put("home_region", homeHeader.region)
-                    .put("home_battery", homeHeader.battery)
-                    .put("home_maker", homeHeader.maker)
-            } else {
-                // GB/GBC/GBA: the board shows a battery only for a
-                // cart that keeps its save on one.
-                game.put("home_battery", homeHeader.battery)
-            }
-            if (!home && !gba) {
-                game.put("gb_title", gbTitle)
-                    .put("gb_code", gbCode)
-                    .put("gb_japan", gbJapan)
-                    .put("gb_cgb_flag", gbCgbFlag)
-            }
-            games.put(game)
+            val read = readEntry(context, fileUri, name, extension, size, modified,
+                dir.folder, previous[fileUri.toString()]) ?: continue
+            if (read.reused) headersReused++ else headersRead++
+            games.put(read.game)
         }
         progress?.invoke(found.size, found.size)
         android.util.Log.i("SlotKonkr", "ROM scan: $directories folders, ${games.length()} carts, " +
             "headers read=$headersRead, reused=$headersReused")
         return ScanResult(games.toString(), games.length(), truncated)
+    }
+
+    /** One cart as the index keeps it, and whether its header came from
+     *  the old index. Null when the file is not a cart slot. runs. */
+    private class ReadEntry(val game: JSONObject, val reused: Boolean)
+
+    private fun readEntry(context: Context, fileUri: Uri, name: String, extension: String,
+                          size: Long, modified: Long, folder: String,
+                          old: JSONObject?): ReadEntry? {
+        val resolver = context.contentResolver
+        // Keep the shelf title identical to the RetroArch save basename.
+        val title = name.substringBeforeLast('.').trim().take(200)
+        if (title.isEmpty()) return null
+        val uriText = fileUri.toString()
+        val reuse = old != null && canReuseHeader(
+            old.optString("title"), old.optLong("size", -1),
+            old.optLong("modified", -1), title, size, modified) &&
+            // Old indexes lack the GB header metadata used by
+            // Cart Studio. Read only 0x150 bytes once to migrate.
+            // Older ones also lack whether a GB/GBA cart has a
+            // battery (2026-11): read once more to learn it.
+            (old.has("home_battery") && (old.optString("platform") == "GBA" ||
+                old.has("gb_cgb_flag") || old.has("home_maker")))
+        // ZIP archives remain a single shelf cartridge identified
+        // by the ZIP's SAF URI and filename. Resolve the embedded
+        // ROM header/extension only on cache misses.
+        val zipped = extension == "zip"
+        val zipHeader = if (zipped && !reuse) {
+            try {
+                resolver.openInputStream(fileUri)?.use { input ->
+                    RomSource.inspect(input, name)
+                }
+            } catch (error: Exception) {
+                android.util.Log.w("SlotKonkr",
+                    "Skipping unsupported/corrupt cartridge ZIP: " +
+                        name.take(80), error)
+                null
+            }
+        } else null
+        if (zipped && !reuse && zipHeader == null) return null
+        val embeddedExtension = zipHeader?.extension
+            ?: if (zipped) old?.optString("rom_ext")?.takeIf { it.isNotEmpty() }
+                ?: when (old?.optString("platform")) {
+                "GBA" -> "gba"
+                "GBC" -> "gbc"
+                else -> "gb"
+            } else extension
+        val gba = embeddedExtension == "gba"
+        val home = Systems.isHome(embeddedExtension)
+        var homeHeader = Systems.HomeHeader("", "", false)
+        var code: String
+        var colorOnly: Boolean
+        var platform: String
+        var gbTitle = ""
+        var gbCode = ""
+        var gbJapan = false
+        var gbCgbFlag = -1
+        if (reuse && old != null) {
+            code = old.optString("code")
+            colorOnly = old.optBoolean("color_only")
+            platform = old.optString("platform")
+            gbTitle = old.optString("gb_title")
+            gbCode = old.optString("gb_code")
+            gbJapan = old.optBoolean("gb_japan")
+            gbCgbFlag = old.optInt("gb_cgb_flag", -1)
+            homeHeader = Systems.HomeHeader(old.optString("home_title"),
+                old.optString("home_region"), old.optBoolean("home_battery"),
+                old.optString("home_maker"))
+        } else {
+            val header = zipHeader?.bytes
+                ?: cartridgeHeader(context, fileUri, Systems.headerBytes(embeddedExtension))
+            // A .bin is a Mega Drive cart only with a SEGA header.
+            if (!Systems.acceptsHeader(embeddedExtension, header)) return null
+            if (home) homeHeader = Systems.homeHeader(embeddedExtension, header, name)
+            else if (!gba) homeHeader = Systems.HomeHeader("", "", Systems.gbBattery(header))
+            else homeHeader = Systems.HomeHeader("", "", try {
+                resolver.openInputStream(fileUri)?.use { input ->
+                    RomSource.useRom(input, name) { rom, _ -> Systems.gbaBattery(rom) }
+                } ?: false
+            } catch (_: Exception) { false })
+            // Use the exact Nintendo GB header fields read by
+            // Cart Studio's automatic shell selector. Never infer
+            // colours from the ROM filename or download artwork.
+            if (!gba && !home && header.size >= 0x14b) {
+                gbTitle = String(header, 0x134, 11, Charsets.US_ASCII)
+                    .substringBefore('\u0000').trim()
+                gbCode = String(header, 0x13f, 4, Charsets.US_ASCII)
+                    .takeIf { value -> value.all { it in 'A'..'Z' || it in '0'..'9' } }
+                    ?: ""
+                gbJapan = header[0x14a].toInt() == 0
+                gbCgbFlag = header[0x143].toInt() and 0xff
+            }
+            code = if (gba && header.size >= 0xb0) {
+                String(header, 0xac, 4, Charsets.US_ASCII)
+                    .takeIf { it.all { c -> c in 'A'..'Z' || c in '0'..'9' } }
+                    ?: ""
+            } else ""
+            colorOnly = !gba && !home && (embeddedExtension == "gbc" ||
+                (header.size > 0x143 && (header[0x143].toInt() and 0xff) == 0xc0))
+            val container = folder.lowercase(Locale.ROOT)
+            val gbColor = !gba && !home && (embeddedExtension == "gbc" || colorOnly ||
+                container == "gbc" || container == "game boy color")
+            platform = when {
+                home -> Systems.platformFor(embeddedExtension)!!
+                gba -> "GBA"
+                gbColor -> "GBC"
+                else -> "GB"
+            }
+        }
+        val game = JSONObject()
+            .put("title", title)
+            .put("filename", name)
+            .put("platform", platform)
+            .put("uri", uriText)
+            .put("code", code)
+            .put("color_only", colorOnly)
+            .put("size", size)
+            .put("modified", modified)
+        if (home) {
+            // The home console shells, labels and battery read
+            // these; rom_ext lets a cached ZIP keep its system.
+            game.put("rom_ext", embeddedExtension)
+                .put("home_title", homeHeader.title)
+                .put("home_region", homeHeader.region)
+                .put("home_battery", homeHeader.battery)
+                .put("home_maker", homeHeader.maker)
+        } else {
+            // GB/GBC/GBA: the board shows a battery only for a
+            // cart that keeps its save on one.
+            game.put("home_battery", homeHeader.battery)
+        }
+        if (!home && !gba) {
+            game.put("gb_title", gbTitle)
+                .put("gb_code", gbCode)
+                .put("gb_japan", gbJapan)
+                .put("gb_cgb_flag", gbCgbFlag)
+        }
+        return ReadEntry(game, reuse)
+    }
+
+    /** A file slot. just saved in the ROM folder (RomM): its folder's name
+     *  ("" for the ROM folder itself), as a scan would see it. */
+    internal data class SavedFile(val uri: Uri, val folder: String,
+                                  val label: java.io.File? = null, val labelPlatform: String = "")
+
+    /** The URI a scan gives this file, whatever form its provider gave. */
+    fun indexUri(treeUri: Uri, file: Uri): Uri =
+        DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getDocumentId(file))
+
+    /**
+     * The index with files slot. just saved added to it, read the way a scan
+     * reads them, so the next scan finds the same index. No folder listing.
+     * Null when it can't be done safely (no index, a file unreadable or not a
+     * cart): the caller scans the folder instead.
+     */
+    fun withSavedFiles(context: Context, treeUri: Uri, gamesJson: String,
+                       files: List<SavedFile>): String? {
+        val resolver = context.contentResolver
+        val columns = arrayOf(
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+        )
+        val added = ArrayList<JSONObject>()
+        for (file in files) {
+            val fileUri = indexUri(treeUri, file.uri)
+            val (name, size, modified) = resolver.query(fileUri, columns, null, null, null)?.use { c ->
+                if (!c.moveToFirst()) return null
+                val name = c.getString(c.getColumnIndexOrThrow(columns[0])) ?: return null
+                // Providers may leave these out, as in a scan.
+                val sizeIndex = c.getColumnIndex(columns[1])
+                val modifiedIndex = c.getColumnIndex(columns[2])
+                Triple(name,
+                    if (sizeIndex >= 0 && !c.isNull(sizeIndex)) c.getLong(sizeIndex) else -1L,
+                    if (modifiedIndex >= 0 && !c.isNull(modifiedIndex)) c.getLong(modifiedIndex) else -1L)
+            } ?: return null
+            if (name.startsWith(".")) return null
+            val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            if (!isSupportedRomExtension(extension)) return null
+            added += readEntry(context, fileUri, name, extension, size, modified,
+                file.folder, null)?.game ?: return null
+        }
+        return mergeGames(gamesJson, added)
+    }
+
+    /** The index with these carts in it, each replacing the one at its URI.
+     *  Null past the shelf's bound. */
+    internal fun mergeGames(gamesJson: String, added: List<JSONObject>): String? {
+        val old = JSONArray(gamesJson)
+        val replaced = added.mapTo(HashSet()) { it.optString("uri") }
+        val games = JSONArray()
+        for (i in 0 until old.length()) {
+            val game = old.optJSONObject(i) ?: continue
+            if (game.optString("uri") !in replaced) games.put(game)
+        }
+        for (game in added) games.put(game)
+        return if (games.length() > MAX_ROMS) null else games.toString()
     }
 
     /** Only stable nonzero provider metadata permits skipping a header read. */

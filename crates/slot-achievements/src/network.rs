@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::storage::{self, Auth, Config, Game, Store, Unlock};
-use crate::{wake_evaluator, Notice, Status, SyncStatus};
+use crate::{wake_evaluator, Notice, Status, SyncDetail, SyncStatus};
 
 const API: &str = "https://retroachievements.org/dorequest.php";
 const VERSION: &str = "12.2.1";
@@ -75,6 +75,15 @@ impl Http {
     }
 }
 
+/// An image the server says it does not have is not a network problem:
+/// the badge queue stops asking for it instead of retrying forever.
+fn image_failure(error: ureq::Error) -> Failure {
+    match error {
+        ureq::Error::StatusCode(404 | 410) => Failure::Rejected,
+        _ => Failure::Network,
+    }
+}
+
 impl Transport for Http {
     fn game_icon(&mut self, id: &str) -> Result<Vec<u8>, Failure> {
         // Strict numeric ImageIcon identifier; never accept caller-supplied URL.
@@ -84,7 +93,7 @@ impl Transport for Http {
         self.0
             .get(format!("https://media.retroachievements.org/Images/{id}.png"))
             .call()
-            .map_err(|_| Failure::Network)?
+            .map_err(image_failure)?
             .body_mut()
             .with_config()
             .limit(crate::badges::MAX_BYTES)
@@ -98,7 +107,7 @@ impl Transport for Http {
                 "https://media.retroachievements.org/Badge/{name}.png"
             ))
             .call()
-            .map_err(|_| Failure::Network)?
+            .map_err(image_failure)?
             .body_mut()
             .with_config()
             .limit(crate::badges::MAX_BYTES)
@@ -425,6 +434,8 @@ pub(crate) fn run(
     let mut library = crate::library::pending(&root, &dir, now());
     let mut library_total = library.len();
     let mut library_failed = false;
+    // The last pass failed only on one ROM of the library, not on the account.
+    let mut item_failed = false;
     let mut rescanned = Instant::now();
     let mut badges = crate::badges::Queue::new(&dir);
     let mut smart_queue: VecDeque<(String, u32)> = VecDeque::new();
@@ -547,8 +558,12 @@ pub(crate) fn run(
                 !game.online || (game.ready && game.last_ping.elapsed() >= Duration::from_secs(120))
             })
         {
-            status.set(SyncStatus::Syncing);
+            status.explain(
+                SyncStatus::Syncing,
+                busy_detail(!library.is_empty() || !smart_queue.is_empty(), &badges),
+            );
         }
+        item_failed = false;
         let result = (|| -> Result<(), Failure> {
             if !verified {
                 let logged_in = login(&mut http, &config, auth.as_ref()).map_err(|e| {
@@ -677,6 +692,7 @@ pub(crate) fn run(
                                 // The next SAF pass may offer it again, rate limited.
                                 let failed = smart_queue.pop_front().unwrap();
                                 queued_hashes.remove(&failed.0);
+                                item_failed |= deferred_error.is_none();
                                 deferred_error = Some(error);
                             }
                         }
@@ -695,6 +711,7 @@ pub(crate) fn run(
                         Err(Failure::Network) => return Err(Failure::Network),
                         Err(error) => {
                             library_failed = true;
+                            item_failed |= deferred_error.is_none();
                             deferred_error = Some(error);
                         }
                     }
@@ -731,17 +748,20 @@ pub(crate) fn run(
         );
         match result {
             Ok(()) => {
-                status.set(if library_failed || badges.waiting {
-                    SyncStatus::Attention
-                } else if !library.is_empty()
+                // One ROM or one badge that failed is retried later on its own:
+                // it never turns the whole account status into an error.
+                if !library.is_empty()
                     || !smart_queue.is_empty()
                     || badges.pending()
                     || store.lock().unwrap().unlocks.values().any(|u| !u.synced)
                 {
-                    SyncStatus::Syncing
+                    status.explain(
+                        SyncStatus::Syncing,
+                        busy_detail(!library.is_empty() || !smart_queue.is_empty(), &badges),
+                    );
                 } else {
-                    SyncStatus::Ready
-                });
+                    status.explain(SyncStatus::Ready, SyncDetail::None);
+                }
                 delay = 30;
                 warned = false;
                 // Respect the persisted rolling 100-game/30-minute budget.
@@ -755,17 +775,21 @@ pub(crate) fn run(
                     } else { 1 });
             }
             Err(error) => {
-                status.set(if error == Failure::Network {
-                    SyncStatus::Offline
-                } else {
-                    SyncStatus::Attention
-                });
+                match error {
+                    Failure::Network => status.explain(SyncStatus::Offline, SyncDetail::None),
+                    // A single ROM the server could not prepare: retried on the
+                    // next library scan, after a fresh login.
+                    _ if item_failed => status.explain(SyncStatus::Syncing, SyncDetail::Retrying),
+                    Failure::Rejected => status.explain(SyncStatus::Attention, SyncDetail::Server),
+                    Failure::Authentication => status.explain(SyncStatus::Attention, SyncDetail::Login),
+                    Failure::Invalid => status.explain(SyncStatus::Attention, SyncDetail::Storage),
+                }
                 // Reauthenticate after errors. No rejected or malformed response consumes an award.
                 verified = false;
                 let quiet_offline = error == Failure::Network
                     && (active.as_ref().is_some_and(|g| g.ready)
                         || (active.is_none() && auth.is_some()));
-                if !warned && !quiet_offline {
+                if !warned && !quiet_offline && !item_failed {
                     let generation = active.as_ref().map_or(0, |g| g.generation);
                     let title = match error {
                         Failure::Network if active.as_ref().is_some_and(|g| g.ready) => {
@@ -1061,6 +1085,19 @@ mod presence_tests {
 }
 
 // A fixed phase split keeps newly discovered badges from moving progress backwards.
+/// What a busy pass is working on: game metadata first, then images.
+fn busy_detail(games: bool, badges: &crate::badges::Queue) -> SyncDetail {
+    if games {
+        SyncDetail::Games
+    } else if badges.waiting {
+        SyncDetail::Retrying
+    } else if badges.pending() {
+        SyncDetail::Badges
+    } else {
+        SyncDetail::None
+    }
+}
+
 fn cache_progress(
     total: usize,
     remaining: usize,

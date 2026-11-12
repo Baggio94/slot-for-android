@@ -1,7 +1,7 @@
 //! Per-cartridge opt-in latency profiles. Never touch the ROM or RetroArch saves.
 use std::{fs, io, path::{Path, PathBuf}};
 use serde::{Deserialize, Serialize};
-use crate::{core_selection, settings::{self, Settings, Shader, Bezel, Blending, LcdEffect}};
+use crate::{core_selection, settings::{self, Settings, Shader, Bezel, Blending, LcdEffect, Upscaler}};
 use slot_store::{Core, Platform};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,12 +31,28 @@ pub struct EmulationProfile {
     // for the light sensor. None follows the handheld (sensor if it has
     // one).
     pub sun: Option<u8>,
+    // Tilt and gyro games' sensitivity, MOTION_MIN..=MOTION_MAX; None is
+    // MOTION_DEFAULT, the sensors as they read (Siham 2026-11-12).
+    pub motion: Option<u8>,
     // Frame Blending, LCD Effect and Dither Blending changed in game are
     // this game's; Settings > Systems keeps each system's default (Siham
     // 2026-11-10).
     pub blending_override: Option<Blending>,
     pub lcd_effect_override: Option<LcdEffect>,
     pub dither_override: Option<bool>,
+    /// A GBA Video cart's Upscaler (Siham 2026-11-10).
+    pub upscaler_override: Option<Upscaler>,
+}
+
+pub const MOTION_MIN: u8 = 1;
+pub const MOTION_MAX: u8 = 10;
+pub const MOTION_DEFAULT: u8 = 5;
+/// How much a sensitivity level scales a tilt or a turn: 1.0 at the
+/// default, each step the same feel (x1.41 below it, x1.32 above), from
+/// 0.25 at 1 to 4.0 at 10.
+pub fn motion_factor(level: u8) -> f32 {
+    let steps = f32::from(level.clamp(MOTION_MIN, MOTION_MAX)) - f32::from(MOTION_DEFAULT);
+    2f32.powf(steps / if steps < 0.0 { 2.0 } else { 2.5 })
 }
 
 pub const SUN_SENSOR: u8 = 11;
@@ -117,8 +133,9 @@ impl EmulationProfile {
             ff_sound_override: None, rewind_override: None,
             rewind_speed_override: None,
             turbo_override: None, rumble_override: None,
-            eject_save_override: None, sun: None,
-            blending_override: None, lcd_effect_override: None, dither_override: None }
+            eject_save_override: None, sun: None, motion: None,
+            blending_override: None, lcd_effect_override: None, dither_override: None,
+            upscaler_override: None }
     }
     /// Materialise the *current* game's per-ROM settings without mutating
     /// Settings.json or any other game's configured defaults.
@@ -147,6 +164,9 @@ impl EmulationProfile {
         if let Some(value)=self.lcd_effect_override { settings.set_lcd_effect_for(platform,value); }
         if let Some(value)=self.dither_override {
             if platform==Platform::Md { settings.dither_blend_md=value; }
+        }
+        if let Some(value)=self.upscaler_override {
+            if platform==Platform::Gba { settings.upscaler_gbav=value; }
         }
     }
 
@@ -193,6 +213,7 @@ impl EmulationProfile {
             60..=65 => self.blending_override=Some(view.blending_for(platform)),
             66..=68 => self.lcd_effect_override=Some(view.lcd_effect_for(platform)),
             69 if platform==Platform::Md => self.dither_override=Some(view.dither_blend_md),
+            70 if platform==Platform::Gba => self.upscaler_override=Some(view.upscaler_gbav),
             _ => return false,
         }
         true
@@ -208,6 +229,9 @@ impl EmulationProfile {
             self.ff_speed_override=None;
         }
         if self.sun.is_some_and(|sun| sun > SUN_AUTO) { self.sun = None; }
+        if self.motion.is_some_and(|m| !(MOTION_MIN..=MOTION_MAX).contains(&m)) {
+            self.motion = None;
+        }
         self
     }
     pub fn change(&mut self, key: usize, right: bool) -> bool {
@@ -223,6 +247,16 @@ impl EmulationProfile {
             _ => return false,
         }
         *self != before
+    }
+    /// The game's motion sensitivity.
+    pub fn motion(&self) -> u8 {
+        self.motion.unwrap_or(MOTION_DEFAULT).clamp(MOTION_MIN, MOTION_MAX)
+    }
+    /// One step up or down, stopping at the ends.
+    pub fn change_motion(&mut self, up: bool) {
+        let level = self.motion();
+        self.motion = Some(if up { (level + 1).min(MOTION_MAX) }
+            else { level.saturating_sub(1).max(MOTION_MIN) });
     }
     /// The game's sun, `top` being its highest manual level.
     pub fn sun(&self, light_sensor: bool, top: u8) -> u8 {
@@ -309,6 +343,23 @@ impl EmulationProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn motion_sensitivity_steps_between_its_ends() {
+        let mut profile = EmulationProfile::default();
+        assert_eq!(profile.motion(), MOTION_DEFAULT);
+        assert_eq!(motion_factor(profile.motion()), 1.0, "the default leaves the sensors alone");
+        profile.change_motion(true);
+        assert_eq!(profile.motion(), 6);
+        for _ in 0..10 { profile.change_motion(true); }
+        assert_eq!(profile.motion(), MOTION_MAX);
+        for _ in 0..20 { profile.change_motion(false); }
+        assert_eq!(profile.motion(), MOTION_MIN);
+        assert_eq!(motion_factor(MOTION_MIN), 0.25);
+        assert!((motion_factor(MOTION_MAX) - 4.0).abs() < 1e-5);
+        assert!((motion_factor(3) - 0.5).abs() < 1e-6);
+        assert_eq!(EmulationProfile { motion: Some(42), ..profile }.sanitize().motion, None);
+    }
+
     #[test]
     fn sun_follows_the_handheld_until_chosen() {
         let mut profile=EmulationProfile::default();
@@ -515,12 +566,12 @@ mod tests {
         assert!(p.change_visual_and_gameplay(&global,Platform::Gba,2,true));
         assert!(p.change_visual_and_gameplay(&global,Platform::Gba,7,true));
         assert_eq!(baseline,global,"Pause edits never mutate Settings.json");
-        assert_eq!(p.screen_shader,Some(Shader::Lcd3x));
+        assert_eq!(p.screen_shader,Some(Shader::SharpBilinear));
         assert_eq!(p.colour_correction_override,Some(true));
         assert_eq!(p.turbo_override,Some(!global.turbo));
         let mut effective=global.clone();
         p.apply_visual_and_gameplay(&mut effective,Platform::Gba);
-        assert_eq!(effective.shader_gba,Shader::Lcd3x);
+        assert_eq!(effective.shader_gba,Shader::SharpBilinear);
         assert_eq!(effective.shader_gb,global.shader_gb);
         assert!(!effective.turbo);
         assert!(effective.colour_correction);
@@ -638,4 +689,20 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+
+    #[test]
+    fn a_gba_video_game_keeps_its_own_upscaler() {
+        let global = Settings::default().as_gba_video();
+        let mut profile = EmulationProfile::from_settings(&global);
+        assert!(profile.change_visual_and_gameplay(&global, Platform::Gba, 70, true));
+        assert_eq!(profile.upscaler_override, Some(Upscaler::Anime4kFast));
+        assert!(profile.change_visual_and_gameplay(&global, Platform::Gba, 0, true));
+        let mut view = global.clone();
+        profile.apply_visual_and_gameplay(&mut view, Platform::Gba);
+        assert_eq!(view.upscaler_gbav, Upscaler::Anime4kFast);
+        assert_ne!(view.shader_gba, Shader::Lcd3x);
+        // Another system never stores an upscaler.
+        assert!(!EmulationProfile::from_settings(&global)
+            .change_visual_and_gameplay(&global, Platform::Gbc, 70, true));
+    }
 }

@@ -58,6 +58,13 @@ pub fn texels(w: u32, h: u32, rgba_len: usize) -> (u32, u32) {
     if area == 0 || rgba_len as u64 == area {
         return (w, h);
     }
+    // The density in use now: exact, where a guess from the area alone
+    // picks the wrong pair for a face over about 20 times its height
+    // (RomM's INFO lines came out scrambled, Siham 2026-11-10).
+    let (pw, ph) = (px(w), px(h));
+    if (pw as u64) * (ph as u64) * 4 == rgba_len as u64 {
+        return (pw, ph);
+    }
     let texels = rgba_len as u64 / 4;
     let guess = (w as f64 * (rgba_len as f64 / area as f64).sqrt()).round() as i64;
     // Each side was rounded on its own: search the few widths near the
@@ -236,5 +243,17 @@ mod tests {
         let mut c = Canvas::new(4, 4);
         c.blit_texels(&[9; 3 * 3 * 4], 3, 3, -1, 2);
         assert_eq!(c.rgba.iter().filter(|&&b| b == 9).count(), 2 * 2 * 4);
+    }
+
+    #[test]
+    fn a_long_line_keeps_its_texel_size_on_a_dense_panel() {
+        with_scale(960.0 / 720.0, || {
+            for h in [28, 32, 34, 40, 52] {
+                for w in (10..1800).step_by(7) {
+                    let len = (px(w) * px(h) * 4) as usize;
+                    assert_eq!(texels(w, h, len), (px(w), px(h)), "{w}x{h}");
+                }
+            }
+        });
     }
 }

@@ -299,12 +299,65 @@ fn a_badge_failure_does_not_hold_up_awards_or_cached_game_data() {
         .unwrap();
     let (calls, _) = mpsc::channel();
     let service = Service::start_with(root.path().into(), NoBadges(Server { calls }));
-    wait_for(|| service.sync_status() == SyncStatus::Attention);
-    let store = Store::open(root.path(), "Player").unwrap();
-    assert!(store.unlocks[&7].synced);
     let hash = format!("{:x}", md5::compute(b"fixture"));
-    assert!(store.dir.join(format!("{hash}.json")).exists());
+    wait_for(|| {
+        Store::open(root.path(), "Player").is_ok_and(|store| {
+            store.unlocks[&7].synced && store.dir.join(format!("{hash}.json")).exists()
+        })
+    });
+    // A badge that cannot be fetched is retried on its own; it is not an
+    // account problem, so the status says what is being cached instead.
+    wait_for(|| service.sync_detail() == SyncDetail::Badges);
+    assert_eq!(service.sync_status(), SyncStatus::Syncing);
+    // After a few tries it is skipped, and the cache is done.
+    wait_for(|| service.sync_status() == SyncStatus::Ready);
+    let store = Store::open(root.path(), "Player").unwrap();
     assert!(load_badge(&badges::path(&store.dir, "12345").unwrap()).is_none());
+}
+
+#[test]
+fn a_missing_badge_is_skipped_and_a_network_failure_waits() {
+    struct Missing;
+    impl network::Transport for Missing {
+        fn call(&mut self, _: &[(&str, String)]) -> Result<Value, network::Failure> {
+            Err(network::Failure::Network)
+        }
+        fn badge(&mut self, _: &str) -> Result<Vec<u8>, network::Failure> {
+            Err(network::Failure::Rejected)
+        }
+    }
+    struct Unreachable;
+    impl network::Transport for Unreachable {
+        fn call(&mut self, _: &[(&str, String)]) -> Result<Value, network::Failure> {
+            Err(network::Failure::Network)
+        }
+        fn badge(&mut self, _: &str) -> Result<Vec<u8>, network::Failure> {
+            Err(network::Failure::Network)
+        }
+    }
+    let root = configured();
+    let store = Store::open(root.path(), "Player").unwrap();
+    let mut game = game();
+    game.image_icon = String::new();
+    let mut queue = badges::Queue::new(&store.dir);
+    queue.enqueue(&game);
+    for _ in 0..3 {
+        assert!(queue.pending());
+        queue.step(&mut Missing);
+        assert!(!queue.waiting);
+    }
+    assert!(!queue.pending(), "a badge the server lacks must not block the cache");
+    // A rescan does not queue it again during this run.
+    queue.scan();
+    queue.enqueue(&game);
+    assert!(!queue.pending());
+
+    let mut queue = badges::Queue::new(&store.dir);
+    queue.enqueue(&game);
+    for _ in 0..5 {
+        queue.step(&mut Unreachable);
+    }
+    assert!(queue.pending() && queue.waiting, "offline is retried, never skipped");
 }
 
 #[derive(Default)]

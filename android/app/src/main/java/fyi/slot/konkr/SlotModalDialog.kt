@@ -38,6 +38,14 @@ internal class SlotModalDialog(
     private val buttons = ArrayList<TextView>()
     private val secretFields = ArrayList<EditText>()
     private val fields = ArrayList<EditText>()
+    /** Each field's label, shown and hidden with it. */
+    private val fieldLabels = HashMap<EditText, View>()
+    private var messageText: TextView? = null
+    /** Rows whose value Left / Right (or A) change: the value's step. */
+    private val choices = HashMap<TextView, (Int) -> Unit>()
+    private var onL1: (() -> Unit)? = null
+    private var onR1: (() -> Unit)? = null
+    private lateinit var legend: LinearLayout
     private val dialog = object : Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
             // Physical KONKR buttons, never synthetic Mac keyboard mapping.
@@ -58,6 +66,14 @@ internal class SlotModalDialog(
                     }
                     return true
                 }
+                KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_BUTTON_R1 -> {
+                    val action = if (keyCode == KeyEvent.KEYCODE_BUTTON_L1) onL1 else onR1
+                    if (action != null) {
+                        if (event.action == KeyEvent.ACTION_DOWN &&
+                            event.repeatCount == 0 && !busy) action()
+                        return true
+                    }
+                }
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (event.action == KeyEvent.ACTION_DOWN &&
                         event.repeatCount == 0 && !busy) {
@@ -70,7 +86,9 @@ internal class SlotModalDialog(
                     if (currentFocus is EditText) return super.dispatchKeyEvent(event)
                     if (event.action == KeyEvent.ACTION_DOWN &&
                         event.repeatCount == 0 && !busy) {
-                        moveFocus(if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1)
+                        val step = if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                        val choice = (currentFocus as? TextView)?.let { choices[it] }
+                        if (choice != null) choice(step) else moveFocus(step)
                     }
                     return true
                 }
@@ -83,6 +101,8 @@ internal class SlotModalDialog(
                             val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE)
                                 as? InputMethodManager
                             imm?.showSoftInput(focus, InputMethodManager.SHOW_IMPLICIT)
+                        } else if (focus is TextView && choices.containsKey(focus)) {
+                            choices[focus]?.invoke(1)
                         } else {
                             (focus as? TextView)?.takeIf { it in buttons && it.isEnabled }
                                 ?.performClick()
@@ -147,17 +167,19 @@ internal class SlotModalDialog(
         root.addView(View(activity), LinearLayout.LayoutParams(-1,
             SlotUi.menuPixel(activity, if (isRaLogin) 9 else 19)))
         if (message.isNotBlank()) {
-            body.addView(SlotUi.label(activity, message, 15f, SlotUi.muted,
+            val text = SlotUi.label(activity, message, 15f, SlotUi.muted,
                 upper = false).apply {
                 setPadding(0, 0, 0, dp(14))
                 maxLines = if (isRaLogin) 1 else 5
-            })
+            }
+            messageText = text
+            body.addView(text)
         }
         body.addView(errorText)
         scroll.addView(body, android.widget.FrameLayout.LayoutParams(-1, -2))
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(actions, LinearLayout.LayoutParams(-1, -2))
-        val legend = LinearLayout(activity).apply {
+        legend = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
@@ -182,7 +204,8 @@ internal class SlotModalDialog(
         val labelHeight = if (isRaLogin) SlotUi.menuPixel(activity, 22) else dp(27)
         val fieldHeight = if (isRaLogin) SlotUi.menuPixel(activity, 45) else dp(48)
         val fieldGap = if (isRaLogin) SlotUi.menuPixel(activity, 16) else dp(10)
-        body.addView(SlotUi.label(activity, label, 13f, SlotUi.muted),
+        val caption = SlotUi.label(activity, label, 13f, SlotUi.muted)
+        body.addView(caption,
             LinearLayout.LayoutParams(-1, labelHeight).apply {
                 topMargin = if (isRaLogin) SlotUi.menuPixel(activity, 3) else dp(4)
                 // Give USERNAME/PASSWORD visible breathing room above the box.
@@ -205,6 +228,7 @@ internal class SlotModalDialog(
             bottomMargin = fieldGap
         })
         fields.add(field)
+        fieldLabels[field] = caption
         if (password) secretFields.add(field)
         body.removeView(errorText)
         body.addView(errorText)
@@ -235,6 +259,85 @@ internal class SlotModalDialog(
         return button
     }
 
+    /**
+     * A row with a value Left / Right (or A) step through, as slot.'s own
+     * settings: "REGION   < USA >". [onChange] hears the new index.
+     */
+    fun addChoice(label: String, values: List<String>, selected: Int, onChange: (Int) -> Unit): TextView {
+        var index = selected.coerceIn(0, values.size - 1)
+        val row = SlotUi.label(activity, "", 16f, SlotUi.muted).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(SlotUi.menuEntryInset(activity), 0, SlotUi.menuEntryInset(activity), 0)
+            isFocusable = true
+            contentDescription = label
+            setOnFocusChangeListener { view, focused ->
+                view.setBackgroundColor(if (focused) SlotUi.selected else Color.TRANSPARENT)
+                setTextColor(if (focused) SlotUi.ink else SlotUi.muted)
+            }
+        }
+        fun show() { row.text = "$label   < ${values[index]} >" }
+        show()
+        choices[row] = { step ->
+            index = (index + step + values.size) % values.size
+            show()
+            onChange(index)
+        }
+        body.addView(row, LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 46)))
+        buttons.add(row)
+        body.removeView(errorText)
+        body.addView(errorText)
+        return row
+    }
+
+    /** The legend's keys, in place of A SELECT and B BACK. */
+    fun setLegend(vararg keys: Pair<String, String>) {
+        legend.removeAllViews()
+        keys.forEachIndexed { i, (key, action) ->
+            legend.addView(SlotUi.nativeHint(activity, key, action),
+                LinearLayout.LayoutParams(-2, -2).apply { if (i > 0) leftMargin = dp(35) })
+        }
+    }
+
+    /** The sentence under the title, for a form with several modes. */
+    fun setMessage(message: String) {
+        messageText?.text = message
+    }
+
+    /** Shows or hides a field with its label (a form's other mode). */
+    fun setFieldVisible(field: EditText, visible: Boolean) {
+        val state = if (visible) View.VISIBLE else View.GONE
+        field.visibility = state
+        fieldLabels[field]?.visibility = state
+        if (!visible && dialog.currentFocus == field) focusTargets().firstOrNull()?.requestFocus()
+    }
+
+    /** L1 and R1 switch a form's modes; the legend names them in place of
+     *  A, an obvious key, so it still fits narrow screens. */
+    fun setShoulders(left: String, right: String, onLeft: () -> Unit, onRight: () -> Unit) {
+        onL1 = onLeft
+        onR1 = onRight
+        legend.removeAllViews()
+        legend.addView(SlotUi.nativeHint(activity, "L1", left))
+        legend.addView(SlotUi.nativeHint(activity, "R1", right),
+            LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(35) })
+        legend.addView(SlotUi.nativeHint(activity, "B", "BACK"),
+            LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(35) })
+    }
+
+    /** The first field or button shown, focused. */
+    fun focusFirst() {
+        focusTargets().firstOrNull()?.let(::focusStart)
+    }
+
+    /** A page of buttons only (RomM's account page) opened with nothing
+     *  selected when Android was in touch mode, where a plain button can't
+     *  take focus (Siham 2026-11-10): the first one is made able to. */
+    private fun focusStart(view: View) {
+        if (view.requestFocus()) return
+        view.isFocusableInTouchMode = true
+        view.requestFocus()
+    }
+
     fun setError(message: String) {
         errorText.text = message
         errorText.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
@@ -263,7 +366,11 @@ internal class SlotModalDialog(
         // The initial focused EditText must not rely on D-pad scrolling to
         // finish its layout. Start at the top after all inputs are measured.
         if (isRaLogin) scroll.post { scroll.scrollTo(0, 0) }
-        (fields.firstOrNull() ?: buttons.firstOrNull())?.requestFocus()
+        (fields.firstOrNull { it.visibility == View.VISIBLE } ?: buttons.firstOrNull())?.let { first ->
+            focusStart(first)
+            // A window not laid out yet can refuse it: once more after.
+            first.post { if (dialog.currentFocus == null) focusStart(first) }
+        }
     }
 
     fun dismiss() = dialog.dismiss()

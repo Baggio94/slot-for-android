@@ -14,6 +14,7 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.text.Normalizer
 import java.util.Locale
 import java.util.zip.CRC32
 
@@ -94,6 +95,52 @@ internal object HomeCartLabels {
         return if (j || u || e) Triple(j, u, e) else null
     }
 
+    /** Mega Drive titles slot. draws in another mould than Sega's (EA,
+     *  Accolade, Codemasters, Virtua Racing, Sonic & Knuckles), as
+     *  "key/region" (us, eu or any) to the label shell, from slot-ui's own
+     *  table (assets/home_shells.tsv). */
+    @Volatile private var mdCarts: Map<String, String> = emptyMap()
+
+    private val MD_MOULDS = mapOf(
+        "megadrive-ea" to "md_ea",
+        "megadrive-accolade" to "md_accolade",
+        "megadrive-codemasters" to "md_codemasters",
+        "megadrive-vr" to "md_vr",
+        "megadrive-sk" to "md_sk",
+    )
+
+    internal fun readShells(tsv: String) {
+        mdCarts = tsv.lineSequence().mapNotNull { line ->
+            val cols = line.split('\t')
+            val shell = MD_MOULDS[cols.getOrNull(1)]
+            if (cols.size >= 4 && cols[0] == "md" && shell != null) "${cols[2]}/${cols[3]}" to shell else null
+        }.toMap()
+    }
+
+    private fun loadShells(context: Context) {
+        if (mdCarts.isNotEmpty()) return
+        try {
+            readShells(context.assets.open("home_shells.tsv").bufferedReader().use { it.readText() })
+        } catch (error: Exception) {
+            Log.w(TAG, "home_shells.tsv unreadable", error)
+        }
+    }
+
+    /** A game's title as slot-ui's tables key it (home_art::title_key), from
+     *  its file name with or without the extension. */
+    internal fun titleKey(name: String): String {
+        val bare = StringBuilder()
+        var depth = 0
+        for (ch in name.replace(Regex("""\.[A-Za-z0-9]{1,4}$"""), "")) when (ch) {
+            '(', '[' -> depth++
+            ')', ']' -> depth = (depth - 1).coerceAtLeast(0)
+            else -> if (depth == 0) bare.append(ch)
+        }
+        return Normalizer.normalize(bare, Normalizer.Form.NFKD)
+            .filter { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' }
+            .lowercase(Locale.ROOT)
+    }
+
     /** The shell slot. draws for this cart (slot-ui's home_shell, without the
      *  Famicom table): its label must come from the same region. */
     internal fun shell(rom: Rom): String {
@@ -107,7 +154,9 @@ internal object HomeCartLabels {
             Systems.MD -> when {
                 japanOnly -> "md_jp"
                 usa && ("T-50" in maker || "ELECTRONIC ARTS" in maker) -> "md_ea"
-                else -> "md"
+                else -> titleKey(rom.filename.ifBlank { rom.title }).let { key ->
+                    mdCarts["$key/${if (usa) "us" else "eu"}"] ?: mdCarts["$key/any"]
+                } ?: "md"
             }
             else -> ""
         }
@@ -120,6 +169,9 @@ internal object HomeCartLabels {
         return when (shell(rom)) {
             "fc", "md_jp" -> listOf("jp")
             "snes_us", "md_ea" -> listOf("us")
+            // Sonic & Knuckles' "World" scan is the box's logo, not its label.
+            "md_sk" -> (if (regions?.second == true && regions.third != true)
+                listOf("us") + europe else europe + listOf("us")) + listOf("jp", "kr", "asi")
             // Super Famicom labels have the PAL shape.
             "snes" -> if (regions?.first == true && regions.third != true)
                 listOf("jp") + europe + listOf("wor") else europe + listOf("jp", "wor")
@@ -137,17 +189,28 @@ internal object HomeCartLabels {
         "md" to floatArrayOf(48f / 312, 0f / 210, 216f / 312, 179f / 210),
         "md_jp" to floatArrayOf(39f / 312, 0f / 209, 232f / 312, 175f / 209),
         "md_ea" to floatArrayOf(62f / 312, 0f / 290, 218f / 312, 240f / 290),
+        "md_accolade" to floatArrayOf(42f / 312, 0f / 285, 229f / 312, 221f / 285),
+        "md_codemasters" to floatArrayOf(52f / 312, 0f / 246, 214f / 312, 211f / 246),
+        "md_vr" to floatArrayOf(34f / 312, 48f / 306, 248f / 312, 118f / 306),
+        "md_sk" to floatArrayOf(17f / 312, 52f / 216, 276f / 312, 29f / 216),
     )
 
     /** The label to fetch: the region's scan, else its front render when
-     *  slot. knows where that shell's label sits. */
+     *  slot. knows where that shell's label sits. Virtua Racing's scans are
+     *  cut taller than its label (the US one lost its top and bottom in the
+     *  well), so its label is the one its front render shows, which fills
+     *  the well exactly; Sonic & Knuckles' renders are mostly Sega's own
+     *  cart, so only its scans fit (Siham 2026-11-10). */
     internal fun pick(medias: List<Media>, rom: Rom): Media? {
         val regions = labelRegions(rom)
         fun best(type: String) = regions.firstNotNullOfOrNull { region ->
             medias.firstOrNull { it.type == type && it.region == region }
         }
-        return best("support-texture")
-            ?: best("support-2D")?.takeIf { shell(rom) in WINDOWS }
+        return when (val shell = shell(rom)) {
+            "md_vr" -> best("support-2D")
+            "md_sk" -> best("support-texture")
+            else -> best("support-texture") ?: best("support-2D")?.takeIf { shell in WINDOWS }
+        }
     }
 
     internal fun medias(json: JSONObject): List<Media> {
@@ -250,6 +313,31 @@ internal object HomeCartLabels {
         }
     }
 
+    /** The shell a stored label was cut for. Labels saved before slot.
+     *  remembered it (stored as true) were cut for the shell of that time:
+     *  Sega's own Mega Drive cart unless Japanese or EA's in the US. */
+    private fun cutFor(real: JSONObject, rom: Rom): String? = when (val v = real.opt(rom.uri)) {
+        is String -> v
+        true -> if (rom.platform == Systems.MD) {
+            val regions = nameRegions(rom.filename.ifBlank { rom.title })
+            val japanOnly = regions?.let { it.first && !it.second && !it.third } ?: (rom.region == "J")
+            val usa = regions?.second ?: (rom.region == "U")
+            val maker = rom.maker.uppercase(Locale.ROOT)
+            when {
+                japanOnly -> "md_jp"
+                usa && ("T-50" in maker || "ELECTRONIC ARTS" in maker) -> "md_ea"
+                else -> "md"
+            }
+        } else shell(rom)
+        else -> null
+    }
+
+    /** A label cut for another shell than the cart now has (a Mega Drive
+     *  game slot. now draws in EA's, Accolade's... cart): fetched and cut
+     *  again, so the label fills the new shell's well (Siham 2026-11-10). */
+    internal fun recut(real: JSONObject, rom: Rom): Boolean =
+        real.has(rom.uri) && cutFor(real, rom).let { it != null && it != shell(rom) }
+
     private fun known(state: JSONObject, rom: Rom): Boolean {
         val old = state.optJSONObject(rom.uri) ?: return false
         return old.optLong("size") == rom.size && old.optLong("modified") == rom.modified
@@ -347,21 +435,27 @@ internal object HomeCartLabels {
      *  pick() chooses among the dump's stored scans and renders, and its
      *  bytes. Null when the set doesn't hold the dump or has no fitting label. */
     internal fun ownLabel(context: Context, rom: Rom, crcs: List<String>): Pair<Media, ByteArray>? {
-        for (crc in crcs) {
-            val entries = SlotArtSet.entries(context, rom.platform, crc) ?: continue
+        loadShells(context)
+        fun label(crc: String): Pair<Media, ByteArray>? {
+            val entries = SlotArtSet.entries(context, rom.platform, crc) ?: return null
             val medias = entries.map { Media(it.type, it.region, it.url) }
             val media = pick(medias, rom) ?: return null
             val entry = entries.first { it.url == media.url }
             val bytes = SlotArtSet.file(context, entry) ?: return null
             return media to bytes
         }
-        return null
+        for (crc in crcs) label(crc)?.let { return it }
+        // Not by its checksum: by its name, as the carousel and RomM match
+        // names (a hack, a translation, another region's dump).
+        val named = ArtNames.crcFor(context, rom.platform, rom.filename.ifBlank { rom.title })
+        return named?.takeIf { it !in crcs }?.let(::label)
     }
 
     /** Cart Studio's pictures for a NES, Super Nintendo or Mega Drive cart:
      *  its label as the automatic labels save it (the own art set first,
      *  ScreenScraper second) and the art set's logo. Null when none. */
     internal fun studioArt(context: Context, uri: String): Pair<ByteArray?, ByteArray?> {
+        loadShells(context)
         val rom = games(context).firstOrNull { it.uri == uri } ?: return null to null
         val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri)) ?: return null to null
         val (whole, bare) = RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
@@ -410,6 +504,7 @@ internal object HomeCartLabels {
      *  Studio shows it and kept with the others, under each of its checksums
      *  tried in turn (a dump's own, then its headerless one). */
     fun studioLabel(context: Context, platform: String, name: String, crcs: List<String>): ByteArray? {
+        loadShells(context)
         if (systemId(platform) == null || crcs.isEmpty()) return null
         val dir = File(context.filesDir, REAL_DIR)
         crcs.map { File(dir, "$it.png") }.firstOrNull { it.isFile && it.length() in 8L..MAX_IMAGE.toLong() }
@@ -499,7 +594,7 @@ internal object HomeCartLabels {
         // A cart is missing its label, or (scraped before Studio offered it)
         // the copy Cart Studio shows as its real label.
         val missing = all.filter {
-            (!CartLabelPaths.file(context.filesDir, it.uri).exists() || !real.has(it.uri)) &&
+            (!CartLabelPaths.file(context.filesDir, it.uri).exists() || !real.has(it.uri) || recut(real, it)) &&
                 !known(state, it) && retry.pending(it.uri)
         }
         return all to missing
@@ -511,6 +606,7 @@ internal object HomeCartLabels {
      * this pass begins (Siham 2026-11-09).
      */
     fun announce(context: Context) {
+        loadShells(context)
         try {
             credentials() ?: return
             if (android.os.SystemClock.elapsedRealtime() < closedUntil) return
@@ -524,6 +620,7 @@ internal object HomeCartLabels {
     }
 
     fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit): Boolean {
+        loadShells(context)
         val creds = credentials() ?: return false
         val now = android.os.SystemClock.elapsedRealtime()
         if (now < closedUntil || !shouldContinue()) return false
@@ -603,11 +700,17 @@ internal object HomeCartLabels {
                 }
                 val chosen = media ?: continue
                 val png = labelPng(imageBytes ?: continue, chosen, rom) ?: continue
-                for (crc in listOfNotNull(whole, bare).distinct()) writeAtomic(File(File(context.filesDir, REAL_DIR), "$crc.png"), png)
-                real.put(rom.uri, true)
+                val stale = recut(real, rom)
+                val crcFiles = listOfNotNull(whole, bare).distinct().map { File(File(context.filesDir, REAL_DIR), "$it.png") }
+                val before = if (stale) crcFiles.firstOrNull { it.isFile }?.readBytes() else null
+                for (file in crcFiles) writeAtomic(file, png)
+                real.put(rom.uri, shell(rom))
                 dirty = true
                 val target = CartLabelPaths.file(context.filesDir, rom.uri)
-                if (target.exists()) { outcome = "EXISTS"; saved++; continue }
+                // A label cut for the cart's old shell is replaced, unless it
+                // is no longer the automatic one (a Cart Studio choice).
+                val replace = stale && before != null && target.isFile && target.readBytes().contentEquals(before)
+                if (target.exists() && !replace) { outcome = "EXISTS"; saved++; continue }
                 target.parentFile?.mkdirs()
                 val atomic = AtomicFile(target)
                 val out = atomic.startWrite()

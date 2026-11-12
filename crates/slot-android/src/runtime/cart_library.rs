@@ -25,6 +25,9 @@ struct Draft {
 pub(super) struct CartLibrary {
     /// The system's shelf (Platform::ALL order).
     system: usize,
+    /// The system's carts as (shelf, index), in name order: the GBA tab
+    /// also has the GBA Video shelf's (Siham 2026-11-10: no tab of their own).
+    view: Vec<(usize, usize)>,
     cursor: usize,
     first_row: usize,
     /// Per cart of the system: it has a label file.
@@ -107,7 +110,7 @@ impl CartLibrary {
 /// L2/R2: the first cart of the previous or next letter, as Up/Down on the
 /// shelf. L2 goes to the start of the cart's own letter first, and both
 /// wrap around.
-fn letter_target(carts: &[Cart], index: usize, dir: i32) -> usize {
+fn letter_target(carts: &[&Cart], index: usize, dir: i32) -> usize {
     let n = carts.len();
     if n < 2 || index >= n { return index; }
     let initial = |i: usize| slot_store::initial(&carts[i].stem);
@@ -140,19 +143,44 @@ fn visuals_root() -> Option<std::path::PathBuf> {
     PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(r, _)| r.clone())
 }
 
+/// A system's carts on the page, as (shelf, index) in name order.
+fn view_in(shelves: &[Shelf], system: usize) -> Vec<(usize, usize)> {
+    let mut racks = vec![system];
+    if system == Platform::Gba as usize { racks.push(VIDEO_RACK); }
+    let mut view: Vec<(usize, usize)> = racks.into_iter()
+        .filter_map(|rack| shelves.get(rack).map(|shelf| (rack, shelf.carts.len())))
+        .flat_map(|(rack, n)| (0..n).map(move |i| (rack, i))).collect();
+    if view.iter().any(|&(rack, _)| rack != system) {
+        view.sort_by_cached_key(|&(rack, i)| slot_store::sort_key(&shelves[rack].carts[i].stem));
+    }
+    view
+}
+
+/// How many carts a system's tab has.
+fn count_in(shelves: &[Shelf], system: usize) -> usize {
+    let video = if system == Platform::Gba as usize {
+        shelves.get(VIDEO_RACK).map_or(0, |s| s.carts.len())
+    } else { 0 };
+    shelves.get(system).map_or(0, |s| s.carts.len()) + video
+}
+
 impl Engine {
+    fn library_view(&self, system: usize) -> Vec<(usize, usize)> { view_in(&self.shelves, system) }
+    fn library_count(&self, system: usize) -> usize { count_in(&self.shelves, system) }
+
     /// Menu > Cart Studio: the library page, on the shelf's system.
     pub(super) fn open_cart_library(&mut self) -> bool {
         // Always the first tab with carts, on its first cart: X on the
         // carousel edits the cart in hand (Siham 2026-11-10).
         let systems = Platform::ALL.len().min(self.shelves.len());
-        let Some(system) = (0..systems).find(|&s| !self.shelves[s].carts.is_empty()) else {
+        let Some(system) = (0..systems).find(|&s| self.library_count(s) > 0) else {
             set_message("No cartridges yet.".into());
             return false;
         };
         let cursor = 0;
+        let view = self.library_view(system);
         self.cart_library = Some(CartLibrary {
-            system, cursor, first_row: 0, labelled: Vec::new(), flags_stale: true,
+            system, view, cursor, first_row: 0, labelled: Vec::new(), flags_stale: true,
             drafts: HashMap::new(), confirm: false, letter: None, letter_at: None,
             grown: (system, cursor), shrinking: None, grown_at: None,
             size: self.settings.cart_studio_size,
@@ -188,8 +216,11 @@ impl Engine {
 
     fn refresh_library_flags(&mut self) {
         let root = visuals_root();
+        let Some(system) = self.cart_library.as_ref().map(|l| l.system) else { return };
+        let view = self.library_view(system);
         let Some(library) = self.cart_library.as_mut() else { return };
-        let carts = &self.shelves[library.system].carts;
+        library.view = view;
+        let carts: Vec<&Cart> = library.view.iter().map(|&(rack, i)| &self.shelves[rack].carts[i]).collect();
         library.labelled = carts.iter()
             .map(|cart| {
                 library.drafts.get(cart.rom.to_string_lossy().as_ref()).is_some_and(|d| d.outcome.label.is_some())
@@ -213,10 +244,10 @@ impl Engine {
         if !matches!(self.overlay, ShelfOverlay::CartLibrary) { return Vec::new(); }
         let Some(library) = self.cart_library.as_ref() else { return Vec::new() };
         let g = library.grid();
-        let n = self.shelves[library.system].carts.len();
+        let n = library.view.len();
         let first = library.first_row * g.cols;
         // The page, then the next row down.
-        (first..(first + g.cols * (g.rows + 1)).min(n)).map(|i| (library.system, i)).collect()
+        (first..(first + g.cols * (g.rows + 1)).min(n)).map(|i| library.view[i]).collect()
     }
 
     /// Y: every change of the session saved, the carts redrawn in place.
@@ -262,7 +293,7 @@ impl Engine {
             }
             return;
         }
-        let n = self.shelves[library.system].carts.len();
+        let n = library.view.len();
         let cols = library.grid().cols;
         match code {
             21 if library.cursor > 0 => library.cursor -= 1,
@@ -276,9 +307,10 @@ impl Engine {
                 let mut next = library.system;
                 for _ in 0..systems {
                     next = (next + step) % systems;
-                    if !self.shelves[next].carts.is_empty() { break; }
+                    if count_in(&self.shelves, next) > 0 { break; }
                 }
                 if next != library.system {
+                    library.view = view_in(&self.shelves, next);
                     library.system = next;
                     library.cursor = 0;
                     library.first_row = 0;
@@ -287,9 +319,9 @@ impl Engine {
                 }
             }
             104 | 105 => {
-                let carts = &self.shelves[library.system].carts;
+                let carts: Vec<&Cart> = library.view.iter().map(|&(rack, i)| &self.shelves[rack].carts[i]).collect();
                 if carts.is_empty() { return; }
-                library.cursor = letter_target(carts, library.cursor, if code == 105 { 1 } else { -1 });
+                library.cursor = letter_target(&carts, library.cursor, if code == 105 { 1 } else { -1 });
                 let letter = slot_store::initial(&carts[library.cursor].stem);
                 self.show_library_letter(letter);
             }
@@ -309,7 +341,8 @@ impl Engine {
                 self.keep_library_cursor_visible();
             }
             96 => {
-                let Some(saved) = self.shelves[library.system].carts.get(library.cursor) else { return };
+                let Some(&(rack, index)) = library.view.get(library.cursor) else { return };
+                let Some(saved) = self.shelves[rack].carts.get(index) else { return };
                 let uri = saved.rom.to_string_lossy().into_owned();
                 let (cart, pending) = match library.drafts.get(&uri) {
                     Some(draft) => (draft.cart.clone(), draft.outcome.label.clone()),
@@ -359,17 +392,17 @@ impl Engine {
             ("EDITED".into(), true)];
         let systems = Platform::ALL.len().min(self.shelves.len());
         for s in 0..systems {
-            let n = self.shelves[s].carts.len();
+            let n = self.library_count(s);
             if n > 0 { texts.push((format!("{} {n}", platform_key(Platform::ALL[s])), s == library.system)); }
         }
         texts.push((unsaved_note(library.drafts.len()), true));
         if let Some(count) = label_count(&library.labelled) { texts.push((count, false)); }
-        for (_, i) in self.cart_library_cells() {
-            texts.push((slot_ui::label_text(&self.shelves[library.system].carts[i]), true));
+        for (rack, i) in self.cart_library_cells() {
+            texts.push((slot_ui::label_text(&self.shelves[rack].carts[i]), true));
         }
         for (text, lit) in texts { self.controls_face(&text, lit); }
-        for (key, label) in [("B", "BACK"), ("L1 R1", "SYSTEM"), ("L2 R2", "LETTER"), ("SELECT", "SIZE"), ("Y", "SAVE"), ("A", "EDIT"),
-                             ("B", "DISCARD"), ("A", "KEEP EDITING")] {
+        for (key, label) in [("B", "BACK"), ("L2 R2", "LETTER"), ("SELECT", "SIZE"), ("Y", "SAVE"), ("A", "EDIT"),
+                             ("B", "DISCARD"), ("A", "KEEP EDITING"), ("L1", ""), ("R1", "")] {
             self.controls_hint(key, label);
         }
     }
@@ -391,33 +424,22 @@ impl Engine {
                 .map_or(45.0, |&(_, _, th)| 33.0 + th as f32 * 0.79 / 2.0);
             out.push(Draw::Tex { x: width - 32.0 - dw, y: title_mid - dh / 2.0, w: dw, h: dh, tex, alpha: 0.8 * fade });
         }
-        // The systems, centred, the chosen one lit.
+        // The systems, the chosen one lit, between L1 and R1.
         let systems = Platform::ALL.len().min(self.shelves.len());
-        let tabs: Vec<(usize, slot_gfx::TexId, f32, f32)> = (0..systems).filter_map(|s| {
-            let n = self.shelves[s].carts.len();
+        let tabs: Vec<(bool, slot_gfx::TexId, f32, f32)> = (0..systems).filter_map(|s| {
+            let n = self.library_count(s);
             if n == 0 { return None; }
             face(&format!("{} {n}", platform_key(Platform::ALL[s])), s == library.system)
-                .map(|(tex, w, h)| (s, tex, w as f32 * 0.5, h as f32 * 0.5))
+                .map(|(tex, w, h)| (s == library.system, tex, w as f32 * 0.5, h as f32 * 0.5))
         }).collect();
-        let pad = 14.0;
-        let full: f32 = tabs.iter().map(|t| t.2 + pad * 2.0).sum::<f32>() + 6.0 * tabs.len().saturating_sub(1) as f32;
-        let scale = ((width - 64.0) / full.max(1.0)).min(1.0);
-        let mut x = (width - full * scale) / 2.0;
-        for (s, tex, w, h) in tabs {
-            let cell = (w + pad * 2.0) * scale;
-            if s == library.system {
-                out.push(Draw::Rect { x, y: TABS_Y, w: cell, h: 28.0, colour: tint(1.0) });
-            }
-            out.push(Draw::Tex { x: x + pad * scale, y: TABS_Y + 14.0 - h * scale / 2.0, w: w * scale, h: h * scale, tex,
-                alpha: if s == library.system { fade } else { 0.6 * fade } });
-            x += cell + 6.0 * scale;
-        }
-        let shelf = &self.shelves[library.system];
+        self.draw_system_tabs(out, &tabs, TABS_Y, fade);
         // The carts, the whole width.
         let g = library.grid();
         let first = library.first_row * g.cols;
-        for i in first..(first + g.cols * g.rows).min(shelf.carts.len()) {
-            let cart = &shelf.carts[i];
+        for i in first..(first + g.cols * g.rows).min(library.view.len()) {
+            let (rack, index) = library.view[i];
+            let shelf = &self.shelves[rack];
+            let cart = &shelf.carts[index];
             let draft = library.drafts.get(cart.rom.to_string_lossy().as_ref());
             let shown = draft.map_or(cart, |d| &d.cart);
             let (col, row) = ((i - first) % g.cols, (i - first) / g.cols);
@@ -432,7 +454,7 @@ impl Engine {
             let s = fit * cart_size(library, i);
             let (dw, dh) = (bw as f32 * s, bh as f32 * s);
             let (ix, iy) = (cx + (g.cell_w - dw) / 2.0, name_y - NAME_GAP - dh);
-            match draft.map(|d| d.face).or_else(|| shelf.face(i)) {
+            match draft.map(|d| d.face).or_else(|| shelf.face(index)) {
                 Some(tex) => out.push(Draw::Tex { x: ix, y: iy, w: dw, h: dh, tex, alpha: fade }),
                 None => out.push(Draw::Rect { x: ix, y: iy, w: dw, h: dh, colour: tint(0.5) }),
             }
@@ -481,9 +503,9 @@ impl Engine {
         let mut keys: Vec<(&str, &str)> = if library.confirm {
             vec![("B", "DISCARD"), ("A", "KEEP EDITING"), ("Y", "SAVE")]
         } else if library.drafts.is_empty() {
-            vec![("B", "BACK"), ("L1 R1", "SYSTEM"), ("L2 R2", "LETTER"), ("SELECT", "SIZE"), ("A", "EDIT")]
+            vec![("B", "BACK"), ("L2 R2", "LETTER"), ("SELECT", "SIZE"), ("A", "EDIT")]
         } else {
-            vec![("B", "BACK"), ("L1 R1", "SYSTEM"), ("L2 R2", "LETTER"), ("SELECT", "SIZE"), ("A", "EDIT"), ("Y", "SAVE")]
+            vec![("B", "BACK"), ("L2 R2", "LETTER"), ("SELECT", "SIZE"), ("A", "EDIT"), ("Y", "SAVE")]
         };
         // A narrow screen drops the obvious hints, never the spacing: A then B
         // work the same everywhere; SELECT goes last, seen before any edit
@@ -498,6 +520,76 @@ impl Engine {
         let hints = hints_of(&keys);
         for (tex, w, x) in centred_hints(&hints, LEGEND_GAP) {
             out.push(Draw::Tex { x, y: self.legend_y(), w: w as f32, h: HINT_H as f32, tex, alpha: fade });
+        }
+    }
+}
+
+/// The gap between two tabs, and between a tab and L1 or R1.
+const TAB_GAP: f32 = 6.0;
+const TAB_PAD: f32 = 14.0;
+const KEY_GAP: f32 = 10.0;
+
+/// The tabs shown when they don't all fit: the chosen one and as many of
+/// its neighbours as `room` holds, both sides in turn. `start..end`.
+pub(super) fn tab_window(cells: &[f32], chosen: usize, room: f32) -> (usize, usize) {
+    let n = cells.len();
+    if n == 0 { return (0, 0); }
+    let chosen = chosen.min(n - 1);
+    let (mut start, mut end, mut used) = (chosen, chosen + 1, cells[chosen]);
+    loop {
+        let mut grew = false;
+        if end < n && used + TAB_GAP + cells[end] <= room {
+            used += TAB_GAP + cells[end];
+            end += 1;
+            grew = true;
+        }
+        if start > 0 && used + TAB_GAP + cells[start - 1] <= room {
+            start -= 1;
+            used += TAB_GAP + cells[start];
+            grew = true;
+        }
+        if !grew { break; }
+    }
+    (start, end)
+}
+
+impl Engine {
+    /// The systems' tabs at `y`, centred, L1 left of the first one shown and
+    /// R1 right of the last (Siham 2026-11-10: out of the legend). Tabs that
+    /// don't fit scroll with the chosen one. `tabs`: chosen, face, size.
+    pub(super) fn draw_system_tabs(&self, out: &mut Vec<Draw>, tabs: &[(bool, slot_gfx::TexId, f32, f32)],
+                                   y: f32, fade: f32) {
+        if tabs.is_empty() { return; }
+        let width = out_w() as f32;
+        let key = |k: &'static str| self.controls_hint_faces.get(&(k, "")).copied();
+        let (l1, r1) = (key("L1"), key("R1"));
+        let key_w = |k: Option<(slot_gfx::TexId, u32)>| k.map_or(0.0, |(_, w)| w as f32 + KEY_GAP);
+        let room = width - 64.0 - key_w(l1) - key_w(r1);
+        let cells: Vec<f32> = tabs.iter().map(|t| t.2 + TAB_PAD * 2.0).collect();
+        let chosen = tabs.iter().position(|t| t.0).unwrap_or(0);
+        let (start, end) = tab_window(&cells, chosen, room);
+        let strip = cells[start..end].iter().sum::<f32>() + TAB_GAP * (end - start).saturating_sub(1) as f32;
+        let mut x = ((width - strip - key_w(l1) - key_w(r1)) / 2.0).max(32.0);
+        let mid = y + 14.0;
+        let mut tint = edge();
+        tint[3] *= fade;
+        // Only one system: nothing to switch to, no keys.
+        let keys = tabs.len() > 1;
+        if let (true, Some((tex, w))) = (keys, l1) {
+            let h = slot_ui::BUTTON_H as f32;
+            out.push(Draw::Tex { x, y: mid - h / 2.0, w: w as f32, h, tex, alpha: fade });
+        }
+        if keys { x += key_w(l1); }
+        for (i, &(lit, tex, w, h)) in tabs.iter().enumerate().take(end).skip(start) {
+            let cell = cells[i];
+            if lit { out.push(Draw::Rect { x, y, w: cell, h: 28.0, colour: tint }); }
+            out.push(Draw::Tex { x: x + TAB_PAD, y: mid - h / 2.0, w, h, tex,
+                alpha: if lit { fade } else { 0.6 * fade } });
+            x += cell + TAB_GAP;
+        }
+        if let (true, Some((tex, w))) = (keys, r1) {
+            let h = slot_ui::BUTTON_H as f32;
+            out.push(Draw::Tex { x: x - TAB_GAP + KEY_GAP, y: mid - h / 2.0, w: w as f32, h, tex, alpha: fade });
         }
     }
 }
@@ -556,7 +648,8 @@ mod tests {
 
     #[test]
     fn l2_r2_go_letter_to_letter_and_wrap() {
-        let carts = shelf(&["1942", "Alleyway", "Asteroids", "Batman", "Zelda"]);
+        let owned = shelf(&["1942", "Alleyway", "Asteroids", "Batman", "Zelda"]);
+        let carts: Vec<&Cart> = owned.iter().collect();
         assert_eq!(letter_target(&carts, 0, 1), 1);
         assert_eq!(letter_target(&carts, 1, 1), 3);
         assert_eq!(letter_target(&carts, 3, 1), 4);
@@ -566,6 +659,7 @@ mod tests {
         assert_eq!(letter_target(&carts, 1, -1), 0);
         assert_eq!(letter_target(&carts, 0, -1), 4);
         // One letter only: nowhere to go.
-        assert_eq!(letter_target(&shelf(&["Alpha", "Asteroids"]), 1, 1), 1);
+        let one = shelf(&["Alpha", "Asteroids"]);
+        assert_eq!(letter_target(&one.iter().collect::<Vec<_>>(), 1, 1), 1);
     }
 }
