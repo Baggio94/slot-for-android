@@ -368,8 +368,29 @@ static uint64_t now_us(void) {
   return (uint64_t)ts.tv_sec * 1000000u + ts.tv_nsec / 1000u;
 }
 
+/* Run-Ahead timeline (BENCH_TIMELINE=1, RetroArch side). RetroArch's
+ * Run-Ahead runs each shown frame as: the real frame, a savestate, N hidden
+ * frames (the last one is shown), then loads the savestate back. A run is
+ * "real" when no savestate is pending, and the pad script follows real time,
+ * as a player's hand does. With BENCH_PAD_EXTERNAL=1 the frontend's own test
+ * (slot.) sets the pad with bench_set_pad() and marks each shown picture
+ * with bench_present(). */
+static int timeline = -1, in_spec, pad_external = -1;
+static uint64_t realtime, presents;
+
+EXPORT void bench_set_pad(uint32_t mask) { pad_mask = mask; }
+EXPORT void bench_present(void) {
+  if (logf_) fprintf(logf_, "{\"event\":\"present\",\"t\":%llu,\"video\":\"%016llx\"}\n",
+                     (unsigned long long)presents, (unsigned long long)vhash);
+  presents++;
+}
+
 EXPORT void retro_run(void) {
-  while (script_pos < script_len && script_frames[script_pos] <= frame)
+  if (timeline < 0) timeline = getenv("BENCH_TIMELINE") != NULL;
+  if (pad_external < 0) pad_external = getenv("BENCH_PAD_EXTERNAL") != NULL;
+  int is_real = !timeline || !in_spec;
+  uint64_t at = timeline ? (is_real ? realtime : realtime - 1) : frame;
+  while (!pad_external && script_pos < script_len && script_frames[script_pos] <= at)
     pad_mask = script_masks[script_pos++];
   vcalls = vdup = polls = reads = order_len = 0;
   aframes = 0;
@@ -381,16 +402,17 @@ EXPORT void retro_run(void) {
   if (logf_)
     fprintf(logf_, "{\"event\":\"frame\",\"frame\":%llu,\"pad\":%u,\"video\":\"%016llx\",\"w\":%u,\"h\":%u,"
                    "\"video_calls\":%u,\"dupes\":%u,\"audio_frames\":%llu,\"audio\":\"%016llx\","
-                   "\"polls\":%u,\"reads\":%u,\"order\":\"%s\",\"run_us\":%llu}\n",
+                   "\"polls\":%u,\"reads\":%u,\"order\":\"%s\",\"run_us\":%llu,\"real\":%d,\"t\":%llu}\n",
             (unsigned long long)frame, pad_mask, (unsigned long long)vhash, vw, vh, vcalls, vdup,
             (unsigned long long)aframes, (unsigned long long)ahash, polls, reads, order,
-            (unsigned long long)run_us);
+            (unsigned long long)run_us, is_real, (unsigned long long)at);
   frame++;
+  if (is_real) realtime++;
   /* RetroArch's --max-frames counts presented frames, which some cores
      (Snes9x) never advance with a null video driver: stop here instead. */
   static long exit_at = -2;
   if (exit_at == -2) exit_at = getenv("BENCH_EXIT_AT") ? atol(getenv("BENCH_EXIT_AT")) : -1;
-  if (exit_at > 0 && frame >= (uint64_t)exit_at) {
+  if (exit_at > 0 && (timeline ? realtime : frame) >= (uint64_t)exit_at) {
     log_end("exit_at");
     if (logf_) fclose(logf_);
     if (pcmf) fclose(pcmf);
@@ -400,11 +422,13 @@ EXPORT void retro_run(void) {
 
 EXPORT size_t retro_serialize_size(void) { return REAL(size_t, retro_serialize_size, void)(); }
 EXPORT bool retro_serialize(void *data, size_t size) {
+  in_spec = 1;
   return REAL(bool, retro_serialize, void *, size_t)(data, size);
 }
 EXPORT bool retro_unserialize(const void *data, size_t size) {
   if (logf_) fprintf(logf_, "{\"event\":\"unserialize\",\"frame\":%llu,\"size\":%zu}\n",
                      (unsigned long long)frame, size);
+  in_spec = 0;
   return REAL(bool, retro_unserialize, const void *, size_t)(data, size);
 }
 EXPORT void retro_cheat_reset(void) { REAL(void, retro_cheat_reset, void)(); }
