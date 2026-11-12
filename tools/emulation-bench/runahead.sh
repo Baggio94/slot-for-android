@@ -9,7 +9,8 @@
 # shown frame where their pictures differ is that event's response.
 #
 # usage: runahead.sh CORE PLATFORM ROM [EVENTS]
-# env:   RETROARCH, BENCH_OUT (default .build/bench/runahead), BENCH_BIOS
+# env:   RETROARCH, BENCH_OUT (default .build/bench/runahead), BENCH_BIOS,
+#        BENCH_EVENTS (your own "FRAME MASK" events instead of the usual script)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HERE="$ROOT/tools/emulation-bench"
@@ -23,8 +24,14 @@ OUT="${BENCH_OUT:-$ROOT/.build/bench/runahead}/$CORE/$NAME"
 rm -rf "$OUT"
 mkdir -p "$OUT/scripts"
 
-# The bench's usual pad script, cut to its first EVENTS changes.
-python3 "$HERE/input_script.py" 4000 | grep -v "^#" | head -n "$EVENTS" > "$OUT/events.txt" || true
+# The bench's usual pad script cut to its first EVENTS changes, or your own
+# "FRAME MASK" file (BENCH_EVENTS).
+if [ -n "${BENCH_EVENTS:-}" ]; then
+  grep -v "^#" "$BENCH_EVENTS" > "$OUT/events.txt"
+  EVENTS=$(wc -l < "$OUT/events.txt")
+else
+  python3 "$HERE/input_script.py" 4000 | grep -v "^#" | head -n "$EVENTS" > "$OUT/events.txt" || true
+fi
 LAST=$(tail -1 "$OUT/events.txt" | cut -d' ' -f1)
 FRAMES=$((LAST + 90))
 for k in $(seq 0 "$EVENTS"); do head -n "$k" "$OUT/events.txt" > "$OUT/scripts/$k.txt"; done
