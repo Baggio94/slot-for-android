@@ -17,7 +17,7 @@ The port has since grown to other Android handhelds and home consoles. The goal 
 ## Highlights
 
 - **Cartridges first.** Your library is a shelf of cartridges with their real labels, insertion and ejection animations and sounds.
-- **Six systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive, each with two emulation cores to choose from.
+- **Seven systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive, each with two emulation cores to choose from, and PICO-8, played by fake-08.
 - **Any screen shape.** The interface adapts to square, 4:3, 3:2 and widescreen handhelds at their native resolution.
 - **Cart Studio.** Change a cartridge's label, shell colour, finish and shape, right on the handheld.
 - **Screen options.** LCD and CRT shaders, overlays, color correction, Frame Blending and LCD effects, per system or per game.
@@ -33,7 +33,7 @@ The port has since grown to other Android handhelds and home consoles. The goal 
 2. Open slot., press **START → Library → Choose ROM Folder** and pick your parent ROM folder (not `gba`, `gb`...).
 3. Pick a cartridge and press **A**.
 
-Supported files: `.gba`, `.gb`, `.gbc`, `.nes`, `.fc`, `.unf`, `.unif`, `.sfc`, `.smc`, `.md`, `.gen`, `.smd`, `.bin`, and `.zip` archives with one game each. Games can sit directly in that folder or in one subfolder per system (ES-DE style).
+Supported files: `.gba`, `.gb`, `.gbc`, `.nes`, `.fc`, `.unf`, `.unif`, `.sfc`, `.smc`, `.md`, `.gen`, `.smd`, `.bin`, `.p8`, `.p8.png`, and `.zip` archives with one game each. Games can sit directly in that folder or in one subfolder per system (ES-DE style).
 
 **Updating:** slot. checks for updates in **START → About**. You can also install a newer APK over the current one. Don't uninstall slot. or clear its data first, or you will lose your settings and the saves stored inside the app.
 
