@@ -424,10 +424,16 @@ pub fn port_rows(has_controller: bool) -> Vec<PortRow> {
 /// Rows a scrolling page shows at once.
 pub const VISIBLE_ROWS: usize = 6;
 
-/// First row shown: the selected row stays third from the top while the
-/// list scrolls, and the list never scrolls past its end.
-pub fn scroll_offset(selected: usize, rows: usize) -> usize {
-    selected.saturating_sub(2).min(rows.saturating_sub(VISIBLE_ROWS))
+/// First row shown on a page of `rows` whose first row shown was `top`: the
+/// list stays put while the selected row moves inside the six, and follows
+/// it once it comes within a row of an edge, so the next row always shows.
+/// The list never scrolls past its end.
+pub fn scroll_follow(top: usize, selected: usize, rows: usize) -> usize {
+    let max = rows.saturating_sub(VISIBLE_ROWS);
+    let mut top = top.min(max);
+    if selected + 2 > top + VISIBLE_ROWS { top = selected + 2 - VISIBLE_ROWS; }
+    if selected < top + 1 { top = selected.saturating_sub(1); }
+    top.min(max)
 }
 
 // ---------------------------------------------------------------------------
@@ -1262,11 +1268,21 @@ mod tests {
         assert_eq!(port_rows(false), vec![PortRow::Controller]);
         let rows = port_rows(true).len();
         assert_eq!(rows, 19);
-        assert_eq!(scroll_offset(0, rows), 0);
-        assert_eq!(scroll_offset(2, rows), 0);
-        assert_eq!(scroll_offset(3, rows), 1);
-        assert_eq!(scroll_offset(18, rows), rows - VISIBLE_ROWS);
-        assert_eq!(scroll_offset(3, 4), 0, "a short page never scrolls");
+        // Going down, the list waits until the next row would hide.
+        let mut top = 0;
+        for (selected, want) in [(0, 0), (4, 0), (5, 1), (6, 2), (17, 13), (18, 13)] {
+            top = scroll_follow(top, selected, rows);
+            assert_eq!(top, want, "down to row {selected}");
+        }
+        // Going back up, it waits again.
+        for (selected, want) in [(17, 13), (14, 13), (13, 12), (1, 0), (0, 0)] {
+            top = scroll_follow(top, selected, rows);
+            assert_eq!(top, want, "up to row {selected}");
+        }
+        assert_eq!(scroll_follow(0, 18, rows), rows - VISIBLE_ROWS, "from the first row to the last");
+        assert_eq!(scroll_follow(13, 0, rows), 0, "and back");
+        assert_eq!(scroll_follow(0, 3, 4), 0, "a short page never scrolls");
+        assert_eq!(scroll_follow(9, 2, 7), 1, "a shorter list pulls its first row back");
     }
 
     #[test]

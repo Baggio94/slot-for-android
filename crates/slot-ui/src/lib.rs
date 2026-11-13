@@ -35,6 +35,7 @@ mod silhouette;
 mod slot_chrome;
 mod sticker;
 pub mod text;
+pub mod menu_style;
 mod button_art;
 mod hold_ring;
 mod toast;

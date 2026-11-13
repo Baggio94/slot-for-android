@@ -1073,7 +1073,7 @@ impl Engine {
             vec![("B", "BACK"), ("Y", "RESET"), ("SWAP", "CHANGE"), a]
         };
         // The legend, under its own band.
-        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: opening() });
+        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: menu_ground() });
         let hints_of = |keys: &[(&'static str, &'static str)]| -> Vec<(slot_gfx::TexId, u32)> {
             keys.iter().filter_map(|key| self.controls_hint_faces.get(key).copied()).collect()
         };
@@ -1229,9 +1229,9 @@ impl Engine {
                     alpha: if chosen { fade } else { 0.7 * fade } });
             }
         }
-        out.push(Draw::Rect { x: 0.0, y: 26.0, w: width, h: 40.0, colour: opening() });
+        out.push(Draw::Rect { x: 0.0, y: 26.0, w: width, h: 40.0, colour: menu_ground() });
         self.draw_page_title(out, "SEARCH GAME", fade);
-        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: opening() });
+        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: menu_ground() });
         let keys = [("B", "BACK"), ("X", "DELETE"),
             if search.on_results { ("R1", "KEYS") } else { ("R1", "RESULTS") },
             if search.on_results { ("A", "USE") } else { ("A", "TYPE") }];

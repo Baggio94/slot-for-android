@@ -492,14 +492,14 @@ impl Engine {
                 let side = w.max(h) + 24.0;
                 let (mx, my) = ((width - side) / 2.0, (GRID_TOP + GRID_BOTTOM - side) / 2.0);
                 // See-through, the carts showing behind (Siham 2026-11-08).
-                let mut ground = opening();
+                let mut ground = menu_ground();
                 ground[3] *= 0.65 * alpha;
                 out.push(Draw::Rect { x: mx, y: my, w: side, h: side, colour: ground });
                 out.push(Draw::Tex { x: (width - w) / 2.0, y: my + (side - h) / 2.0, w, h, tex, alpha });
             }
         }
         // The legend.
-        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: opening() });
+        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: menu_ground() });
         let mut keys: Vec<(&str, &str)> = if library.confirm {
             vec![("B", "DISCARD"), ("A", "KEEP EDITING"), ("Y", "SAVE")]
         } else if library.drafts.is_empty() {

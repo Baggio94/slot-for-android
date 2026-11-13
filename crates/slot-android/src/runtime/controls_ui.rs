@@ -22,7 +22,6 @@ pub(super) struct ControlsView {
     heading: String,
     lines: Vec<ControlsLine>,
     selected: usize,
-    offset: usize,
     hints: Vec<(slot_gfx::TexId, u32)>,
 }
 
@@ -864,60 +863,39 @@ impl Engine {
             if !legend_too_wide(&hints) { break; }
             while let Some(i) = keys.iter().position(|&(k, _)| k == dropped) { keys.remove(i); hints.remove(i); }
         }
-        let offset = controls::scroll_offset(selected, lines.len());
-        self.controls_view = ControlsView { heading, lines, selected, offset, hints };
+        self.controls_view = ControlsView { heading, lines, selected, hints };
     }
 
-    /// The menu cursor's page kind, selected visible row and visible rows.
+    /// The menu cursor's page kind, selected row and rows.
     pub(super) fn controls_cursor(&self) -> Option<(u8, usize, usize)> {
         let rows = self.controls_view.lines.len();
         match self.overlay {
             ShelfOverlay::ControlsSettings { row } => Some((18, row, 4)),
-            ShelfOverlay::Hotkeys { row } if rows > 0 => {
-                let offset = controls::scroll_offset(row, rows);
-                Some((24, row - offset, rows.min(controls::VISIBLE_ROWS)))
-            }
-            ShelfOverlay::ControlsPort { port, row } if rows > 0 => {
-                let offset = controls::scroll_offset(row, rows);
-                Some((19 + port as u8, row - offset, rows.min(controls::VISIBLE_ROWS)))
-            }
+            ShelfOverlay::Hotkeys { row } if rows > 0 => Some((24, row, rows)),
+            ShelfOverlay::ControlsPort { port, row } if rows > 0 => Some((19 + port as u8, row, rows)),
             ShelfOverlay::LayoutPorts { row, .. } => Some((21, row, rows)),
-            ShelfOverlay::LayoutPort { port, row, .. } if rows > 0 => {
-                let offset = controls::scroll_offset(row, rows);
-                Some((22 + port as u8, row - offset, rows.min(controls::VISIBLE_ROWS)))
-            }
-            ShelfOverlay::Cheats { row } if rows > 0 => {
-                let offset = controls::scroll_offset(row, rows);
-                Some((26, row - offset, rows.min(controls::VISIBLE_ROWS)))
-            }
+            ShelfOverlay::LayoutPort { port, row, .. } if rows > 0 => Some((22 + port as u8, row, rows)),
+            ShelfOverlay::Cheats { row } if rows > 0 => Some((26, row, rows)),
             _ => None,
         }
     }
 
     pub(super) fn draw_controls(&self, out: &mut Vec<Draw>) {
         let view = &self.controls_view;
-        let shown = view.lines.len().saturating_sub(view.offset).min(controls::VISIBLE_ROWS);
+        let count = view.lines.len();
+        let shown = count.min(controls::VISIBLE_ROWS);
         let top = settings_row_top(shown);
         // Opaque on the shelf; the paused game and the slot in a game.
         self.draw_menu_ground(top, out);
         let fade = slot_ui::ease((self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
-        let cursor = if self.menu_cursor_y.is_finite() { self.menu_cursor_y }
-            else { top + view.selected.saturating_sub(view.offset) as f32 * QUICK_PITCH };
-        out.push(Draw::Rect {
-            x: 0.0, y: cursor + 4.0, w: out_w() as f32, h: QUICK_PITCH - 8.0,
-            colour: { let mut c = edge(); c[3] *= fade; c },
-        });
         let face = |text: &str, lit: bool| self.controls_faces.get(&Self::face_key(text, lit)).copied();
         let width = out_w() as f32;
-        if let Some((tex, w, h)) = face(&view.heading, true) {
-            let scale = 0.79f32.min((width - 70.0) / w.max(1) as f32);
-            out.push(Draw::Tex { x: 32.0, y: 33.0, w: w as f32 * scale, h: h as f32 * scale,
-                tex, alpha: 0.68 * fade });
-        }
-        for (i, line) in view.lines.iter().enumerate().skip(view.offset).take(shown) {
-            let visible = i - view.offset;
-            let y = top + visible as f32 * QUICK_PITCH + 8.0 + (1.0 - fade) * 8.0;
+        self.draw_menu_cursor(top, view.selected, count, width - PILL_RIGHT, fade, out);
+        for (i, line) in view.lines.iter().enumerate() {
+            let Some((dy, shows)) = self.menu_row_place(i, count) else { continue };
+            let y = top + dy + 8.0 + (1.0 - fade) * 8.0;
             let chosen = i == view.selected;
+            let rest = if chosen { 1.0 } else { menu_look::ROW_REST };
             let mut label_room = width - 70.0;
             let right = width - 34.0;
             if let Some((tex, w, h)) = face(&line.value, line.lit) {
@@ -927,24 +905,28 @@ impl Engine {
                 let x = right - vw - if carets { 22.0 } else { 0.0 };
                 label_room = (x - 37.0 - 16.0 - if carets { 20.0 } else { 0.0 }).max(80.0);
                 out.push(Draw::Tex { x, y, w: vw, h: h as f32 * scale, tex,
-                    alpha: if chosen { fade } else { 0.62 * fade } });
+                    alpha: fade * shows * rest });
                 if carets {
                     let (left, lw, lh) = self.setting_carets[0];
                     let (right_tex, rw, rh) = self.setting_carets[1];
                     out.push(Draw::Tex { x: x - lw as f32 - 8.0, y, w: lw as f32, h: lh as f32,
-                        tex: left, alpha: fade });
+                        tex: left, alpha: fade * shows });
                     out.push(Draw::Tex { x: right - rw as f32, y, w: rw as f32, h: rh as f32,
-                        tex: right_tex, alpha: fade });
+                        tex: right_tex, alpha: fade * shows });
                 }
             }
             if let Some((tex, w, h)) = face(&line.label, true) {
                 let scale = 0.79f32.min(label_room / w.max(1) as f32);
                 out.push(Draw::Tex { x: 37.0, y, w: w as f32 * scale, h: h as f32 * scale,
-                    tex, alpha: fade });
+                    tex, alpha: fade * shows * rest });
             }
         }
+        // The rows slide under the title and the legend.
+        self.draw_menu_bands(top, count, out);
+        self.draw_menu_scrollbar(top, count, fade, out);
+        self.draw_menu_header(self.controls_path(), face(&view.heading, true), fade, out);
         // The legend, under its own band.
-        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: opening() });
+        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: menu_ground() });
         for (tex, w, x) in centred_hints(&view.hints, LEGEND_GAP) {
             out.push(Draw::Tex { x, y: self.legend_y(), w: w as f32, h: HINT_H as f32, tex, alpha: fade });
         }

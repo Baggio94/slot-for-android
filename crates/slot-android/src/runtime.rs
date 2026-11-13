@@ -38,6 +38,7 @@ use slot_ui::{
     sticker_face_konkr, StickerFields, STICKER_W, STICKER_H, quick_caret_face,
     onboarding_instruction_face, onboarding_note_face,
 };
+use slot_ui::menu_style::{self, menu_ground, PILL_H, PILL_LEFT, PILL_R, PILL_RIGHT};
 
 /// Upload a Slot face at whatever density it was rendered at. Draws keep
 /// using the face's logical `w`/`h`; only the texel count differs.
@@ -1177,6 +1178,18 @@ struct Engine {
     menu_seen: u8,
     menu_opened: Instant,
     menu_cursor_y: f32,
+    /// A long page's first row shown, and where its list is on the way there.
+    menu_scroll_top: usize,
+    menu_scroll_y: f32,
+    /// The selected row's bar: left end, strip, right end.
+    menu_pill: [(slot_gfx::TexId, u32, u32); 3],
+    /// The mark on a row that opens a page.
+    menu_opens: (slot_gfx::TexId, u32, u32),
+    /// Each page's path line, made when first shown.
+    menu_paths: std::collections::HashMap<&'static str, (slot_gfx::TexId, u32, u32)>,
+    /// The cart beside the main and game menus: its name, then its title
+    /// and system lines.
+    menu_side: Option<(String, [(slot_gfx::TexId, u32, u32); 2])>,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
     first_run_hint: (slot_gfx::TexId, u32),
@@ -1602,6 +1615,11 @@ impl Engine {
             let face = quick_value_face(core.text(), true);
             (gpu.create_face(&face), face.w, face.h)
         });
+        let menu_pill = menu_style::pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
+        let menu_opens = {
+            let face = menu_style::menu_opens_face();
+            (gpu.create_face(&face), face.w, face.h)
+        };
         let setting_carets = [false, true].map(|right| {
             let face = quick_caret_face(right);
             let tex = gpu.create_face(&face);
@@ -1839,6 +1857,12 @@ impl Engine {
             menu_seen: 0,
             menu_opened: now,
             menu_cursor_y: 0.0,
+            menu_scroll_top: 0,
+            menu_scroll_y: 0.0,
+            menu_pill,
+            menu_opens,
+            menu_paths: Default::default(),
+            menu_side: None,
             menu_textures,
             menu_hints,
             first_run_hint,
@@ -3214,6 +3238,9 @@ impl Engine {
                     .as_ref().map(|(root, _)| root.clone());
                 if let Some(root) = root {
                     slot_ui::set_theme(slot_store::Theme::read(&root));
+                    for (face, (tex, _, _)) in menu_style::pill_faces().iter().zip(self.menu_pill) {
+                        self.gpu.update_face(tex, face);
+                    }
                     let custom_colours=root.join("Config/theme.txt").is_file();
                     self.slot_faces=if custom_colours { None }
                         else if self.settings.appearance == crate::settings::Appearance::Light {
@@ -6009,25 +6036,22 @@ impl Engine {
         let which = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
         let (tex, width, height) = self.setting_values[which];
         // Its row among the six shown while Library scrolls.
-        let offset = crate::controls::scroll_offset(row, LIBRARY_ROWS.len());
-        let Some(shown) = LIBRARY_SHARE_ROW.checked_sub(offset)
-            .filter(|&r| r < crate::controls::VISIBLE_ROWS) else { return };
-        let y = self.menu_rows_top(LIBRARY_ROWS.len().min(crate::controls::VISIBLE_ROWS))
-            + shown as f32 * QUICK_PITCH + 8.0;
+        let Some((dy, shows)) = self.menu_row_place(LIBRARY_SHARE_ROW, LIBRARY_ROWS.len()) else { return };
+        let y = self.menu_rows_top(LIBRARY_ROWS.len().min(crate::controls::VISIBLE_ROWS)) + dy + 8.0;
         let scale = 0.79f32;
         let w = width as f32 * scale;
         let right = out_w() as f32 - 34.0;
         let selected = row == LIBRARY_SHARE_ROW;
         let x = right - w - if selected { 22.0 } else { 0.0 };
         out.push(Draw::Tex { x, y, w, h: height as f32 * scale, tex,
-            alpha: if selected { 1.0 } else { 0.62 } });
+            alpha: shows * if selected { 1.0 } else { menu_look::ROW_REST } });
         if selected {
             let (left, lw, lh) = self.setting_carets[0];
             let (right_tex, rw, rh) = self.setting_carets[1];
             out.push(Draw::Tex { x: x - lw as f32 - 8.0, y,
-                w: lw as f32, h: lh as f32, tex: left, alpha: 1.0 });
+                w: lw as f32, h: lh as f32, tex: left, alpha: shows });
             out.push(Draw::Tex { x: right - rw as f32, y,
-                w: rw as f32, h: rh as f32, tex: right_tex, alpha: 1.0 });
+                w: rw as f32, h: rh as f32, tex: right_tex, alpha: shows });
         }
     }
 
@@ -6082,20 +6106,19 @@ impl Engine {
         let scales = self.fit_scales(items, keys);
         self.draw_menu_rows(heading, items, row, &scales, out);
         self.draw_values(row, keys, &scales, out);
+        self.draw_menu_chrome(heading, items.len(), row, true, out);
     }
 
     fn draw_values(&self, row: usize, keys: &[usize], scales: &[(f32, f32)],
                    out: &mut Vec<Draw>) {
         // Six rows at most on screen; a longer page scrolls (as Controls).
-        let offset = crate::controls::scroll_offset(row, keys.len());
         let top = self.menu_rows_top(keys.len().min(crate::controls::VISIBLE_ROWS));
-        for (index, key) in keys.iter().copied().enumerate()
-            .skip(offset).take(crate::controls::VISIBLE_ROWS) {
+        for (index, key) in keys.iter().copied().enumerate() {
+            let Some((dy, shows)) = self.menu_row_place(index, keys.len()) else { continue };
             let Some((tex, width, height)) = self.value_face(key) else { continue };
             let scale = scales.get(index).map_or(0.79, |s| s.1);
             // A smaller value stays centred on its row.
-            let y = top + (index - offset) as f32 * QUICK_PITCH + 8.0
-                + height as f32 * (0.79 - scale) / 2.0;
+            let y = top + dy + 8.0 + height as f32 * (0.79 - scale) / 2.0;
             let w = width as f32 * scale;
             let right = out_w() as f32 - 34.0;
             // Interface's Wallpaper Tint, idle over no personal image.
@@ -6105,41 +6128,21 @@ impl Engine {
             let x = right - w - if chosen { 22.0 } else { 0.0 };
             out.push(Draw::Tex {
                 x, y, w, h: height as f32 * scale,
-                tex, alpha: if chosen { 1.0 } else if idle { 0.3 } else { 0.62 },
+                tex, alpha: shows * if chosen { 1.0 } else if idle { 0.3 } else { menu_look::ROW_REST },
             });
             if chosen {
-                let y = top + (index - offset) as f32 * QUICK_PITCH + 8.0;
+                let y = top + dy + 8.0;
                 let (left, lw, lh) = self.setting_carets[0];
                 let (right_tex, rw, rh) = self.setting_carets[1];
                 out.push(Draw::Tex {
                     x: x - lw as f32 - 8.0, y, w: lw as f32,
-                    h: lh as f32, tex: left, alpha: 1.0,
+                    h: lh as f32, tex: left, alpha: shows,
                 });
                 out.push(Draw::Tex {
                     x: right - rw as f32, y, w: rw as f32,
-                    h: rh as f32, tex: right_tex, alpha: 1.0,
+                    h: rh as f32, tex: right_tex, alpha: shows,
                 });
             }
-        }
-        // The original Back / Change physical keycap legend; on the in-game
-        // Screen page, either side of the seated cart.
-        if self.screen_panel() {
-            // B Back | L1 R1 Size; where the screen already has the
-            // system's shape there is no size: arrows Change.
-            let right = if self.screen_page_sizes() { self.screen_size_hint }
-                else { self.settings_hints[1] };
-            self.draw_flanking_hints(&[self.settings_hints[0], right], out);
-            return;
-        }
-        out.push(Draw::Rect {
-            x: 0.0, y: 420.0, w: out_w() as f32, h: 60.0,
-            colour: opening(),
-        });
-        for (tex, w, x) in centred_hints(&self.settings_hints, LEGEND_GAP) {
-            out.push(Draw::Tex {
-                x, y: self.legend_y(), w: w as f32, h: HINT_H as f32,
-                tex, alpha: 1.0,
-            });
         }
     }
 
@@ -6217,7 +6220,7 @@ impl Engine {
         if !self.screen_panel() {
             out.push(Draw::Rect {
                 x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
-                colour: opening(),
+                colour: menu_ground(),
             });
             return;
         }
@@ -6233,74 +6236,102 @@ impl Engine {
     fn draw_original_style_menu(&self, heading: usize, items: &[usize],
                                 selected: usize, out: &mut Vec<Draw>) {
         self.draw_menu_rows(heading, items, selected, &[], out);
+        self.draw_menu_chrome(heading, items.len(), selected, false, out);
     }
 
-    /// `scales`: each row's label scale (fit_scales), or none for 0.79.
-    fn draw_menu_rows(&self, heading: usize, items: &[usize], selected: usize,
-                      scales: &[(f32, f32)], out: &mut Vec<Draw>) {
-        // The original Slot full-screen quick menu uses the housing palette,
-        // full-width selected bar, 52px pitch, and centred physical keycaps.
-        // Reuse those exact primitives for Android's library settings.
-        // Six rows at most on screen; a longer page scrolls (as Controls).
-        let offset = crate::controls::scroll_offset(selected, items.len());
-        let top = self.menu_rows_top(items.len().min(crate::controls::VISIBLE_ROWS));
-        self.draw_menu_ground(top, out);
-        let cursor = if self.menu_cursor_y.is_finite() { self.menu_cursor_y }
-            else { top + (selected - offset) as f32 * QUICK_PITCH };
+    /// The fade a menu page opens with.
+    fn menu_fade(&self, heading: usize) -> f32 {
         // The game menu fades in over 100 ms, after its 120 ms wait for a
         // second tap; every other menu over the original 160 ms.
         let fade_s = if heading == 19 { 0.10 } else { 0.16 };
-        let intro = (self.menu_opened.elapsed().as_secs_f32() / fade_s).clamp(0.0, 1.0);
-        let fade = slot_ui::ease(intro);
-        out.push(Draw::Rect {
-            x: 0.0, y: cursor + 4.0, w: out_w() as f32,
-            h: QUICK_PITCH - 8.0,
-            colour: { let mut c = edge(); c[3] *= fade; c },
-        });
-        // The in-game Screen page leaves the game in view above its rows.
-        if !self.screen_panel() {
-            self.text_fit(heading, 32.0, 33.0, out_w() as f32 - 70.0, 0.68 * fade, out);
-        }
-        for (i, index) in items.iter().copied().enumerate()
-            .skip(offset).take(crate::controls::VISIBLE_ROWS) {
+        slot_ui::ease((self.menu_opened.elapsed().as_secs_f32() / fade_s).clamp(0.0, 1.0))
+    }
+
+    /// A menu page's ground, the bar under its selected row and its rows.
+    /// `scales`: each row's label scale (fit_scales), or none for 0.79.
+    fn draw_menu_rows(&self, heading: usize, items: &[usize], selected: usize,
+                      scales: &[(f32, f32)], out: &mut Vec<Draw>) {
+        // The original Slot quick menu's 52px pitch and type. Six rows at
+        // most on screen; a longer page slides its list (as Controls).
+        let shown = items.len().min(crate::controls::VISIBLE_ROWS);
+        let top = self.menu_rows_top(shown);
+        self.draw_menu_ground(top, out);
+        let fade = self.menu_fade(heading);
+        // The main and game menus leave the right of a wide screen to the
+        // selected cart.
+        let side = self.menu_side_room(heading, items);
+        let x1 = out_w() as f32 - side.unwrap_or(PILL_RIGHT);
+        self.draw_menu_cursor(top, selected, items.len(), x1, fade, out);
+        for (i, index) in items.iter().copied().enumerate() {
+            let Some((dy, shows)) = self.menu_row_place(i, items.len()) else { continue };
             let x = 37.0;
-            let y = top + (i - offset) as f32 * QUICK_PITCH + 8.0
-                + (1.0 - fade) * 8.0;
-            let alpha = if heading == 82 && self.general_row_dimmed(index) { 0.4 * fade } else { fade };
+            let y = top + dy + 8.0 + (1.0 - fade) * 8.0;
+            let chosen = i == selected;
+            let idle = heading == 82 && self.general_row_dimmed(index);
+            let alpha = fade * shows * if idle { 0.4 } else if chosen { 1.0 } else { menu_look::ROW_REST };
+            let opens = self.menu_row_opens(heading, index);
             match scales.get(i) {
                 Some(&(scale, _)) => self.text_scaled(index, x, y, scale, alpha, out),
-                None => self.text_fit(index, x, y, out_w() as f32 - 70.0, alpha, out),
+                None => self.text_fit(index, x, y, x1 - x - if opens { 36.0 } else { 14.0 }, alpha, out),
+            }
+            if opens {
+                let (tex, w, h) = self.menu_opens;
+                let w = w as f32 * 0.79;
+                out.push(Draw::Tex {
+                    x: (x1 - 14.0 - w).round(), y, w, h: h as f32 * 0.79, tex,
+                    alpha: fade * shows * if chosen { 1.0 } else { 0.4 },
+                });
             }
         }
-        // All menus use the original Slot keycap generator. The paused game
-        // screen additionally advertises its active SAVE / LOAD shortcuts.
-        // (The Screen page's values draw its legend, either side of the cart.)
+        if let Some(room) = side {
+            self.draw_menu_side(room, top, shown, fade, out);
+        }
+    }
+
+    /// What frames a menu page's rows: its scroll bar, its path line and
+    /// title, and its keycap legend. Drawn after the rows and their values,
+    /// so a long page's sliding rows pass under it.
+    fn draw_menu_chrome(&self, heading: usize, count: usize, selected: usize,
+                        values: bool, out: &mut Vec<Draw>) {
+        let top = self.menu_rows_top(count.min(crate::controls::VISIBLE_ROWS));
+        let fade = self.menu_fade(heading);
+        // The in-game Screen page leaves the game in view above its rows,
+        // and its legend goes either side of the seated cart.
         if self.screen_panel() {
+            self.draw_menu_scrollbar(top, count, fade, out);
+            if values {
+                // B Back | L1 R1 Size; where the screen already has the
+                // system's shape there is no size: arrows Change.
+                let right = if self.screen_page_sizes() { self.screen_size_hint }
+                    else { self.settings_hints[1] };
+                self.draw_flanking_hints(&[self.settings_hints[0], right], out);
+            }
             return;
         }
-        if heading == 19 {
+        self.draw_menu_bands(top, count, out);
+        self.draw_menu_scrollbar(top, count, fade, out);
+        self.draw_menu_header(self.menu_path(heading), self.menu_textures.get(heading).copied(), fade, out);
+        // All menus use the original Slot keycap generator. The paused game
+        // screen additionally advertises its active SAVE / LOAD shortcuts.
+        let hints: &[(slot_gfx::TexId, u32)] = if values {
+            // The original Back / Change physical keycap legend.
+            &self.settings_hints
+        } else if heading == 19 {
             let linked = self.game.as_ref().is_some_and(|session|
                 session.linked() || session.requires_relaunch());
             // A paused Link never offers save/load, even in its keycap hints.
-            let hints: &[(slot_gfx::TexId, u32)] = if linked {
-                &self.game_menu_hints[..1] // B Back only
-            } else { &self.game_menu_hints };
-            for (tex, w, x) in centred_hints(hints, 15.0) {
-                out.push(Draw::Tex {
-                    x, y: self.legend_y(), w: w as f32, h: HINT_H as f32,
-                    tex, alpha: fade,
-                });
-            }
-        } else {
+            if linked { &self.game_menu_hints[..1] } // B Back only
+            else { &self.game_menu_hints }
+        } else if heading == 5 && selected == LIBRARY_SHARE_ROW {
             // Library's Share Saves row is a toggle, not a submenu.
-            let hints = if heading == 5 && selected == 4 { &self.settings_hints }
-                else { &self.menu_hints };
-            for (tex, w, x) in centred_hints(hints, LEGEND_GAP) {
-                out.push(Draw::Tex {
-                    x, y: self.legend_y(), w: w as f32, h: HINT_H as f32,
-                    tex, alpha: fade,
-                });
-            }
+            &self.settings_hints
+        } else { &self.menu_hints };
+        let gap = if !values && heading == 19 { 15.0 } else { LEGEND_GAP };
+        for (tex, w, x) in centred_hints(hints, gap) {
+            out.push(Draw::Tex {
+                x, y: self.legend_y(), w: w as f32, h: HINT_H as f32,
+                tex, alpha: if values { 1.0 } else { fade },
+            });
         }
     }
 
@@ -6471,18 +6502,23 @@ impl Engine {
         match self.overlay {
             ShelfOverlay::None => {}
             ShelfOverlay::Menu { row } => {
-                self.draw_original_style_menu(0, &[1, 2, 3, 48, 25, 31], row, out);
+                let items = [1, 2, 3, 48, 25, 31];
+                self.draw_original_style_menu(0, &items, row, out);
                 if self.update_status == 1 {
-                    // Scale to the available right-hand width, then center the
-                    // resulting shorter glyph vertically within About's row.
-                    self.draw_update_status_centered(106, 523.0,
+                    // After About's label, as far as its mark: scale to
+                    // that width, then center the resulting shorter glyph
+                    // vertically within About's row.
+                    let x1 = out_w() as f32 - self.menu_side_room(0, &items).unwrap_or(PILL_RIGHT);
+                    let x = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round();
+                    self.draw_update_status_centered(106, x,
                         settings_row_top(6) + 5.5 * QUICK_PITCH,
-                        175.0, 0.70, out);
+                        (x1 - 36.0 - x).clamp(40.0, 175.0), 0.70, out);
                 }
             }
             ShelfOverlay::Library { row } => {
-                self.draw_original_style_menu(5, &LIBRARY_ROWS, row, out);
+                self.draw_menu_rows(5, &LIBRARY_ROWS, row, &[], out);
                 self.draw_library_share_value(row, out);
+                self.draw_menu_chrome(5, LIBRARY_ROWS.len(), row, false, out);
             }
             ShelfOverlay::Settings { row } => {
                 self.draw_original_style_menu(26, &SETTINGS_ROWS, row, out);
@@ -6520,9 +6556,9 @@ impl Engine {
                 let fade = slot_ui::ease(
                     (self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
                 out.push(Draw::Tex {
-                    x: out_w() as f32 - 32.0 - w as f32 * scale, y: 33.0,
+                    x: out_w() as f32 - 32.0 - w as f32 * scale, y: menu_look::TITLE_Y,
                     w: w as f32 * scale, h: h as f32 * scale,
-                    tex, alpha: 0.68 * fade,
+                    tex, alpha: menu_look::ROW_REST * fade,
                 });
             }
             ShelfOverlay::ScreenSettings { row } => {
@@ -6541,7 +6577,7 @@ impl Engine {
                 // for two transparent menu rows and a non-focusable status line.
                 out.push(Draw::Rect {
                     x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
-                    colour: opening(),
+                    colour: menu_ground(),
                 });
                 // Narrower than the 720 of the KONKR's 3:2 (4:3 640, Retroid
                 // Pocket Classic 552, 1:1 480): the sticker shrinks to the
@@ -6561,19 +6597,13 @@ impl Engine {
                 let fade = slot_ui::ease(
                     (self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
                 let top = about_row_top();
-                let cursor = if self.menu_cursor_y.is_finite() {
-                    self.menu_cursor_y
-                } else { top + row as f32 * QUICK_PITCH };
-                out.push(Draw::Rect {
-                    x: 0.0, y: cursor + 4.0, w: out_w() as f32,
-                    h: QUICK_PITCH - 8.0,
-                    colour: { let mut c = edge(); c[3] *= fade; c },
-                });
+                self.draw_menu_cursor(top, row, 2, out_w() as f32 - PILL_RIGHT, fade, out);
+                let lit = |chosen: bool| if chosen { fade } else { menu_look::ROW_REST * fade };
                 self.text_fit(if about_primary_action(self.update_status) == 21 {110} else {95},
-                    37.0, top + 8.0, 590.0 + narrower, fade, out);
-                self.text_fit(98, 37.0, top + QUICK_PITCH + 8.0, 475.0 + narrower, fade, out);
+                    37.0, top + 8.0, 590.0 + narrower, lit(row == 0), out);
+                self.text_fit(98, 37.0, top + QUICK_PITCH + 8.0, 475.0 + narrower, lit(row == 1), out);
                 self.text_fit(if self.update_auto {105}else{104},
-                    592.0 + narrower, top + QUICK_PITCH + 8.0, 95.0, fade, out);
+                    592.0 + narrower, top + QUICK_PITCH + 8.0, 95.0, lit(row == 1), out);
                 // Equal first-pixel baselines: the third status line begins
                 // exactly one QUICK_PITCH after the second line, rather than
                 // being vertically centered using a different offset.
@@ -7037,6 +7067,7 @@ impl Engine {
             }
         }
         self.prepare_controls();
+        self.prepare_menu_look();
         self.prepare_cart_studio();
         self.prepare_cart_library();
         self.prepare_romm();
@@ -7074,22 +7105,26 @@ impl Engine {
             ShelfOverlay::Romm => (32u8, 0, 0),
             _ => (0, 0, 0),
         };
-        // A page of more than six rows shows six and scrolls: the bar
-        // follows the selected row within them (Controls' are already so).
-        let offset = crate::controls::scroll_offset(selected, count);
-        let (selected, count) = (selected - offset, count.min(crate::controls::VISIBLE_ROWS));
+        // A page of more than six rows shows six and slides its list: the
+        // bar moves freely inside them, and the list follows it only once it
+        // comes within a row of an edge. The bar's place is in the list's
+        // own frame, so both glide together.
+        let row_top = |engine: &Self| if kind == 17 { about_row_top() }
+            else { engine.menu_rows_top(count.min(crate::controls::VISIBLE_ROWS)) };
         if kind != self.menu_seen {
             self.menu_seen = kind;
             self.menu_opened = now;
+            self.menu_scroll_top = crate::controls::scroll_follow(0, selected, count);
+            self.menu_scroll_y = self.menu_scroll_top as f32 * QUICK_PITCH;
             if count > 0 {
-                self.menu_cursor_y = (if kind == 17 { about_row_top() }
-                    else { self.menu_rows_top(count) }) + selected as f32 * QUICK_PITCH;
+                self.menu_cursor_y = row_top(self) + selected as f32 * QUICK_PITCH;
             }
         } else if count > 0 {
-            let goal = (if kind == 17 { about_row_top() }
-                else { self.menu_rows_top(count) }) + selected as f32 * QUICK_PITCH;
+            self.menu_scroll_top = crate::controls::scroll_follow(self.menu_scroll_top, selected, count);
+            let goal = row_top(self) + selected as f32 * QUICK_PITCH;
             let response = 1.0 - (-dt * 24.0).exp();
             self.menu_cursor_y += (goal - self.menu_cursor_y) * response;
+            self.menu_scroll_y += (self.menu_scroll_top as f32 * QUICK_PITCH - self.menu_scroll_y) * response;
         }
 
         // Upstream CRT: 160ms extinction, 350ms black hold, 450ms ejection.
@@ -8347,6 +8382,7 @@ mod link_hardware_tests;
 
 mod jni_exports;
 mod controls_ui;
+mod menu_look;
 mod cheats_ui;
 mod cart_studio;
 mod cart_library;
