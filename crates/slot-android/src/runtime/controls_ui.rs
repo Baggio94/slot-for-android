@@ -464,7 +464,7 @@ impl Engine {
         match self.overlay {
             ShelfOverlay::ControlsSettings { row } => match code {
                 19 | 20 => self.overlay = ShelfOverlay::ControlsSettings {
-                    row: move_menu_row(row, code, 4),
+                    row: move_menu_row(row, code, 4, self.menu_repeat_dispatch),
                 },
                 96 if row < PORTS => self.overlay = ShelfOverlay::ControlsPort { port: row, row: 0 },
                 96 if row == PORTS => self.overlay = ShelfOverlay::Hotkeys { row: 0 },
@@ -483,7 +483,7 @@ impl Engine {
                 let line = rows.get(row).copied().unwrap_or(PortRow::Controller);
                 match (code, line) {
                     (19 | 20, _) => self.overlay = ShelfOverlay::ControlsPort {
-                        port, row: move_menu_row(row, code, rows.len()),
+                        port, row: move_menu_row(row, code, rows.len(), self.menu_repeat_dispatch),
                     },
                     (21 | 22, PortRow::Controller) => {
                         let connected = self.connected_fps();
@@ -533,7 +533,7 @@ impl Engine {
                 let ports = if controls::takes_port2(system) { 2 } else { 1 };
                 match code {
                     19 | 20 => self.overlay = ShelfOverlay::LayoutPorts {
-                        platform, game, row: move_menu_row(row, code, ports + 1),
+                        platform, game, row: move_menu_row(row, code, ports + 1, self.menu_repeat_dispatch),
                     },
                     96 if row < ports => self.overlay = ShelfOverlay::LayoutPort {
                         platform, game, port: row, row: 0,
@@ -560,7 +560,7 @@ impl Engine {
                 let default_xy = self.default_xy(game);
                 match (code, line) {
                     (19 | 20, _) => self.overlay = ShelfOverlay::LayoutPort {
-                        platform, game, port, row: move_menu_row(row, code, rows.len()),
+                        platform, game, port, row: move_menu_row(row, code, rows.len(), self.menu_repeat_dispatch),
                     },
                     (96, LayoutRow::Button(button)) => match self.controls.on_port(port) {
                         Some(fp) if self.pad_connected(fp) => {
@@ -598,7 +598,7 @@ impl Engine {
                 let rows = controls::hotkey_rows();
                 match (code, rows.get(row).copied().unwrap_or(HotkeyRow::Reset)) {
                     (19 | 20, _) => self.overlay = ShelfOverlay::Hotkeys {
-                        row: move_menu_row(row, code, rows.len()),
+                        row: move_menu_row(row, code, rows.len(), self.menu_repeat_dispatch),
                     },
                     (21 | 22 | 96, HotkeyRow::Button) => {
                         self.controls.hotkeys.cycle_button(code != 21);

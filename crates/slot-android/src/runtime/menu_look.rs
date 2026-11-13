@@ -121,7 +121,8 @@ impl Engine {
             26 if game => "Game Menu",
             26 => "Menu",
             33 | 50 if game => "Game Menu \u{203a} Settings",
-            33 | 50 | 59 | 82 | 117 => "Menu \u{203a} Settings",
+            59 => "Settings \u{203a} Interface",
+            33 | 50 | 82 | 117 => "Menu \u{203a} Settings",
             91..=93 | 121..=123 => "Settings \u{203a} Systems",
             _ => "",
         }
@@ -161,8 +162,9 @@ impl Engine {
     pub(super) fn prepare_menu_look(&mut self) {
         let path = match self.overlay {
             ShelfOverlay::None | ShelfOverlay::Core | ShelfOverlay::States
-            | ShelfOverlay::Multiplayer | ShelfOverlay::CartStudio
-            | ShelfOverlay::CartLibrary | ShelfOverlay::Romm | ShelfOverlay::About { .. } => "",
+            | ShelfOverlay::Multiplayer | ShelfOverlay::About { .. } => "",
+            ShelfOverlay::CartStudio | ShelfOverlay::CartLibrary | ShelfOverlay::Romm => self.studio_page_path(),
+            ShelfOverlay::InterfaceSettings { .. } => self.menu_path(59),
             ShelfOverlay::ControlsSettings { .. } | ShelfOverlay::ControlsPort { .. }
             | ShelfOverlay::LayoutPorts { .. } | ShelfOverlay::LayoutPort { .. }
             | ShelfOverlay::Hotkeys { .. } | ShelfOverlay::Cheats { .. } => self.controls_path(),
@@ -178,7 +180,7 @@ impl Engine {
             let tex = self.gpu.create_face(&face);
             self.menu_paths.insert(path, (tex, face.w, face.h));
         }
-        if !matches!(self.overlay, ShelfOverlay::Menu { .. } | ShelfOverlay::GameMenu { .. }) { return; }
+        if !matches!(self.overlay, ShelfOverlay::GameMenu { .. }) { return; }
         let Some(cart) = self.shelves.get(self.active).and_then(|s| s.carts.get(s.index)) else {
             return;
         };
@@ -203,7 +205,7 @@ impl Engine {
     /// The room right of the main or game menu's rows for the selected
     /// cart, where the screen is wide enough for both.
     pub(super) fn menu_side_room(&self, heading: usize, items: &[usize]) -> Option<f32> {
-        if !matches!(heading, 0 | 19) || self.menu_side.is_none() { return None; }
+        if heading != 19 || self.menu_side.is_none() { return None; }
         let shelf = self.shelves.get(self.active)?;
         shelf.carts.get(shelf.index)?;
         shelf.face(shelf.index)?;
@@ -240,6 +242,15 @@ impl Engine {
         let system_w = system.1 as f32 * system_scale;
         out.push(Draw::Tex { x: (centre - system_w / 2.0).round(), y: y + h + 10.0 + title_h,
             w: system_w, h: system_h, tex: system.0, alpha: 0.5 * fade });
+    }
+
+    pub(super) fn studio_page_path(&self) -> &'static str {
+        match self.overlay {
+            ShelfOverlay::CartLibrary => "Menu",
+            ShelfOverlay::CartStudio => "Library \u{203a} Cart Studio",
+            ShelfOverlay::Romm => "Menu \u{203a} Library",
+            _ => "",
+        }
     }
 }
 
@@ -283,6 +294,24 @@ mod tests {
 #[cfg(all(test, target_os = "linux"))]
 mod render {
     use super::*;
+
+    #[test]
+    fn apps_and_bios_picker_return_to_their_original_menu_row() {
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        for page in [ShelfOverlay::Menu { row: 3 }, ShelfOverlay::Library { row: 2 }] {
+            engine.overlay = page;
+            engine.handle(Input::Key(96, true));
+            assert!(engine.external_pending);
+            engine.handle(Input::Suspend);
+            engine.handle(Input::Reset);
+            assert_eq!(engine.overlay, page);
+            engine.handle(Input::ExternalReturn);
+            assert!(!engine.external_pending);
+            assert_eq!(engine.overlay, page);
+            assert!(engine.menu_held.is_none());
+        }
+    }
 
     fn entries() -> Vec<RomEntry> {
         let json: Vec<String> = ["Pokemon Emerald", "Metroid Fusion"].iter().map(|n| format!(

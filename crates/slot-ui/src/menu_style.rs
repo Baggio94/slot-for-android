@@ -5,6 +5,21 @@ use crate::plate::UndoFace;
 use crate::power_menu::MENU_INK;
 use crate::slot_chrome::theme;
 use crate::text;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// OLED changes page grounds, never cartridge shells or console hardware.
+static OLED: AtomicBool = AtomicBool::new(false);
+pub fn set_oled(enabled: bool) { OLED.store(enabled, Ordering::Relaxed); }
+pub fn oled() -> bool { OLED.load(Ordering::Relaxed) }
+
+fn ground_rgb(housing: [u8; 3], oled: bool) -> [u8; 3] {
+    if oled { [0; 3] } else { housing.map(|c| (c as f32 * 0.88).round() as u8) }
+}
+
+/// Keep a specialised page's layout while making its plain ground OLED black.
+pub fn page_ground(original: [f32; 4]) -> [f32; 4] {
+    if oled() { [0.0, 0.0, 0.0, original[3]] } else { original }
+}
 
 /// The selected row's bar: its height and corner radius.
 pub const PILL_H: u32 = 44;
@@ -19,7 +34,7 @@ pub const PATH_H: u32 = 18;
 
 /// The menus' ground: the housing, a shade darker.
 pub fn menu_ground_rgb() -> [u8; 3] {
-    theme().housing.map(|c| (c as f32 * 0.88).round() as u8)
+    ground_rgb(theme().housing, oled())
 }
 
 pub fn menu_ground() -> [f32; 4] {
@@ -29,7 +44,8 @@ pub fn menu_ground() -> [f32; 4] {
 
 /// The bar's colour: the theme's edge, settled into the ground.
 pub fn pill_rgb() -> [u8; 3] {
-    let (ground, edge) = (menu_ground_rgb(), theme().edge);
+    // OLED retains Dark's selection colour.
+    let (ground, edge) = (ground_rgb(theme().housing, false), theme().edge);
     [0, 1, 2].map(|i| (ground[i] as f32 + (edge[i] as f32 - ground[i] as f32) * 0.62).round() as u8)
 }
 
@@ -95,6 +111,14 @@ pub fn menu_opens_face() -> UndoFace {
 mod tests {
     use super::*;
     use crate::density::Face as _;
+
+    #[test]
+    fn oled_grounds_are_pure_black_even_with_a_custom_palette() {
+        for housing in [[36, 36, 41], [255, 255, 255], [120, 40, 80]] {
+            assert_eq!(ground_rgb(housing, true), [0; 3]);
+            assert_ne!(ground_rgb(housing, false), [0; 3]);
+        }
+    }
 
     #[test]
     fn the_bar_is_round_at_its_ends_and_whole_between() {

@@ -125,12 +125,12 @@ internal class RaPanelDialog(
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(SlotUi.menuPixel(activity, 32),
-                SlotUi.menuPixel(activity, 33),
+                SlotUi.menuPixel(activity, 20),
                 SlotUi.menuPixel(activity, 32), dp(12))
             setBackgroundColor(SlotUi.menuBackground)
         }
-        root.addView(SlotUi.menuHeading(activity, "RETROACHIEVEMENTS"),
-            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 32)))
+        root.addView(SlotUi.menuHeader(activity, "RETROACHIEVEMENTS"),
+            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 50)))
         root.addView(View(activity), LinearLayout.LayoutParams(-1,
             SlotUi.menuPixel(activity, 18)))
         scroll = ScrollView(activity).apply {

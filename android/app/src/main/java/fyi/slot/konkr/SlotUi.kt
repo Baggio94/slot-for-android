@@ -24,15 +24,48 @@ import java.util.Locale
  */
 internal object SlotUi {
     val background: Int = Color.rgb(23, 22, 25)
-    // The same dark opening palette used for native Library / Settings.
-    val menuBackground: Int = Color.rgb(8, 8, 11)
+    @Volatile var menuBackground: Int = Color.rgb(32, 32, 36)
+        private set
     val surface: Int = Color.rgb(37, 36, 43)
-    val selected: Int = Color.rgb(68, 66, 77)
+    @Volatile var selected: Int = Color.rgb(60, 60, 68)
+        private set
     val ink: Int = Color.rgb(246, 244, 239)
     val muted: Int = Color.rgb(174, 171, 180)
     val rule: Int = Color.rgb(91, 89, 96)
     val accent: Int = Color.rgb(210, 188, 134)
     val error: Int = Color.rgb(241, 160, 146)
+
+    /** Rust publishes the active theme, including custom colours and OLED. */
+    fun updateMenuPalette(packed: Long) {
+        menuBackground = 0xff000000.toInt() or ((packed ushr 24).toInt() and 0xffffff)
+        selected = 0xff000000.toInt() or (packed.toInt() and 0xffffff)
+    }
+
+    fun rowBackground(context: Context, focused: Boolean): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(if (focused) selected else Color.TRANSPARENT)
+            cornerRadius = menuPixel(context, 11).toFloat()
+        }
+
+    fun menuHeader(context: Context, title: String): View =
+        android.widget.LinearLayout(context).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            val path = when (title.uppercase(Locale.ROOT)) {
+                "APPS", "RETROACHIEVEMENTS" -> "MENU"
+                "ROMM" -> "MENU › LIBRARY"
+                "SIGN OUT" -> "MENU › RETROACHIEVEMENTS"
+                "SAVE CONFLICT", "SAVE STATE" -> "LIBRARY"
+                else -> "slot."
+            }
+            addView(label(context, path, 13f).apply {
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuPixel(context, 13).toFloat())
+                letterSpacing = .15f
+                alpha = .5f
+                setPadding(menuPixel(context, 12), 0, 0, 0)
+            }, android.widget.LinearLayout.LayoutParams(-1, menuPixel(context, 18)))
+            addView(menuHeading(context, title),
+                android.widget.LinearLayout.LayoutParams(-1, menuPixel(context, 32)))
+        }
 
     @Volatile private var cachedFont: Typeface? = null
 
@@ -132,12 +165,15 @@ internal object SlotUi {
                 }
             }.getOrNull()
         }
-        if (image == null) return label(context, title, 16f, muted)
+        if (image == null) return label(context, title, 16f, ink).apply {
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuPixel(context, 26).toFloat())
+            setPadding(menuPixel(context, 16), 0, 0, 0)
+        }
         return android.widget.FrameLayout(context).apply {
             addView(ImageView(context).apply {
                 setImageBitmap(image)
                 scaleType = ImageView.ScaleType.FIT_XY
-                alpha = .68f
+                alpha = 1f
             }, android.widget.FrameLayout.LayoutParams(
                 menuPixel(context, (image.width * .79f / LEGEND_DENSITY).toInt()),
                 menuPixel(context, (image.height * .79f / LEGEND_DENSITY).toInt()),

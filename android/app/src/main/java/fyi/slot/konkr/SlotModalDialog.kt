@@ -116,7 +116,7 @@ internal class SlotModalDialog(
     }
     private val root = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(SlotUi.menuPixel(activity, 32), SlotUi.menuPixel(activity, 33),
+        setPadding(SlotUi.menuPixel(activity, 32), SlotUi.menuPixel(activity, 20),
             SlotUi.menuPixel(activity, 32), dp(9))
         setBackgroundColor(SlotUi.menuBackground)
     }
@@ -162,8 +162,8 @@ internal class SlotModalDialog(
     }
 
     init {
-        root.addView(SlotUi.menuHeading(activity, title),
-            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 32)))
+        root.addView(SlotUi.menuHeader(activity, title),
+            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 50)))
         root.addView(View(activity), LinearLayout.LayoutParams(-1,
             SlotUi.menuPixel(activity, if (isRaLogin) 9 else 19)))
         if (message.isNotBlank()) {
@@ -248,7 +248,7 @@ internal class SlotModalDialog(
             isClickable = true
             contentDescription = label
             setOnFocusChangeListener { view, focused ->
-                view.setBackgroundColor(if (focused) SlotUi.selected else Color.TRANSPARENT)
+                view.background = SlotUi.rowBackground(activity, focused)
                 setTextColor(if (focused) SlotUi.ink else SlotUi.muted)
             }
             setOnClickListener { if (!busy) onClick() }
@@ -271,7 +271,7 @@ internal class SlotModalDialog(
             isFocusable = true
             contentDescription = label
             setOnFocusChangeListener { view, focused ->
-                view.setBackgroundColor(if (focused) SlotUi.selected else Color.TRANSPARENT)
+                view.background = SlotUi.rowBackground(activity, focused)
                 setTextColor(if (focused) SlotUi.ink else SlotUi.muted)
             }
         }

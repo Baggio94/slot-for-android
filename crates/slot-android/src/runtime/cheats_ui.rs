@@ -68,7 +68,7 @@ impl Engine {
         let ShelfOverlay::Cheats { row } = self.overlay else { return };
         let rows = self.cheat_rows();
         match code {
-            19 | 20 => self.overlay = ShelfOverlay::Cheats { row: move_menu_row(row, code, rows.len()) },
+            19 | 20 => self.overlay = ShelfOverlay::Cheats { row: move_menu_row(row, code, rows.len(), self.menu_repeat_dispatch) },
             // L1 / R1: the game's other cheat file (Codes, Game Genie...),
             // from its first cheat.
             102 | 103 if self.cheat_sources.len() > 1 => {

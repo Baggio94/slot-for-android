@@ -1,6 +1,15 @@
 //! JNI entry points called by MainActivity, plus the EGL recovery test fixture.
 use super::*;
 
+/// The same page and selected-row colours for Android-owned forms and Apps.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeMenuPalette(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jni::sys::jlong {
+    let rgb = |c: [u8; 3]| (u64::from(c[0]) << 16) | (u64::from(c[1]) << 8) | u64::from(c[2]);
+    ((rgb(menu_style::menu_ground_rgb()) << 24) | rgb(menu_style::pill_rgb())) as i64
+}
+
 // The primitive JNI ABI is sufficient for this stage; no Java objects are touched.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
@@ -239,6 +248,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                     ).collect::<Vec<_>>(),
                 ));
             // Other ROMs: the shelves take them in place, their faces kept.
+            let library_page = holder.borrow().as_ref().and_then(|engine| {
+                matches!(engine.overlay, ShelfOverlay::Library { .. } | ShelfOverlay::Menu { .. })
+                    .then_some((engine.overlay, engine.external_pending))
+            });
             let in_place = holder.borrow_mut().as_mut()
                 .is_some_and(|engine| engine.shelves.iter().any(|s| !s.carts.is_empty())
                     && engine.update_library(version, snapshot.as_deref()));
@@ -249,6 +262,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 match Engine::new(version, snapshot.as_deref()) {
                     Ok(mut engine) => {
                         engine.size = size;
+                        if let Some((overlay, pending)) = library_page {
+                            engine.overlay = overlay;
+                            engine.external_pending = pending;
+                        }
                         if let Some((active, uris)) = selected_uris {
                             let active = restore_shelf_focus(&mut engine.shelves, active, &uris);
                             engine.active = super::gba_before_video(&engine.shelves, active);

@@ -660,7 +660,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 120] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 121] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -690,7 +690,7 @@ const SETTING_VALUE_NAMES: [&str; 120] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Pixel Transparency", "Sunlight Shimmer",
                                "Dot Matrix Color",
                                "Bilinear", "FSR", "Anime4K Fast", "Anime4K",
-                               "MAX", "crt-royale"];
+                               "MAX", "crt-royale", "OLED"];
 
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
@@ -759,6 +759,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             crate::settings::Appearance::Dark => 21,
             crate::settings::Appearance::Light => 22,
             crate::settings::Appearance::Original => 76,
+            crate::settings::Appearance::Oled => 120,
         },
         19 => if settings.show_recents {4}else{5},
         20 => if settings.show_titles {4}else{5},
@@ -1360,6 +1361,7 @@ impl Engine {
         // Upstream Slot delegates colour correction to libretro core options.
         // Disable the dev13 approximate GPU grade to avoid double correction.
         gpu.enable_context_recovery();
+        menu_style::set_oled(settings.appearance == crate::settings::Appearance::Oled);
         gpu.set_colour_correction(false);
         FF_AUDIO_ENABLED.store(settings.ff_sound, Ordering::Release);
         let visuals_root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
@@ -3288,12 +3290,15 @@ impl Engine {
             Input::ExternalReturn => {
                 if self.external_pending {
                     self.external_pending = false;
+                    self.menu_held = None;
+                    self.menu_seen = 0;
                     // Keep the original Menu and selected row when coming back
                     // from Cart Studio, Apps or the RetroAchievements panel.
                 }
             }
             Input::Reset => {
                 self.reset_time_controls();
+                self.menu_held = None;
                 self.buttons = 0;
                 // Android won't tell the releases of keys held while away.
                 self.buttons2 = 0;
@@ -3768,7 +3773,7 @@ impl Engine {
                         if let ShelfOverlay::GameMenu { row } = self.overlay {
                             match code {
                                 19 | 20 => self.overlay = ShelfOverlay::GameMenu {
-                                    row: move_menu_row(row, code, pause_rows(linked, relaunch).len()),
+                                    row: move_menu_row(row, code, pause_rows(linked, relaunch).len(), self.menu_repeat_dispatch),
                                 },
                                 96 => match pause_rows(linked, relaunch).get(row).copied() {
                                     Some(PauseRow::SaveEject) => self.handle(Input::Exit),
@@ -3828,7 +3833,7 @@ impl Engine {
                                 self.controls_menu_key(code),
                             ShelfOverlay::PauseSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::PauseSettings {
-                                    row: move_menu_row(row, code, self.pause_settings_rows().len()),
+                                    row: move_menu_row(row, code, self.pause_settings_rows().len(), self.menu_repeat_dispatch),
                                 },
                                 96 => {
                                     let linked=self.game.as_ref().is_some_and(GameSession::linked);
@@ -3858,7 +3863,7 @@ impl Engine {
                                     self.step_screen_size(code == 102);
                                 },
                                 19 | 20 => self.overlay = ShelfOverlay::PauseScreenSettings {
-                                    row: move_menu_row(row,code,self.pause_screen_page_rows().len()),
+                                    row: move_menu_row(row,code,self.pause_screen_page_rows().len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 => if let Some(key)=self.pause_screen_page_key(row) {
                                     self.change_game_screen_or_gameplay(key,code==22);
@@ -3875,7 +3880,7 @@ impl Engine {
                             },
                             ShelfOverlay::PauseGameplaySettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::PauseGameplaySettings {
-                                    row: move_menu_row(row,code,GAMEPLAY_KEYS.len()),
+                                    row: move_menu_row(row,code,GAMEPLAY_KEYS.len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 => self.change_game_screen_or_gameplay(GAMEPLAY_KEYS[row],code==22),
                                 97 => self.overlay = ShelfOverlay::PauseSettings { row: 1 },
@@ -3883,7 +3888,7 @@ impl Engine {
                             },
                             ShelfOverlay::PauseEmulationSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::PauseEmulationSettings {
-                                    row: move_menu_row(row, code, self.pause_emulation_rows().len()),
+                                    row: move_menu_row(row, code, self.pause_emulation_rows().len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 if row == 3 && self.game.as_ref().is_some_and(GameSession::motion) =>
                                     self.change_game_motion(code == 22),
@@ -4003,7 +4008,7 @@ impl Engine {
                         match self.overlay {
                             ShelfOverlay::Menu { row } => match code {
                                 19 | 20 => {
-                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 6) };
+                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 6, self.menu_repeat_dispatch) };
                                 }
                                 // Debounce taps while Apps, Studio or RA is opening.
                                 96 if !self.external_pending => {
@@ -4040,7 +4045,7 @@ impl Engine {
                             ShelfOverlay::Library { row } => match code {
                                 19 | 20 => {
                                     let n = LIBRARY_ROWS.len();
-                                    let next = if code == 19 { (row + n - 1) % n } else { (row + 1) % n };
+                                    let next = move_menu_row(row, code, n, self.menu_repeat_dispatch);
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
                                 // Identical left/right + A toggle to Settings.
@@ -4051,7 +4056,7 @@ impl Engine {
                                 }
                                 // RomM, right after the ROM folder (Siham 2026-11-09).
                                 96 if row == 1 && !self.external_pending => self.open_romm(),
-                                96 => if let Some(action) = match row {
+                                96 if !self.external_pending => if let Some(action) = match row {
                                     // ROM, BIOS, SRAM root, State root, Refresh.
                                     0 => Some(1),
                                     2 => Some(4),
@@ -4062,7 +4067,9 @@ impl Engine {
                                 } {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                         .push_back(action);
-                                    self.overlay = ShelfOverlay::None;
+                                    // Keep Library and its row behind the Android picker.
+                                    // Both selection and cancellation send ExternalReturn.
+                                    self.external_pending = action != 2;
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 0 },
                                 108 => self.overlay = ShelfOverlay::None,
@@ -4077,7 +4084,7 @@ impl Engine {
                             ShelfOverlay::Romm => self.romm_key(code),
                             ShelfOverlay::Settings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::Settings {
-                                    row: move_menu_row(row, code, SETTINGS_ROWS.len()),
+                                    row: move_menu_row(row, code, SETTINGS_ROWS.len(), self.menu_repeat_dispatch),
                                 },
                                 96 => match row {
                                     0 => {
@@ -4097,7 +4104,7 @@ impl Engine {
                             },
                             ShelfOverlay::GeneralSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::GeneralSettings {
-                                    row: move_menu_row(row, code, self.general_rows().len()),
+                                    row: move_menu_row(row, code, self.general_rows().len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 | 96 => {
                                     self.cycle_general_row(row,code!=21,code==96);
@@ -4108,7 +4115,7 @@ impl Engine {
                             },
                             ShelfOverlay::InterfaceSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::InterfaceSettings {
-                                    row: move_menu_row(row, code, INTERFACE_ROWS.len()),
+                                    row: move_menu_row(row, code, INTERFACE_ROWS.len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 | 96 => {
                                     if let Some(&key) = INTERFACE_KEYS.get(row) {
@@ -4121,7 +4128,7 @@ impl Engine {
                             },
                             ShelfOverlay::ScreenSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::ScreenSettings {
-                                    row: move_menu_row(row, code, SYSTEM_ORDER.len()),
+                                    row: move_menu_row(row, code, SYSTEM_ORDER.len(), self.menu_repeat_dispatch),
                                 },
                                 96 => {
                                     self.load_default_cores();
@@ -4135,7 +4142,7 @@ impl Engine {
                             },
                             ShelfOverlay::ScreenSystemSettings { platform,row } => match code {
                                 19 | 20 => self.overlay=ShelfOverlay::ScreenSystemSettings {
-                                    platform,row:move_menu_row(row,code,Self::system_page_rows(platform).len()),
+                                    platform,row:move_menu_row(row,code,Self::system_page_rows(platform).len(), self.menu_repeat_dispatch),
                                 },
                                 96 if row+1==Self::system_page_rows(platform).len() =>
                                     self.overlay=Self::layout_entry(platform, false),
@@ -4151,7 +4158,7 @@ impl Engine {
                             },
                             ShelfOverlay::EmulationSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::EmulationSettings {
-                                    row: move_menu_row(row, code, 3),
+                                    row: move_menu_row(row, code, 3, self.menu_repeat_dispatch),
                                 },
                                 21 | 22 => self.change_setting(row + 10, code == 22),
                                 97 => self.overlay = ShelfOverlay::Settings { row: 3 },
@@ -4160,7 +4167,7 @@ impl Engine {
                             },
                             ShelfOverlay::GameplaySettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::GameplaySettings {
-                                    row: move_menu_row(row, code, GAMEPLAY_KEYS.len()),
+                                    row: move_menu_row(row, code, GAMEPLAY_KEYS.len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 => self.change_setting(GAMEPLAY_KEYS[row], code == 22),
                                 97 => self.overlay = ShelfOverlay::Settings { row: 2 },
@@ -4169,7 +4176,7 @@ impl Engine {
                             },
                             ShelfOverlay::About { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::About {
-                                    row: move_menu_row(row, code, 2),
+                                    row: move_menu_row(row, code, 2, self.menu_repeat_dispatch),
                                 },
                                 96 => {
                                     let action = if row == 0 {
@@ -5957,6 +5964,7 @@ impl Engine {
 
     fn cycle_appearance(&mut self) {
         self.settings.appearance=self.settings.appearance.toggle();
+        menu_style::set_oled(self.settings.appearance == crate::settings::Appearance::Oled);
         self.home_slot_faces=self.home_slot_themes[self.settings.appearance.bar_theme()];
         let custom_colours = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().is_some_and(|(root,_)|
@@ -6228,7 +6236,7 @@ impl Engine {
         let bottom = OUT_H as f32 - MOUTH_H + self.footer_dy();
         out.push(Draw::Rect {
             x: 0.0, y, w: out_w() as f32, h: (bottom - y).max(0.0),
-            colour: [0.0, 0.0, 0.0, GAME_MENU_SCRIM],
+            colour: [0.0, 0.0, 0.0, if menu_style::oled() { 1.0 } else { GAME_MENU_SCRIM }],
         });
         self.draw_game_footer(out);
     }
@@ -6378,7 +6386,7 @@ impl Engine {
     fn draw_multiplayer(&self, out: &mut Vec<Draw>) {
         out.push(Draw::Rect {
             x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
-            colour: opening(),
+            colour: menu_ground(),
         });
         let Some(art) = &self.link_art else { return };
         link_screen::draw_link_art_with(self.link_phase, self.link_millis(), art, &self.link_marks,
@@ -7762,7 +7770,7 @@ impl Engine {
             y: 0.0,
             w: out_w() as f32,
             h: OUT_H as f32,
-            colour: [0.085, 0.085, 0.093, 1.0],
+            colour: menu_style::page_ground([0.085, 0.085, 0.093, 1.0]),
         }];
         // Slot v1.7 carousel ground: None has no wallpaper; personal images
         // receive only the selected Wallpaper Tint (never a fixed scrim).
@@ -7770,8 +7778,8 @@ impl Engine {
             .then(|| self.shelf_wallpaper_ready.get(self.active).copied().unwrap_or(false)
                 .then(|| self.shelf_wallpaper_texs.get(self.active).copied().flatten()).flatten())
             .flatten();
-        let active_wallpaper = if self.settings.wallpaper ==
-            crate::settings::WallpaperPick::None { None }
+        let active_wallpaper = if self.settings.wallpaper == crate::settings::WallpaperPick::None
+            || (menu_style::oled() && !self.wallpaper_personal && shelf_wallpaper.is_none()) { None }
             else { shelf_wallpaper.or(self.wallpaper_texture) };
         let tint = if self.wallpaper_personal || shelf_wallpaper.is_some() {
             self.settings.wallpaper_tint.alpha()
@@ -8290,8 +8298,15 @@ fn about_primary_action(status: u8) -> i32 {
 
 /// Physical D-pad UP and DOWN must move the selection in opposite
 /// directions, including wraparound; never leak navigation to libretro.
-fn move_menu_row(row: usize, key: i32, count: usize) -> usize {
+fn move_menu_row(row: usize, key: i32, count: usize, repeating: bool) -> usize {
     if count == 0 { return 0; }
+    if repeating {
+        return match key {
+            19 => row.saturating_sub(1),
+            20 => (row + 1).min(count - 1),
+            _ => row.min(count - 1),
+        };
+    }
     match key {
         19 => (row + count - 1) % count,
         20 => (row + 1) % count,

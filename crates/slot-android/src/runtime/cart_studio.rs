@@ -701,7 +701,7 @@ impl Engine {
         }
         let rows = studio.rows().len();
         match code {
-            19 | 20 => studio.row = move_menu_row(studio.row, code, rows),
+            19 | 20 => studio.row = move_menu_row(studio.row, code, rows, self.menu_repeat_dispatch),
             21 | 102 => studio.cycle(false),
             22 | 103 => studio.cycle(true),
             100 => {
@@ -1019,7 +1019,6 @@ impl Engine {
             return;
         }
         let (x0, x1) = (layout.x0, layout.x1);
-        let tint = |a: f32| { let mut c = edge(); c[3] *= a * fade; c };
         let hint_keys: Vec<(&str, &str)> = if studio.chart.is_some() {
             self.draw_chart(studio, x0, x1, fade, out);
             vec![("B", "BACK"), ("SWAP", "MOVE"), ("A", "CHOOSE")]
@@ -1029,10 +1028,8 @@ impl Engine {
             let rows = studio.rows();
             let lowest = STRIP_BOTTOM - FINISH_STRIP_H - rows.len() as f32 * QUICK_PITCH;
             let rows_top = (cart_top - 8.0).clamp(ROWS_TOP, lowest.max(ROWS_TOP));
-            out.push(Draw::Rect {
-                x: x0 - 8.0, y: rows_top + studio.row as f32 * QUICK_PITCH + 4.0, w: x1 - x0 + 16.0, h: QUICK_PITCH - 8.0,
-                colour: tint(1.0),
-            });
+            self.draw_menu_pill(x0 - 8.0, x1 + 8.0,
+                rows_top + studio.row as f32 * QUICK_PITCH + 4.0, fade, out);
             for (slot, &row) in rows.iter().enumerate() {
                 let y = rows_top + slot as f32 * QUICK_PITCH + 8.0;
                 let (value, lit) = studio.value(row);
@@ -1092,11 +1089,8 @@ impl Engine {
 
     /// A page's title, top left like every menu page's (Siham 2026-11-08).
     pub(super) fn draw_page_title(&self, out: &mut Vec<Draw>, title: &str, fade: f32) {
-        if let Some((tex, w, h)) = self.controls_faces.get(&Self::face_key(title, true)).copied() {
-            let width = out_w() as f32;
-            let scale = 0.79f32.min((width - 70.0) / w.max(1) as f32);
-            out.push(Draw::Tex { x: 32.0, y: 33.0, w: w as f32 * scale, h: h as f32 * scale, tex, alpha: 0.68 * fade });
-        }
+        let title = self.controls_faces.get(&Self::face_key(title, true)).copied();
+        self.draw_menu_header(self.studio_page_path(), title, fade, out);
     }
 
     /// A mini cart centred in its box.

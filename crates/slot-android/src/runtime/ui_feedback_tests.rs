@@ -2,6 +2,20 @@ use super::*;
 use slot_store::Cart;
 
 #[test]
+fn held_menu_navigation_stops_at_edges_until_a_new_press() {
+    for count in [1, 2, 6, 7, 19] {
+        let mut row = 0;
+        for _ in 0..(count * 3) { row = move_menu_row(row, 20, count, true); }
+        assert_eq!(row, count - 1);
+        assert_eq!(move_menu_row(row, 20, count, false), 0);
+        for _ in 0..(count * 3) { row = move_menu_row(row, 19, count, true); }
+        assert_eq!(row, 0);
+        assert_eq!(move_menu_row(row, 19, count, false), count - 1);
+    }
+    assert_eq!(move_menu_row(0, 20, 0, true), 0);
+}
+
+#[test]
 fn updater_about_has_two_actions_in_all_statuses() {
     assert_eq!(about_primary_action(0), 19);
     assert_eq!(about_primary_action(1), 21);
@@ -9,8 +23,8 @@ fn updater_about_has_two_actions_in_all_statuses() {
     for status in [2, 3, 4] {
         assert_eq!(about_primary_action(status), 19);
     }
-    assert_eq!(move_menu_row(0, 19, 2), 1);
-    assert_eq!(move_menu_row(1, 20, 2), 0);
+    assert_eq!(move_menu_row(0, 19, 2, false), 1);
+    assert_eq!(move_menu_row(1, 20, 2, false), 0);
     assert_eq!(about_row_top(), 270.0);
 }
 
@@ -335,11 +349,11 @@ fn in_game_shortcut_keycaps_fit_720x480_without_clipping() {
 
 #[test]
 fn paused_game_menu_dpad_up_down_wrap_correctly() {
-    assert_eq!(move_menu_row(0, 19, 3), 2);
-    assert_eq!(move_menu_row(2, 20, 3), 0);
-    assert_eq!(move_menu_row(1, 19, 3), 0);
-    assert_eq!(move_menu_row(1, 20, 3), 2);
-    assert_eq!(move_menu_row(1, 96, 3), 1);
+    assert_eq!(move_menu_row(0, 19, 3, false), 2);
+    assert_eq!(move_menu_row(2, 20, 3, false), 0);
+    assert_eq!(move_menu_row(1, 19, 3, false), 0);
+    assert_eq!(move_menu_row(1, 20, 3, false), 2);
+    assert_eq!(move_menu_row(1, 96, 3, false), 1);
 }
 
 #[test]

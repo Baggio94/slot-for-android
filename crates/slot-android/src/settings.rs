@@ -64,16 +64,17 @@ impl WallpaperTint {
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Appearance { #[default] Dark, Light, Original }
+pub enum Appearance { #[default] Dark, Light, Original, Oled }
 impl Appearance {
-    /// Dark, Light, then Original: the dark interface with every console
+    /// Dark, OLED, Light, then Original: the dark interface with every console
     /// bar in its console's own colours (Siham 2026-11-03).
     pub fn toggle(self)->Self {
-        match self { Self::Dark=>Self::Light, Self::Light=>Self::Original, Self::Original=>Self::Dark }
+        match self { Self::Dark=>Self::Oled, Self::Oled=>Self::Light,
+            Self::Light=>Self::Original, Self::Original=>Self::Dark }
     }
     /// Which set of console bars `slot_ui::bitmaps::home_slot` draws.
     pub fn bar_theme(self)->usize {
-        match self { Self::Original=>0, Self::Dark=>1, Self::Light=>2 }
+        match self { Self::Original=>0, Self::Dark | Self::Oled=>1, Self::Light=>2 }
     }
 }
 
@@ -1170,7 +1171,10 @@ mod tests {
     fn official_wallpaper_tint_alpha_and_theme_toggle_are_exact() {
         assert_eq!(WallpaperTint::ALL.map(WallpaperTint::alpha),
             [0.0,0.25,0.45,0.65]);
-        assert_eq!(Appearance::Dark.toggle(),Appearance::Light);
+        assert_eq!(Appearance::Dark.toggle(),Appearance::Oled);
+        assert_eq!(Appearance::Oled.toggle(),Appearance::Light);
+        assert_eq!(Appearance::Oled.bar_theme(),Appearance::Dark.bar_theme());
+        assert_eq!(serde_json::from_str::<Appearance>("\"oled\"").unwrap(), Appearance::Oled);
         assert_eq!(Appearance::Light.toggle(),Appearance::Original);
         assert_eq!(Appearance::Original.toggle(),Appearance::Dark);
     }

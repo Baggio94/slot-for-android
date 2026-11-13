@@ -110,7 +110,7 @@ class AppsActivity : Activity() {
 
     private fun plate(color: Int, selected: Boolean = false) = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = dp(4).toFloat()
+        cornerRadius = SlotUi.menuPixel(this, 11).toFloat()
         if (selected) setStroke(dp(2), SlotUi.ink)
     }
 
@@ -146,7 +146,7 @@ class AppsActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(SlotUi.menuBackground)
             setPadding(SlotUi.menuPixel(this@AppsActivity, 32),
-                SlotUi.menuPixel(this@AppsActivity, 33),
+                SlotUi.menuPixel(this@AppsActivity, 20),
                 SlotUi.menuPixel(this@AppsActivity, 32), dp(4))
             isFocusableInTouchMode = true
         }
@@ -156,8 +156,8 @@ class AppsActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        header.addView(SlotUi.menuHeading(this, "APPS"),
-            LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 32), 1f))
+        header.addView(SlotUi.menuHeader(this, "APPS"),
+            LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 50), 1f))
         homeButton = slotSize(SlotUi.label(this, "Set as Home", 13f), 13).apply {
             gravity = Gravity.CENTER
             isSingleLine = true

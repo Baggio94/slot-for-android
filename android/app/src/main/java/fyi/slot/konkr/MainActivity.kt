@@ -148,6 +148,8 @@ class MainActivity : Activity() {
     external fun nativeGameError(uri: String, message: String)
     external fun nativeExitGame()
     external fun nativeSuspend()
+    external fun nativePresentationResume()
+    external fun nativeMenuPalette(): Long
     external fun nativeIsPlaying(): Boolean
     external fun nativeCarouselQuiet(): Boolean
     external fun nativeWarmRomCandidate(): String?
@@ -866,6 +868,7 @@ class MainActivity : Activity() {
             }
             romm.poll()
             deleteRequestedGames()
+            SlotUi.updateMenuPalette(nativeMenuPalette())
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
@@ -1133,6 +1136,27 @@ class MainActivity : Activity() {
         cartSounds = CartSounds(this)
         val renderer = object : GLSurfaceView.Renderer {
             var ready = false
+            private val graphicsRecovery = SlotGraphicsRecovery()
+            private var surfaceWidth = 0
+            private var surfaceHeight = 0
+
+            private fun restoreGraphics(): Boolean {
+                val restored = graphicsRecovery.attempt(SystemClock.uptimeMillis()) {
+                    nativeSurfaceCreated().also { ok ->
+                        if (!ok) Log.e(TAG, "Slot GLES recovery failed; retrying with session retained")
+                    }
+                }
+                if (restored) {
+                    if (surfaceWidth > 0 && surfaceHeight > 0)
+                        nativeSurfaceChanged(surfaceWidth, surfaceHeight)
+                    nativePresentationResume()
+                    runOnUiThread {
+                        pushControllers()
+                        uiHandler.postDelayed({ hideSlotStartupSplash() }, 650L)
+                    }
+                }
+                return restored
+            }
             private var probeStartNs = 0L
             private var lastDrawNs = 0L
             private var callbacks = 0
@@ -1167,20 +1191,17 @@ class MainActivity : Activity() {
                 }
                 resetTiming()
                 nativeEglPresentationReset()
-                ready = nativeSurfaceCreated()
+                graphicsRecovery.reset()
+                ready = restoreGraphics()
                 glPacingCorrelation.reset()
-                if (!ready) Log.e(TAG, "Slot GLES initialization failed")
-                else runOnUiThread {
-                    // The engine is new: tell it every controller.
-                    pushControllers()
-                    // Wait for the renderer to exist before revealing the shelf.
-                    uiHandler.postDelayed({ hideSlotStartupSplash() }, 650L)
-                }
             }
             override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-                if (ready) nativeSurfaceChanged(width, height)
+                surfaceWidth = width
+                surfaceHeight = height
+                nativeSurfaceChanged(width, height)
             }
             override fun onDrawFrame(gl: GL10?) {
+                if (!ready) ready = restoreGraphics()
                 val a12StartedNs = SystemClock.elapsedRealtimeNanos()
                 // Beta8 observer: age of last Choreographer timestamp
                 // when GL starts, not a measured display-present time.
@@ -2790,6 +2811,7 @@ class MainActivity : Activity() {
     private fun openSharedFolderPicker(requestCode: Int) {
         check(requestCode == SAVE_REQUEST || requestCode == STATE_REQUEST)
         SlotBuildBehavior.externalFolderRestrictionMessage(packageName)?.let { restriction ->
+            nativeExternalReturn()
             SlotToast.makeText(this, restriction, Toast.LENGTH_LONG).show()
             return
         }
@@ -2802,6 +2824,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, requestCode)
         } catch (error: ActivityNotFoundException) {
+            nativeExternalReturn()
             SlotToast.makeText(this, "Couldn't open the folder picker.", Toast.LENGTH_LONG).show()
         }
     }
@@ -2817,6 +2840,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, BIOS_REQUEST)
         } catch (error: ActivityNotFoundException) {
+            nativeExternalReturn()
             SlotToast.makeText(this, "Couldn't open the folder picker.", Toast.LENGTH_LONG).show()
         }
     }
@@ -2885,6 +2909,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, FOLDER_REQUEST)
         } catch (error: ActivityNotFoundException) {
+            nativeExternalReturn()
             nativeSetShelfStatus(shelfPickerError)
             Log.w(TAG, "Android folder picker unavailable", error)
         }
@@ -2900,6 +2925,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, kind)
         } catch (error: ActivityNotFoundException) {
+            nativeExternalReturn()
             SlotToast.makeText(this, "Couldn't open the file picker.", Toast.LENGTH_LONG).show()
         }
     }
@@ -3211,6 +3237,11 @@ class MainActivity : Activity() {
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode in setOf(FOLDER_REQUEST, BIOS_REQUEST, SAVE_REQUEST, STATE_REQUEST,
+                THEME_REQUEST, WALLPAPER_REQUEST, LABEL_REQUEST, STUDIO_PICTURE_REQUEST)) {
+            nativeExternalReturn()
+            wakeCarouselRender()
+        }
         if (requestCode == STUDIO_PICTURE_REQUEST) {
             val cart = pendingStudioPictureUri
             pendingStudioPictureUri = null
@@ -3602,8 +3633,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (returnFromSlotChild) {
-            // Clear the preserved native menu ONLY after Apps/Studio has
-            // finished and the shelf itself is about to be visible again.
+            // Release the external-page guard, retaining the menu and its row.
             returnFromSlotChild = false
             nativeExternalReturn()
         }
@@ -3630,6 +3660,8 @@ class MainActivity : Activity() {
         lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()
+        view.queueEvent { nativePresentationResume() }
+        wakeCarouselRender()
         updateDisplaySyncMode()
         immersive()
     }

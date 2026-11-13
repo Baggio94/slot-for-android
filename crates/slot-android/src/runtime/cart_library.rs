@@ -421,7 +421,7 @@ impl Engine {
             let scale = 0.56f32.min((width * 0.4) / w.max(1) as f32);
             let (dw, dh) = (w as f32 * scale, h as f32 * scale);
             let title_mid = self.controls_faces.get(&Self::face_key("CART STUDIO", true))
-                .map_or(45.0, |&(_, _, th)| 33.0 + th as f32 * 0.79 / 2.0);
+                .map_or(menu_look::TITLE_Y + 12.0, |&(_, _, th)| menu_look::TITLE_Y + th as f32 * 0.79 / 2.0);
             out.push(Draw::Tex { x: width - 32.0 - dw, y: title_mid - dh / 2.0, w: dw, h: dh, tex, alpha: 0.8 * fade });
         }
         // The systems, the chosen one lit, between L1 and R1.
