@@ -236,6 +236,8 @@ internal object HomeCartLabels {
             val platform = row.optString("platform")
             val uri = row.optString("uri")
             if (platform !in Systems.HOME_PLATFORMS || !uri.startsWith("content://")) return@mapNotNull null
+            // PICO-8 carts carry their own label (Pico8Labels).
+            if (platform == Systems.P8) return@mapNotNull null
             Rom(uri, platform, row.optString("title"), row.optString("filename"),
                 row.optLong("size", -1), row.optLong("modified", -1),
                 row.optString("home_region"), row.optString("home_maker"))

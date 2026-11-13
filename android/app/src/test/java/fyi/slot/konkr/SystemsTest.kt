@@ -28,6 +28,34 @@ class SystemsTest {
         assertEquals("FCEUmm", Systems.folderForKey("fceumm"))
     }
 
+    @Test fun aTinyPico8TextCartIsStillACart() {
+        assertEquals(16, Systems.minRomBytes("p8"))
+        assertEquals(RomSource.MIN_ROM_BYTES, Systems.minRomBytes("nes"))
+        assertEquals(RomSource.MIN_ROM_BYTES, Systems.minRomBytes("gba"))
+    }
+
+    @Test fun pico8CartsAreP8FilesAndCartPictures() {
+        assertEquals("P8", Systems.platformFor("p8"))
+        assertEquals("P8", Systems.platformFor("PNG"))
+        assertEquals("fake-08", Systems.coreFolder("", "png"))
+        fun png(w: Int, h: Int) = ByteArray(0x150).also {
+            byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(),
+                0x0d, 0x0a, 0x1a, 0x0a).copyInto(it)
+            "IHDR".toByteArray().copyInto(it, 12)
+            it[18] = (w shr 8).toByte(); it[19] = w.toByte()
+            it[22] = (h shr 8).toByte(); it[23] = h.toByte()
+        }
+        assertTrue(Systems.acceptsHeader("png", png(160, 205)))
+        assertFalse(Systems.acceptsHeader("png", png(160, 144)))
+        assertFalse(Systems.acceptsHeader("png", ByteArray(0x150)))
+        assertEquals("Celeste Classic 2", Systems.titleOf("Celeste Classic 2.p8.png"))
+        assertTrue(Systems.acceptsName("Celeste.P8.PNG"))
+        assertFalse(Systems.acceptsName("covers/front.png"))
+        assertTrue(Systems.acceptsName("Sonic.md"))
+        assertEquals("Jelpi", Systems.titleOf("Jelpi.p8"))
+        assertEquals("Sonic (USA)", Systems.titleOf("Sonic (USA).md"))
+    }
+
     @Test fun binNeedsASegaHeader() {
         val sega = ByteArray(0x200).also { "SEGA GENESIS    ".toByteArray().copyInto(it, 0x100) }
         assertTrue(Systems.acceptsHeader("bin", sega))
