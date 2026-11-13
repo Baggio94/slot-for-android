@@ -62,6 +62,9 @@ impl WallpaperTint {
     }
 }
 
+/// Settings.json's own key for the OLED appearance (Settings::save).
+const OLED_KEY: &str = "appearance_oled";
+
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Appearance { #[default] Dark, Light, Original, Oled }
@@ -654,6 +657,10 @@ impl Settings {
                             }
                         }
                         if legacy_pacing_is_native(json) { s.responsive_loop=false; }
+                        if s.appearance == Appearance::Dark
+                            && json.get(OLED_KEY).and_then(serde_json::Value::as_bool) == Some(true) {
+                            s.appearance = Appearance::Oled;
+                        }
                     }
                     // Beta RC1 imported user.png but lacked an option to turn
                     // it off. Preserve that picture on update to U1 instead
@@ -731,7 +738,17 @@ impl Settings {
     }
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
-        let bytes = serde_json::to_vec_pretty(&self).map_err(io::Error::other)?;
+        // A version from before OLED reads the whole file or none of it: an
+        // appearance it doesn't know would reset every setting. Written as
+        // Dark plus a key it ignores, it keeps them and shows Dark.
+        let bytes = if self.appearance == Appearance::Oled {
+            let dark = Self { appearance: Appearance::Dark, ..self.clone() };
+            let mut json = serde_json::to_value(&dark).map_err(io::Error::other)?;
+            json[OLED_KEY] = serde_json::json!(true);
+            serde_json::to_vec_pretty(&json)
+        } else {
+            serde_json::to_vec_pretty(&self)
+        }.map_err(io::Error::other)?;
         // Durable like battery saves: a power cut must never leave an empty
         // Settings.json that silently resets every preference.
         slot_store::atomic_write(&dir.join(NAME), &bytes)
@@ -1165,6 +1182,40 @@ mod tests {
         settings.save(&root).unwrap();
         assert_eq!(Settings::load(&root).wallpaper,WallpaperPick::None);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oled_is_saved_so_a_version_without_it_keeps_every_setting() {
+        let root = std::env::temp_dir().join(format!(
+            "slot-oled-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .unwrap().as_nanos()));
+        let mut settings = Settings::load(&root);
+        settings.appearance = Appearance::Oled;
+        settings.ff_speed = 4;
+        settings.save(&root).unwrap();
+        // What 2.3.0 reads: an appearance it knows, the rest untouched.
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join(NAME)).unwrap()).unwrap();
+        assert_eq!(json["appearance"], "dark");
+        assert_eq!(json["ff_speed"], 4);
+        assert_eq!(Settings::load(&root), settings);
+        // 2.4.0-menus2 wrote the appearance itself: still OLED.
+        let mut menus2 = json.clone();
+        menus2["appearance"] = serde_json::json!("oled");
+        menus2.as_object_mut().unwrap().remove(OLED_KEY);
+        fs::write(root.join(NAME), serde_json::to_vec(&menus2).unwrap()).unwrap();
+        assert_eq!(Settings::load(&root).appearance, Appearance::Oled);
+        // Back to Dark, the key goes with it.
+        settings.appearance = Appearance::Dark;
+        settings.save(&root).unwrap();
+        assert_eq!(Settings::load(&root).appearance, Appearance::Dark);
+        // Light chosen in an older version over a file that still says OLED.
+        let mut light = json;
+        light["appearance"] = serde_json::json!("light");
+        fs::write(root.join(NAME), serde_json::to_vec(&light).unwrap()).unwrap();
+        assert_eq!(Settings::load(&root).appearance, Appearance::Light);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -147,7 +147,7 @@ pub(super) struct Studio {
     minis: Minis,
     stale: bool,
     /// Opened from the library page: B and A go back there.
-    from_library: bool,
+    pub(super) from_library: bool,
 }
 
 fn outlines(platform: Platform) -> Vec<(&'static str, Outline)> {

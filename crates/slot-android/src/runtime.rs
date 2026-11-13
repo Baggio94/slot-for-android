@@ -4067,9 +4067,11 @@ impl Engine {
                                 } {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                         .push_back(action);
-                                    // Keep Library and its row behind the Android picker.
-                                    // Both selection and cancellation send ExternalReturn.
-                                    self.external_pending = action != 2;
+                                    // Keep Library and its row behind the Android picker:
+                                    // both selection and cancellation send ExternalReturn.
+                                    // Refresh has no picker and shows its scan on the shelf.
+                                    if action == 2 { self.overlay = ShelfOverlay::None; }
+                                    else { self.external_pending = true; }
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 0 },
                                 108 => self.overlay = ShelfOverlay::None,
@@ -6236,7 +6238,8 @@ impl Engine {
         let bottom = OUT_H as f32 - MOUTH_H + self.footer_dy();
         out.push(Draw::Rect {
             x: 0.0, y, w: out_w() as f32, h: (bottom - y).max(0.0),
-            colour: [0.0, 0.0, 0.0, if menu_style::oled() { 1.0 } else { GAME_MENU_SCRIM }],
+            // The same in OLED: the Screen page tunes the picture behind it.
+            colour: [0.0, 0.0, 0.0, GAME_MENU_SCRIM],
         });
         self.draw_game_footer(out);
     }

@@ -247,7 +247,10 @@ impl Engine {
     pub(super) fn studio_page_path(&self) -> &'static str {
         match self.overlay {
             ShelfOverlay::CartLibrary => "Menu",
-            ShelfOverlay::CartStudio => "Library \u{203a} Cart Studio",
+            // From Menu > Cart Studio's shelves, or X on a cart of the home.
+            ShelfOverlay::CartStudio if self.studio.as_ref().is_some_and(|s| s.from_library) =>
+                "Menu \u{203a} Cart Studio",
+            ShelfOverlay::CartStudio => "slot.",
             ShelfOverlay::Romm => "Menu \u{203a} Library",
             _ => "",
         }
@@ -311,6 +314,22 @@ mod render {
             assert_eq!(engine.overlay, page);
             assert!(engine.menu_held.is_none());
         }
+        // Refresh Library opens nothing: back to the shelf, where its scan shows.
+        engine.overlay = ShelfOverlay::Library { row: 6 };
+        engine.handle(Input::Key(96, true));
+        assert_eq!(engine.overlay, ShelfOverlay::None);
+        assert!(!engine.external_pending);
+    }
+
+    #[test]
+    fn cart_studio_names_the_page_it_was_opened_from() {
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        engine.open_cart_studio();
+        assert_eq!(engine.studio_page_path(), "slot.");
+        let cart = engine.shelves[engine.active].carts[0].clone();
+        engine.open_cart_studio_on(cart, None, true);
+        assert_eq!(engine.studio_page_path(), "Menu \u{203a} Cart Studio");
     }
 
     fn entries() -> Vec<RomEntry> {
