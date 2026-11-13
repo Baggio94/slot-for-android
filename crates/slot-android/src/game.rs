@@ -1094,7 +1094,11 @@ impl GameSession {
     fn pad(&self, port: usize, buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
         match &self.layouts[port] {
             Some(layout) => ButtonMask(layout.apply(buttons.0, frame)),
-            None => pad_buttons(self.full_pad, buttons, turbo, frame),
+            // Without Controls the core gets slot.'s buttons as they are,
+            // but never C or Z: their bits are L2 and R2 to a core.
+            None => pad_buttons(self.full_pad,
+                ButtonMask(buttons.0 & !(crate::controls::bit::C | crate::controls::bit::Z)),
+                turbo, frame),
         }
     }
 

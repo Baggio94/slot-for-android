@@ -340,6 +340,8 @@ fn controls(code: i32) -> u16 {
         21 => ButtonMask::LEFT, 22 => ButtonMask::RIGHT,
         96 => ButtonMask::A, 99 => ButtonMask::X,
         102 => ButtonMask::L, 103 => ButtonMask::R,
+        // Six-button pads: slot.'s own C and Z, which Controls can map.
+        98 => crate::controls::bit::C, 101 => crate::controls::bit::Z,
         _ => 0,
     }
 }
