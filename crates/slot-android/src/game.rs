@@ -755,7 +755,7 @@ impl GameSession {
                 // Sega CD and the lock-on adapters are not carts slot. shows.
                 core.set_option("genesis_plus_gx_lock_on", "disabled");
             }
-            Core::Picodrive => {}
+            Core::Picodrive | Core::Fake08 => {}
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
@@ -763,6 +763,8 @@ impl GameSession {
         let console = match platform {
             Platform::Gb => 4, Platform::Gba => 5, Platform::Gbc => 6,
             Platform::Nes => 7, Platform::Snes => 3, Platform::Md => 1,
+            // RetroAchievements has no PICO-8.
+            Platform::Pico8 => 0,
         };
         // Second-instance Run-Ahead boots its copy from these, solo only.
         let runahead_secondary_spec = linked_boot.is_none().then(|| crate::runahead_secondary::Spec {
@@ -775,8 +777,8 @@ impl GameSession {
             native_video: !platform.handheld(),
         });
         let mut core: Box<dyn RetroCore> = match achievements {
-            Some(service) => service.wrap_for_console(Box::new(core), console),
-            None => Box::new(core),
+            Some(service) if console != 0 => service.wrap_for_console(Box::new(core), console),
+            _ => Box::new(core),
         };
         // bsnes keeps its battery itself, named after the ROM file and
         // written to the save directory when the game unloads, as in

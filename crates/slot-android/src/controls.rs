@@ -485,14 +485,19 @@ const MD: [ConsoleButton; 12] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
     cb("X", bit::L), cb("Y", bit::X), cb("Z", bit::R),
     cb("Mode", bit::SELECT), cb("START", bit::START)];
 
+/// fake-08 reads PICO-8's O from B, X from A and Pause from START.
+const PICO8: [ConsoleButton; 7] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("O", bit::B), cb("X", bit::A), cb("Pause", bit::START)];
+
 /// Systems, by the names slot. files their controls under.
-pub const SYSTEMS: [&str; 6] = ["gba", "gbc", "gb", "nes", "snes", "md"];
+pub const SYSTEMS: [&str; 7] = ["gba", "gbc", "gb", "nes", "snes", "md", "p8"];
 
 pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
     match system {
         "gba" => &GBA,
         "snes" => &SNES,
         "md" => &MD,
+        "p8" => &PICO8,
         _ => &TWO_BUTTONS,
     }
 }
@@ -1295,7 +1300,8 @@ mod tests {
     #[test]
     fn untouched_systems_play_exactly_as_before() {
         let controls = Controls::default();
-        for system in SYSTEMS {
+        // PICO-8 came after Controls: it has no "before".
+        for system in SYSTEMS.into_iter().filter(|s| *s != "p8") {
             for turbo in [true, false] {
                 let default_xy = if turbo { XyRole::TurboAB } else { XyRole::BA };
                 let layout = controls.resolve(system, None, 0, default_xy);
@@ -1307,6 +1313,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn pico8_plays_o_x_and_pause_from_b_a_and_start() {
+        let resolved = Controls::default().resolve("p8", None, 0, XyRole::BA);
+        let dpad = bit::UP | bit::DOWN | bit::LEFT | bit::RIGHT;
+        assert_eq!(resolved.apply(dpad, 0), dpad);
+        assert_eq!(resolved.apply(bit::B, 0), bit::B, "O");
+        assert_eq!(resolved.apply(bit::A, 0), bit::A, "X");
+        assert_eq!(resolved.apply(bit::START, 0), bit::START, "Pause");
+        let names: Vec<_> = console_buttons("p8").iter().map(|b| b.name).collect();
+        assert_eq!(names, ["Up", "Down", "Left", "Right", "O", "X", "Pause"]);
     }
 
     /// game.rs's pad_buttons before Controls, for the comparison above.

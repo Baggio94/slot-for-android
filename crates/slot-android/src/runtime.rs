@@ -507,7 +507,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 138] = [
+const MENU_TEXT: [&str; 139] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -646,14 +646,15 @@ const MENU_TEXT: [&str; 138] = [
     "RomM Server",                        // 135, Library, after Choose ROM Folder
     "Upscaler",                           // 136, GBA Video Screen (Siham 2026-11-10)
     "Sensitivity",                        // 137, tilt and gyro games (Siham 2026-11-12)
+    "PICO-8",                             // 138, Settings > Systems
 ];
 
 /// Settings > Systems, top to bottom.
-const SYSTEM_ORDER: [Platform; 6] = [
+const SYSTEM_ORDER: [Platform; 7] = [
     Platform::Gba, Platform::Gbc, Platform::Gb,
-    Platform::Nes, Platform::Snes, Platform::Md,
+    Platform::Nes, Platform::Snes, Platform::Md, Platform::Pico8,
 ];
-const SYSTEM_TITLES: [usize; 6] = [91, 92, 93, 121, 122, 123];
+const SYSTEM_TITLES: [usize; 7] = [91, 92, 93, 121, 122, 123, 138];
 // Special racks follow the supported platforms, not hard-coded GB-era indices.
 const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
@@ -1215,7 +1216,7 @@ struct Engine {
     pak_chip_textures: [slot_gfx::TexId; Core::ALL.len()],
     pak_chip_blank: slot_gfx::TexId,
     /// The NES, Super Nintendo and Mega Drive chips with no core name.
-    home_chip_blanks: [slot_gfx::TexId; 3],
+    home_chip_blanks: [slot_gfx::TexId; 4],
     chip_shadow: slot_gfx::TexId,
     core_legend_faces: [(slot_gfx::TexId, u32); 3],
     a_down_at: Option<Instant>,
@@ -1636,7 +1637,7 @@ impl Engine {
         // GB/GBC boards hop their own big pak chip between two footprints.
         let pak_chip_textures = Core::ALL.map(|core| gpu.create_face(&pak_chip_face(Some(core))));
         let pak_chip_blank = gpu.create_face(&pak_chip_face(None));
-        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md]
+        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md, Platform::Pico8]
             .map(|p| gpu.create_face(&slot_ui::home_chip_face(p, None)));
         let shadow = chip_shadow_face();
         let chip_shadow = gpu.create_face(&shadow);
@@ -4232,7 +4233,10 @@ impl Engine {
                             self.overlay = ShelfOverlay::Menu { row: 0 };
                             return;
                         }
-                        109 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
+                        // PICO-8 has one core: its board has nothing to choose.
+                        109 if !self.inserted && !self.shelves[self.active].carts.is_empty()
+                            && self.shelves[self.active].carts[self.shelves[self.active].index].platform
+                                != Platform::Pico8 => {
                             let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
                             let face = board_face(selected);
                             if let Some(texture) = self.board_texture {
@@ -4975,6 +4979,8 @@ impl Engine {
             (Platform::Nes,true)=>&[124,90],
             (Platform::Snes|Platform::Md,false)=>&[120,124],
             (Platform::Snes|Platform::Md,true)=>&[120,124,90],
+            // PICO-8: Screen Size alone, its pixels stay sharp.
+            (Platform::Pico8,_)=>&[120],
         }
     }
     fn screen_keys(platform: Platform)-> &'static [usize] {
@@ -4995,6 +5001,7 @@ impl Engine {
             (Platform::Nes,true)=>&[47,44],
             (Platform::Snes,true)=>&[SCREEN_SIZE_KEY,48,45],
             (Platform::Md,true)=>&[SCREEN_SIZE_KEY,49,46],
+            (Platform::Pico8,_)=>&[SCREEN_SIZE_KEY],
         }
     }
     // Settings > Systems opens with the system's default core, then its
@@ -5007,6 +5014,7 @@ impl Engine {
     fn look_rows(platform: Platform) -> (Vec<usize>, Vec<usize>) {
         let mut rows = Vec::new();
         let mut keys = Vec::new();
+        if platform == Platform::Pico8 { return (rows, keys); }
         if let Some(key) = Settings::look_key(platform) {
             rows.push(if platform == Platform::Md { 132 } else { 131 });
             keys.push(key);
@@ -5064,6 +5072,9 @@ impl Engine {
             (Platform::Nes|Platform::Snes|Platform::Md,true,_)=>&[118,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,false)=>&[118,120,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,true)=>&[118,120,124,90],
+            // One core, nothing to choose; Screen Size where the panel isn't square.
+            (Platform::Pico8,true,_)=>&[],
+            (Platform::Pico8,false,_)=>&[120],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -5091,6 +5102,8 @@ impl Engine {
             (Platform::Md,true,_)=>&[43,49],
             (Platform::Md,false,false)=>&[43,SCREEN_SIZE_KEY,49],
             (Platform::Md,false,true)=>&[43,SCREEN_SIZE_KEY,49,46],
+            (Platform::Pico8,true,_)=>&[],
+            (Platform::Pico8,false,_)=>&[SCREEN_SIZE_KEY],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
@@ -6696,6 +6709,7 @@ impl Engine {
                 Platform::Nes => self.home_chip_blanks[0],
                 Platform::Snes => self.home_chip_blanks[1],
                 Platform::Md => self.home_chip_blanks[2],
+                Platform::Pico8 => self.home_chip_blanks[3],
                 _ => self.pak_chip_blank,
             };
             (&self.pak_chip_textures, blank)

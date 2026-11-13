@@ -226,6 +226,8 @@ impl Bezel {
         Bezel::SnesGrayLogo, Bezel::SnesGrayLogoAlt];
     pub const MD: [Bezel; 4] = [Bezel::None, Bezel::GenesisClassic, Bezel::Genesis,
         Bezel::MegaDrive];
+    /// PICO-8 has no console to frame it.
+    pub const PICO8: [Bezel; 1] = [Bezel::None];
     pub fn list(platform: slot_store::Platform) -> &'static [Bezel] {
         use slot_store::Platform;
         match platform {
@@ -235,6 +237,7 @@ impl Bezel {
             Platform::Nes => &Self::NES,
             Platform::Snes => &Self::SNES,
             Platform::Md => &Self::MD,
+            Platform::Pico8 => &Self::PICO8,
         }
     }
     pub fn step_in(self,list:&[Bezel],right:bool)->Self {
@@ -516,6 +519,9 @@ pub struct Settings {
     pub blending_snes: Blending,
     #[serde(default)]
     pub blending_md: Blending,
+    /// PICO-8 has no Frame Blending row yet: always Off.
+    #[serde(default)]
+    pub blending_p8: Blending,
     /// LCD Effect of each Game Boy (Systems > [system] > LCD Effect).
     #[serde(default)]
     pub lcd_effect_gba: LcdEffect,
@@ -570,6 +576,7 @@ impl Default for Settings {
             simpletex_gba_colour: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
             blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
+            blending_p8: Blending::Off,
             lcd_effect_gba: LcdEffect::Off, lcd_effect_gbc: LcdEffect::Off, lcd_effect_gb: LcdEffect::Off,
             dither_blend_md: false,
             shader_gbav: Shader::Lcd3x, upscaler_gbav: Upscaler::Fsr,
@@ -743,6 +750,8 @@ impl Settings {
             slot_store::Platform::Nes=>self.shader_nes,
             slot_store::Platform::Snes=>self.shader_snes,
             slot_store::Platform::Md=>self.shader_md,
+            // PICO-8's pixels stay sharp.
+            slot_store::Platform::Pico8=>Shader::Off,
         }
     }
     pub fn set_shader_for(&mut self,platform:slot_store::Platform,shader:Shader) {
@@ -753,6 +762,7 @@ impl Settings {
             slot_store::Platform::Nes=>self.shader_nes=shader,
             slot_store::Platform::Snes=>self.shader_snes=shader,
             slot_store::Platform::Md=>self.shader_md=shader,
+            slot_store::Platform::Pico8=>{}
         }
     }
     /// The Shader row's key of a home console (47 NES, 48 SNES, 49 MD).
@@ -775,7 +785,8 @@ impl Settings {
     /// The Settings key of a system's Frame Blending row (60..=65).
     pub fn blending_key(platform: slot_store::Platform) -> usize {
         use slot_store::Platform::*;
-        match platform { Gba => 60, Gbc => 61, Gb => 62, Nes => 63, Snes => 64, Md => 65 }
+        // PICO-8's key is never shown (look_rows) and changes nothing.
+        match platform { Gba => 60, Gbc => 61, Gb => 62, Nes => 63, Snes => 64, Md => 65, Pico8 => 71 }
     }
 
     pub(crate) fn blending_mut(&mut self, platform: slot_store::Platform) -> &mut Blending {
@@ -783,6 +794,7 @@ impl Settings {
         match platform {
             Gba => &mut self.blending_gba, Gbc => &mut self.blending_gbc, Gb => &mut self.blending_gb,
             Nes => &mut self.blending_nes, Snes => &mut self.blending_snes, Md => &mut self.blending_md,
+            Pico8 => &mut self.blending_p8,
         }
     }
 
@@ -814,6 +826,7 @@ impl Settings {
         match platform {
             Gba => self.blending_gba, Gbc => self.blending_gbc, Gb => self.blending_gb,
             Nes => self.blending_nes, Snes => self.blending_snes, Md => self.blending_md,
+            Pico8 => self.blending_p8,
         }
     }
 
@@ -849,6 +862,7 @@ impl Settings {
             slot_store::Platform::Nes=>self.bezel_nes,
             slot_store::Platform::Snes=>self.bezel_snes,
             slot_store::Platform::Md=>self.bezel_md,
+            slot_store::Platform::Pico8=>Bezel::None,
         }
     }
     pub fn set_bezel_for(&mut self,platform:slot_store::Platform,value:Bezel) {
@@ -859,6 +873,7 @@ impl Settings {
             slot_store::Platform::Nes=>self.bezel_nes=value,
             slot_store::Platform::Snes=>self.bezel_snes=value,
             slot_store::Platform::Md=>self.bezel_md=value,
+            slot_store::Platform::Pico8=>{}
         }
     }
     /// The Bezel row's settings key for each system.
@@ -867,6 +882,8 @@ impl Settings {
             slot_store::Platform::Gba=>25, slot_store::Platform::Gbc=>26,
             slot_store::Platform::Gb=>27, slot_store::Platform::Nes=>44,
             slot_store::Platform::Snes=>45, slot_store::Platform::Md=>46,
+            // Never offered (video_mode::bezel_offered) and changes nothing.
+            slot_store::Platform::Pico8=>73,
         }
     }
     fn step_bezel(&mut self,platform:slot_store::Platform,right:bool) {

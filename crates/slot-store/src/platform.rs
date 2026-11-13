@@ -12,12 +12,14 @@ pub enum Platform {
     Snes,
     /// Mega Drive and Genesis.
     Md,
+    /// PICO-8 carts (.p8 and .p8.png), played by fake-08.
+    Pico8,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 6] = [
+    pub const ALL: [Platform; 7] = [
         Platform::Gba, Platform::Gb, Platform::Gbc,
-        Platform::Nes, Platform::Snes, Platform::Md,
+        Platform::Nes, Platform::Snes, Platform::Md, Platform::Pico8,
     ];
 
     pub fn name(self) -> &'static str {
@@ -28,6 +30,7 @@ impl Platform {
             Platform::Nes => "NES",
             Platform::Snes => "Super Nintendo",
             Platform::Md => "Mega Drive",
+            Platform::Pico8 => "PICO-8",
         }
     }
 
@@ -39,6 +42,7 @@ impl Platform {
             Platform::Nes => "NES",
             Platform::Snes => "SNES",
             Platform::Md => "MD",
+            Platform::Pico8 => "P8",
         }
     }
 
@@ -55,6 +59,9 @@ impl Platform {
             // .bin is also used by other systems: Android only files a .bin
             // here when its header says SEGA.
             Platform::Md => &["md", "gen", "smd", "bin"],
+            // A .png is a PICO-8 cart only as NAME.p8.png (Android also
+            // checks its size, 160x205).
+            Platform::Pico8 => &["p8", "png"],
         }
     }
 
@@ -73,10 +80,14 @@ impl Platform {
             Platform::Nes => (256, 240),
             Platform::Snes => (256, 224),
             Platform::Md => (320, 224),
+            Platform::Pico8 => (128, 128),
         }
     }
 
     pub fn accepts(self, path: &Path) -> bool {
+        if self == Platform::Pico8 && !pico8_name(path) {
+            return false;
+        }
         path.extension()
             .and_then(|e| e.to_str())
             .is_some_and(|ext| {
@@ -85,4 +96,23 @@ impl Platform {
                     .any(|k| ext.eq_ignore_ascii_case(k))
             })
     }
+}
+
+/// PICO-8 carts: NAME.p8, or NAME.p8.png (a picture of the cart).
+fn pico8_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_ascii_lowercase())
+        .is_some_and(|n| n.ends_with(".p8") || n.ends_with(".p8.png"))
+}
+
+/// A cart's name without its extension: "Celeste.p8.png" is "Celeste".
+pub fn cart_stem(file_name: &str) -> &str {
+    let lower = file_name.to_ascii_lowercase();
+    for ext in [".p8.png", ".p8"] {
+        if lower.ends_with(ext) {
+            return &file_name[..file_name.len() - ext.len()];
+        }
+    }
+    file_name.rsplit_once('.').map_or(file_name, |(stem, _)| stem)
 }

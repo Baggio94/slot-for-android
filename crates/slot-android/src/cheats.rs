@@ -24,15 +24,17 @@ pub struct Source {
     pub cheats: Vec<Cheat>,
 }
 
-fn pack(platform: Platform) -> &'static [u8] {
-    match platform {
+/// None for PICO-8: libretro has no cheat files for it.
+fn pack(platform: Platform) -> Option<&'static [u8]> {
+    Some(match platform {
         Platform::Gb => include_bytes!("../cheats/gb.cht.z"),
         Platform::Gbc => include_bytes!("../cheats/gbc.cht.z"),
         Platform::Gba => include_bytes!("../cheats/gba.cht.z"),
         Platform::Nes => include_bytes!("../cheats/nes.cht.z"),
         Platform::Snes => include_bytes!("../cheats/snes.cht.z"),
         Platform::Md => include_bytes!("../cheats/md.cht.z"),
-    }
+        Platform::Pico8 => return None,
+    })
 }
 
 /// The tags naming a cheat device, after the game's own name.
@@ -109,7 +111,8 @@ pub fn rom_checksums(platform: Platform, rom: &[u8]) -> Vec<u32> {
 /// The game's cheat files, best first. Empty when there are none.
 pub fn lookup(platform: Platform, checksums: &[u32], rom_stem: &str) -> Vec<Source> {
     let mut text = String::new();
-    if flate2::read::ZlibDecoder::new(pack(platform)).read_to_string(&mut text).is_err() {
+    let Some(pack) = pack(platform) else { return Vec::new() };
+    if flate2::read::ZlibDecoder::new(pack).read_to_string(&mut text).is_err() {
         return Vec::new();
     }
     let wanted: Vec<String> = checksums.iter().map(|c| format!("{c:08x}")).collect();
@@ -231,8 +234,9 @@ mod tests {
     #[test]
     fn every_pack_opens() {
         for platform in Platform::ALL {
+            let Some(pack) = pack(platform) else { continue };
             let mut text = String::new();
-            flate2::read::ZlibDecoder::new(pack(platform)).read_to_string(&mut text).unwrap();
+            flate2::read::ZlibDecoder::new(pack).read_to_string(&mut text).unwrap();
             assert!(text.starts_with("slot-cheats 1\n"), "{platform:?}");
             assert!(text.lines().any(|l| l.starts_with("R ")), "{platform:?}");
         }

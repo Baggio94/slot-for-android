@@ -123,7 +123,7 @@ pub fn write_system_mode(root: &Path, platform: Platform, mode: VideoMode) -> st
 /// picture then fills it and neither Screen Size nor a bezel is offered,
 /// as GBA on the KONKR's 3:2 screen.
 pub fn screen_fits(platform: Platform, panel: (u32, u32)) -> bool {
-    let shape = if platform.handheld() {
+    let shape = if platform.handheld() || platform == Platform::Pico8 {
         let (w, h) = platform.picture();
         w as f32 / h as f32
     } else {
@@ -138,7 +138,8 @@ pub fn screen_fits(platform: Platform, panel: (u32, u32)) -> bool {
 /// 3:2 panel), except NES and SNES on screens narrower than 4:3: Integer
 /// overscale there, in square pixels.
 pub fn default_mode(platform: Platform, panel: (u32, u32)) -> VideoMode {
-    if square_pixels(platform, panel) { VideoMode::Actual } else { VideoMode::Aspect }
+    // PICO-8's 128x128 starts at Integer: every pixel the same size.
+    if square_pixels(platform, panel) || platform == Platform::Pico8 { VideoMode::Actual } else { VideoMode::Aspect }
 }
 
 fn narrow(panel: (u32, u32)) -> bool {
@@ -318,6 +319,7 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
                 None
             }
         }
+        Platform::Pico8 => None,
     }
 }
 
@@ -329,6 +331,7 @@ pub fn bezel_offered(platform: Platform, panel: (u32, u32)) -> bool {
             picture_rect(platform, VideoMode::Aspect, panel)[0] >= ROOM * panel.0 as f32,
         Platform::Gba | Platform::Md => !screen_fits(platform, panel),
         Platform::Nes | Platform::Snes => a > 4.0 / 3.0 * 1.01,
+        Platform::Pico8 => false,
     }
 }
 
