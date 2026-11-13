@@ -1,311 +1,70 @@
-<p align="center"><img src=".github/resources/slot-for-android-hero.png" alt="slot. for Android — Insert. Play. Eject. On a KONKR Pocket Block, a KONKR Pocket Advance and a Retroid Pocket Classic" width="100%"></p>
+<p align="center"><img src=".github/resources/slot-for-android-hero.png" alt="slot. for Android on a KONKR Pocket Block, a KONKR Pocket Advance and a Retroid Pocket Classic" width="100%"></p>
 
 # slot. for Android
 
-*An unofficial Android port of [slot.](https://slot-cfw.fyi/#hero) for Android handhelds — born on the KONKR Pocket Advance.*
+An unofficial Android port of [slot.](https://slot-cfw.fyi/#hero). Your games appear as cartridges on a shelf: pick one, insert it and play.
+
+**[Download the latest version](https://github.com/Baggio94/slot-for-android/releases/latest)** · **[Read the guide](https://github.com/Baggio94/slot-for-android/wiki)**
 
 ## Why I made this port
 
-When I watched [Russ from Retro Game Corps showcase slot.](https://www.youtube.com/watch?v=vndbnpH0QoE&t=1167s), I immediately thought: *this would be perfect for the KONKR Pocket Advance.*
+When I watched [Russ from Retro Game Corps showcase slot.](https://www.youtube.com/watch?v=vndbnpH0QoE&t=1167s), I thought it would be perfect for the KONKR Pocket Advance, a handheld I mostly use for Game Boy Advance games.
 
-So I decided to bring slot. to Android, adding a few extra features along the way while staying true to the simplicity, charm, and philosophy of the original experience.
+The round button on top of the KONKR fits slot. naturally: press it to insert a cartridge, hold it while playing to eject it. It feels close to handling a real cartridge.
 
-For me, the KONKR Pocket Advance is first and foremost a **dedicated Game Boy Advance handheld**. GBA is pretty much all I play on it, although slot. also supports Game Boy and Game Boy Color.
+The port has since grown to other Android handhelds and home consoles. The goal stays the same as the original: less time in menus, more time playing.
 
-What makes this port special is how naturally slot. fits the hardware.
+## Highlights
 
-The round button on top of the KONKR feels like it was made for this. **Press it to insert a cartridge, then press and hold it while playing to eject it.** With the button positioned right where it is, there's something incredibly satisfying about the whole interaction. It almost feels like inserting and removing a real cartridge from a Game Boy Advance.
+- **Cartridges first.** Your library is a shelf of cartridges with their real labels, insertion and ejection animations and sounds.
+- **Six systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive, each with two emulation cores to choose from.
+- **Any screen shape.** The interface adapts to square, 4:3, 3:2 and widescreen handhelds at their native resolution.
+- **Cart Studio.** Change a cartridge's label, shell colour, finish and shape, right on the handheld.
+- **Screen options.** LCD and CRT shaders, overlays, color correction, Frame Blending and LCD effects, per system or per game.
+- **Saves.** Save states, automatic saving on eject, rewind and fast-forward. Compatible with RetroArch saves and Syncthing.
+- **RetroAchievements.** Online or offline, with unlocks synced when you reconnect.
+- **Multiplayer.** Link Cable, Wireless Adapter and two-player netplay, on the same Wi-Fi or over the Internet.
+- **RomM.** Download games from your own RomM server.
+- **Cheats.** RetroArch's cheat database is included for every system.
 
-Sure, I wish the KONKR's buttons were a little less spongy, but I've gotten used to them!
+## Getting started
 
-And that's really what slot. is all about: **less time navigating menus, more time playing games.** Pick a cartridge, pop it in, and start playing. No unnecessary complexity, no distractions — just a simple, natural, cartridge-based experience.
+1. Download the APK from [Releases](https://github.com/Baggio94/slot-for-android/releases/latest) and install it. It needs an ARM64 handheld with Android 12 or later.
+2. Open slot., press **START → Library → Choose ROM Folder** and pick your parent ROM folder (not `gba`, `gb`...).
+3. Pick a cartridge and press **A**.
 
-Since then, slot. has grown beyond the KONKR. It now adapts to any Android handheld screen, from square displays like the Retroid Pocket Classic to widescreen devices, and it welcomes the NES, Super Nintendo and Mega Drive next to the Game Boy family — each with its own cartridges, slot and multiplayer.
+Supported files: `.gba`, `.gb`, `.gbc`, `.nes`, `.fc`, `.unf`, `.unif`, `.sfc`, `.smc`, `.md`, `.gen`, `.smd`, `.bin`, and `.zip` archives with one game each. Games can sit directly in that folder or in one subfolder per system (ES-DE style).
 
-My goal with this port is to preserve everything that makes the original slot. special, while making it feel right at home on every Android handheld.
+**Updating:** slot. checks for updates in **START → About**. You can also install a newer APK over the current one. Don't uninstall slot. or clear its data first, or you will lose your settings and the saves stored inside the app.
 
-## Features
+More in [Getting Started](https://github.com/Baggio94/slot-for-android/wiki/Getting-Started).
 
-Everything you love about the original slot., now on Android handhelds — with a few extra features that stay true to its original philosophy.
+## Essential controls
 
-### The original slot. experience
-
-- **A cartridge-first experience** — Browse your games as beautifully rendered physical cartridges, complete with satisfying insertion and ejection animations and sounds.
-- **Made for Game Boy Advance** — GBA takes center stage, with dedicated shelves for Game Boy and Game Boy Color games.
-- **Pick a cartridge and play** — No complicated menus or unnecessary distractions. Insert a cartridge and jump straight into your game.
-- **Cart Studio** — Customize your cartridges with authentic labels, shell colours and finishes, right inside slot.
-- **All the essentials** — Save states, automatic saving, rewind, fast-forward, turbo buttons and rumble.
-- **Make it yours** — Light and dark themes, wallpapers, favorites, recently played games, shaders, color correction and screen bezels.
-- **Multiplayer** — The original slot.'s Link Cable and Wireless Adapter experience, adapted for Android.
-
-### What's added in this Android port?
-
-- **NES, Super Nintendo and Mega Drive** — Three home consoles join the Game Boy family, each with its own shelf, cartridge shells (including Famicom and Japanese Mega Drive moulds), console slot, Cart Studio labels, RetroAchievements and multiplayer.
-- **Two emulation cores per system** — mGBA or gpSP for GBA, mGBA or Gambatte for GB and GBC, FCEUmm or Nestopia for NES, Snes9x or bsnes for SNES, Genesis Plus GX or PicoDrive for Mega Drive. Choose a default core per system, or a different one for any game.
-- **Game Boy Advance Video** — GBA Video cartridges get their own shelf behind the GBA shelf, with FSR or Anime4K upscaling.
-- **Made for every Android handheld** — The interface fills any screen shape, from square (1:1) to widescreen, at the panel's native resolution. Screen sizes, overlays and frame pacing get sensible defaults for each handheld.
-- **SLOT button** — On the KONKR, use the round top button to insert a cartridge, or hold it while playing to save and eject it. The Retroid Pocket's centre key works the same way, and on every handheld SELECT + X opens the in-game menu and SELECT + START saves and ejects the cartridge.
-- **slot.'s own labels** — Your cartridges get their real labels automatically, from slot. for Android's own label collection for every system, rom hacks included.
-- **Easy library setup** — Choose your ROM folder directly from Android, with optional BIOS, saves and save states folders. ES-DE style folders are recognised.
-- **RomM** — Download games from your own [RomM](https://github.com/rommapp/romm) server straight to their shelf, with their label: **START → Library → RomM**.
-- **RetroArch save compatibility** — Share SRAM saves, RTC data and compatible save states with RetroArch, using the same folders and matching emulation cores.
-- **Share Core Saves** — Switch any game to its other core and keep your in-game save, on every system.
-- **Syncthing-friendly** — Keep your saves synchronized across devices by sharing your RetroArch save and state folders.
-- **RetroAchievements, online and offline** — Earn achievements on every system. Prepare your library while connected, then play offline and synchronize your unlocks when you're back online.
-- **Multiplayer on Android** — Play on the same Wi-Fi (LAN) or over the Internet (WAN, beta) with a four-digit room code: mGBA Link Cable for GBA, GB and GBC, gpSP Link Cable and Wireless Adapter for GBA, and two-player netplay for NES, Super Nintendo and Mega Drive. Each console plugs in its own connector.
-- **Your controls, your way** — Choose the controller of each player, remap its buttons, give each system or game its own layout, and pick your own hotkeys. With a second controller, two players can share one handheld on NES, Super Nintendo and Mega Drive.
-- **Screen menu** — Change the shader, color correction, palette, overlay and screen size while you watch your game. Press SELECT + Y to open it straight from the game.
-- **Frame Blending** — Off, Mix or Ghosting for each system, for games that flicker their sprites to draw shadows or transparency.
-- **Shaders for every system** — Ten GBA shader presets, Game Boy LCD shaders with Dot Matrix in your palette's colours, and twelve shaders for the home consoles (zfast-crt, fakelottes, crt-aperture, GDV Trinitron, CRT Geom Deluxe, crt-pi, crt-easymode, crt-hyllian, SABR, Super Eagle, xBR-lv2, crt-royale), plus Pixel AA for clean pixels at any scale.
-- **LCD Effect** — Matt Akins' Pixel Transparency and Sunlight Shimmer on the Game Boy, Game Boy Color and Game Boy Advance: the backing shows through the pixels, and with Sunlight Shimmer the light follows the handheld as you tilt it.
-- **Motion games on any handheld** — WarioWare: Twisted!, Yoshi Topsy-Turvy, Koro Koro Puzzle and Kirby Tilt 'n' Tumble use the handheld's motion sensors, with a Sensitivity setting for each game. Without a gyroscope, slot. works out the rotation from the accelerometer.
-- **Cheats** — Every cheat of RetroArch's database comes with slot. for the Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive: open **Cheats** in the game menu and turn each one on or off. slot. remembers them for each game.
-- **Dither Blending** — On the Mega Drive, the striped dithering games used for water, shadows and glass blends into the see-through colour a TV showed.
-- **Independent system settings** — Configure the default core, shader, color correction, screen size, overlay, frame blending and controls of each system separately in **START → Settings → Systems**.
-- **Screen sizes and overlays** — Integer, Original Ratio or Stretch, with [Watomsk](https://github.com/Watomsk/Overlays)'s overlays for every system. At Original Ratio, the NES, Super Nintendo and Mega Drive show in 4:3 as on a TV, or in 8:7 on near-square screens.
-- **Optimized cartridge browsing** — Background artwork loading, persistent caching and GPU texture management designed to keep large libraries responsive.
-- **Android app launcher** — Launch your other Android apps directly from slot., with the option to make slot. your HOME launcher.
-
-All of this without losing what makes slot. special: **the simple pleasure of choosing a cartridge, inserting it and playing.**
-
-## Getting Started
-
-1. Download the latest APK from [Releases](https://github.com/Baggio94/slot-for-android/releases/latest) and install it on your Android handheld (ARM64, Android 12 or later).
-2. Open **slot.**, press **START → Library → Choose ROM Folder** and pick the folder containing your games.
-3. Your cartridges appear in the carousel. Pick one and play!
-
-**Supported files:** `.gba`, `.gb`, `.gbc`, `.nes`, `.fc`, `.unf`, `.unif`, `.sfc`, `.smc`, `.md`, `.gen`, `.smd`, `.bin`, and `.zip` archives holding one game each. Keep your games in one folder or in one folder per system, ES-DE style.
-
-### Optional folders
-
-In **START → Library**, you can also configure:
-
-- **Choose BIOS Folder** — Use your own GBA, GB or GBC BIOS files.
-- **Choose Save Folder** — Choose where your game saves are stored.
-- **Choose Save State Folder** — Choose where your save states are stored.
-
-**Already using RetroArch?** You can select the same save and save state folders to share compatible saves between both applications.
-
-We'll cover RetroArch compatibility and Syncthing in more detail below.
-
-### Updating slot.
-
-slot. checks for updates and can install them for you from **START → About**. You can also install the newer APK over your existing installation. **Do not uninstall the previous version or clear its data**, or you could lose your settings and locally stored saves.
-
-Still on version 1.3? Install the latest APK by hand once: updates from **START → About** work again from there.
-
-## Controls & Hotkeys
-
-<p align="center"><img src=".github/resources/konkr-slot-keycap-v3.svg" alt="slot. button" height="54" /></p>
-
-The KONKR's round top button is called **slot. cap** in this port. Since it controls the cartridge experience, **slot. cap** felt like the most fitting name. Press it to insert a cartridge, or hold it while playing to save and eject it.
-
-**On other handhelds:** the Retroid Pocket's round centre key is the slot. cap. On any handheld, **SELECT + X** works like a tap on the slot. cap while playing, and **SELECT + START** saves and ejects the cartridge.
-
-### Your controllers
-
-In **START → Settings → Controls**:
-
-- **Port 1 / Port 2** — Choose each player's controller and remap its buttons. Port 2 is player 2 on NES, Super Nintendo and Mega Drive.
-- **Hotkeys** — Change any shortcut below, and choose SELECT, L3 or R3 as the Hotkey Button. Fast-forward, rewind, the Boktai sun and the motion sensitivity keep their buttons. A **Screenshot** hotkey (none by default) saves the screen as shown in Pictures/Screenshots.
-- **Reset to Default** — Back to slot.'s own controls.
-
-Each system has its own layout in **START → Settings → Systems → [system] → Controls**: which button plays each console button, and what X / Y and L1 / R1 do on consoles without them. In a game, **Settings → Controls** changes it for that game only.
-
-### Carousel
+The KONKR's round top button is the **slot. cap**. On a Retroid Pocket, it's the round centre key.
 
 | Button | Action |
 |---|---|
-| <kbd>←</kbd> / <kbd>→</kbd> | Browse cartridges |
-| <kbd>↑</kbd> / <kbd>↓</kbd> | Jump to the next or previous letter |
-| <kbd>L1</kbd> / <kbd>R1</kbd> | Switch shelves: GBA, GB, GBC, NES, SNES, Mega Drive, Recents and Favorites |
-| <img src=".github/resources/konkr-slot-keycap-v3.svg" alt="slot. button" height="24" align="middle" /> / <kbd>A</kbd> | Insert a cartridge and resume |
-| Hold <img src=".github/resources/konkr-slot-keycap-v3.svg" alt="slot. button" height="24" align="middle" /> / <kbd>A</kbd> | Start a game fresh |
-| <kbd>Y</kbd> | Add or remove a favorite |
-| <kbd>X</kbd> | Open the selected cartridge in Cart Studio |
-| <kbd>L2</kbd> / <kbd>R2</kbd> | On the GBA shelf: switch to the Game Boy Advance Video shelf and back |
-| Hold <kbd>L2</kbd> + <kbd>R2</kbd> | Delete the selected game (saves and save states are kept) |
-| <kbd>SELECT</kbd> | Choose the emulator core for this game |
-| <kbd>START</kbd> | Open the main menu |
+| slot. cap or **A** | Insert a cartridge |
+| Tap the slot. cap or **SELECT + X** | Open the game menu |
+| Hold the slot. cap or **SELECT + START** | Save and eject |
+| **SELECT + Y** | Screen menu (shader, overlay, screen size) |
+| **START** (on the shelf) | Main menu |
+| **SELECT** (on the shelf) | Choose the core for a game |
 
-### In Game
+Every shortcut can be changed in **START → Settings → Controls → Hotkeys**. The full list is in [Controls & Hotkeys](https://github.com/Baggio94/slot-for-android/wiki/Controls-and-Hotkeys).
 
-| Button | Action |
-|---|---|
-| Tap <img src=".github/resources/konkr-slot-keycap-v3.svg" alt="slot. button" height="24" align="middle" /> | Open or close the in-game menu |
-| Double-tap <img src=".github/resources/konkr-slot-keycap-v3.svg" alt="slot. button" height="24" align="middle" /> | Open the Save State Switcher |
-| Hold <img src=".github/resources/konkr-slot-keycap-v3.svg" alt="slot. button" height="24" align="middle" /> | Save and eject the cartridge |
-| <kbd>SELECT</kbd> + <kbd>X</kbd> | Same as a tap on the slot. cap |
-| <kbd>SELECT</kbd> + <kbd>START</kbd> | Save and eject the cartridge |
-| <kbd>SELECT</kbd> + <img src=".github/resources/konkr-slot-keycap-v3.svg" alt="slot. button" height="24" align="middle" /> | Open Multiplayer |
-| <kbd>SELECT</kbd> + <kbd>R1</kbd> | Create a save state |
-| <kbd>SELECT</kbd> + <kbd>L1</kbd> | Load the latest save state |
-| Hold <kbd>R2</kbd> | Fast-forward |
-| Double-tap <kbd>R2</kbd> | Lock or unlock fast-forward |
-| Hold <kbd>L2</kbd> | Rewind |
-| Hold <kbd>X</kbd> / <kbd>Y</kbd> | Turbo A / B (GBA, GB, GBC and NES, when enabled) |
-| <kbd>SELECT</kbd> + <kbd>B</kbd> / <kbd>A</kbd> | Previous / next shader |
-| <kbd>SELECT</kbd> + <kbd>Y</kbd> | Open or close the Screen menu |
-| <kbd>SELECT</kbd> + <kbd>L2</kbd> / <kbd>R2</kbd> | Change GB palette (Game Boy games, when enabled) |
-| <kbd>R3</kbd> / <kbd>L3</kbd> or <kbd>SELECT</kbd> + <kbd>R2</kbd> / <kbd>L2</kbd> | More / less motion sensitivity (motion games) |
-| <kbd>SELECT</kbd> + <kbd>Up</kbd> / <kbd>Down</kbd> | Bigger / smaller screen: Integer, Original Ratio, Stretch |
-| <kbd>SELECT</kbd> + <kbd>Left</kbd> / <kbd>Right</kbd> | Run-Ahead: Off, 1 frame, 2 frames |
-| <kbd>L1</kbd> / <kbd>R1</kbd> | Bigger / smaller screen (GB, GBC and NES, whose games don't use these buttons) |
+## Guide
 
-These are the default shortcuts: change them in **START → Settings → Controls → Hotkeys**. X / Y (GBA, GB, GBC and NES) and L1 / R1 (GB, GBC and NES) can do something else in **Systems → [system] → Controls**.
+The [wiki](https://github.com/Baggio94/slot-for-android/wiki) explains every screen and setting:
 
-### Screen menu
-
-Press <kbd>SELECT</kbd> + <kbd>Y</kbd> while playing, or open **Settings → Screen** in the in-game menu. The game stays in view while you change its shader, color correction, palette and overlay, and <kbd>L1</kbd> / <kbd>R1</kbd> change the screen size on every system. Press <kbd>B</kbd> or <kbd>SELECT</kbd> + <kbd>Y</kbd> to return to the game.
-
-### Save State Switcher
-
-| Button | Action |
-|---|---|
-| <kbd>←</kbd> / <kbd>→</kbd> | Browse save states |
-| <kbd>A</kbd> | Load the selected state |
-| <kbd>Y</kbd> | Delete the selected state: <kbd>X</kbd> confirms, <kbd>B</kbd> keeps it |
-| <kbd>X</kbd> | Undo the last save or load (within 30 seconds) |
-| <kbd>B</kbd> | Return to the game |
-
-**Note:** Unlike the original slot., this Android port uses **START** to open the main menu and **SELECT** to choose the emulator core on the carousel.
-
-### Boktai: the Sun
-
-Boktai 1, 2 and 3 read real sunlight through a sensor on the cartridge. In slot., you choose the sun for each game.
-
-**Calibrate first.** The first time a Boktai game starts, it calibrates its solar sensor and expects darkness. Make sure the Sun is at **0** at that moment, or the gauge will never fill. To calibrate again later, set the Sun to 0 and run the calibration from the game's own options.
-
-**Set the Sun** in the in-game menu, **Settings → Emulation → Sun**. It's saved for each game:
-
-- **0 to 8** in Boktai 1, **0 to 10** in Boktai 2 and 3 — one bar of the gauge per level.
-- **SENSOR** — the handheld's light sensor, on handhelds that have one.
-- **AUTO** — follows the time of day: night until 6:00, full sun at 13:00, night again from 20:00.
-
-| Button | Action |
-|---|---|
-| <kbd>R3</kbd> or <kbd>SELECT</kbd> + <kbd>R2</kbd> | More sun |
-| <kbd>L3</kbd> or <kbd>SELECT</kbd> + <kbd>L2</kbd> | Less sun |
-
-The shortcuts go through every setting in order: 0, 1 … 8 or 10, SENSOR, AUTO, then back to 0. A banner shows the new setting. The Sun can't be changed during Multiplayer.
-
-### Motion games
-
-WarioWare: Twisted!, Yoshi Topsy-Turvy, Koro Koro Puzzle and Kirby Tilt 'n' Tumble read the handheld's motion. Hold the handheld up like a steering wheel to play WarioWare: Twisted!. On handhelds without a gyroscope, such as the KONKR Pocket Advance, slot. works out the rotation from the accelerometer.
-
-**Set the Sensitivity** in the in-game menu, **Settings → Emulation → Sensitivity**, from 1 to 10 (5 by default). It's saved for each game.
-
-| Button | Action |
-|---|---|
-| <kbd>R3</kbd> or <kbd>SELECT</kbd> + <kbd>R2</kbd> | More sensitive |
-| <kbd>L3</kbd> or <kbd>SELECT</kbd> + <kbd>L2</kbd> | Less sensitive |
-
-The "(Gyro Fix)" versions of WarioWare: Twisted! play with the D-pad instead and ignore the motion sensors.
-
-## Cart Studio
-
-Your cartridges dress themselves: slot. fetches their labels automatically while you're online, for every system.
-
-Want a different label or cartridge style? Cart Studio is built into slot. No computer is required.
-
-### One cartridge
-
-Highlight a cartridge on the carousel and press **X**. Choose:
-
-- **Label** — Current, Real Label, Logo Only, slot. label, **Search game…** (another game's label, found by name) or **Picture…** (one of your own pictures).
-- **Background** — The colour behind a logo.
-- **Colour** — Press **A** for a chart of the system's real shell colours, then fun ones.
-- **Finish** — Original, Solid, Clear, Solid glitter or Clear glitter.
-- **Shape** — For systems with several cartridge moulds.
-
-Press **A** to save. The cartridge changes on the carousel right away.
-
-### A whole system
-
-Press **START → Cart Studio** to see every cartridge of a system. **L1 / R1** change the system, **L2 / R2** jump from letter to letter, and **A** edits a cartridge. Edited cartridges wait on the page until **Y** saves them all; **B** asks before dropping unsaved changes.
-
-## Saves, RetroArch & Syncthing
-
-Your saves, wherever you play.
-
-slot. is compatible with RetroArch's save files and save states, so you can pick up right where you left off.
-
-- Go to **START → Library** and select the same **Save Folder** and **Save State Folder** used by RetroArch.
-- Enable RetroArch's option to organize saves and states into folders by core.
-- Use **Syncthing** to keep these shared folders synchronized across your devices.
-
-**Note:** Save states are core-specific. Use the same emulator core in both apps for compatibility.
-
-**Share Core Saves:** turn it on in **START → Library**, and when you switch a game to its other core, slot. carries your in-game save over, so you can keep playing where you left off. It works on every system. If both cores already have a different save for a GBA game, slot. asks which one to keep.
-
-## RomM
-
-Download games from your own [RomM](https://github.com/rommapp/romm) server in **START → Library → RomM**.
-
-1. Enter your server's address (for example `http://192.168.1.20:8080` on your home network, or an https address).
-2. Sign in with a pairing code from RomM 5, or with your username and password.
-3. Pick a system with **L1 / R1**, select games with **A** and download them with **Y**. They land on their shelf with their label.
-
-**SELECT** filters the list (search, region, official releases only, games already on your shelves, RomM favorites) and **START** shows a game's details.
-
-## RetroAchievements
-
-Earn achievements online or offline — even with Wi-Fi turned off!
-
-slot. supports [RetroAchievements](https://retroachievements.org/) for **GBA, GB, GBC, NES, SNES and Mega Drive** games. On Super Nintendo, achievements need Snes9x (bsnes doesn't support them).
-
-1. Open **START → RetroAchievements** and sign in to your account.
-2. Stay connected to Wi-Fi while slot. prepares your game library and downloads achievement data.
-3. Once your games are cached, **play completely offline** and keep earning achievements.
-4. Reconnect to Wi-Fi whenever you like to automatically sync your offline unlocks.
-
-**No need to keep Wi-Fi enabled while playing!** Just connect occasionally to sync your achievements and refresh your game data.
-
-*Achievements require supported ROMs and an initial online preparation.*
-
-## Multiplayer
-
-Link up with another Android handheld, just like the good old days!
-
-slot. supports multiplayer on the same Wi-Fi (**LAN**) and over the Internet (**WAN**, beta):
-
-- **mGBA** — Link Cable for compatible GBA, GB and GBC games. Both consoles may use different BIOS files, or none at all.
-- **gpSP** — Link Cable and Wireless Adapter for compatible GBA games, including Pokémon trading. Press **SELECT** in the Multiplayer screen to switch between them when a game supports both.
-- **Gambatte** — Link Cable for GB and GBC games (LAN only for now).
-- **NES, Super Nintendo and Mega Drive** — Two-player netplay, with player 1 on the Host and player 2 on the Join console. On Super Nintendo, use Snes9x.
-
-### How to connect
-
-1. Launch the same game using the same emulator core on both devices.
-2. Press <kbd>SELECT</kbd> + <img src=".github/resources/konkr-slot-keycap-v3.svg" alt="slot. button" height="24" align="middle" /> or open **Multiplayer** in the in-game menu.
-3. Choose **LAN** with <kbd>L1</kbd> or **WAN** with <kbd>R1</kbd>: the switch at the top right shows a house for LAN and a globe for WAN.
-4. **LAN** — Connect both devices to the same Wi-Fi, then choose **Host** on one and **Join** on the other.
-5. **WAN** — Choose **Host**: slot. shows a four-digit code. Press <kbd>Y</kbd> to share it. Your friend chooses **Join**, enters the code with the D-pad and presses <kbd>A</kbd>. No router setup needed.
-6. Once connected, enjoy multiplayer!
-
-**Note:** Both devices should run the same version of slot. Multiplayer support depends on the game, core and connection mode. WAN goes through slot.'s own server and is still in beta: a slow connection adds a little input delay.
+- [Getting Started](https://github.com/Baggio94/slot-for-android/wiki/Getting-Started) · [Controls & Hotkeys](https://github.com/Baggio94/slot-for-android/wiki/Controls-and-Hotkeys) · [Shelves](https://github.com/Baggio94/slot-for-android/wiki/Shelves) · [Game Menu](https://github.com/Baggio94/slot-for-android/wiki/Game-Menu)
+- [Settings](https://github.com/Baggio94/slot-for-android/wiki/Settings) · [Screen, Shaders & Effects](https://github.com/Baggio94/slot-for-android/wiki/Screen-Shaders-and-Effects) · [Cores & Saves](https://github.com/Baggio94/slot-for-android/wiki/Cores-and-Saves)
+- [Cart Studio](https://github.com/Baggio94/slot-for-android/wiki/Cart-Studio) · [RomM](https://github.com/Baggio94/slot-for-android/wiki/RomM) · [RetroAchievements](https://github.com/Baggio94/slot-for-android/wiki/RetroAchievements) · [Multiplayer](https://github.com/Baggio94/slot-for-android/wiki/Multiplayer) · [Cheats](https://github.com/Baggio94/slot-for-android/wiki/Cheats)
+- [Special Games](https://github.com/Baggio94/slot-for-android/wiki/Special-Games) (Boktai, motion games) · [Apps & Home Launcher](https://github.com/Baggio94/slot-for-android/wiki/Apps-and-Home-Launcher)
 
 ## Credits & License
 
-slot. for Android wouldn't exist without the incredible work of the original creators.
+Thanks to **[Brandon Kowalski](https://github.com/BrandonKowalski/slot)**, creator of the original [slot.](https://slot-cfw.fyi/), **[Markus](https://github.com/MarkusMaribu)** for its artwork, and to the authors of the emulation cores, shaders, overlays and tools slot. for Android uses. The full list is on the [Credits](https://github.com/Baggio94/slot-for-android/wiki/Credits) page.
 
-Special thanks to:
-
-- **[Brandon Kowalski](https://github.com/BrandonKowalski/slot)** — Creator of the original [slot.](https://slot-cfw.fyi/) and its wonderful cartridge-first experience.
-- **[Markus](https://github.com/MarkusMaribu)** — The beautiful skeuomorphic artwork that gives slot. its unique identity.
-- **[pvaibhav](https://github.com/pvaibhav/slot)** — Contributions and improvements inherited from the Slot fork.
-- **[Watomsk](https://github.com/Watomsk/Overlays)** — The screen overlays for every system, used with permission.
-- **[Matt Akins](https://github.com/mattakins/Pixel_Transparency)** — Pixel Transparency and Sunlight Shimmer, adapted with his permission.
-- **[mGBA](https://mgba.io/), [gpSP](https://github.com/libretro/gpsp), [Gambatte](https://github.com/libretro/gambatte-libretro), [FCEUmm](https://github.com/libretro/libretro-fceumm), [Nestopia](https://github.com/libretro/nestopia), [Snes9x](https://github.com/libretro/snes9x), [bsnes](https://github.com/libretro/bsnes-libretro), [Genesis Plus GX](https://github.com/libretro/Genesis-Plus-GX), [PicoDrive](https://github.com/libretro/picodrive), [libretro](https://www.libretro.com/) and [RetroAchievements](https://retroachievements.org/)** — The projects and contributors powering emulation and achievements.
-- **The libretro shader authors** — LCD and CRT shaders by Gigaherz, Themaister, Greg Hogan, jdgleaver, cgwg, hunterk, Pokefan531, endrift, davej, guest(r), Timothy Lottes, EasyMode, Hyllian, TroggleMonkey (crt-royale), Joshua Street, the DOSBox Team and Derek Liauw Kie Fa, LuigiRa and Harlequin, and Sp00kyFox.
-- **Sp00kyFox** — GDAPT, the Mega Drive's Dither Blending, used with the author's permission.
-- **[Anime4K](https://github.com/bloc97/Anime4K)** by bloc97 and **FSR** by AMD — The Game Boy Advance Video upscalers (MIT).
-- **[RomM](https://github.com/rommapp/romm)** — The self-hosted game library slot. downloads from.
-- **[ScreenScraper](https://www.screenscraper.fr/)** — Cartridge labels and artwork.
-- **[libretro-database](https://github.com/libretro/libretro-database)** — The cheat codes (CC BY-SA 4.0).
-
-This is an **unofficial community port**, not affiliated with or endorsed by the original Slot developers or any handheld manufacturer.
-
-The Slot-derived source code is distributed under the **[GNU GPL-3.0](LICENSE)**. Third-party components retain their respective licenses and copyright notices.
-
-**Thank you to everyone who made this possible!**
+This is an unofficial community port, not affiliated with or endorsed by the original Slot developers or any handheld manufacturer. The Slot-derived source code is distributed under the [GNU GPL-3.0](LICENSE). Third-party components keep their own licenses, listed in [licenses](licenses).
