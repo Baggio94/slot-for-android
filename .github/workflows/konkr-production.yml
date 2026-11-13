@@ -116,10 +116,10 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-gambatte-android.sh
-      - name: Build NES, SNES and Mega Drive arm64 libretro cores
+      - name: Build NES, SNES, Mega Drive and PICO-8 arm64 libretro cores
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive; do
+          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive fake08; do
             bash scripts/build-home-core-android.sh "$core"
           done
       - name: Test Android debug and release policies on JVM
