@@ -7,8 +7,8 @@
 //! same when a Bluetooth controller reconnects. A controller's bindings
 //! belong to it, not to its port: they follow it from Port 2 to Port 1.
 //!
-//! slot. itself only ever sees its own sixteen buttons (BUTTONS, as the
-//! Android key codes it has always read) plus the slot. button (MODE), which
+//! slot. itself only ever sees its own eighteen buttons (BUTTONS, as the
+//! Android key codes it reads) plus the slot. button (MODE), which
 //! can't be remapped, so a remapped controller drives the games, the menus
 //! and every shortcut alike. Pure: no Android, no GL.
 #![allow(unexpected_cfgs)]
@@ -25,12 +25,15 @@ pub const LISTEN_MS: u64 = 5_000;
 pub const FILE: &str = "slot-konkr-controls.json";
 
 /// slot.'s own buttons, in the Port page's order, with the Android key code
-/// each has always been read as.
-pub const BUTTONS: [(&str, i32); 16] = [
+/// each is read as. C and Z (BUTTON_C, BUTTON_Z) are the extra face buttons
+/// of six-button pads (Retroid Pocket Classic 6-button, Mega Drive style
+/// controllers); they come last so the older buttons keep their places.
+pub const BUTTONS: [(&str, i32); 18] = [
     ("Up", 19), ("Down", 20), ("Left", 21), ("Right", 22),
     ("A", 96), ("B", 97), ("X", 99), ("Y", 100),
     ("L1", 102), ("R1", 103), ("L2", 104), ("R2", 105),
     ("L3", 106), ("R3", 107), ("SELECT", 109), ("START", 108),
+    ("C", 98), ("Z", 101),
 ];
 
 /// slot.'s own menus can't be used without these (BUTTONS' Up, Down, A): A
@@ -55,9 +58,15 @@ pub struct Pad {
 impl Pad {
     pub fn bind(&self, button: usize) -> Option<i32> {
         let (name, default) = BUTTONS[button];
-        match self.binds.get(name).copied().unwrap_or(default) {
-            0 => None,
-            code => Some(code),
+        match self.binds.get(name).copied() {
+            Some(0) => None,
+            Some(code) => Some(code),
+            // Its own key, unless another button has it: a controller saved
+            // before C and Z existed may have given BUTTON_C or BUTTON_Z to
+            // another button, which keeps it. (Mapping always swaps, so for
+            // the older buttons this never happens.)
+            None if self.binds.values().any(|&code| code == default) => None,
+            None => Some(default),
         }
     }
 
@@ -450,6 +459,10 @@ pub mod bit {
     pub const X: u16 = 1 << 9;
     pub const L: u16 = 1 << 10;
     pub const R: u16 = 1 << 11;
+    /// C and Z: slot.'s own, never a core's. A console button reads them
+    /// only where Controls maps it to them (Mega Drive C and Z).
+    pub const C: u16 = 1 << 12;
+    pub const Z: u16 = 1 << 13;
 }
 
 /// The name of one of slot.'s buttons, by its bit; "None" for no button.
@@ -458,6 +471,7 @@ pub fn slot_button_name(slot: u16) -> &'static str {
         bit::UP => "Up", bit::DOWN => "Down", bit::LEFT => "Left", bit::RIGHT => "Right",
         bit::A => "A", bit::B => "B", bit::X => "X", bit::Y => "Y",
         bit::L => "L1", bit::R => "R1", bit::SELECT => "SELECT", bit::START => "START",
+        bit::C => "C", bit::Z => "Z",
         _ => "None",
     }
 }
@@ -1047,7 +1061,60 @@ mod tests {
             assert_eq!(controls.slot_code(BUILTIN, code, false), Some(code));
         }
         assert_eq!(controls.slot_code(BUILTIN, MODE, false), Some(MODE));
-        assert_eq!(controls.slot_code(BUILTIN, 98, false), None, "BUTTON_C isn't a slot. button");
+        assert_eq!(controls.slot_code(BUILTIN, 98, false), Some(98), "BUTTON_C is slot.'s C");
+        assert_eq!(controls.slot_code(BUILTIN, 101, false), Some(101), "BUTTON_Z is slot.'s Z");
+        assert_eq!(controls.slot_code(BUILTIN, 188, false), None, "Button 1 isn't a slot. button");
+    }
+
+    #[test]
+    fn a_controller_saved_with_c_on_another_button_keeps_it_there() {
+        // Before C and Z were slot. buttons, the C key could only be used
+        // by mapping it to one: L1 here.
+        let mut pad = Pad::default();
+        pad.binds.insert("L1".into(), 98);
+        let c = BUTTONS.iter().position(|(name, _)| *name == "C").unwrap();
+        let z = BUTTONS.iter().position(|(name, _)| *name == "Z").unwrap();
+        assert_eq!(pad.bind(8), Some(98));
+        assert_eq!(pad.bind(c), None, "C has no key: L1 has it");
+        assert_eq!(pad.button_for(98), Some(8));
+        assert_eq!(pad.bind(z), Some(101));
+        assert!(pad.map(c, 98), "giving it back swaps with L1");
+        assert_eq!((pad.bind(c), pad.bind(8)), (Some(98), None));
+    }
+
+    #[test]
+    fn mega_drive_c_and_z_can_be_the_six_button_pad_s_own() {
+        let mut controls = Controls::default();
+        let scope = Scope::System("md");
+        let index = |name: &str| console_buttons("md").iter().position(|b| b.name == name).unwrap();
+        // Defaults unchanged: C is played by A, Z by R1.
+        assert_eq!(controls.bind(&scope, 0, index("C")), (bit::A, false));
+        assert_eq!(controls.bind(&scope, 0, index("Z")), (bit::R, false));
+        controls.map_console(&scope, 0, index("C"), bit::C);
+        controls.map_console(&scope, 0, index("Z"), bit::Z);
+        controls.map_console(&scope, 0, index("A"), bit::A);
+        controls.map_console(&scope, 0, index("X"), bit::X);
+        controls.map_console(&scope, 0, index("Y"), bit::Y);
+        let resolved = controls.resolve("md", None, 0, XyRole::BA);
+        // Each of the pad's six face buttons plays the Mega Drive button of
+        // the same name, read by the core as RetroArch does.
+        assert_eq!(resolved.apply(bit::A, 0), bit::Y, "A");
+        assert_eq!(resolved.apply(bit::B, 0), bit::B, "B");
+        assert_eq!(resolved.apply(bit::C, 0), bit::A, "C");
+        assert_eq!(resolved.apply(bit::X, 0), bit::L, "X");
+        assert_eq!(resolved.apply(bit::Y, 0), bit::X, "Y");
+        assert_eq!(resolved.apply(bit::Z, 0), bit::R, "Z");
+        assert_eq!(slot_button_name(bit::C), "C");
+        assert_eq!(slot_button_name(bit::Z), "Z");
+    }
+
+    #[test]
+    fn c_and_z_play_nothing_unless_controls_map_them() {
+        let controls = Controls::default();
+        for system in SYSTEMS {
+            let resolved = controls.resolve(system, None, 0, XyRole::BA);
+            assert_eq!(resolved.apply(bit::C | bit::Z, 0), 0, "{system}");
+        }
     }
 
     #[test]
@@ -1261,11 +1328,11 @@ mod tests {
     fn port_pages_scroll_with_the_selection() {
         assert_eq!(port_rows(false), vec![PortRow::Controller]);
         let rows = port_rows(true).len();
-        assert_eq!(rows, 19);
+        assert_eq!(rows, 21);
         assert_eq!(scroll_offset(0, rows), 0);
         assert_eq!(scroll_offset(2, rows), 0);
         assert_eq!(scroll_offset(3, rows), 1);
-        assert_eq!(scroll_offset(18, rows), rows - VISIBLE_ROWS);
+        assert_eq!(scroll_offset(20, rows), rows - VISIBLE_ROWS);
         assert_eq!(scroll_offset(3, 4), 0, "a short page never scrolls");
     }
 
