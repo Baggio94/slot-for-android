@@ -313,6 +313,8 @@ pub fn home_slot_family(cart: &slot_store::Cart) -> Option<usize> {
         | M::MegaDriveCodemasters
         | M::MegaDriveVr
         | M::MegaDriveSk => 3,
+        // PICO-8 carts go into the Mega Drive's black slot.
+        M::Pico8 => 3,
     })
 }
 

@@ -71,7 +71,7 @@ fn auto_shell(entry: &RomEntry, platform: Platform) -> Option<ShellChoice> {
     match platform {
         Platform::Gba => None,
         // The region's mould, a publisher's, and the game's colour.
-        Platform::Nes | Platform::Snes | Platform::Md => slot_ui::home_shell(
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Pico8 => slot_ui::home_shell(
             platform, entry.title.trim(), &entry.home_region, &entry.home_maker),
         Platform::Gb | Platform::Gbc => {
             // Cart Studio and the shelf must resolve the same automatic
@@ -147,7 +147,7 @@ pub fn chosen_shell(platform: Platform, auto: Option<ShellChoice>, chosen: Optio
             // A Studio colour on a home cart keeps the automatic mould
             // unless it names one of that system's own.
             if let Some(auto) = auto.filter(|_| {
-                matches!(platform, Platform::Nes | Platform::Snes | Platform::Md)
+                matches!(platform, Platform::Nes | Platform::Snes | Platform::Md | Platform::Pico8)
                     && chosen.outline.platform() != Some(platform)
             }) {
                 chosen.outline = auto.outline;
@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(grouped[2].len(), 1);
     }
     #[test]
-    fn all_six_platforms_are_available_to_recents_and_favorites() {
+    fn all_platforms_are_available_to_recents_and_favorites() {
         let entry = |platform: &str, slug: &str| RomEntry {
             platform: platform.into(), title: slug.into(),
             uri: format!("content://roms/{slug}"), code: String::new(),
@@ -306,7 +306,7 @@ mod tests {
         };
         let grouped = carts_by_platform(&[
             entry("GBA", "gba"), entry("GB", "gb"), entry("GBC", "gbc"),
-            entry("NES", "nes"), entry("SNES", "snes"), entry("MD", "md"),
+            entry("NES", "nes"), entry("SNES", "snes"), entry("MD", "md"), entry("P8", "p8"),
         ]);
         assert_eq!(grouped.len(), slot_store::Platform::ALL.len());
         assert!(grouped.iter().all(|shelf| shelf.len() == 1));

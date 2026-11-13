@@ -10,12 +10,13 @@ use std::sync::OnceLock;
 
 use unicode_normalization::UnicodeNormalization;
 
-/// The three home consoles.
+/// The three home consoles, and PICO-8's carts in slot.'s own mould.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum HomeSystem {
     Nes,
     Snes,
     Md,
+    Pico8,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -35,6 +36,9 @@ pub enum HomeMould {
     MegaDriveVr,
     /// Sonic & Knuckles' lock-on cart.
     MegaDriveSk,
+    /// slot.'s own PICO-8 cart (tools/pico8-mould): the label well holds
+    /// the cart's picture and its title under it.
+    Pico8,
 }
 
 /// A mould's art and where things sit on it, in its logical pixels.
@@ -81,7 +85,7 @@ macro_rules! art {
 }
 
 // Printed by nes-megadrive/export_app.py.
-static ARTS: [MouldArt; 13] = [
+static ARTS: [MouldArt; 14] = [
     art!("nes", 352, (126, 0, 145, 239),
         [(40.6, 234.6, 101.0, 46.5), (170.4, 234.6, 101.0, 46.5)],
         (166.3, 103.6, 121.6, 39.5), [126, 126, 128], None),
@@ -123,11 +127,15 @@ static ARTS: [MouldArt; 13] = [
     art!("md_sk", 216, (17, 52, 276, 29),
         [(66.3, 88.7, 88.6, 49.9), (162.5, 88.7, 88.6, 49.9)],
         (152.8, 34.6, 93.0, 29.7), [14, 14, 15], None),
+    // Drawn by tools/pico8-mould/make.py.
+    art!("p8", 400, (36, 66, 240, 296),
+        [(40.0, 196.0, 104.0, 52.0), (168.0, 196.0, 104.0, 52.0)],
+        (100.0, 120.0, 112.0, 31.0), [52, 52, 56], None),
 ];
 
 
 impl HomeMould {
-    pub const ALL: [HomeMould; 13] = [
+    pub const ALL: [HomeMould; 14] = [
         HomeMould::Nes,
         HomeMould::Famicom,
         HomeMould::FamicomNamco,
@@ -141,6 +149,7 @@ impl HomeMould {
         HomeMould::MegaDriveCodemasters,
         HomeMould::MegaDriveVr,
         HomeMould::MegaDriveSk,
+        HomeMould::Pico8,
     ];
 
     pub fn index(self) -> usize {
@@ -168,6 +177,7 @@ impl HomeMould {
             | HomeMould::MegaDriveCodemasters
             | HomeMould::MegaDriveVr
             | HomeMould::MegaDriveSk => HomeSystem::Md,
+            HomeMould::Pico8 => HomeSystem::Pico8,
         }
     }
 
@@ -177,6 +187,7 @@ impl HomeMould {
             HomeSystem::Nes => HomeMould::Nes,
             HomeSystem::Snes => HomeMould::Snes,
             HomeSystem::Md => HomeMould::MegaDrive,
+            HomeSystem::Pico8 => HomeMould::Pico8,
         }
     }
 
@@ -196,6 +207,7 @@ impl HomeMould {
             HomeMould::MegaDriveCodemasters => "megadrive-codemasters",
             HomeMould::MegaDriveVr => "megadrive-vr",
             HomeMould::MegaDriveSk => "megadrive-sk",
+            HomeMould::Pico8 => "pico8",
         }
     }
 
@@ -379,5 +391,6 @@ pub fn home_pick(system: HomeSystem, stem: &str, region: &str, maker: &str) -> (
             let (colour, glitter) = own_shell(mould, &key, usa).unwrap_or((mould.art().colour, false));
             (mould, colour, glitter)
         }
+        HomeSystem::Pico8 => (HomeMould::Pico8, HomeMould::Pico8.art().colour, false),
     }
 }

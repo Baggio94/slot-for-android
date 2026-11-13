@@ -3,13 +3,13 @@ use slot_store::Platform;
 #[test]
 fn every_platform_has_a_directory() {
     let names: Vec<&str> = Platform::ALL.iter().map(|p| p.dir_name()).collect();
-    assert_eq!(names, vec!["GBA", "GB", "GBC", "NES", "SNES", "MD"]);
+    assert_eq!(names, vec!["GBA", "GB", "GBC", "NES", "SNES", "MD", "P8"]);
 }
 
 #[test]
 fn every_platform_is_a_shelf_of_its_own() {
     assert_eq!(Platform::ALL, [Platform::Gba, Platform::Gb, Platform::Gbc,
-        Platform::Nes, Platform::Snes, Platform::Md]);
+        Platform::Nes, Platform::Snes, Platform::Md, Platform::Pico8]);
     for (i, p) in Platform::ALL.iter().enumerate() {
         assert!(
             !Platform::ALL[..i].contains(p),
@@ -33,6 +33,11 @@ fn each_platform_takes_only_its_own_extensions() {
     assert!(Platform::Md.accepts(std::path::Path::new("Sonic.md")));
     assert!(Platform::Md.accepts(std::path::Path::new("Sonic.gen")));
     assert!(!Platform::Snes.accepts(std::path::Path::new("Zelda.nes")));
+    assert!(Platform::Pico8.accepts(std::path::Path::new("Celeste.p8.png")));
+    assert!(Platform::Pico8.accepts(std::path::Path::new("Jelpi.P8")));
+    assert!(!Platform::Pico8.accepts(std::path::Path::new("cover.png")));
+    assert_eq!(slot_store::cart_stem("Celeste Classic 2.P8.PNG"), "Celeste Classic 2");
+    assert_eq!(slot_store::cart_stem("Sonic (USA).md"), "Sonic (USA)");
 }
 
 #[test]

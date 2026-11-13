@@ -126,7 +126,7 @@ pub fn shell_for(cart: &Cart) -> Shell {
     match cart.platform {
         Platform::Gba => gba_shell_for(&cart.code),
         Platform::Gb | Platform::Gbc => gb_shell_for(&cart.rom),
-        Platform::Nes | Platform::Snes | Platform::Md => crate::home::home_mould_of(cart)
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Pico8 => crate::home::home_mould_of(cart)
             .map_or(DEFAULT_SHELL, |m| shell(m.art().colour, Finish::Solid)),
     }
 }
@@ -345,6 +345,10 @@ const MD_SWATCHES: &[Swatch] = &[
     swatch("Mega Drive black", [18, 18, 19], Finish::Solid),
 ];
 
+const PICO8_SWATCHES: &[Swatch] = &[
+    swatch("Charcoal", [52, 52, 56], Finish::Solid),
+];
+
 /// Colours no real cart came in, for fun, on every system.
 pub const FUN_SWATCHES: &[Swatch] = &[
     swatch("Cherry", [0xe0, 0x28, 0x3a], Finish::Solid),
@@ -367,5 +371,6 @@ pub fn system_swatches(platform: Platform) -> &'static [Swatch] {
         Platform::Nes => NES_SWATCHES,
         Platform::Snes => SNES_SWATCHES,
         Platform::Md => MD_SWATCHES,
+        Platform::Pico8 => PICO8_SWATCHES,
     }
 }

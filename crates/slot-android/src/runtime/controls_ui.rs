@@ -83,6 +83,7 @@ impl Engine {
         match platform {
             Platform::Gba => "gba", Platform::Gbc => "gbc", Platform::Gb => "gb",
             Platform::Nes => "nes", Platform::Snes => "snes", Platform::Md => "md",
+            Platform::Pico8 => "p8",
         }
     }
 

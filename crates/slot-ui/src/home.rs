@@ -31,6 +31,7 @@ impl HomeMould {
             | HomeMould::MegaDriveCodemasters
             | HomeMould::MegaDriveVr
             | HomeMould::MegaDriveSk => Platform::Md,
+            HomeMould::Pico8 => Platform::Pico8,
         }
     }
 
@@ -40,6 +41,7 @@ impl HomeMould {
             Platform::Nes => Some(HomeMould::Nes),
             Platform::Snes => Some(HomeMould::Snes),
             Platform::Md => Some(HomeMould::MegaDrive),
+            Platform::Pico8 => Some(HomeMould::Pico8),
             Platform::Gba | Platform::Gb | Platform::Gbc => None,
         }
     }
@@ -59,6 +61,7 @@ impl HomeMould {
             HomeMould::MegaDriveCodemasters => Outline::MegaDriveCodemasters,
             HomeMould::MegaDriveVr => Outline::MegaDriveVr,
             HomeMould::MegaDriveSk => Outline::MegaDriveSk,
+            HomeMould::Pico8 => Outline::Pico8,
         }
     }
 
@@ -145,6 +148,7 @@ pub fn home_shell(platform: Platform, stem: &str, region: &str, maker: &str) -> 
         Platform::Nes => HomeSystem::Nes,
         Platform::Snes => HomeSystem::Snes,
         Platform::Md => HomeSystem::Md,
+        Platform::Pico8 => HomeSystem::Pico8,
         Platform::Gba | Platform::Gb | Platform::Gbc => return None,
     };
     let (mould, colour, glitter) = home_pick(system, stem, region, maker);

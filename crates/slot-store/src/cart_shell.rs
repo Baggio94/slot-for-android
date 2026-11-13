@@ -26,10 +26,12 @@ pub enum Outline {
     MegaDriveCodemasters,
     MegaDriveVr,
     MegaDriveSk,
+    /// slot.'s own PICO-8 cart.
+    Pico8,
 }
 
 impl Outline {
-    pub const NAMES: [(Outline, &'static str); 16] = [
+    pub const NAMES: [(Outline, &'static str); 17] = [
         (Outline::Auto, "auto"),
         (Outline::Notched, "notched"),
         (Outline::Rounded, "rounded"),
@@ -46,6 +48,7 @@ impl Outline {
         (Outline::MegaDriveCodemasters, "megadrive-codemasters"),
         (Outline::MegaDriveVr, "megadrive-vr"),
         (Outline::MegaDriveSk, "megadrive-sk"),
+        (Outline::Pico8, "pico8"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -73,6 +76,7 @@ impl Outline {
             | Outline::MegaDriveCodemasters
             | Outline::MegaDriveVr
             | Outline::MegaDriveSk => Some(Platform::Md),
+            Outline::Pico8 => Some(Platform::Pico8),
         }
     }
 }
