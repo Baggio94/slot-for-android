@@ -332,6 +332,51 @@ mod render {
         assert_eq!(engine.studio_page_path(), "Menu \u{203a} Cart Studio");
     }
 
+    /// Bright ink columns of the selected row, grouped into glyphs:
+    /// (first column, last column, top row, bottom row).
+    fn glyphs_in_row(engine: &mut Engine, row_y: (usize, usize)) -> Vec<(usize, usize, usize, usize)> {
+        for _ in 0..40 {
+            engine.draw(0, || {});
+            std::thread::sleep(std::time::Duration::from_millis(12));
+        }
+        let rgba = engine.gpu.read_frame();
+        let (w, _) = panel_size();
+        let w = w as usize;
+        let lit = |x: usize, y: usize| {
+            let at = (y * w + x) * 4;
+            (rgba[at] as u32 + rgba[at + 1] as u32 + rgba[at + 2] as u32) > 3 * 150
+        };
+        let mut glyphs: Vec<(usize, usize, usize, usize)> = Vec::new();
+        for x in 0..w {
+            let rows: Vec<usize> = (row_y.0..row_y.1).filter(|&y| lit(x, y)).collect();
+            let (Some(&top), Some(&bottom)) = (rows.first(), rows.last()) else { continue };
+            match glyphs.last_mut() {
+                Some(g) if x <= g.1 + 6 => { g.1 = x; g.2 = g.2.min(top); g.3 = g.3.max(bottom); }
+                _ => glyphs.push((x, x, top, bottom)),
+            }
+        }
+        glyphs
+    }
+
+    #[test]
+    fn setting_arrows_are_centred_on_their_value() {
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        engine.overlay = ShelfOverlay::GeneralSettings { row: 0 };
+        let (_, h) = panel_size();
+        let k = h as f32 / OUT_H as f32;
+        // The selected row's band, in panel pixels.
+        let top = engine.menu_rows_top(6);
+        let band = ((top * k) as usize, ((top + QUICK_PITCH) * k) as usize);
+        let glyphs = glyphs_in_row(&mut engine, band);
+        let mid = |g: &(usize, usize, usize, usize)| (g.2 + g.3) as f32 / 2.0;
+        // The arrows are the last glyph and the one before the value.
+        let right_arrow = glyphs.last().unwrap();
+        let value = &glyphs[glyphs.len() - 2];
+        assert!((mid(right_arrow) - mid(value)).abs() <= 1.0,
+            "arrow centred at {} but the value at {}", mid(right_arrow), mid(value));
+    }
+
     fn entries() -> Vec<RomEntry> {
         let json: Vec<String> = ["Pokemon Emerald", "Metroid Fusion"].iter().map(|n| format!(
             r#"{{"title":"{n}","platform":"GBA","uri":"content://roms/{n}.gba","code":"AXXE"}}"#)).collect();

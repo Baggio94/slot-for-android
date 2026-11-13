@@ -84,7 +84,7 @@ pub use polaroids::{
 pub use power_menu::{menu_face, PowerChoice, MENU_PAD};
 pub use quick_menu::{
     quick_value_width, quick_value_width_within, quick_value_face_within,
-    quick_caret_face, quick_label_face, quick_legend_faces, quick_value_face, QuickMenu,
+    quick_caret_face, quick_caret_mid, quick_label_face, quick_legend_faces, quick_value_face, QuickMenu,
     QuickMenuFaces, QuickRow, QuickValue, QUICK_EDGE, QUICK_PITCH, QUICK_SPLIT, QUICK_TOP,
 };
 pub use rebuild::{rebuild_count_face, rebuild_title_face, RebuildScreen};

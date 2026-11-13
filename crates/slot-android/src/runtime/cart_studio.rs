@@ -1046,6 +1046,7 @@ impl Engine {
                     if carets {
                         let (lt, lw, lh) = self.setting_carets[0];
                         let (rt, rw, rh) = self.setting_carets[1];
+                        let y = self.caret_y(y, scale);
                         out.push(Draw::Tex { x: x - lw as f32 - 8.0, y, w: lw as f32, h: lh as f32, tex: lt, alpha: fade });
                         out.push(Draw::Tex { x: x1 - rw as f32, y, w: rw as f32, h: rh as f32, tex: rt, alpha: fade });
                     }

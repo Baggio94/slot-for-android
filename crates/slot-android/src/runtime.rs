@@ -1168,6 +1168,8 @@ struct Engine {
     // The live Palette row shows the palette's own name, one face per palette.
     palette_values: Vec<(slot_gfx::TexId, u32, u32)>,
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
+    /// slot_ui::quick_caret_mid: where the carets' ink is centred.
+    caret_mid: f32,
     settings_hints: [(slot_gfx::TexId, u32); 2],
     /// The in-game Screen page's L1 R1 Size, right of the cart.
     screen_size_hint: (slot_gfx::TexId, u32),
@@ -1849,6 +1851,7 @@ impl Engine {
             system_video_modes: Platform::ALL.map(|platform| video_mode::default_mode(platform, panel_size())),
             palette_values,
             setting_carets,
+            caret_mid: slot_ui::quick_caret_mid(),
             settings_hints,
             screen_size_hint,
             about_texture,
@@ -5905,7 +5908,8 @@ impl Engine {
     fn push_hold_scene(&self, commands: &mut Vec<Draw>) {
         commands.push(Draw::Rect {
             x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
-            colour: [0.085, 0.085, 0.093, 1.0],
+            // The shelf's own ground: black in OLED, as the shelf after it.
+            colour: menu_style::page_ground([0.085, 0.085, 0.093, 1.0]),
         });
         if let Some(shelf) = self.shelves.get(self.active) {
             if let Some(cart) = shelf.carts.get(shelf.index) {
@@ -6058,6 +6062,7 @@ impl Engine {
         if selected {
             let (left, lw, lh) = self.setting_carets[0];
             let (right_tex, rw, rh) = self.setting_carets[1];
+            let y = self.caret_y(y, scale);
             out.push(Draw::Tex { x: x - lw as f32 - 8.0, y,
                 w: lw as f32, h: lh as f32, tex: left, alpha: shows });
             out.push(Draw::Tex { x: right - rw as f32, y,
@@ -6141,7 +6146,8 @@ impl Engine {
                 tex, alpha: shows * if chosen { 1.0 } else if idle { 0.3 } else { menu_look::ROW_REST },
             });
             if chosen {
-                let y = top + dy + 8.0;
+                // A smaller value stays centred on the 0.79 label's middle.
+                let y = self.caret_y(top + dy + 8.0, 0.79);
                 let (left, lw, lh) = self.setting_carets[0];
                 let (right_tex, rw, rh) = self.setting_carets[1];
                 out.push(Draw::Tex {
@@ -6251,6 +6257,12 @@ impl Engine {
     }
 
     /// The fade a menu page opens with.
+    /// The carets' top beside a value drawn from `text_y` at `scale`: their
+    /// ink centred on its capitals, not hanging from the same top.
+    pub(super) fn caret_y(&self, text_y: f32, scale: f32) -> f32 {
+        text_y - (1.0 - scale) * self.caret_mid
+    }
+
     fn menu_fade(&self, heading: usize) -> f32 {
         // The game menu fades in over 100 ms, after its 120 ms wait for a
         // second tap; every other menu over the original 160 ms.
@@ -7781,8 +7793,8 @@ impl Engine {
             .then(|| self.shelf_wallpaper_ready.get(self.active).copied().unwrap_or(false)
                 .then(|| self.shelf_wallpaper_texs.get(self.active).copied().flatten()).flatten())
             .flatten();
-        let active_wallpaper = if self.settings.wallpaper == crate::settings::WallpaperPick::None
-            || (menu_style::oled() && !self.wallpaper_personal && shelf_wallpaper.is_none()) { None }
+        // OLED blackens only the ground: a chosen wallpaper shows as in Dark.
+        let active_wallpaper = if self.settings.wallpaper == crate::settings::WallpaperPick::None { None }
             else { shelf_wallpaper.or(self.wallpaper_texture) };
         let tint = if self.wallpaper_personal || shelf_wallpaper.is_some() {
             self.settings.wallpaper_tint.alpha()

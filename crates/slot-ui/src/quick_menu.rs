@@ -313,6 +313,22 @@ pub fn quick_caret_face(right: bool) -> UndoFace {
     face.into_undo()
 }
 
+/// Where the caret's ink is centred, in logical pixels from its face's top:
+/// the capitals' middle on a label drawn at full size. A label drawn smaller
+/// from the same top has its middle higher, and the caret must follow it.
+pub fn quick_caret_mid() -> f32 {
+    let face = quick_caret_face(true);
+    let th = density::px(face.h).max(1);
+    let tw = (face.rgba.len() as u32 / 4 / th).max(1);
+    let inked: Vec<u32> = (0..th)
+        .filter(|y| (0..tw).any(|x| face.rgba[((y * tw + x) * 4 + 3) as usize] > 32))
+        .collect();
+    match (inked.first(), inked.last()) {
+        (Some(&a), Some(&b)) => (a + b + 1) as f32 / 2.0 * face.h as f32 / th as f32,
+        _ => face.h as f32 / 2.0,
+    }
+}
+
 pub fn quick_legend_faces() -> [UndoFace; 3] {
     [
         hint_face("B", "Back"),
