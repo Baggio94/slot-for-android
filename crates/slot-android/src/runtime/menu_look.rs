@@ -598,10 +598,9 @@ mod render {
     }
 
     #[test]
-    fn theme_wallpaper_takes_each_theme_s_shelf_colour() {
+    fn no_wallpaper_shows_each_theme_s_colour() {
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
-        engine.settings.wallpaper = crate::settings::WallpaperPick::Theme;
         let corner = |engine: &mut Engine| {
             for _ in 0..30 {
                 engine.draw(0, || {});
@@ -613,6 +612,15 @@ mod render {
             [rgba[at], rgba[at + 1], rgba[at + 2]]
         };
         let f = |c: [f32; 4]| [0, 1, 2].map(|i| (c[i] * 255.0).round() as u8);
+        // From the wood wallpaper, as on a handheld (the 2.4.0-menus6 Theme
+        // choice kept drawing the image it left), to None.
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Default;
+        engine.reload_wallpaper(None);
+        assert!(engine.wallpaper_texture.is_some());
+        let wood = corner(&mut engine);
+        engine.settings.wallpaper = crate::settings::WallpaperPick::None;
+        engine.reload_wallpaper(None);
+        assert_ne!(corner(&mut engine), wood);
         assert_eq!(corner(&mut engine), f(menu_style::DARK_SHELF));
         assert!(!engine.top_line_dark_ink());
         // Dark > OLED: black.
@@ -626,6 +634,11 @@ mod render {
         engine.cycle_appearance(true);
         assert_eq!(corner(&mut engine), menu_style::MenuPalette::original(6).shelf);
         assert!(engine.shelf_ink().is_some());
+        // Any image chosen covers the colour again.
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Blur;
+        engine.reload_wallpaper(None);
+        assert_ne!(corner(&mut engine), menu_style::MenuPalette::original(6).shelf);
+        assert!(engine.shelf_ink().is_none());
         // Left goes back the same way: Light.
         engine.cycle_appearance(false);
         assert_eq!(engine.settings.appearance, crate::settings::Appearance::Light);

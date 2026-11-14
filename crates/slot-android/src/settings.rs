@@ -16,16 +16,11 @@ pub enum WallpaperPick {
     #[default]
     Default,
     Blur,
-    /// A plain colour that follows the appearance: Dark's grey, OLED's
-    /// black, Light's light grey, Original's colour for the console on
-    /// the slot (menu_style::shelf_ground, Siham 2026-11-14). Saved as
-    /// Default plus THEME_WALLPAPER_KEY, so older versions keep the file.
-    Theme,
     File(String),
 }
 impl WallpaperPick {
     pub fn choices(root: &Path) -> Vec<Self> {
-        let mut choices=vec![Self::None, Self::Random, Self::Shelf, Self::Default, Self::Blur, Self::Theme];
+        let mut choices=vec![Self::None, Self::Random, Self::Shelf, Self::Default, Self::Blur];
         choices.extend(crate::wallpaper::list(root).into_iter().map(Self::File));
         choices
     }
@@ -42,7 +37,6 @@ impl WallpaperPick {
             Self::Shelf=>"Shelf".into(),
             Self::Default=>"Default".into(),
             Self::Blur=>"Default Blur".into(),
-            Self::Theme=>"Theme".into(),
             // The imported image reads "User", like the other values.
             Self::File(name)=>match name.rsplit_once('.').map(|(a,_)|a).unwrap_or(name) {
                 stem if stem.eq_ignore_ascii_case("user") => "User".into(),
@@ -70,7 +64,8 @@ impl WallpaperTint {
 
 /// Settings.json's own key for the OLED appearance (Settings::save).
 const OLED_KEY: &str = "appearance_oled";
-/// Settings.json's own key for the Theme wallpaper (Settings::save).
+/// 2.4.0-menus6's Theme wallpaper, now None, which shows the theme's
+/// colour: read only.
 const THEME_WALLPAPER_KEY: &str = "wallpaper_theme";
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -675,7 +670,7 @@ impl Settings {
                         }
                         if s.wallpaper == WallpaperPick::Default
                             && json.get(THEME_WALLPAPER_KEY).and_then(serde_json::Value::as_bool) == Some(true) {
-                            s.wallpaper = WallpaperPick::Theme;
+                            s.wallpaper = WallpaperPick::None;
                         }
                     }
                     // Beta RC1 imported user.png but lacked an option to turn
@@ -757,17 +752,13 @@ impl Settings {
         // A version from before OLED reads the whole file or none of it: an
         // appearance it doesn't know would reset every setting. Written as
         // Dark plus a key it ignores, it keeps them and shows Dark.
-        // OLED and the Theme wallpaper go in keys of their own, so a version
-        // without them reads Dark and Default rather than resetting all.
+        // OLED goes in a key of its own, so a version without it reads Dark
+        // rather than resetting every setting.
         let oled = self.appearance == Appearance::Oled;
-        let theme = self.wallpaper == WallpaperPick::Theme;
-        let bytes = if oled || theme {
-            let mut older = self.clone();
-            if oled { older.appearance = Appearance::Dark; }
-            if theme { older.wallpaper = WallpaperPick::Default; }
+        let bytes = if oled {
+            let older = Self { appearance: Appearance::Dark, ..self.clone() };
             let mut json = serde_json::to_value(&older).map_err(io::Error::other)?;
-            if oled { json[OLED_KEY] = serde_json::json!(true); }
-            if theme { json[THEME_WALLPAPER_KEY] = serde_json::json!(true); }
+            json[OLED_KEY] = serde_json::json!(true);
             serde_json::to_vec_pretty(&json)
         } else {
             serde_json::to_vec_pretty(&self)
@@ -1153,15 +1144,14 @@ mod tests {
         std::fs::write(dir.join("another.png"), b"placeholder").unwrap();
         std::fs::write(dir.join("GBA.png"), b"placeholder").unwrap();
         let choices=WallpaperPick::choices(&root);
-        assert_eq!(choices, vec![None,Random,Shelf,Default,Blur,Theme,
+        assert_eq!(choices, vec![None,Random,Shelf,Default,Blur,
             File("another.png".into()),File("user.png".into())]);
         assert_eq!(None.step(&root,true), Random);
         assert_eq!(Random.step(&root,true), Shelf);
         assert_eq!(Shelf.step(&root,true), Default);
         assert_eq!(None.step(&root,false), File("user.png".into()));
         assert_eq!(Default.step(&root,true), Blur);
-        assert_eq!(Blur.step(&root,true), Theme);
-        assert_eq!(Theme.step(&root,true), File("another.png".into()));
+        assert_eq!(Blur.step(&root,true), File("another.png".into()));
         assert_eq!(File("missing.png".into()).step(&root,true), Blur);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1209,28 +1199,31 @@ mod tests {
     }
 
     #[test]
-    fn theme_wallpaper_is_saved_so_a_version_without_it_shows_default() {
+    fn menus6_theme_wallpaper_reads_as_none() {
         let root = std::env::temp_dir().join(format!(
             "slot-theme-wallpaper-{}-{}", std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
                 .unwrap().as_nanos()));
         let mut settings = Settings::load(&root);
-        settings.wallpaper = WallpaperPick::Theme;
-        settings.appearance = Appearance::Oled;
+        settings.ff_speed = 4;
         settings.save(&root).unwrap();
-        let json: serde_json::Value =
+        // 2.4.0-menus6 saved its Theme wallpaper as Default plus a key.
+        let mut json: serde_json::Value =
             serde_json::from_slice(&fs::read(root.join(NAME)).unwrap()).unwrap();
-        assert_eq!(json["wallpaper"], "default");
-        assert_eq!(json["appearance"], "dark");
-        assert_eq!(Settings::load(&root), settings);
-        // Another wallpaper chosen in an older version over the key.
-        let mut blur = json;
-        blur["wallpaper"] = serde_json::json!("blur");
-        fs::write(root.join(NAME), serde_json::to_vec(&blur).unwrap()).unwrap();
-        assert_eq!(Settings::load(&root).wallpaper, WallpaperPick::Blur);
-        // Theme comes after Default Blur in the list, both ways.
-        assert_eq!(WallpaperPick::Blur.step(&root, true), WallpaperPick::Theme);
-        assert_eq!(WallpaperPick::Theme.step(&root, false), WallpaperPick::Blur);
+        json["wallpaper"] = serde_json::json!("default");
+        json[THEME_WALLPAPER_KEY] = serde_json::json!(true);
+        fs::write(root.join(NAME), serde_json::to_vec(&json).unwrap()).unwrap();
+        let loaded = Settings::load(&root);
+        assert_eq!(loaded.wallpaper, WallpaperPick::None);
+        assert_eq!(loaded.ff_speed, 4);
+        // Saved again, the key is gone: Default stays Default afterwards.
+        loaded.save(&root).unwrap();
+        assert!(!String::from_utf8(fs::read(root.join(NAME)).unwrap()).unwrap()
+            .contains(THEME_WALLPAPER_KEY));
+        let mut back = loaded.clone();
+        back.wallpaper = WallpaperPick::Default;
+        back.save(&root).unwrap();
+        assert_eq!(Settings::load(&root).wallpaper, WallpaperPick::Default);
         let _ = fs::remove_dir_all(root);
     }
 

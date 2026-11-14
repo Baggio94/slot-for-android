@@ -668,7 +668,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 122] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 121] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -698,7 +698,7 @@ const SETTING_VALUE_NAMES: [&str; 122] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Pixel Transparency", "Sunlight Shimmer",
                                "Dot Matrix Color",
                                "Bilinear", "FSR", "Anime4K Fast", "Anime4K",
-                               "MAX", "crt-royale", "OLED", "Theme"];
+                               "MAX", "crt-royale", "OLED"];
 
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
@@ -755,7 +755,6 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             crate::settings::WallpaperPick::Shelf => 65,
             crate::settings::WallpaperPick::Default => 19,
             crate::settings::WallpaperPick::Blur => 20,
-            crate::settings::WallpaperPick::Theme => 121,
             crate::settings::WallpaperPick::File(_) => 26,
         },
         17 => match settings.wallpaper_tint {
@@ -1337,8 +1336,6 @@ fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperP
         (WallpaperPick::Default, _) => return (default(), false),
         (WallpaperPick::Blur, _) =>
             return (slot_ui::blur_background_native().map(|v|v.to_vec()), false),
-        // The theme's own colour: the ground drawn under no image.
-        (WallpaperPick::Theme, _) => return (None, false),
         // Shelves without their own file show the bundled default.
         (WallpaperPick::Shelf, _) => return (default(), false),
         (WallpaperPick::File(name), Some(root)) => {
@@ -2024,8 +2021,8 @@ impl Engine {
     /// Tint; None is the dark ground). Siham 2026-11-11.
     fn top_line_dark_ink(&self) -> bool {
         use crate::settings::WallpaperPick;
-        if self.settings.wallpaper == WallpaperPick::None { return false; }
-        if self.settings.wallpaper == WallpaperPick::Theme { return menu_style::shelf_takes_dark_ink(); }
+        // None is the theme's own colour (menu_style::shelf_ground).
+        if self.settings.wallpaper == WallpaperPick::None { return menu_style::shelf_takes_dark_ink(); }
         let shelf = (self.settings.wallpaper == WallpaperPick::Shelf
             && self.shelf_wallpaper_ready.get(self.active).copied().unwrap_or(false))
             .then(|| self.shelf_wallpaper_luma.get(self.active).copied().flatten()).flatten();
@@ -2040,10 +2037,10 @@ impl Engine {
         luma * (1.0 - tint) > slot_ui::LIGHT_WALLPAPER
     }
 
-    /// The shelf's name and game title in dark ink over a light Theme
-    /// wallpaper (Light, and Original's GBA, Game Boy Color).
+    /// The shelf's name and game title in dark ink over the light colour
+    /// Wallpaper None shows in Light, and Original's GBA and Game Boy Color.
     fn shelf_ink(&self) -> Option<slot_gfx::InkMap> {
-        if self.settings.wallpaper != crate::settings::WallpaperPick::Theme
+        if self.settings.wallpaper != crate::settings::WallpaperPick::None
             || !menu_style::shelf_takes_dark_ink() { return None; }
         let [r, g, b, _] = menu_style::shelf_ground();
         let ink = menu_style::MenuPalette::LIGHT.ink.unwrap_or([0; 3]).map(|v| v as f32 / 255.0);
@@ -7903,7 +7900,9 @@ impl Engine {
             y: 0.0,
             w: out_w() as f32,
             h: OUT_H as f32,
-            colour: if self.settings.wallpaper == crate::settings::WallpaperPick::Theme {
+            // None: the theme's colour, Dark's grey, OLED's black, Light's
+            // and Original's own (Siham 2026-11-14). An image covers it.
+            colour: if self.settings.wallpaper == crate::settings::WallpaperPick::None {
                 menu_style::shelf_ground()
             } else { menu_style::page_ground(menu_style::DARK_SHELF) },
         }];
