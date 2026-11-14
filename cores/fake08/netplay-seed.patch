@@ -1,0 +1,16 @@
+diff --git a/libs/z8lua/lstate.c b/libs/z8lua/lstate.c
+index e20507d..6703b3b 100644
+--- a/libs/z8lua/lstate.c
++++ b/libs/z8lua/lstate.c
+@@ -280,7 +280,10 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
+   g->frealloc = f;
+   g->ud = ud;
+   g->mainthread = L;
+-  g->seed = makeseed(L);
++  /* A fixed seed: two consoles playing one game together (and a save
++  ** state loaded later) must walk a table with pairs() in the same order. */
++  (void)makeseed;
++  g->seed = 0x50494338;  /* "PIC8" */
+   g->uvhead.u.l.prev = &g->uvhead;
+   g->uvhead.u.l.next = &g->uvhead;
+   g->gcrunning = 0;  /* no GC while building state */

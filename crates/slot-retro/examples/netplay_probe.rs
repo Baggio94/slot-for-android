@@ -4,7 +4,10 @@
 //! off in its own game like Join, loads Host's state and replays the frames:
 //! every frame must come out identical, and player 2 must reach the game.
 //!
-//! usage: netplay_probe CORE ROM [--frames N]
+//! fake-08's state holds a Lua heap whose bytes differ after every load even
+//! when the game does not: --pictures compares the pictures alone.
+//!
+//! usage: netplay_probe CORE ROM [--frames N] [--pictures]
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,9 +33,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     let core = PathBuf::from(args.next().ok_or("CORE")?);
     let rom = PathBuf::from(args.next().ok_or("ROM")?);
     let mut frames = 600u32;
+    let mut pictures = false;
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--frames" => frames = args.next().ok_or("--frames N")?.parse()?,
+            "--pictures" => pictures = true,
             _ => return Err(format!("unknown {flag}").into()),
         }
     }
@@ -58,7 +63,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     for (frame, (&(p1, p2), (state, video))) in inputs.iter().zip(&host).enumerate() {
         c.run_frame_linked(p1, p2);
         let _ = c.take_audio();
-        if &c.serialize()? != state {
+        if !pictures && &c.serialize()? != state {
             return Err(format!("consoles desynchronised at frame {frame}").into());
         }
         if c.video_xrgb8888() != &video[..] {
@@ -68,10 +73,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     // Same frames without player 2.
     c.unserialize(&start)?;
     let mut diverged = false;
-    for (&(p1, _), (state, _)) in inputs.iter().zip(&host) {
+    for (&(p1, _), (state, video)) in inputs.iter().zip(&host) {
         c.run_frame_linked(p1, ButtonMask::default());
         let _ = c.take_audio();
-        diverged |= &c.serialize()? != state;
+        diverged |= if pictures { c.video_xrgb8888() != &video[..] } else { &c.serialize()? != state };
     }
     if !diverged { return Err("player 2's buttons never reached the game".into()); }
     println!("ok: {frames} linked frames identical, player 2 reaches the game");
