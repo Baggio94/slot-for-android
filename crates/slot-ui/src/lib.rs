@@ -60,7 +60,7 @@ pub use home::{home_mould_of, home_shell, title_key, HomeMould, HOME_CART_W};
 pub use clock::{clock_label, date_time_text, hhmm, set_clock_hint_face, ClockPicker, Field};
 pub use density::Face;
 pub use draw::{Draw, TexId, OUT_H, out_w};
-pub use footer::{draw_footer, draw_footer_with_ink, draw_status_clock, footer_ink, Printed};
+pub use footer::{draw_footer, draw_footer_with_ink, draw_status_clock, draw_status_clock_grown, footer_ink, Printed};
 pub use hud::{
     badge_at, ff_badge, FfState, Hud, HudKind, LinkBadge, Millis, HUD_ICON_PX, HUD_INK, HUD_MS,
     LINK_HOST_INK, LINK_JOIN_INK, PLATE_H,
@@ -73,7 +73,7 @@ pub use link_art::{
 };
 pub use plate::{
     arrows_hint_face, arrows_hint_face_ink, hint_face_ink, hint_label_x, arrows_label_x, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
-    hint_width, title_face, title_line_face, word_face, word_ink, word_width, platform_name_face, PLATFORM_NAME_SCALE,
+    hint_width, title_face, title_line_face, word_face, word_ink, word_ink_scaled, word_width, platform_name_face, PLATFORM_NAME_SCALE,
     onboarding_instruction_face, onboarding_note_face, onboarding_max_w,
     Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,
     HINT_EDGE, HINT_GAP, HINT_H, LEGEND_GAP, TITLE_H, TITLE_W,

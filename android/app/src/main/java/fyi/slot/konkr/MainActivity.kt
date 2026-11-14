@@ -157,6 +157,10 @@ class MainActivity : Activity() {
     external fun nativeSlotButtonReleased(held: Boolean)
     external fun nativeLidCover(closed: Boolean)
     external fun nativeLidStep()
+    /** Settings > Interface > RG Rotate: [dim after s, sleep after s (0 never),
+     *  black cover with no game (1), animations (1)]. */
+    external fun nativeRotateDelays(): IntArray
+    external fun nativeRotateCanSleep(active: Boolean)
     external fun nativeCarouselQuiet(): Boolean
     external fun nativeWarmRomCandidate(): String?
     external fun nativeCanRefreshLibrary(): Boolean
@@ -906,6 +910,8 @@ class MainActivity : Activity() {
                 10 -> resetVisualFile(WALLPAPER_REQUEST)
                 11 -> openCartLabelPicker()
                 12 -> removeSelectedCartLabel()
+                60 -> if (::lidCover.isInitialized) lidCover.requestAdmin()
+                61 -> if (::lidCover.isInitialized) lidCover.removeAdmin()
                 30 -> requestStudioArt()
                 32 -> requestStudioGameArt(1)
                 33 -> requestStudioPicture()
@@ -1120,6 +1126,17 @@ class MainActivity : Activity() {
     /** RG Rotate's middle button is down: a Home Android sends meanwhile is
      *  its long press, the slot. button held. */
     private var rotateMiddleDown = false
+    /** The middle button was held long enough: slot. ejected on its own. */
+    private var rotateMiddleHeld = false
+    /** Android takes the middle button at 0.5 s (Home, its release lost),
+     *  so slot. counts the hold itself and ejects just before (measured on
+     *  Siham's Rotate, 2026-11-14: Home came, the game only paused). */
+    private val rotateMiddleHold = Runnable {
+        if (!rotateMiddleDown) return@Runnable
+        rotateMiddleHeld = true
+        nativeSlotButtonReleased(true)
+        wakeCarouselRender()
+    }
     /** Keys swallowed by the closed RG Rotate, whose releases go too. */
     private val lidSwallowed = HashSet<Int>()
 
@@ -1369,7 +1386,7 @@ class MainActivity : Activity() {
                 bottomMargin = (12 * resources.displayMetrics.density).toInt()
             })
         raAchievementOverlay = RaAchievementOverlay(this, frame)
-        lidCover = LidCover(this, frame)
+        lidCover = LidCover(this) { if (::shelfStatus.isInitialized) shelfStatus else null }
         showSlotStartupSplash(frame)
         setContentView(frame)
         immersive()
@@ -1523,13 +1540,18 @@ class MainActivity : Activity() {
             }
             return true
         }
-        if (isRetroidSlotKey(keyCode, event) || RgRotate.middleKey(keyCode, event) ||
-            RgRotate.sideKey(keyCode, event)) {
+        if (isRetroidSlotKey(keyCode, event) || RgRotate.middleKey(keyCode, event)) {
             // The Retroid's round centre key sends BACK: there it is the
-            // slot. button, with the KONKR top key's exact behaviour. So are
-            // the RG Rotate's middle (BACK) and round side (F10) buttons.
+            // slot. button, with the KONKR top key's exact behaviour. So is
+            // the RG Rotate's middle (BACK) button. Its round side button
+            // (F10) is left to Android, which switches launchers with it.
             if (event.repeatCount == 0) {
-                if (RgRotate.middleKey(keyCode, event)) rotateMiddleDown = true
+                if (RgRotate.middleKey(keyCode, event)) {
+                    rotateMiddleDown = true
+                    rotateMiddleHeld = false
+                    uiHandler.removeCallbacks(rotateMiddleHold)
+                    uiHandler.postDelayed(rotateMiddleHold, RgRotate.HOLD_MS)
+                }
                 EmulationDiagnostics.input(keyCode, true, event, KeyEvent.KEYCODE_BUTTON_MODE)
                 warmedCandidate.set(null)
                 // Stage the key before waking a dozing shelf: no stale frame.
@@ -1635,9 +1657,13 @@ class MainActivity : Activity() {
         setIntent(intent)
         // RG Rotate: holding the middle button sends Android Home, which
         // brings back slot. (the home app). That hold is the slot. button's.
-        if (rotateMiddleDown && intent.hasCategory(Intent.CATEGORY_HOME)) {
+        val home = intent.hasCategory(Intent.CATEGORY_HOME) ||
+            intent.getBooleanExtra(SlotHomeActivity.EXTRA_HOME, false)
+        if (rotateMiddleDown && home) {
             rotateMiddleDown = false
-            nativeSlotButtonReleased(true)
+            uiHandler.removeCallbacks(rotateMiddleHold)
+            if (!rotateMiddleHeld) nativeSlotButtonReleased(true)
+            rotateMiddleHeld = false
         }
     }
 
@@ -1725,13 +1751,20 @@ class MainActivity : Activity() {
             nativeKey(button, false)
             return true
         }
-        if (isRetroidSlotKey(keyCode, event) || RgRotate.middleKey(keyCode, event) ||
-            RgRotate.sideKey(keyCode, event)) {
+        if (isRetroidSlotKey(keyCode, event) || RgRotate.middleKey(keyCode, event)) {
             EmulationDiagnostics.input(keyCode, false, event, KeyEvent.KEYCODE_BUTTON_MODE)
             warmedCandidate.set(null)
             wakeCarouselRender()
             val middle = RgRotate.middleKey(keyCode, event)
-            if (middle) rotateMiddleDown = false
+            if (middle) {
+                rotateMiddleDown = false
+                uiHandler.removeCallbacks(rotateMiddleHold)
+                // Already ejected by the hold: the release is nothing more.
+                if (rotateMiddleHeld) {
+                    rotateMiddleHeld = false
+                    return true
+                }
+            }
             if (event.isCanceled) {
                 // The system took a long press (RG Rotate): no tap. The
                 // middle button's is the slot. button held: eject.

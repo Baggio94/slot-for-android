@@ -504,6 +504,38 @@ impl Shelf {
         draw_empty_slot(out);
     }
 
+    /// The selected cart alone, whole, within `width` x `height` and centred on
+    /// (`cx`, `cy`): the closed RG Rotate's cover (Siham 2026-11-14).
+    /// `lift` 0 leaves it where the shelf draws it, 1 has it centred.
+    pub fn draw_selected_centred(&self, cx: f32, cy: f32, width: f32, height: f32,
+                                 lift: f32, alpha: f32, out: &mut Vec<Draw>) {
+        let Some(cart) = self.carts.get(self.index) else { return };
+        let (cw, ch) = shelf_box_for(cart);
+        let k = (height / ch.max(1.0)).min(width / cw.max(1.0));
+        let (w, h) = (cw * k, ch * k);
+        let (x, y) = (cx - w / 2.0, cy - h / 2.0);
+        let lift = lift.clamp(0.0, 1.0);
+        let lift = lift * lift * (3.0 - 2.0 * lift);
+        let (x, y, w, h) = match self.selected_rect() {
+            Some((x0, y0, w0, h0)) if lift < 1.0 => {
+                let mix = |a: f32, b: f32| a + (b - a) * lift;
+                (mix(x0, x), mix(y0, y), mix(w0, w), mix(h0, h))
+            }
+            _ => (x, y, w, h),
+        };
+        let body = self.shells.get(self.index).copied().unwrap_or_else(|| body_of(cart));
+        let backing = match body {
+            Body::Gba => self.shadow,
+            Body::Gb(GbShell::Notched) => self.gb_shadow,
+            Body::Gb(GbShell::Rounded) => self.gbc_shadow,
+            Body::Home(m) => self.home_shadows[m.index()],
+        };
+        out.push(match self.face(self.index).or(backing) {
+            Some(tex) => Draw::Tex { x, y, w, h, tex, alpha },
+            None => Draw::Rect { x, y, w, h, colour: [0.14, 0.14, 0.16, alpha] },
+        });
+    }
+
     pub fn draw_row(
         &self,
         hidden: Option<&str>,

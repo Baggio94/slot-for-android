@@ -81,6 +81,43 @@ pub fn draw_status_clock(
     (clock.w as f32, gauge)
 }
 
+/// `draw_status_clock`, the clock and the battery each grown `grow` times
+/// from its own corner (the closed RG Rotate, Siham 2026-11-14).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_status_clock_grown(
+    top: bool, grow: f32,
+    battery: Option<Battery>, percent: Printed, bolt: Option<TexId>,
+    clock: Printed, ink: [u8; 3], alpha: f32, out: &mut Vec<Draw>,
+) {
+    let mut parts = Vec::new();
+    draw_status_clock(top, battery, percent, bolt, clock, ink, &mut parts);
+    let line = if top { STATUS_TOP_Y } else { FOOTER_Y };
+    let margin = footer_margin(out_w());
+    // The clock comes last (when it has a face): it grows from the left
+    // corner, the battery's pieces from the right one.
+    let clock_at = if clock.w > 0 { parts.len().saturating_sub(1) } else { parts.len() };
+    let anchor_y = if top { line } else { line + HINT_H as f32 };
+    for (i, draw) in parts.into_iter().enumerate() {
+        let anchor_x = if i == clock_at { margin } else { out_w() as f32 - margin };
+        out.push(grown(draw, anchor_x, anchor_y, grow, alpha));
+    }
+}
+
+fn grown(draw: Draw, ax: f32, ay: f32, k: f32, fade: f32) -> Draw {
+    let place = |x: f32, y: f32, w: f32, h: f32| (ax + (x - ax) * k, ay + (y - ay) * k, w * k, h * k);
+    match draw {
+        Draw::Rect { x, y, w, h, colour } => {
+            let (x, y, w, h) = place(x, y, w, h);
+            Draw::Rect { x, y, w, h, colour: [colour[0], colour[1], colour[2], colour[3] * fade] }
+        }
+        Draw::Tex { x, y, w, h, tex, alpha } => {
+            let (x, y, w, h) = place(x, y, w, h);
+            Draw::Tex { x, y, w, h, tex, alpha: alpha * fade }
+        }
+        other => other,
+    }
+}
+
 /// The top icons' line (Android's status row, 12 px down, 24 high).
 const STATUS_TOP_Y: f32 = 12.0;
 

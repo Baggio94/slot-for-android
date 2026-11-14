@@ -199,6 +199,18 @@ pub fn word_ink(text: &str, ink: [u8; 3]) -> UndoFace {
     face.into_undo()
 }
 
+/// `word_ink` drawn `k` times finer, for the same logical size: the closed
+/// RG Rotate grows its clock and battery without blurring them.
+pub fn word_ink_scaled(text: &str, ink: [u8; 3], k: u32) -> UndoFace {
+    let k = k.max(1);
+    let mut face = Canvas::new(word_width(text) * k, HINT_H * k);
+    if let Some(font) = text::label_font() {
+        let layout = text::fit(font, text, face.w as f32, 1, LABEL_PX * k as f32, LABEL_MIN_PX * k as f32);
+        face.text(&layout, ink);
+    }
+    face.into_undo()
+}
+
 /// High-resolution shelf label for the KONKR's 960×640 panel.
 /// Render at 3× Slot's original 16px label size, then draw at 1/3.
 ///

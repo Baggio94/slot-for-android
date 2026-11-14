@@ -1,28 +1,20 @@
 package fyi.slot.konkr
 
 import android.animation.ValueAnimator
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Color
-import android.net.Uri
-import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.text.format.DateFormat
 import android.util.Log
-import android.view.Gravity
 import android.view.InputDevice
 import android.view.KeyEvent
-import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
-import java.util.Date
 
 /**
  * Anbernic RG Rotate: a square screen that swivels shut over the controls.
@@ -31,13 +23,16 @@ import java.util.Date
  * - middle button: KEYCODE_BACK from "retrogame_joypad". Android takes a hold
  *   of 0.5 s or more to go Home, which brings slot. back as the home app.
  * - round side button: KEYCODE_F10 from "retrogame_joypad". The system takes
- *   a hold of 0.5 s or more to switch launchers; slot. can't stop it.
+ *   a hold of 0.5 s or more to switch launchers; slot. leaves it alone
+ *   (Siham, 2026-11-14: a tap there inserted the cart before the switch).
  * - lid (hall sensor): KEYCODE_F12 from "gpio-keys", down when it closes and
  *   up when it opens.
  */
 internal object RgRotate {
     private const val PAD = "retrogame_joypad"
     private const val LID = "gpio-keys"
+    /** The middle button's hold, ejecting before Android's own at 0.5 s. */
+    const val HOLD_MS = 400L
 
     val device: Boolean by lazy {
         // ro.product.model "RG Rotate", maker "Anbernic" (Siham's, 2026-11-14).
@@ -53,10 +48,6 @@ internal object RgRotate {
     fun middleKey(keyCode: Int, event: KeyEvent): Boolean =
         device && keyCode == KeyEvent.KEYCODE_BACK && from(event, PAD)
 
-    /** The round side button: the slot. button's taps only. */
-    fun sideKey(keyCode: Int, event: KeyEvent): Boolean =
-        device && keyCode == KeyEvent.KEYCODE_F10 && from(event, PAD)
-
     fun lidKey(keyCode: Int, event: KeyEvent): Boolean =
         device && keyCode == KeyEvent.KEYCODE_F12 && from(event, LID)
 
@@ -71,22 +62,25 @@ internal object RgRotate {
 }
 
 /**
- * The closed RG Rotate. The native shelf draws the cartridge (the game's,
- * seated, or a slowly drifting shelf); this adds the time and battery,
- * dims the screen, then lets Android put it to sleep.
+ * The closed RG Rotate. The native shelf draws the cover (the game's cartridge,
+ * or the shelf), grows the status line's clock and battery and fades the
+ * other icons; this dims the screen, then turns it off.
+ *
+ * Android never ends its screen timeout while the Rotate is shut: the lid is
+ * a held key whose repeats count as user activity every 100 ms (measured on
+ * Siham's Rotate, 2026-11-14). So slot. turns the screen off itself, with the
+ * "Lock the screen" device admin right, asked once.
  */
 internal class LidCover(
     private val activity: MainActivity,
-    frame: FrameLayout,
+    private val icons: () -> SlotStatusIndicators?,
 ) {
     companion object {
-        private const val DIM_AFTER_MS = 15_000L
-        /** Screen off this long after the screen dims. */
-        private const val SLEEP_AFTER_DIM_MS = 60_000L
-        private const val STEP_MS = 6_000L
         private const val DIM_LEVEL = 0.03f
+        /** A shortened screen timeout 2.4.0-menus6 may have left behind. */
         private const val SAVED_TIMEOUT = "rotate_saved_screen_off_timeout"
-        private const val ASKED_SETTINGS = "rotate_asked_write_settings"
+        private const val ASKED_ADMIN = "rotate_asked_device_admin"
+        private const val STEP_MS = 6_000L
     }
 
     var closed = false
@@ -94,47 +88,12 @@ internal class LidCover(
     private val handler = Handler(Looper.getMainLooper())
     private var dimmer: ValueAnimator? = null
     private var screenReceiver: BroadcastReceiver? = null
+    private val admin = ComponentName(activity, SlotDeviceAdmin::class.java)
+    private val policy get() = activity.getSystemService(DevicePolicyManager::class.java)
 
-    private val clock = TextView(activity).apply {
-        typeface = SlotUi.font(activity)
-        textSize = 56f
-        letterSpacing = .04f
-        setTextColor(Color.argb(235, 242, 242, 245))
-        setShadowLayer(12f, 0f, 2f, Color.argb(200, 0, 0, 0))
-        gravity = Gravity.CENTER_HORIZONTAL
-    }
-    private val battery = TextView(activity).apply {
-        typeface = SlotUi.font(activity)
-        textSize = 15f
-        letterSpacing = .08f
-        setTextColor(Color.argb(200, 242, 242, 245))
-        setShadowLayer(8f, 0f, 1f, Color.argb(200, 0, 0, 0))
-        gravity = Gravity.CENTER_HORIZONTAL
-    }
-    private val face = LinearLayout(activity).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER_HORIZONTAL
-        isClickable = false
-        isFocusable = false
-        visibility = View.GONE
-        addView(clock)
-        addView(battery)
-    }
+    init { restoreOldTimeout() }
 
-    init {
-        frame.addView(face, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
-            topMargin = SlotUi.dp(activity, 36)
-        })
-        restoreTimeout()
-    }
-
-    private val tick = object : Runnable {
-        override fun run() {
-            if (!closed) return
-            showTime()
-            handler.postDelayed(this, 1_000L)
-        }
-    }
+    val canSleep: Boolean get() = policy?.isAdminActive(admin) == true
 
     private val step = object : Runnable {
         override fun run() {
@@ -149,16 +108,21 @@ internal class LidCover(
 
     private val dim = Runnable { if (closed) fade(DIM_LEVEL) }
 
+    private val sleep = Runnable {
+        if (!closed) return@Runnable
+        if (canSleep) {
+            runCatching { policy?.lockNow() }
+                .onFailure { Log.w("SlotKonkr", "Rotate: lockNow refused", it) }
+        }
+    }
+
     fun close() {
         if (closed) return
         closed = true
         activity.nativeLidCover(true)
+        icons()?.fadeForLid(true, animations())
         activity.wakeCarouselFor(1_500L)
-        face.visibility = View.VISIBLE
-        showTime()
-        handler.post(tick)
         handler.postDelayed(step, STEP_MS)
-        shortenTimeout()
         listenScreen()
         awake()
     }
@@ -166,50 +130,65 @@ internal class LidCover(
     fun open() {
         if (!closed) return
         closed = false
-        handler.removeCallbacks(tick)
         handler.removeCallbacks(step)
         handler.removeCallbacks(dim)
+        handler.removeCallbacks(sleep)
         dimmer?.cancel()
         setBrightness(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE)
-        face.visibility = View.GONE
         stopListeningScreen()
-        restoreTimeout()
         activity.nativeLidCover(false)
+        icons()?.fadeForLid(false, animations())
         activity.wakeCarouselFor(1_500L)
-        askSettingsOnce()
+        askAdminOnce()
     }
 
-    /** A touch, or the screen back on: full brightness and a new countdown. */
+    /** A touch, or the screen back on: full brightness and a new countdown,
+     *  with the delays of Settings > Interface > RG Rotate. */
     fun awake() {
         if (!closed) return
         handler.removeCallbacks(dim)
+        handler.removeCallbacks(sleep)
         dimmer?.cancel()
         setBrightness(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE)
-        handler.postDelayed(dim, DIM_AFTER_MS)
+        val config = activity.nativeRotateDelays()
+        val (dimS, sleepS) = config[0] to config[1]
+        // No game and the Black cover: straight to sleep.
+        if (config[2] != 0 && !activity.nativeIsPlaying()) {
+            handler.postDelayed(sleep, 800L)
+            return
+        }
+        val dimMs = dimS * 1_000L
+        handler.postDelayed(dim, dimMs)
+        // 0: never sleep on its own.
+        if (sleepS > 0) handler.postDelayed(sleep, dimMs + sleepS * 1_000L)
     }
 
+    private fun animations() = activity.nativeRotateDelays().getOrElse(3) { 1 } != 0
+
     fun onResume() {
-        if (!closed) return
-        face.visibility = View.VISIBLE
-        handler.removeCallbacks(tick)
-        handler.post(tick)
-        awake()
+        activity.nativeRotateCanSleep(canSleep)
+        if (closed) awake()
     }
 
     fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         stopListeningScreen()
-        restoreTimeout()
     }
 
-    private fun showTime() {
-        clock.text = DateFormat.getTimeFormat(activity).format(Date())
-        val manager = activity.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-        val level = manager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
-        val charging = manager?.isCharging == true
-        battery.text = if (level in 0..100) {
-            "$level%" + if (charging) "  CHARGING" else ""
-        } else ""
+    /** Settings > Interface > RG Rotate > Sleep When Closed. */
+    fun requestAdmin() {
+        runCatching {
+            activity.startActivity(Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+                .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
+                .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                    "Lets slot. turn the screen off once your closed RG Rotate has dimmed. " +
+                        "You can turn it off again in Settings > Interface > RG Rotate."))
+        }.onFailure { Log.w("SlotKonkr", "Rotate: device admin page refused", it) }
+    }
+
+    fun removeAdmin() {
+        runCatching { policy?.removeActiveAdmin(admin) }
+        handler.postDelayed({ activity.nativeRotateCanSleep(canSleep) }, 500L)
     }
 
     private fun fade(to: Float) {
@@ -231,30 +210,18 @@ internal class LidCover(
 
     private fun prefs() = activity.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
 
-    /** Android's own screen timeout, made to end the countdown: it turns the
-     *  screen off this long after the last touch, as slot. can't itself. */
-    private fun shortenTimeout() {
-        if (!Settings.System.canWrite(activity)) return
-        runCatching {
-            val resolver = activity.contentResolver
-            if (!prefs().contains(SAVED_TIMEOUT)) {
-                val current = Settings.System.getInt(resolver, Settings.System.SCREEN_OFF_TIMEOUT)
-                prefs().edit().putInt(SAVED_TIMEOUT, current).commit()
-            }
-            Settings.System.putInt(resolver, Settings.System.SCREEN_OFF_TIMEOUT,
-                (DIM_AFTER_MS + SLEEP_AFTER_DIM_MS).toInt())
-        }.onFailure { Log.w("SlotKonkr", "Rotate: screen timeout not changed", it) }
-    }
-
-    /** Puts the player's own timeout back; also after a crash while closed. */
-    private fun restoreTimeout() {
+    /** 2.4.0-menus6 shortened Android's screen timeout while closed; put the
+     *  player's own back if it was left behind (it can no longer write it
+     *  without that permission: then just forget it). */
+    private fun restoreOldTimeout() {
         if (!prefs().contains(SAVED_TIMEOUT)) return
-        if (!Settings.System.canWrite(activity)) return
         runCatching {
-            Settings.System.putInt(activity.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT,
-                prefs().getInt(SAVED_TIMEOUT, 30 * 60_000))
-            prefs().edit().remove(SAVED_TIMEOUT).apply()
-        }.onFailure { Log.w("SlotKonkr", "Rotate: screen timeout not restored", it) }
+            if (Settings.System.canWrite(activity)) {
+                Settings.System.putInt(activity.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT,
+                    prefs().getInt(SAVED_TIMEOUT, 30 * 60_000))
+            }
+        }
+        prefs().edit().remove(SAVED_TIMEOUT).apply()
     }
 
     private fun listenScreen() {
@@ -273,25 +240,20 @@ internal class LidCover(
         screenReceiver = null
     }
 
-    /** The first time the Rotate is opened without the permission: ask for it
-     *  once, so a closed Rotate can go to sleep on its own. */
-    private fun askSettingsOnce() {
-        if (Settings.System.canWrite(activity)) return
-        if (prefs().getBoolean(ASKED_SETTINGS, false)) return
-        prefs().edit().putBoolean(ASKED_SETTINGS, true).apply()
+    /** The first time the Rotate is opened without the right: ask once. */
+    private fun askAdminOnce() {
+        if (canSleep) return
+        if (prefs().getBoolean(ASKED_ADMIN, false)) return
+        prefs().edit().putBoolean(ASKED_ADMIN, true).apply()
         handler.postDelayed({
             if (activity.isFinishing || activity.isDestroyed) return@postDelayed
             val dialog = SlotModalDialog(activity, "SLEEP WHEN CLOSED",
-                "To let the RG Rotate dim and then sleep a minute after you close it, " +
-                    "allow slot. to modify system settings. Your screen timeout comes back " +
-                    "as soon as you open it.")
+                "To let your RG Rotate go to sleep after you close it, slot. needs to be " +
+                    "able to turn the screen off. Android will ask you to activate it.")
             dialog.addButton("NOT NOW") { dialog.dismiss() }
             dialog.addButton("ALLOW") {
                 dialog.dismiss()
-                runCatching {
-                    activity.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS,
-                        Uri.parse("package:" + activity.packageName)))
-                }
+                requestAdmin()
             }
             dialog.show()
         }, 600L)

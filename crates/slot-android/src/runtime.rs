@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_void, CString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use crate::game::GameSession;
 use crate::settings::Settings;
 use crate::emulation::EmulationProfile;
@@ -487,6 +487,8 @@ enum ShelfOverlay {
     GameplaySettings { row: usize },
     EmulationSettings { row: usize },
     InterfaceSettings { row: usize },
+    /// Settings > Interface > RG Rotate.
+    RotateSettings { row: usize },
     GeneralSettings { row: usize },
     /// Settings > Controls, and its Port 1 / Port 2 pages.
     ControlsSettings { row: usize },
@@ -516,7 +518,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 138] = [
+const MENU_TEXT: [&str; 146] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -655,6 +657,14 @@ const MENU_TEXT: [&str; 138] = [
     "RomM Server",                        // 135, Library, after Choose ROM Folder
     "Upscaler",                           // 136, GBA Video Screen (Siham 2026-11-10)
     "Sensitivity",                        // 137, tilt and gyro games (Siham 2026-11-12)
+    "RG Rotate",                          // 138, Interface, on that console only (Siham 2026-11-14)
+    "RG ROTATE",                          // 139
+    "In Game",                            // 140, what the closed Rotate shows
+    "No Game",                            // 141
+    "Dim After",                          // 142
+    "Sleep After",                        // 143
+    "Sleep When Closed",                  // 144, the "Lock the screen" right
+    "Animations",                         // 145
 ];
 
 /// Settings > Systems, top to bottom.
@@ -668,7 +678,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 121] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 136] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -698,7 +708,65 @@ const SETTING_VALUE_NAMES: [&str; 121] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Pixel Transparency", "Sunlight Shimmer",
                                "Dot Matrix Color",
                                "Bilinear", "FSR", "Anime4K Fast", "Anime4K",
-                               "MAX", "crt-royale", "OLED"];
+                               "MAX", "crt-royale", "OLED",
+                               // RG Rotate (ROTATE_VALUES on): keep these 15 last.
+                               "INSERTED CART", "FULL CART", "LAST FRAME",
+                               "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
+                               "5 S", "10 S", "15 S", "30 S", "1 MIN", "2 MIN", "5 MIN", "NEVER"];
+/// The first RG Rotate value in SETTING_VALUE_NAMES.
+const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 15;
+/// Settings > Interface > RG Rotate: its rows and their keys (85, Sleep
+/// When Closed, is Android's "Lock the screen" right, not a setting).
+const ROTATE_ROWS: [usize; 6] = [140, 141, 142, 143, 144, 145];
+const ROTATE_KEYS: [usize; 6] = [80, 81, 82, 83, 85, 84];
+/// Android holds slot.'s "Lock the screen" right (RG Rotate).
+pub(crate) static ROTATE_CAN_SLEEP: AtomicBool = AtomicBool::new(false);
+/// RG Rotate's dim and sleep delays in s, packed dim << 16 | sleep, bit 30
+/// the black cover with no game, bit 31 animations on.
+pub(crate) static ROTATE_DELAYS: AtomicU32 = AtomicU32::new(15 << 16 | 60 | 1 << 31);
+
+/// An Anbernic RG Rotate (ro.product.model "RG Rotate", Siham's, 2026-11-14).
+fn rg_rotate() -> bool {
+    DEVICE_NAME.lock().unwrap_or_else(|e| e.into_inner()).1.contains("RG Rotate")
+}
+
+/// A near-square panel (the RG Rotate, the Retroid Pocket Classic): no room
+/// on the console bar for the clock, battery or icons, so they stay on top
+/// and Status Bar doesn't offer the bar (Siham 2026-11-14). 4:3 still does.
+fn near_square_panel() -> bool {
+    let packed = PANEL_SIZE.load(Ordering::Acquire);
+    let (w, h) = ((packed >> 32) as u32, packed as u32);
+    if w == 0 || h == 0 { return false; }
+    (w.max(h) as f32 / w.min(h) as f32) < 1.25
+}
+
+/// The RG Rotate's close and open animations, in s.
+const LID_ANIMATION_S: f32 = 0.45;
+
+/// A draw scaled `k` times about (`cx`, `cy`), moved down `dy`, faded.
+fn lid_place(draw: Draw, cx: f32, cy: f32, k: f32, dy: f32, fade: f32) -> Draw {
+    let place = |x: f32, y: f32, w: f32, h: f32| (cx + (x - cx) * k, cy + (y - cy) * k + dy, w * k, h * k);
+    match draw {
+        Draw::Rect { x, y, w, h, colour } => {
+            let (x, y, w, h) = place(x, y, w, h);
+            Draw::Rect { x, y, w, h, colour: [colour[0], colour[1], colour[2], colour[3] * fade] }
+        }
+        Draw::Tex { x, y, w, h, tex, alpha } => {
+            let (x, y, w, h) = place(x, y, w, h);
+            Draw::Tex { x, y, w, h, tex, alpha: alpha * fade }
+        }
+        Draw::Turned { x, y, w, h, tex, alpha, turn } => {
+            let (x, y, w, h) = place(x, y, w, h);
+            Draw::Turned { x, y, w, h, tex, alpha: alpha * fade, turn }
+        }
+        other => other,
+    }
+}
+
+fn interface_rows() -> (&'static [usize], &'static [usize]) {
+    if near_square_panel() { (&INTERFACE_ROWS[2..], &INTERFACE_KEYS[2..]) }
+    else { (&INTERFACE_ROWS, &INTERFACE_KEYS) }
+}
 
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
@@ -811,6 +879,13 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             }
         }
         69 => if scoped.dither_blend_md { 4 } else { 5 },
+        80 => ROTATE_VALUES + usize::from(settings.rotate_game_cover.min(2)),
+        81 => ROTATE_VALUES + 3 + usize::from(settings.rotate_shelf_cover.min(3)),
+        82 => ROTATE_VALUES + 7 + usize::from(settings.rotate_dim.min(3)),
+        83 => match settings.rotate_delays().1 { 30 => ROTATE_VALUES + 10, 60 => ROTATE_VALUES + 11,
+            120 => ROTATE_VALUES + 12, 300 => ROTATE_VALUES + 13, _ => ROTATE_VALUES + 14 },
+        84 => if settings.rotate_animations { 4 } else { 5 },
+        85 => if ROTATE_CAN_SLEEP.load(Ordering::Acquire) { 4 } else { 5 },
         70 => match scoped.upscaler_gbav {
             crate::settings::Upscaler::Off => 5,
             crate::settings::Upscaler::Bilinear => 114,
@@ -1255,6 +1330,13 @@ struct Engine {
     /// cartridge; with no game the shelf drifts, back where it was on opening.
     lid_covered: bool,
     lid_shelf_index: Option<(usize, usize)>,
+    /// 0 open .. 1 closed: the close and open animations' progress.
+    lid_t: f32,
+    /// LidStep ticks (6 s) since the last Random Cart.
+    lid_ticks: u32,
+    /// The clock and battery percentage drawn three times finer, so they
+    /// grow without blurring: (text, dark ink, texture, logical width).
+    lid_faces: [(String, bool, Option<slot_gfx::TexId>, u32); 2],
     /// SELECT is physically down, whatever screen has the input.
     select_physical: bool,
     /// SELECT+X / SELECT+START presses whose releases are still to consume.
@@ -1927,6 +2009,9 @@ impl Engine {
             mode_down_at: None,
             lid_covered: false,
             lid_shelf_index: None,
+            lid_t: 0.0,
+            lid_ticks: 0,
+            lid_faces: Default::default(),
             select_physical: false,
             combo_releases: 0,
             eject_sound_armed: false,
@@ -3413,29 +3498,34 @@ impl Engine {
             Input::LidCover(closed) => {
                 if closed == self.lid_covered { return; }
                 self.lid_covered = closed;
+                if !self.settings.rotate_animations { self.lid_t = if closed { 1.0 } else { 0.0 }; }
                 if self.game.is_some() { return; }
                 if closed {
-                    if let Some(shelf) = self.shelves.get_mut(self.active) {
-                        let n = shelf.carts.len();
-                        if n > 1 {
-                            self.lid_shelf_index = Some((self.active, shelf.index));
-                            let seed = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map_or(0, |d| d.subsec_nanos() as usize);
-                            shelf.select(seed % n);
-                        }
+                    self.lid_ticks = 0;
+                    self.lid_shelf_index = self.shelves.get(self.active).map(|s| (self.active, s.index));
+                    match self.settings.rotate_shelf_cover {
+                        0 | 2 => self.lid_random_cart(),
+                        1 => self.lid_last_played(),
+                        _ => {}
                     }
                 } else if let Some((active, index)) = self.lid_shelf_index.take() {
-                    if active == self.active {
-                        if let Some(shelf) = self.shelves.get_mut(active) {
-                            if index < shelf.carts.len() { shelf.select(index); }
-                        }
+                    if active < self.shelves.len() && !self.shelves[active].carts.is_empty() {
+                        self.active = active;
+                        if index < self.shelves[active].carts.len() { self.shelves[active].select(index); }
                     }
                 }
             }
             Input::LidStep => {
                 if self.lid_covered && self.game.is_none() && matches!(self.overlay, ShelfOverlay::None) {
-                    if let Some(shelf) = self.shelves.get_mut(self.active) { shelf.right(); }
+                    match self.settings.rotate_shelf_cover {
+                        0 => if let Some(shelf) = self.shelves.get_mut(self.active) { shelf.right(); },
+                        2 => {
+                            self.lid_ticks += 1;
+                            // One a minute: ten of Android's 6 s steps.
+                            if self.lid_ticks >= 10 { self.lid_ticks = 0; self.lid_random_cart(); }
+                        }
+                        _ => {}
+                    }
                 }
             }
             Input::Exit => {
@@ -4187,14 +4277,31 @@ impl Engine {
                             },
                             ShelfOverlay::InterfaceSettings { row } => match code {
                                 19 | 20 => self.overlay = ShelfOverlay::InterfaceSettings {
-                                    row: move_menu_row(row, code, INTERFACE_ROWS.len(), self.menu_repeat_dispatch),
+                                    row: move_menu_row(row, code, interface_rows().0.len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 | 96 => {
-                                    if let Some(&key) = INTERFACE_KEYS.get(row) {
+                                    if let Some(&key) = interface_rows().1.get(row) {
                                         self.change_setting(key, code != 21);
                                     }
                                 },
                                 97 => self.overlay = ShelfOverlay::Settings { row: 5 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::RotateSettings { row } => match code {
+                                19 | 20 => self.overlay = ShelfOverlay::RotateSettings {
+                                    row: move_menu_row(row, code, ROTATE_ROWS.len(), self.menu_repeat_dispatch),
+                                },
+                                21 | 22 | 96 => match ROTATE_KEYS.get(row).copied() {
+                                    // Android's own page grants the right; slot. gives it back.
+                                    Some(85) => UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                        .push_back(if ROTATE_CAN_SLEEP.load(Ordering::Acquire) { 61 } else { 60 }),
+                                    Some(key) => self.change_setting(key, code != 21),
+                                    None => {}
+                                },
+                                97 => self.overlay = ShelfOverlay::GeneralSettings {
+                                    row: self.general_rows().iter().position(|&r| r == 138).unwrap_or(0),
+                                },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -5846,6 +5953,7 @@ impl Engine {
         let mut rows=vec![83]; // Wallpaper
         if self.settings.wallpaper == crate::settings::WallpaperPick::Shelf {rows.push(133);}
         rows.extend_from_slice(&[84,85,86,87,43,45]);
+        if rg_rotate() { rows.push(138); }
         rows
     }
     /// A row shown but idle: Wallpaper Tint over no personal image, Delete
@@ -5877,6 +5985,7 @@ impl Engine {
                 self.wallpaper_shelf = self.active;
             }
             133 => self.cycle_wallpaper_shelf(right),
+            138 if confirm => self.overlay = ShelfOverlay::RotateSettings { row: 0 },
             84 if self.show_general_tint() => self.cycle_wallpaper_tint(right),
             85 => self.cycle_appearance(right),
             86 => {
@@ -5994,6 +6103,142 @@ impl Engine {
                     !self.inserted && self.progress > 0.0);
             } else {
                 commands.push(Draw::Game);
+            }
+        }
+    }
+
+    /// The closed Rotate's shelf on a cart at random (its own shelf).
+    fn lid_random_cart(&mut self) {
+        let Some(shelf) = self.shelves.get_mut(self.active) else { return };
+        let n = shelf.carts.len();
+        if n < 2 { return; }
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos() as usize ^ d.as_secs() as usize);
+        let mut next = seed % n;
+        if next == shelf.index { next = (next + 1) % n; }
+        shelf.select(next);
+    }
+
+    /// The closed Rotate's shelf on the last cart played, on its system's
+    /// shelf (Recents keeps the order; the cart is found by its ROM).
+    fn lid_last_played(&mut self) {
+        let Some(root) = Self::recents_root() else { return };
+        let Some(uri) = crate::recents::load(&root).into_iter().next() else { return };
+        for (rack, shelf) in self.shelves.iter_mut().enumerate() {
+            if rack >= RECENTS_RACK { break; }
+            if let Some(i) = shelf.carts.iter().position(|c| c.rom.to_string_lossy() == uri.as_str()) {
+                self.active = rack;
+                shelf.select(i);
+                return;
+            }
+        }
+    }
+
+    /// The clock and percentage faces, finer, in `dark` or white ink.
+    fn refresh_lid_faces(&mut self, dark: bool) {
+        let percent = self.battery.map(|b| format!("{}%", b.percent.min(100))).unwrap_or_default();
+        let texts = [self.clock_text.clone(), percent];
+        for (slot, text) in self.lid_faces.iter_mut().zip(texts) {
+            if slot.0 == text && slot.1 == dark && slot.2.is_some() { continue; }
+            if text.is_empty() { *slot = (text, dark, slot.2, 0); continue; }
+            let face = slot_ui::word_ink_scaled(&text, slot_ui::footer_ink(dark), 3);
+            let tex = match slot.2 {
+                Some(tex) => { self.gpu.update_face(tex, &face); tex }
+                None => self.gpu.create_face(&face),
+            };
+            *slot = (text.clone(), dark, Some(tex), slot_ui::word_width(&text));
+        }
+    }
+
+    /// The closed Rotate's clock and battery, grown from their corners
+    /// on the top line as the lid closes (`t` 0..1).
+    fn push_lid_status(&mut self, dark: bool, alpha: f32, commands: &mut Vec<Draw>) {
+        self.refresh_lid_faces(dark);
+        let printed = |f: &(String, bool, Option<slot_gfx::TexId>, u32)|
+            f.2.filter(|_| f.3 > 0).map_or(Printed::default(), |tex| Printed::new(tex, f.3));
+        let (clock, percent) = (printed(&self.lid_faces[0]), printed(&self.lid_faces[1]));
+        let bolt = Some(if dark { self.bolt_light_texture } else { self.bolt_texture });
+        slot_ui::draw_status_clock_grown(true, 1.0 + self.lid_t, self.battery, percent, bolt,
+            clock, slot_ui::footer_ink(dark), alpha, commands);
+    }
+
+    /// The closed Rotate in a game (Settings > Interface > RG Rotate > In
+    /// Game): the screen switches off like a CRT, then the cover comes in.
+    fn draw_lid_game(&mut self) {
+        let t = self.lid_t;
+        let mode = self.settings.rotate_game_cover;
+        let mut commands = Vec::new();
+        if mode == 2 {
+            // The game's last frame, dimmed.
+            self.gpu.set_screen_power(1.0);
+            commands.push(Draw::Game);
+            commands.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+                colour: [0.0, 0.0, 0.0, 0.62 * t] });
+            self.push_lid_status(false, t, &mut commands);
+        } else {
+            let screen = (1.0 - t * 2.0).clamp(0.0, 1.0);
+            let cover = ((t - 0.5) * 2.0).clamp(0.0, 1.0);
+            if screen > 0.0 {
+                self.gpu.set_screen_power(screen);
+                commands.push(Draw::Game);
+            }
+            let mut scene = Vec::new();
+            if mode == 0 {
+                self.push_lid_scene(&mut scene);
+            } else {
+                scene.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+                    colour: menu_style::page_ground([0.085, 0.085, 0.093, 1.0]) });
+                if let Some(shelf) = self.shelves.get(self.active) {
+                    shelf.draw_selected_centred(out_w() as f32 / 2.0, OUT_H as f32 * 0.55,
+                        out_w() as f32 * 0.62, OUT_H as f32 * 0.56, 1.0, 1.0, &mut scene);
+                }
+            }
+            // The cover settles in, a touch closer as it comes.
+            let k = 0.94 + 0.06 * cover;
+            let (cx, cy) = (out_w() as f32 / 2.0, OUT_H as f32 / 2.0);
+            commands.extend(scene.into_iter().map(|d| lid_place(d, cx, cy, k, 0.0, cover)));
+            self.push_lid_status(false, cover, &mut commands);
+        }
+        self.gpu.fit(self.size);
+        self.gpu.begin_frame();
+        self.gpu.draw_list(&commands);
+        self.gpu.end_frame(self.size);
+    }
+
+    /// The closed Rotate with no game, over the shelf already drawn: the
+    /// shelf steps back from the top line (Drifting Shelf), or the cover
+    /// rises over it (Last Played, Random Cart), or the screen goes dark.
+    fn push_lid_shelf(&self, commands: &mut Vec<Draw>) {
+        let t = self.lid_t;
+        match self.settings.rotate_shelf_cover {
+            0 => {
+                // Shrunk from its foot, the shelf leaves the top line free.
+                let k = 1.0 - 0.12 * t;
+                let (cx, cy) = (out_w() as f32 / 2.0, OUT_H as f32);
+                // The wallpaper (what covers the whole screen) stays put.
+                let whole = |x: f32, y: f32, w: f32, h: f32|
+                    x <= 0.5 && y <= 0.5 && x + w >= out_w() as f32 - 0.5 && y + h >= OUT_H as f32 - 0.5;
+                for draw in commands.iter_mut() {
+                    let keep = match *draw {
+                        Draw::Rect { x, y, w, h, .. } | Draw::Tex { x, y, w, h, .. } => whole(x, y, w, h),
+                        _ => true,
+                    };
+                    if !keep { *draw = lid_place(*draw, cx, cy, k, 0.0, 1.0); }
+                }
+            }
+            mode => {
+                commands.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+                    colour: if mode == 3 { [0.0, 0.0, 0.0, t] }
+                        else { let g = menu_style::page_ground([0.085, 0.085, 0.093, 1.0]);
+                               [g[0], g[1], g[2], 0.94 * t] } });
+                if mode != 3 {
+                    if let Some(shelf) = self.shelves.get(self.active) {
+                        // The shelf's own cart lifts to the middle.
+                        shelf.draw_selected_centred(out_w() as f32 / 2.0, OUT_H as f32 * 0.55,
+                            out_w() as f32 * 0.62, OUT_H as f32 * 0.56, t,
+                            (t * 4.0).min(1.0), commands);
+                    }
+                }
             }
         }
     }
@@ -6654,7 +6899,11 @@ impl Engine {
                 self.draw_settings_menu(82,&rows,row,&keys,out);
             }
             ShelfOverlay::InterfaceSettings { row } => {
-                self.draw_settings_menu(59, &INTERFACE_ROWS, row, &INTERFACE_KEYS, out);
+                let (rows, keys) = interface_rows();
+                self.draw_settings_menu(59, rows, row, keys, out);
+            }
+            ShelfOverlay::RotateSettings { row } => {
+                self.draw_settings_menu(139, &ROTATE_ROWS, row, &ROTATE_KEYS, out);
             }
             ShelfOverlay::EmulationSettings { row } => {
                 self.draw_settings_menu(50, &[51, 52, 55], row, &[10, 11, 12], out);
@@ -7023,6 +7272,10 @@ impl Engine {
         let phase_native_started = Instant::now();
         LINK_ACTIVE.store(self.game.as_ref().is_some_and(|game| game.linked()), Ordering::Release);
         self.tick_menu_repeat();
+        let (dim, sleep) = self.settings.rotate_delays();
+        ROTATE_DELAYS.store(u32::from(dim) << 16 | u32::from(sleep)
+            | u32::from(self.settings.rotate_shelf_cover == 3) << 30
+            | u32::from(self.settings.rotate_animations) << 31, Ordering::Release);
         self.refresh_system_status();
         self.poll_shelf_wallpapers();
         // Poll the already-running achievement evaluator without blocking GL.
@@ -7070,6 +7323,11 @@ impl Engine {
             else { elapsed.min(0.05) };
         self.last = now;
         let mut cover_with_hold = false;
+        {
+            let goal = if self.lid_covered { 1.0 } else { 0.0 };
+            let step = if self.settings.rotate_animations { elapsed.min(0.05) / LID_ANIMATION_S } else { 1.0 };
+            self.lid_t = if goal > self.lid_t { (self.lid_t + step).min(goal) } else { (self.lid_t - step).max(goal) };
+        }
 
         // Measure real libretro simulation FPS independently of the optional
         // performance HUD. No display toggles or simulation timing changes.
@@ -7217,7 +7475,8 @@ impl Engine {
             ShelfOverlay::GeneralSettings { row } =>
                 (12u8, row, self.general_rows().len()),
             ShelfOverlay::About { row } => (17u8, row, 2usize),
-            ShelfOverlay::InterfaceSettings { row } => (10u8, row, INTERFACE_ROWS.len()),
+            ShelfOverlay::InterfaceSettings { row } => (10u8, row, interface_rows().0.len()),
+            ShelfOverlay::RotateSettings { row } => (18u8, row, ROTATE_ROWS.len()),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
             ShelfOverlay::PauseEmulationSettings { row } =>
                 (9u8, row, self.pause_emulation_rows().len()),
@@ -7360,17 +7619,12 @@ impl Engine {
             }
         }
 
-        if self.game.is_some() && self.lid_covered {
-            // RG Rotate closed: the game waits, its cartridge in the slot and
-            // the screen off. No libretro frame, so no audio either.
+        if self.game.is_some() && (self.lid_covered || self.lid_t > 0.0) {
+            // RG Rotate closed: the game waits under its cover. No libretro
+            // frame, so no audio either, until the lid is open again.
             if let Some(game) = self.game.as_mut() { game.set_link_paused(true); }
             self.game_accum = 0.0;
-            let mut commands = Vec::new();
-            self.push_lid_scene(&mut commands);
-            self.gpu.fit(self.size);
-            self.gpu.begin_frame();
-            self.gpu.draw_list(&commands);
-            self.gpu.end_frame(self.size);
+            self.draw_lid_game();
             return;
         }
         if self.game.is_some() && matches!(self.overlay, ShelfOverlay::States) {
@@ -8081,6 +8335,8 @@ impl Engine {
             self.gpu.end_frame(self.size);
             return;
         }
+        let lid = self.game.is_none() && self.lid_t > 0.0;
+        if lid { self.push_lid_shelf(&mut commands); }
         // Keep the upper indicators on the identical visibility lifecycle
         // as Slot's footer: only on an idle, menu-free cartridge carousel.
         // A first run shows its sentence alone: no clock, battery or icons
@@ -8097,8 +8353,9 @@ impl Engine {
             if light { indicator_flags |= 16; } // theme ink for Android Wi-Fi/task glyphs
             // Settings > Status Bar: where the icons and the clock go. On
             // the same line they share it, the icons on the left.
-            let clock_top = self.settings.clock_on_top;
-            let icons_bottom = self.settings.icons_on_bottom;
+            let near_square = near_square_panel();
+            let clock_top = self.settings.clock_on_top || near_square;
+            let icons_bottom = self.settings.icons_on_bottom && !near_square;
             let icons = self.settings.show_wifi || self.settings.show_bluetooth
                 || self.settings.show_integrations;
             let grouped = icons && clock_top != icons_bottom;
@@ -8113,10 +8370,20 @@ impl Engine {
             if line_dark(icons_bottom) { indicator_flags |= 256; }
             let dark_ink = line_dark(!clock_top);
             if dark_ink != self.footer_inked_dark { self.recolour_footer_text_to(dark_ink); }
-            let (clock_w, battery_w) = slot_ui::draw_status_clock(clock_top,
-                self.battery, self.battery_face,
-                Some(if dark_ink {self.bolt_light_texture} else {self.bolt_texture}),
-                self.clock_face, slot_ui::footer_ink(dark_ink), &mut commands);
+            let (clock_w, battery_w) = if lid {
+                // The closed Rotate grows them in their corners; the Black
+                // cover hides them, and over a cover the ink is white.
+                if self.settings.rotate_shelf_cover != 3 {
+                    let ink_dark = dark_ink && self.settings.rotate_shelf_cover == 0;
+                    self.push_lid_status(ink_dark, 1.0, &mut commands);
+                }
+                (0.0, 0.0)
+            } else {
+                slot_ui::draw_status_clock(clock_top,
+                    self.battery, self.battery_face,
+                    Some(if dark_ink {self.bolt_light_texture} else {self.bolt_texture}),
+                    self.clock_face, slot_ui::footer_ink(dark_ink), &mut commands)
+            };
             // Sharing the line, the icons sit after the clock and before the
             // battery: Android places them from these widths (8 bits each).
             if grouped {
@@ -8615,7 +8882,9 @@ mod settings_value_tests {
             for key in GAMEPLAY_KEYS {
                 keys.push(("Gameplay".into(), key, platform));
             }
-            for key in INTERFACE_KEYS.into_iter().chain([10, 11, 12]).chain(16..=20) {
+            for key in INTERFACE_KEYS.into_iter().chain([10, 11, 12]).chain(16..=20)
+                // 85 is Android's "Lock the screen" right, not a setting.
+                .chain(ROTATE_KEYS.into_iter().filter(|&key| key != 85)) {
                 keys.push(("Interface/Emulation/General".into(), key, platform));
             }
         }

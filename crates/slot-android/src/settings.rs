@@ -488,6 +488,17 @@ pub struct Settings {
     /// Apps: only the running ones, instead of the stopped ones dimmed.
     #[serde(default)]
     pub apps_running_only: bool,
+    /// Settings > Interface > RG Rotate (that console only), what the closed
+    /// Rotate shows: in a game, 0 the cart inserted, 1 the whole cart in the
+    /// middle, 2 the game's last frame dimmed; with no game, 0 the drifting
+    /// shelf, 1 the last cart played, 2 a cart at random each minute, 3
+    /// nothing (Siham 2026-11-14).
+    pub rotate_game_cover: u8,
+    pub rotate_shelf_cover: u8,
+    /// Dim after ROTATE_DIM_S[i], then sleep ROTATE_SLEEP_S[i] later.
+    pub rotate_dim: u8,
+    pub rotate_sleep: u8,
+    pub rotate_animations: bool,
     /// Cart Studio's size step (SELECT), the same for every system; 0, two
     /// big carts, is the default (Siham 2026-11-10).
     #[serde(default)]
@@ -573,6 +584,8 @@ impl Default for Settings {
             show_wifi: false, show_bluetooth: false, show_integrations: false,
             time_format: TimeFormat::TwentyFourHour,
             clock_on_top: false, icons_on_bottom: false, apps_running_only: false,
+            rotate_game_cover: 1, rotate_shelf_cover: 1, rotate_dim: 2, rotate_sleep: 1,
+            rotate_animations: true,
             cart_studio_size: 0,
             status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
@@ -928,6 +941,11 @@ impl Settings {
                 *blending = blending.step(right);
             }
             66 => self.lcd_effect_gba = self.lcd_effect_gba.step(right),
+            80 => self.rotate_game_cover = step_index(self.rotate_game_cover, 3, right),
+            81 => self.rotate_shelf_cover = step_index(self.rotate_shelf_cover, 4, right),
+            82 => self.rotate_dim = step_index(self.rotate_dim, ROTATE_DIM_S.len() as u8, right),
+            83 => self.rotate_sleep = step_index(self.rotate_sleep, ROTATE_SLEEP_S.len() as u8, right),
+            84 => self.rotate_animations = !self.rotate_animations,
             70 => self.upscaler_gbav = self.upscaler_gbav.step(right),
             67 => self.lcd_effect_gbc = self.lcd_effect_gbc.step(right),
             68 => self.lcd_effect_gb = self.lcd_effect_gb.step(right),
@@ -987,6 +1005,23 @@ impl Settings {
             .unwrap_or(GbPalette::DEFAULT).core_name()
     }
 }
+/// RG Rotate closed: seconds before it dims, then before it sleeps (0 never).
+pub const ROTATE_DIM_S: [u16; 4] = [5, 10, 15, 30];
+pub const ROTATE_SLEEP_S: [u16; 5] = [30, 60, 120, 300, 0];
+
+/// The next of `count` choices, round.
+fn step_index(value: u8, count: u8, right: bool) -> u8 {
+    let value = value.min(count - 1);
+    if right { (value + 1) % count } else { (value + count - 1) % count }
+}
+
+impl Settings {
+    pub fn rotate_delays(&self) -> (u16, u16) {
+        (ROTATE_DIM_S[usize::from(self.rotate_dim).min(ROTATE_DIM_S.len() - 1)],
+         ROTATE_SLEEP_S[usize::from(self.rotate_sleep).min(ROTATE_SLEEP_S.len() - 1)])
+    }
+}
+
 /// One live Palette row, as slot. 1.8.1: OFF, then every palette in order,
 /// then OFF again. Left walks the same ring backwards.
 fn step_palette(on: &mut bool, index: &mut u8, right: bool) {

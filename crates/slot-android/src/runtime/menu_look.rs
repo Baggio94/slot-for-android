@@ -262,7 +262,7 @@ impl Engine {
             26 if game => "Game Menu",
             26 => "Menu",
             33 | 50 if game => "Game Menu \u{203a} Settings",
-            59 => "Settings \u{203a} Interface",
+            59 | 139 => "Settings \u{203a} Interface",
             33 | 50 | 82 | 117 => "Menu \u{203a} Settings",
             91..=93 | 121..=123 => "Settings \u{203a} Systems",
             _ => "",
@@ -293,6 +293,8 @@ impl Engine {
             19 => matches!(item, 22 | 25 | 66 | 134),
             // Library's RomM Server.
             5 => item == 135,
+            // Interface's RG Rotate.
+            82 => item == 138,
             // A system's Controls.
             91..=93 | 121..=123 => item == 125,
             _ => false,
@@ -306,6 +308,7 @@ impl Engine {
             | ShelfOverlay::Multiplayer | ShelfOverlay::About { .. } => "",
             ShelfOverlay::CartStudio | ShelfOverlay::CartLibrary | ShelfOverlay::Romm => self.studio_page_path(),
             ShelfOverlay::InterfaceSettings { .. } => self.menu_path(59),
+            ShelfOverlay::RotateSettings { .. } => self.menu_path(139),
             ShelfOverlay::ControlsSettings { .. } | ShelfOverlay::ControlsPort { .. }
             | ShelfOverlay::LayoutPorts { .. } | ShelfOverlay::LayoutPort { .. }
             | ShelfOverlay::Hotkeys { .. } | ShelfOverlay::Cheats { .. } => self.controls_path(),
@@ -714,5 +717,38 @@ mod render {
         save(&engine, &dir, "14_slide_b.png");
         engine.overlay = ShelfOverlay::GameMenu { row: 0 };
         shoot(&mut engine, &dir, "15_game_menu.png");
+    }
+
+    /// $SCRATCH_ROTATE: the RG Rotate's pages and its closed covers.
+    #[test]
+    fn render_rotate() {
+        let Ok(dir) = std::env::var("SCRATCH_ROTATE") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        PANEL_SIZE.store(720 << 32 | 720, Ordering::Release);
+        *DEVICE_NAME.lock().unwrap() = ("Anbernic RG Rotate".into(), "RG Rotate".into());
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        *SYSTEM_STATUS.lock().unwrap() = SystemStatus { clock: "21:42".into(),
+            battery: Some(Battery { percent: 76, charge: Charge::Discharging }) };
+        SYSTEM_STATUS_REV.fetch_add(1, Ordering::Release);
+        shoot(&mut engine, &dir, "00_home.png");
+        engine.overlay = ShelfOverlay::GeneralSettings { row: 7 };
+        shoot(&mut engine, &dir, "01_interface.png");
+        engine.overlay = ShelfOverlay::RotateSettings { row: 0 };
+        shoot(&mut engine, &dir, "02_rg_rotate.png");
+        engine.overlay = ShelfOverlay::InterfaceSettings { row: 0 };
+        shoot(&mut engine, &dir, "03_status_bar.png");
+        engine.overlay = ShelfOverlay::None;
+        for (mode, name) in [(0, "drifting_shelf"), (1, "last_played"), (2, "random_cart"), (3, "black")] {
+            engine.settings.rotate_shelf_cover = mode;
+            engine.handle(Input::LidCover(true));
+            // Halfway through the close, then closed.
+            for _ in 0..12 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+            save(&engine, &dir, &format!("1{mode}_{name}_closing.png"));
+            shoot(&mut engine, &dir, &format!("1{mode}_{name}.png"));
+            engine.handle(Input::LidCover(false));
+            shoot(&mut engine, &dir, &format!("1{mode}_{name}_open.png"));
+        }
     }
 }

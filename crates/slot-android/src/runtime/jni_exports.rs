@@ -809,6 +809,29 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLidCover(
 ) { push(Input::LidCover(closed != 0)); }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRotateCanSleep(
+    _env: *mut c_void, _this: *mut c_void, active: jboolean,
+) { ROTATE_CAN_SLEEP.store(active != 0, Ordering::Release); }
+
+/// Settings > Interface > RG Rotate: [dim after s, sleep after s (0 never),
+/// black cover with no game, animations].
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRotateDelays<'a>(
+    mut env: JNIEnv<'a>, _this: JObject<'a>,
+) -> jni::sys::jintArray {
+    let packed = ROTATE_DELAYS.load(Ordering::Acquire);
+    let values = [((packed >> 16) & 0x3fff) as i32, (packed & 0xffff) as i32,
+        ((packed >> 30) & 1) as i32, ((packed >> 31) & 1) as i32];
+    match env.new_int_array(4) {
+        Ok(array) => {
+            let _ = env.set_int_array_region(&array, 0, &values);
+            array.into_raw()
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLidStep(
     _env: *mut c_void, _this: *mut c_void,
 ) { push(Input::LidStep); }

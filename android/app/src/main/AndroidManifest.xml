@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -12,10 +11,6 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- RG Rotate only, granted by the player: a closed Rotate's screen
-         timeout is shortened so it sleeps, then put back on opening. -->
-    <uses-permission android:name="android.permission.WRITE_SETTINGS"
-        tools:ignore="ProtectedPermissions" />
     <queries>
         <!-- Only the explicitly supported optional status integrations. -->
         <package android:name="com.med.sleepmanager" />
@@ -48,8 +43,19 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Never changes the home app silently; user explicitly grants
-                 Home role via Apps -> Set as Home. -->
+        </activity>
+        <!-- slot. as the home app. Android keeps a home app in a task of its
+             own, so Home went to a second slot. when slot. had been opened
+             another way (RG Rotate, 2026-11-14): this one only brings back
+             the slot. already running. Never changes the home app silently;
+             user explicitly grants Home role via Apps -> Set as Home. -->
+        <activity
+            android:name=".SlotHomeActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="fyi.slot.konkr.home"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
@@ -64,6 +70,20 @@
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/slot_update_paths" />
         </provider>
+        <!-- RG Rotate: "Lock the screen" only, so a closed Rotate can sleep.
+             Its lid acts as a held key that Android repeats as user
+             activity, which keeps the screen timeout from ever ending. -->
+        <receiver android:name=".SlotDeviceAdmin"
+            android:exported="true"
+            android:label="slot."
+            android:description="@string/slot_device_admin_description"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data android:name="android.app.device_admin"
+                android:resource="@xml/slot_device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
         <activity android:name=".AppsActivity"
             android:exported="false"
             android:screenOrientation="landscape" />
