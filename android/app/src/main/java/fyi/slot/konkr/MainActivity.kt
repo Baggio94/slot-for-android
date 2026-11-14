@@ -66,6 +66,7 @@ import android.view.InputEvent
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowManager
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -154,13 +155,14 @@ class MainActivity : Activity() {
     external fun nativeMenuPalette(): Long
     external fun nativeMenuDarkInk(): Int
     external fun nativeIsPlaying(): Boolean
+    external fun nativeGameUnpaused(): Boolean
     external fun nativeSlotButtonReleased(held: Boolean)
     external fun nativeLidCover(closed: Boolean)
     external fun nativeLidStep()
     /** Settings > Interface > RG Rotate: [dim after s, sleep after s (0 never),
      *  black cover with no game (1), animations (1)]. */
     external fun nativeRotateDelays(): IntArray
-    external fun nativeRotateCanSleep(active: Boolean)
+    external fun nativeRotateSleepState(state: Int)
     external fun nativeCarouselQuiet(): Boolean
     external fun nativeWarmRomCandidate(): String?
     external fun nativeCanRefreshLibrary(): Boolean
@@ -869,11 +871,13 @@ class MainActivity : Activity() {
                 }
             }
             updateRomWarmCandidate()
-            if (resumed && nativeIsPlaying() && !(::lidCover.isInitialized && lidCover.closed)) {
+            val playing = resumed && nativeIsPlaying() && !(::lidCover.isInitialized && lidCover.closed)
+            if (playing) {
                 if (!audioRunning.get()) startAudio()
             } else if (audioRunning.get()) {
                 stopAudio()
             }
+            keepScreenOn(playing && nativeGameUnpaused())
             drainPendingSaveFlush()
             val request = nativePollLaunchUri()
             if (request != null) {
@@ -912,6 +916,7 @@ class MainActivity : Activity() {
                 12 -> removeSelectedCartLabel()
                 60 -> if (::lidCover.isInitialized) lidCover.requestAdmin()
                 61 -> if (::lidCover.isInitialized) lidCover.removeAdmin()
+                62 -> if (::lidCover.isInitialized) lidCover.openLockSettings()
                 30 -> requestStudioArt()
                 32 -> requestStudioGameArt(1)
                 33 -> requestStudioPicture()
@@ -1649,6 +1654,19 @@ class MainActivity : Activity() {
 
     /** Keys slot. reads: its own, plus any gamepad button a controller may
      *  send instead (C, Z, 1-16...), which Settings > Controls can map. */
+    private var screenKeptOn = false
+
+    /** A game running (not paused, not under the closed RG Rotate's cover)
+     *  keeps the screen on: a cut-scene or a slow puzzle without a press no
+     *  longer sends the console to sleep (Siham, 2026-11-14). Menus and the
+     *  shelf keep Android's own screen timeout. */
+    private fun keepScreenOn(on: Boolean) {
+        if (on == screenKeptOn) return
+        screenKeptOn = on
+        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
     private fun readsKey(keyCode: Int): Boolean =
         keyCode in BUTTONS || KeyEvent.isGamepadButton(keyCode)
 

@@ -809,9 +809,9 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLidCover(
 ) { push(Input::LidCover(closed != 0)); }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRotateCanSleep(
-    _env: *mut c_void, _this: *mut c_void, active: jboolean,
-) { ROTATE_CAN_SLEEP.store(active != 0, Ordering::Release); }
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRotateSleepState(
+    _env: *mut c_void, _this: *mut c_void, state: jint,
+) { ROTATE_SLEEP_STATE.store(state.clamp(0, 2) as u8, Ordering::Release); }
 
 /// Settings > Interface > RG Rotate: [dim after s, sleep after s (0 never),
 /// black cover with no game, animations].
@@ -849,6 +849,11 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSuspend(
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeIsPlaying(
     _env: *mut c_void, _this: *mut c_void,
 ) -> jboolean { PLAYING.load(Ordering::Acquire) as jboolean }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGameUnpaused(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jboolean { GAME_UNPAUSED.load(Ordering::Acquire) as jboolean }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioSpeedPermille(

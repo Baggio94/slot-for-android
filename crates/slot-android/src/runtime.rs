@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_void, CString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU8, AtomicU64, Ordering};
 use crate::game::GameSession;
 use crate::settings::Settings;
 use crate::emulation::EmulationProfile;
@@ -678,7 +678,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 136] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 137] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -709,18 +709,22 @@ const SETTING_VALUE_NAMES: [&str; 136] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Dot Matrix Color",
                                "Bilinear", "FSR", "Anime4K Fast", "Anime4K",
                                "MAX", "crt-royale", "OLED",
-                               // RG Rotate (ROTATE_VALUES on): keep these 15 last.
+                               // RG Rotate (ROTATE_VALUES on): keep these 16 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
-                               "5 S", "10 S", "15 S", "30 S", "1 MIN", "2 MIN", "5 MIN", "NEVER"];
+                               "5 S", "10 S", "15 S", "30 S", "1 MIN", "2 MIN", "5 MIN", "NEVER",
+                               "NEEDS SWIPE LOCK"];
 /// The first RG Rotate value in SETTING_VALUE_NAMES.
-const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 15;
+const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 16;
 /// Settings > Interface > RG Rotate: its rows and their keys (85, Sleep
 /// When Closed, is Android's "Lock the screen" right, not a setting).
 const ROTATE_ROWS: [usize; 6] = [140, 141, 142, 143, 144, 145];
 const ROTATE_KEYS: [usize; 6] = [80, 81, 82, 83, 85, 84];
-/// Android holds slot.'s "Lock the screen" right (RG Rotate).
-pub(crate) static ROTATE_CAN_SLEEP: AtomicBool = AtomicBool::new(false);
+/// A game runs with nothing over it (Android keeps the screen on).
+pub(crate) static GAME_UNPAUSED: AtomicBool = AtomicBool::new(false);
+/// Sleep When Closed (RG Rotate): 0 off, 1 on (slot. holds Android's "Lock
+/// the screen" right), 2 on but the Rotate has no lock screen to sleep under.
+pub(crate) static ROTATE_SLEEP_STATE: AtomicU8 = AtomicU8::new(0);
 /// RG Rotate's dim and sleep delays in s, packed dim << 16 | sleep, bit 30
 /// the black cover with no game, bit 31 animations on.
 pub(crate) static ROTATE_DELAYS: AtomicU32 = AtomicU32::new(15 << 16 | 60 | 1 << 31);
@@ -885,7 +889,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         83 => match settings.rotate_delays().1 { 30 => ROTATE_VALUES + 10, 60 => ROTATE_VALUES + 11,
             120 => ROTATE_VALUES + 12, 300 => ROTATE_VALUES + 13, _ => ROTATE_VALUES + 14 },
         84 => if settings.rotate_animations { 4 } else { 5 },
-        85 => if ROTATE_CAN_SLEEP.load(Ordering::Acquire) { 4 } else { 5 },
+        85 => match ROTATE_SLEEP_STATE.load(Ordering::Acquire) {
+            1 => 4, 2 => ROTATE_VALUES + 15, _ => 5 },
         70 => match scoped.upscaler_gbav {
             crate::settings::Upscaler::Off => 5,
             crate::settings::Upscaler::Bilinear => 114,
@@ -4295,7 +4300,8 @@ impl Engine {
                                 21 | 22 | 96 => match ROTATE_KEYS.get(row).copied() {
                                     // Android's own page grants the right; slot. gives it back.
                                     Some(85) => UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
-                                        .push_back(if ROTATE_CAN_SLEEP.load(Ordering::Acquire) { 61 } else { 60 }),
+                                        .push_back(match ROTATE_SLEEP_STATE.load(Ordering::Acquire) {
+                                            1 => 61, 2 => 62, _ => 60 }),
                                     Some(key) => self.change_setting(key, code != 21),
                                     None => {}
                                 },
@@ -7272,6 +7278,10 @@ impl Engine {
         let phase_native_started = Instant::now();
         LINK_ACTIVE.store(self.game.as_ref().is_some_and(|game| game.linked()), Ordering::Release);
         self.tick_menu_repeat();
+        // A game on screen, no menu or polaroid over it: Android keeps the
+        // screen on (MainActivity.keepScreenOn).
+        GAME_UNPAUSED.store(self.game.is_some() && matches!(self.overlay, ShelfOverlay::None)
+            && self.polaroids.is_none() && !self.exiting_screen, Ordering::Release);
         let (dim, sleep) = self.settings.rotate_delays();
         ROTATE_DELAYS.store(u32::from(dim) << 16 | u32::from(sleep)
             | u32::from(self.settings.rotate_shelf_cover == 3) << 30

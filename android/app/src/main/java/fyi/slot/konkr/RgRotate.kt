@@ -1,6 +1,7 @@
 package fyi.slot.konkr
 
 import android.animation.ValueAnimator
+import android.app.KeyguardManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.BroadcastReceiver
@@ -10,6 +11,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.view.InputDevice
@@ -70,6 +72,13 @@ internal object RgRotate {
  * a held key whose repeats count as user activity every 100 ms (measured on
  * Siham's Rotate, 2026-11-14). So slot. turns the screen off itself, with the
  * "Lock the screen" device admin right, asked once.
+ *
+ * Asleep, Android hands the lid's repeats to the lock screen. With none
+ * ("None" in Security), no window takes them and Android blames slot. after
+ * 5 s ("isn't responding") and kills it (Siham's Rotate, 2026-11-14). With
+ * Swipe, Anbernic lifts it when the lid opens: straight back to the game. So
+ * slot. checks a lock screen came up; if not it turns the screen back on,
+ * only dims from then on, and asks for Swipe.
  */
 internal class LidCover(
     private val activity: MainActivity,
@@ -80,6 +89,9 @@ internal class LidCover(
         /** A shortened screen timeout 2.4.0-menus6 may have left behind. */
         private const val SAVED_TIMEOUT = "rotate_saved_screen_off_timeout"
         private const val ASKED_ADMIN = "rotate_asked_device_admin"
+        /** The Rotate slept without a lock screen: dim only until Swipe is set. */
+        private const val NO_LOCK = "rotate_no_lock_screen"
+        private const val ASKED_LOCK = "rotate_asked_lock_screen"
         private const val STEP_MS = 6_000L
     }
 
@@ -94,6 +106,32 @@ internal class LidCover(
     init { restoreOldTimeout() }
 
     val canSleep: Boolean get() = policy?.isAdminActive(admin) == true
+    private val noLock: Boolean get() = prefs().getBoolean(NO_LOCK, false)
+    private val keyguard get() = activity.getSystemService(KeyguardManager::class.java)
+
+    /** Settings > Interface > RG Rotate > Sleep When Closed: 0 off, 1 on,
+     *  2 waiting for a lock screen. */
+    private fun sleepState() = when {
+        !canSleep -> 0
+        noLock -> 2
+        else -> 1
+    }
+
+    /** Half a second after lockNow, a lock screen should be up. */
+    private val checkLocked = Runnable {
+        if (!closed || keyguard?.isKeyguardLocked != false) return@Runnable
+        Log.w("SlotKonkr", "Rotate: no lock screen after lockNow; waking, dim only from now on")
+        prefs().edit().putBoolean(NO_LOCK, true).remove(ASKED_LOCK).apply()
+        activity.nativeRotateSleepState(sleepState())
+        // Back on before Android's 5 s: slot.'s window takes the lid's repeats.
+        runCatching {
+            @Suppress("DEPRECATION")
+            activity.getSystemService(PowerManager::class.java)
+                ?.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK or
+                    PowerManager.ACQUIRE_CAUSES_WAKEUP, "slot:rotate-no-lock")
+                ?.acquire(1_000L)
+        }.onFailure { Log.w("SlotKonkr", "Rotate: could not wake", it) }
+    }
 
     private val step = object : Runnable {
         override fun run() {
@@ -110,15 +148,20 @@ internal class LidCover(
 
     private val sleep = Runnable {
         if (!closed) return@Runnable
-        if (canSleep) {
+        if (canSleep && !noLock) {
             runCatching { policy?.lockNow() }
                 .onFailure { Log.w("SlotKonkr", "Rotate: lockNow refused", it) }
+            handler.postDelayed(checkLocked, 500L)
+        } else {
+            // No sleep for slot. to give: as dark as the screen goes.
+            fade(0f)
         }
     }
 
     fun close() {
         if (closed) return
         closed = true
+        showOverLockScreen()
         activity.nativeLidCover(true)
         icons()?.fadeForLid(true, animations())
         activity.wakeCarouselFor(1_500L)
@@ -133,13 +176,42 @@ internal class LidCover(
         handler.removeCallbacks(step)
         handler.removeCallbacks(dim)
         handler.removeCallbacks(sleep)
+        handler.removeCallbacks(checkLocked)
         dimmer?.cancel()
         setBrightness(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE)
         stopListeningScreen()
+        leaveLockScreen()
         activity.nativeLidCover(false)
         icons()?.fadeForLid(false, animations())
         activity.wakeCarouselFor(1_500L)
-        askAdminOnce()
+        if (noLock) askLockOnce() else askAdminOnce()
+    }
+
+    /** Woken by the power key, slot. shows over a Swipe lock screen (the
+     *  one slot. needs to sleep under), never over a PIN, pattern or password. */
+    private fun showOverLockScreen() {
+        if (!RgRotate.device) return
+        activity.setShowWhenLocked(keyguard?.isDeviceSecure == false)
+    }
+
+    /** Anbernic lifts a Swipe lock screen as the lid opens, not on the power
+     *  key: slot. lifts it itself, straight back to the game. A PIN keeps its
+     *  own page. */
+    private fun leaveLockScreen() {
+        if (!RgRotate.device) return
+        showOverLockScreen()
+        val guard = keyguard ?: return
+        if (!guard.isKeyguardLocked || guard.isDeviceSecure) return
+        runCatching { guard.requestDismissKeyguard(activity, null) }
+            .onFailure { Log.w("SlotKonkr", "Rotate: lock screen not lifted", it) }
+    }
+
+    /** Settings > Security, to set Swipe; the next sleep checks again. */
+    fun openLockSettings() {
+        prefs().edit().remove(NO_LOCK).apply()
+        runCatching { activity.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
+            .onFailure { Log.w("SlotKonkr", "Rotate: security settings refused", it) }
+        handler.postDelayed({ activity.nativeRotateSleepState(sleepState()) }, 300L)
     }
 
     /** A touch, or the screen back on: full brightness and a new countdown,
@@ -166,8 +238,13 @@ internal class LidCover(
     private fun animations() = activity.nativeRotateDelays().getOrElse(3) { 1 } != 0
 
     fun onResume() {
-        activity.nativeRotateCanSleep(canSleep)
-        if (closed) awake()
+        activity.nativeRotateSleepState(sleepState())
+        if (closed) {
+            showOverLockScreen()
+            awake()
+        } else {
+            leaveLockScreen()
+        }
     }
 
     fun onDestroy() {
@@ -188,7 +265,7 @@ internal class LidCover(
 
     fun removeAdmin() {
         runCatching { policy?.removeActiveAdmin(admin) }
-        handler.postDelayed({ activity.nativeRotateCanSleep(canSleep) }, 500L)
+        handler.postDelayed({ activity.nativeRotateSleepState(sleepState()) }, 500L)
     }
 
     private fun fade(to: Float) {
@@ -238,6 +315,26 @@ internal class LidCover(
     private fun stopListeningScreen() {
         screenReceiver?.let { runCatching { activity.unregisterReceiver(it) } }
         screenReceiver = null
+    }
+
+    /** It slept with no lock screen: explain once, offer Security. */
+    private fun askLockOnce() {
+        if (prefs().getBoolean(ASKED_LOCK, false)) return
+        prefs().edit().putBoolean(ASKED_LOCK, true).apply()
+        handler.postDelayed({
+            if (activity.isFinishing || activity.isDestroyed) return@postDelayed
+            val dialog = SlotModalDialog(activity, "SLEEP WHEN CLOSED",
+                "Your RG Rotate has no lock screen, so Android can't let it sleep while " +
+                    "it is closed. Set Screen lock to Swipe (no code): you won't see it, " +
+                    "opening the Rotate goes straight back to your game. Until then, slot. " +
+                    "only dims the screen.")
+            dialog.addButton("NOT NOW") { dialog.dismiss() }
+            dialog.addButton("SETTINGS") {
+                dialog.dismiss()
+                openLockSettings()
+            }
+            dialog.show()
+        }, 600L)
     }
 
     /** The first time the Rotate is opened without the right: ask once. */
