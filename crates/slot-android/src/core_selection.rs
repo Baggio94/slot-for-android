@@ -22,6 +22,7 @@ pub fn selected(storage: &Path, uri: &str) -> Core {
 
 /// The system of a shelf cart, from the library Android handed over.
 fn platform_of(uri: &str) -> Option<Platform> {
+    if is_splore(uri) { return Some(Platform::Pico8); }
     let library = crate::library::LIBRARY.lock().unwrap_or_else(|e| e.into_inner());
     library.entries.as_ref()?.iter()
         .find(|entry| entry.uri == uri)
@@ -36,14 +37,11 @@ pub fn selected_for(storage: &Path, uri: &str, platform: Platform) -> Core {
     core_for_platform(storage, &key(uri), platform)
 }
 
-/// A cart named Splore.p8 opens PICO-8's Splore (cores/pico8real).
-pub fn is_splore(uri: &str) -> bool {
-    let lower = uri.to_ascii_lowercase();
-    let name = lower.rsplit(['/', ':']).next().unwrap_or(&lower);
-    let name = name.rsplit("%2f").next().unwrap_or(name);
-    let name = name.rsplit("%3a").next().unwrap_or(name);
-    name == "splore.p8"
-}
+/// Splore, PICO-8's own cart browser, is a cart of slot.'s own on the
+/// PICO-8 shelf (library_carts): it is not a file in the ROM folder.
+pub const SPLORE_URI: &str = "slot://pico8/Splore.p8";
+
+pub fn is_splore(uri: &str) -> bool { uri == SPLORE_URI }
 
 /// The board's pick for one cart; picking the system's default clears it.
 pub fn choose(storage: &Path, uri: &str, platform: Platform, core: Core) -> std::io::Result<()> {
@@ -62,10 +60,10 @@ pub fn set_default(storage: &Path, platform: Platform, core: Core) -> std::io::R
 mod tests {
     use super::*;
     #[test]
-    fn splore_is_a_cart_name() {
-        assert!(is_splore("content://com.android.externalstorage.documents/tree/primary%3ARoms/document/primary%3ARoms%2Fpico8%2FSplore.p8"));
-        assert!(is_splore("/sdcard/Roms/pico8/splore.p8"));
-        assert!(!is_splore("content://x/document/primary%3ARoms%2Fpico8%2Fnot_splore.p8"));
+    fn splore_is_slots_own_cart() {
+        assert!(is_splore(SPLORE_URI));
+        // a file of that name in the ROM folder is a cart like any other
+        assert!(!is_splore("content://com.android.externalstorage.documents/tree/primary%3ARoms/document/primary%3ARoms%2Fpico8%2FSplore.p8"));
         assert!(!is_splore("/sdcard/Roms/pico8/celeste.p8"));
     }
     #[test]

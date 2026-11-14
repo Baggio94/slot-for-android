@@ -18,6 +18,12 @@ internal object Systems {
     const val MD = "MD"
     const val P8 = "P8"
 
+    /** Splore, PICO-8's cart browser: slot.'s own cart on the PICO-8 shelf
+     *  (core_selection::SPLORE_URI), not a file in the ROM folder. */
+    const val SPLORE_URI = "slot://pico8/Splore.p8"
+    /** What the core is handed for Splore; it boots with -splore instead. */
+    const val SPLORE_CART = "pico-8 cartridge // http://www.pico-8.com\nversion 41\n__lua__\n-- splore\n"
+
     private val NES_EXT = setOf("nes", "fc", "unf", "unif")
     private val SNES_EXT = setOf("sfc", "smc")
     // .bin is shared with other systems: only a SEGA header makes it a Mega Drive cart.

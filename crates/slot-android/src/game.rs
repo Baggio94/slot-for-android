@@ -757,7 +757,10 @@ impl GameSession {
             }
             Core::Picodrive | Core::Fake08 => {}
             // Splore fetches through slot. (cores/pico8real has no HTTP of its own).
-            Core::Pico8 => crate::pico8::install_http(),
+            Core::Pico8 => {
+                crate::pico8::install_http();
+                core.set_option("pico8_boot", if crate::pico8::splore() { "splore" } else { "cart" });
+            }
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.

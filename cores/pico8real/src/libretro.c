@@ -3,7 +3,7 @@
 // PICO-8 itself is not in this library: it is the player's own copy of the
 // Raspberry Pi build (pico8_64 and pico8.dat), found in the system (BIOS)
 // directory as pico-8/pico8_64 and pico-8/pico8.dat. A cart named
-// splore.p8 opens Splore instead of a cart.
+// splore.p8 (or the core option pico8_boot=splore) opens Splore instead of a cart.
 #include "p8.h"
 #include <time.h>
 
@@ -20,6 +20,8 @@
 #define ENV_GET_LOG_INTERFACE 27
 #define ENV_GET_SAVE_DIRECTORY 31
 #define ENV_GET_INPUT_BITMASKS (51 | 0x10000)
+#define ENV_GET_VARIABLE 15
+struct retro_variable { const char *key, *value; };
 #define PIXEL_FORMAT_XRGB8888 1
 #define DEVICE_JOYPAD 1
 #define JOYPAD_MASK 256
@@ -167,8 +169,12 @@ bool retro_load_game(const struct retro_game_info *game) {
     const char *path = game && game->path ? game->path : NULL;
     const char *base = path ? strrchr(path, '/') : NULL;
     base = base ? base + 1 : path;
-    int splore = !path || !strncasecmp(base, "splore.", 7);
-    if (splore) {
+    // pico8_boot = splore: the frontend says this cart is Splore (slot.
+    // passes a cached copy under another name); else a cart named splore.*
+    struct retro_variable boot = {"pico8_boot", NULL};
+    int splore = env(ENV_GET_VARIABLE, &boot) && boot.value ? !strcmp(boot.value, "splore")
+                                                             : (!path || !strncasecmp(base, "splore.", 7));
+    if (!path || splore) {
         args[n++] = "-splore";
     } else {
         args[n++] = "-run";

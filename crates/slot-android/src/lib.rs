@@ -200,6 +200,16 @@ mod original_picker_integration_tests {
         assert_eq!(picker.chip(1500 + HOP_MS).across, 0.0);
         assert_eq!(picker.press(Press::Keep, 2000), Outcome::Write(Core::Mgba));
     }
+
+    #[test]
+    fn splore_keeps_its_chip_on_pico8() {
+        let mut picker = CorePicker::open_between(Core::Pico8, Core::Fake08, Core::Pico8, 0).only(Core::Pico8);
+        picker.start(0);
+        assert!(!picker.allows(Core::Fake08));
+        assert_eq!(picker.press(Press::Left, 500), Outcome::Refused);
+        assert_eq!(picker.seat(), Core::Pico8);
+        assert_eq!(picker.press(Press::Keep, 1000), Outcome::Write(Core::Pico8));
+    }
 }
 
 #[cfg(test)]

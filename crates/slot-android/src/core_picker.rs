@@ -53,6 +53,9 @@ pub struct CorePicker {
     hop: Option<Hop>,
     close: Option<Close>,
     refusal: Option<Refusal>,
+    /// The one core this cart runs on (Splore: PICO-8); the other socket
+    /// is greyed and the chip refuses to go there.
+    only: Option<Core>,
 }
 
 impl CorePicker {
@@ -78,7 +81,19 @@ impl CorePicker {
             hop: None,
             close: None,
             refusal: None,
+            only: None,
         }
+    }
+
+    /// The chip stays on `core`: the other socket is greyed.
+    pub fn only(mut self, core: Core) -> Self {
+        self.only = Some(core);
+        self
+    }
+
+    /// Whether the chip may go to `core`.
+    pub fn allows(&self, core: Core) -> bool {
+        self.only.is_none_or(|only| only == core)
     }
 
     pub fn start(&mut self, now: Millis) {
@@ -141,6 +156,10 @@ impl CorePicker {
         };
         if self.waiting() {
             return Outcome::Nothing;
+        }
+        if !self.allows(target) {
+            self.refusal = Some(Refusal::started(now));
+            return Outcome::Refused;
         }
         if let Some(progress) = self.hop_progress(now) {
             if target == self.seat {

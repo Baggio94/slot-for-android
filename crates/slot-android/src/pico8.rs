@@ -6,6 +6,36 @@ use std::time::Duration;
 /// Where BiosLibrary stages the Raspberry Pi build of PICO-8.
 pub const DIR: &str = "BIOS/pico-8";
 pub const MISSING: &str = "PICO-8 isn't in the BIOS folder.";
+/// Splore is part of PICO-8 itself, not a cart: fake-08 has nothing like it.
+pub const SPLORE_ONLY: &str = "Splore is part of PICO-8 itself. fake-08 can't run it.";
+pub const SPLORE_KEPT: &str = "Splore comes with PICO-8. It can't be deleted.";
+
+/// Splore's label (assets/pico8/splore-label.png): 128x128, PICO-8's palette.
+const SPLORE_LABEL: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/pico8/splore-label.png"));
+
+/// Splore as a cart on the PICO-8 shelf, first, while PICO-8 is installed.
+/// Its label is written once; Cart Studio may replace it like any other.
+pub fn splore_cart(storage: &Path) -> Option<slot_store::Cart> {
+    if !installed(storage) { return None; }
+    let uri = crate::core_selection::SPLORE_URI;
+    let label = storage.join("Labels").join(format!("{}.png", crate::core_selection::key(uri)));
+    if !label.exists() {
+        let _ = std::fs::create_dir_all(storage.join("Labels"));
+        if let Err(err) = slot_store::atomic_write(&label, SPLORE_LABEL) {
+            eprintln!("slot-konkr: Splore's label: {err}");
+        }
+    }
+    Some(slot_store::Cart {
+        platform: slot_store::Platform::Pico8,
+        stem: "Splore".into(),
+        title: "Splore".into(),
+        code: String::new(),
+        rom: uri.into(),
+        label: Some(label),
+        shell: None,
+        battery: false,
+    })
+}
 
 pub fn installed(storage: &Path) -> bool {
     let dir = storage.join(DIR);
@@ -42,6 +72,13 @@ fn fetch(url: &str, post: Option<&Path>, out: &Path) -> Result<(), Box<dyn std::
     std::fs::rename(&partial, out)?;
     Ok(())
 }
+
+static SPLORE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the game being opened is Splore.p8 (the core only sees a cached
+/// copy of the cart, under another name): read as the core option pico8_boot.
+pub fn set_splore(on: bool) { SPLORE.store(on, std::sync::atomic::Ordering::Relaxed); }
+pub fn splore() -> bool { SPLORE.load(std::sync::atomic::Ordering::Relaxed) }
 
 pub fn install_http() {
     slot_retro::set_http_hook(http);

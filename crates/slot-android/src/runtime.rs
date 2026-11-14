@@ -835,6 +835,9 @@ fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
             // Only app-private labels are used; never rewrite ROMs.
             cart.label = Some(root.join("Labels").join(filename));
         }
+        if let Some(splore) = library.and_then(|_| crate::pico8::splore_cart(root)) {
+            systems[Platform::Pico8 as usize].insert(0, splore);
+        }
     }
     let video = systems.pop().unwrap_or_default();
     (systems, video)
@@ -4163,8 +4166,14 @@ impl Engine {
                                 let now = self.born.elapsed().as_millis() as u64;
                                 if let Some(picker) = self.picker.as_mut() {
                                     match code {
-                                        21 => { picker.press(Press::Left, now); }
-                                        22 => { picker.press(Press::Right, now); }
+                                        21 | 22 => {
+                                            let press = if code == 21 { Press::Left } else { Press::Right };
+                                            let to = if code == 21 { picker.left() } else { picker.right() };
+                                            if picker.press(press, now) == crate::core_picker::Outcome::Refused
+                                                && !picker.allows(to) {
+                                                set_message(crate::pico8::SPLORE_ONLY.to_string());
+                                            }
+                                        }
                                         96 => {
                                             let core = picker.seat();
                                             let cart = &self.shelves[self.active].carts
@@ -4255,6 +4264,9 @@ impl Engine {
                             let mut picker = CorePicker::open_between(current_core,
                                 Core::primary_for(selected.platform),
                                 Core::alternate_for(selected.platform), now);
+                            if core_selection::is_splore(&selected.rom.to_string_lossy()) {
+                                picker = picker.only(Core::Pico8);
+                            }
                             // A clear cart's lid waits for its plastic without
                             // the board (start_waiting_picker), or the shelf
                             // face would lift with the board drawn on it.
@@ -4292,7 +4304,9 @@ impl Engine {
                             self.insert_started = Some(Instant::now());
                             self.a_down_at = self.insert_started;
                             self.fresh_launch = false;
-                            if uri.starts_with("content://") {
+                            // ROM files, and Splore (no file: Android hands the
+                            // core a stand-in, MainActivity.loadGameFromSaf)
+                            if uri.starts_with("content://") || core_selection::is_splore(&uri) {
                                 let uri = uri.into_owned();
                                 let platform = selected.platform;
                                 *LAUNCH_CORE.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -4580,6 +4594,8 @@ impl Engine {
                 core = Core::Mgba;
             }
             let core_file = library.join(format!("lib{}_libretro.so", core.as_str()));
+            // The core sees a cached copy, never the cart's name.
+            crate::pico8::set_splore(core == Core::Pico8 && core_selection::is_splore(uri));
             // First game still wakes RA if the asynchronous SAF scan has not run.
             // Perform this mutable operation BEFORE borrowing rom_stem.
             // GBA, GB and GBC use the verified per-console memory maps.
@@ -6688,7 +6704,8 @@ impl Engine {
             out.push(Draw::Tex {
                 x: x.round(), y: y.round(),
                 w: SOCKET_W as f32 * zoom, h: SOCKET_H as f32 * zoom,
-                tex, alpha: 1.0,
+                // a core this cart can't run on (fake-08 for Splore) is greyed
+                tex, alpha: if picker.allows(core) { 1.0 } else { 0.3 },
             });
         }
 
@@ -7705,6 +7722,8 @@ impl Engine {
             self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map(|cart|cart.rom.to_string_lossy().into_owned())
+                // only ROM files are copied ahead (Splore is none)
+                .filter(|uri|uri.starts_with("content://"))
         } else { None };
         let mut last = WARM_ROM_URI.lock().unwrap_or_else(|e|e.into_inner());
         if *last != candidate { *last = candidate; }
