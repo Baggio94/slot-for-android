@@ -61,7 +61,7 @@ fn quad(d: &Draw) -> Quad {
         Draw::Rect { x, y, w, h, .. }
         | Draw::Tex { x, y, w, h, .. }
         | Draw::Turned { x, y, w, h, .. } => Quad { x, y, w, h },
-        Draw::Game | Draw::Shot { .. } => Quad {
+        Draw::Game | Draw::Shot { .. } | Draw::Ink(_) => Quad {
             x: 0.0,
             y: 0.0,
             w: out_w() as f32,
@@ -111,7 +111,7 @@ fn alpha(d: &Draw) -> f32 {
     match *d {
         Draw::Rect { colour, .. } => colour[3],
         Draw::Tex { alpha, .. } | Draw::Turned { alpha, .. } => alpha,
-        Draw::Game | Draw::Shot { .. } => 1.0,
+        Draw::Game | Draw::Shot { .. } | Draw::Ink(_) => 1.0,
     }
 }
 

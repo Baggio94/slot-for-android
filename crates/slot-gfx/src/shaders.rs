@@ -1295,9 +1295,17 @@ pub const SPRITE_FRAG: &str = r#"
 precision mediump float;
 uniform sampler2D u_tex;
 uniform vec4 u_colour;
+// Draw::Ink: light ink (text, glyphs) redrawn from u_paper to u_ink by its
+// brightness, for menus on a light ground; u_map 0 leaves the texel alone.
+uniform float u_map;
+uniform vec3 u_paper;
+uniform vec3 u_ink;
 varying vec2 v_uv;
 void main() {
-    FRAG_COLOR = texture2D(u_tex, v_uv) * u_colour;
+    vec4 texel = texture2D(u_tex, v_uv);
+    float light = clamp(dot(texel.rgb, vec3(0.299, 0.587, 0.114)) * 1.04, 0.0, 1.0);
+    texel.rgb = mix(texel.rgb, mix(u_paper, u_ink, light), u_map);
+    FRAG_COLOR = texel * u_colour;
 }
 "#;
 

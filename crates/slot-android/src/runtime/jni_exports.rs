@@ -10,6 +10,15 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeMenuPalette(
     ((rgb(menu_style::menu_ground_rgb()) << 24) | rgb(menu_style::pill_rgb())) as i64
 }
 
+/// The menus' dark text in Light and Original (RGB), or -1 for white.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeMenuDarkInk(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jni::sys::jint {
+    menu_style::palette().and_then(|p| p.ink)
+        .map_or(-1, |c| (i32::from(c[0]) << 16) | (i32::from(c[1]) << 8) | i32::from(c[2]))
+}
+
 // The primitive JNI ABI is sufficient for this stage; no Java objects are touched.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(

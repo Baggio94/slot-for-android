@@ -413,7 +413,7 @@ impl Engine {
         let width = out_w() as f32;
         let fade = slot_ui::ease((self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
         let face = |text: &str, lit: bool| self.controls_faces.get(&Self::face_key(text, lit)).copied();
-        let tint = |a: f32| { let mut c = edge(); c[3] *= a * fade; c };
+        let tint = |a: f32| { let mut c = menu_style::highlight(); c[3] *= a * fade; c };
         self.draw_page_title(out, "CART STUDIO", fade);
         // How many of this system's carts still lack a label, right of the
         // title (Siham 2026-11-09): live, like the NO LABEL badges.
@@ -455,7 +455,7 @@ impl Engine {
             let (dw, dh) = (bw as f32 * s, bh as f32 * s);
             let (ix, iy) = (cx + (g.cell_w - dw) / 2.0, name_y - NAME_GAP - dh);
             match draft.map(|d| d.face).or_else(|| shelf.face(index)) {
-                Some(tex) => out.push(Draw::Tex { x: ix, y: iy, w: dw, h: dh, tex, alpha: fade }),
+                Some(tex) => self.without_ink(out, |out| out.push(Draw::Tex { x: ix, y: iy, w: dw, h: dh, tex, alpha: fade })),
                 None => out.push(Draw::Rect { x: ix, y: iy, w: dw, h: dh, colour: tint(0.5) }),
             }
             let badge = if draft.is_some() { Some("EDITED") }
@@ -464,8 +464,11 @@ impl Engine {
                 let s = 0.42f32.min((dw - 8.0).max(10.0) / w.max(1) as f32);
                 let (tw, th) = (w as f32 * s, h as f32 * s);
                 let (tx, ty) = (ix + (dw - tw) / 2.0, iy + dh - th - 10.0);
-                out.push(Draw::Rect { x: tx - 6.0, y: ty - 3.0, w: tw + 12.0, h: th + 6.0, colour: [0.0, 0.0, 0.0, 0.72 * fade] });
-                out.push(Draw::Tex { x: tx, y: ty, w: tw, h: th, tex, alpha: fade });
+                // A badge on the cart: white on black, as the cart's own art.
+                self.without_ink(out, |out| {
+                    out.push(Draw::Rect { x: tx - 6.0, y: ty - 3.0, w: tw + 12.0, h: th + 6.0, colour: [0.0, 0.0, 0.0, 0.72 * fade] });
+                    out.push(Draw::Tex { x: tx, y: ty, w: tw, h: th, tex, alpha: fade });
+                });
             }
             if let Some((tex, w, h)) = face(&slot_ui::label_text(cart), true) {
                 let s = 0.5f32.min((g.cell_w - 14.0) / w.max(1) as f32);
@@ -476,7 +479,7 @@ impl Engine {
         }
         // B with changes not saved: the question over the grid.
         if library.confirm {
-            out.push(Draw::Rect { x: 0.0, y: 60.0, w: width, h: 360.0, colour: [0.0, 0.0, 0.0, 0.6 * fade] });
+            out.push(Draw::Rect { x: 0.0, y: 60.0, w: width, h: 360.0, colour: menu_style::scrim(0.6 * fade) });
             if let Some((tex, w, h)) = face(&unsaved_note(library.drafts.len()), true) {
                 let s = 0.8f32.min((width - 60.0) / w.max(1) as f32);
                 let dw = w as f32 * s;
@@ -571,7 +574,7 @@ impl Engine {
         let strip = cells[start..end].iter().sum::<f32>() + TAB_GAP * (end - start).saturating_sub(1) as f32;
         let mut x = ((width - strip - key_w(l1) - key_w(r1)) / 2.0).max(32.0);
         let mid = y + 14.0;
-        let mut tint = edge();
+        let mut tint = menu_style::highlight();
         tint[3] *= fade;
         // Only one system: nothing to switch to, no keys.
         let keys = tabs.len() > 1;

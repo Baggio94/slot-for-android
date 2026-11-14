@@ -35,10 +35,76 @@ internal object SlotUi {
     val accent: Int = Color.rgb(210, 188, 134)
     val error: Int = Color.rgb(241, 160, 146)
 
-    /** Rust publishes the active theme, including custom colours and OLED. */
-    fun updateMenuPalette(packed: Long) {
-        menuBackground = 0xff000000.toInt() or ((packed ushr 24).toInt() and 0xffffff)
-        selected = 0xff000000.toInt() or (packed.toInt() and 0xffffff)
+    /** The menu pages' text (Apps, RetroAchievements, the dialogs): white,
+     * or dark on Light's and Original's light grounds. Toasts and the shelf's
+     * indicators keep `ink`. */
+    @Volatile var menuInk: Int = ink
+        private set
+    @Volatile var menuMuted: Int = muted
+        private set
+    @Volatile var menuRule: Int = rule
+        private set
+    @Volatile var menuSurface: Int = surface
+        private set
+    /** Set while the text is dark: Slot's white-rastered faces redrawn from
+     * the ground (dark) to the ink (light), as the native Draw::Ink does. */
+    @Volatile var menuInkFilter: android.graphics.ColorFilter? = null
+        private set
+
+    /** An Apps tile or the Set as Home button: Dark's own greys, else the
+     * theme's bar (chosen) on its tiles. */
+    fun appTile(chosen: Boolean, home: Boolean = false): Int = when {
+        menuSurface != surface -> if (chosen) selected else menuSurface
+        home -> if (chosen) Color.rgb(89, 87, 102) else Color.rgb(56, 55, 64)
+        else -> if (chosen) Color.rgb(68, 66, 77) else Color.rgb(37, 36, 43)
+    }
+
+    private fun blend(a: Int, b: Int, t: Float): Int = Color.rgb(
+        (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt(),
+        (Color.green(a) + (Color.green(b) - Color.green(a)) * t).toInt(),
+        (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt())
+
+    /** Rust publishes the active theme, including custom colours, OLED,
+     * Light and Original. `darkInk`: the RGB of the menus' dark text, or -1. */
+    fun updateMenuPalette(packed: Long, darkInk: Int = -1) {
+        val ground = 0xff000000.toInt() or ((packed ushr 24).toInt() and 0xffffff)
+        val pill = 0xff000000.toInt() or (packed.toInt() and 0xffffff)
+        if (ground == menuBackground && pill == selected &&
+            (darkInk == -1) == (menuInkFilter == null) &&
+            (darkInk == -1 || (0xff000000.toInt() or darkInk) == menuInk)) return
+        menuBackground = ground
+        selected = pill
+        if (darkInk == -1) {
+            menuInk = ink
+            menuMuted = muted
+            menuRule = rule
+            // Dark and OLED keep their tiles; Original's dark plastics tint theirs.
+            menuSurface = if (ground == Color.rgb(32, 32, 36) || ground == Color.BLACK) surface
+                else blend(ground, pill, .45f)
+            menuInkFilter = null
+        } else {
+            val dark = 0xff000000.toInt() or darkInk
+            menuInk = dark
+            menuMuted = blend(dark, ground, .38f)
+            menuRule = blend(dark, ground, .7f)
+            menuSurface = blend(ground, Color.BLACK, .06f)
+            val k = floatArrayOf(Color.red(dark) - Color.red(ground).toFloat(),
+                Color.green(dark) - Color.green(ground).toFloat(),
+                Color.blue(dark) - Color.blue(ground).toFloat())
+            val paper = floatArrayOf(Color.red(ground).toFloat(), Color.green(ground).toFloat(),
+                Color.blue(ground).toFloat())
+            val luma = floatArrayOf(.299f, .587f, .114f)
+            menuInkFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix(
+                FloatArray(20) { i ->
+                    val (row, col) = i / 5 to i % 5
+                    when {
+                        row == 3 -> if (col == 3) 1f else 0f
+                        col < 3 -> k[row] / 255f * luma[col]
+                        col == 4 -> paper[row]
+                        else -> 0f
+                    }
+                }))
+        }
     }
 
     fun rowBackground(context: Context, focused: Boolean): GradientDrawable =
@@ -57,7 +123,7 @@ internal object SlotUi {
                 "SAVE CONFLICT", "SAVE STATE" -> "LIBRARY"
                 else -> "slot."
             }
-            addView(label(context, path, 13f).apply {
+            addView(label(context, path, 13f, menuInk).apply {
                 setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuPixel(context, 13).toFloat())
                 letterSpacing = .15f
                 alpha = .5f
@@ -165,7 +231,7 @@ internal object SlotUi {
                 }
             }.getOrNull()
         }
-        if (image == null) return label(context, title, 16f, ink).apply {
+        if (image == null) return label(context, title, 16f, menuInk).apply {
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuPixel(context, 26).toFloat())
             setPadding(menuPixel(context, 16), 0, 0, 0)
         }
@@ -174,6 +240,7 @@ internal object SlotUi {
                 setImageBitmap(image)
                 scaleType = ImageView.ScaleType.FIT_XY
                 alpha = 1f
+                colorFilter = menuInkFilter
             }, android.widget.FrameLayout.LayoutParams(
                 menuPixel(context, (image.width * .79f / LEGEND_DENSITY).toInt()),
                 menuPixel(context, (image.height * .79f / LEGEND_DENSITY).toInt()),
@@ -200,15 +267,15 @@ internal object SlotUi {
         android.widget.LinearLayout(context).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            val cap = label(context, key, 12f, SlotUi.background).apply {
+            val cap = label(context, key, 12f, menuBackground).apply {
                 gravity = Gravity.CENTER
                 minWidth = dp(context, 23)
                 minHeight = dp(context, 21)
                 setPadding(dp(context, 5), 0, dp(context, 5), 0)
-                setBackgroundColor(ink)
+                setBackgroundColor(menuInk)
             }
             addView(cap)
-            val name = label(context, action, 12f, muted).apply {
+            val name = label(context, action, 12f, menuMuted).apply {
                 setPadding(dp(context, 7), 0, 0, 0)
             }
             addView(name)
@@ -241,6 +308,7 @@ internal object SlotUi {
                 setImageBitmap(image)
                 scaleType = ImageView.ScaleType.FIT_CENTER
                 isClickable = false
+                colorFilter = menuInkFilter
             }, android.widget.FrameLayout.LayoutParams(
                 (image.width * scale).toInt().coerceAtLeast(1),
                 (image.height * scale).toInt().coerceAtLeast(1),
@@ -261,8 +329,8 @@ internal object SlotUi {
             // re-apply upstream label.ttf AFTER masking/IME flags.
             typeface = font(context)
             textSize = 15f
-            setTextColor(ink)
-            setHintTextColor(muted)
+            setTextColor(menuInk)
+            setHintTextColor(menuMuted)
             letterSpacing = .04f
             imeOptions = if (password) EditorInfo.IME_ACTION_DONE
                 else EditorInfo.IME_ACTION_NEXT

@@ -19,7 +19,7 @@ mod surface;
 mod upscale;
 
 pub use bezel::{framed, lifted_rect, screen_rect};
-pub use draw::{Draw, TexId};
+pub use draw::{Draw, InkMap, TexId};
 pub use fbdev::{egl_error, panel_mode, panel_size, FbdevSurface};
 pub use fbo::{canvas_size, Compositor, EndFrameCpuPhases, BACKDROP};
 pub use grade::{blue_light_gain, BLUE_LIGHT_MAX};

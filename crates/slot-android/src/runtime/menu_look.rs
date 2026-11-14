@@ -53,9 +53,60 @@ impl Engine {
         let (x0, x1) = (x0.round(), x1.round());
         let (lw, rw, h) = (lw as f32, rw as f32, h as f32);
         if x1 - x0 < lw + rw { return; }
-        out.push(Draw::Tex { x: x0, y, w: lw, h, tex: left, alpha });
-        out.push(Draw::Tex { x: x0 + lw, y, w: x1 - x0 - lw - rw, h, tex: middle, alpha });
-        out.push(Draw::Tex { x: x1 - rw, y, w: rw, h, tex: right, alpha });
+        // The ends land on whole panel pixels (slot_gfx::on_grid): the
+        // middle spans exactly between them, or at a density such as the RG
+        // Rotate's 1.5 a hairline opens or doubles at a join.
+        let grid = panel_size().0 as f32 / out_w() as f32;
+        let middle_x0 = ((x0 * grid).round() + slot_ui::density::px(lw as u32) as f32) / grid;
+        let middle_x1 = ((x1 - rw) * grid).round() / grid;
+        let rows = panel_size().1 as f32 / OUT_H as f32;
+        let middle_y = (y * rows).round() / rows;
+        // The bar is already in the palette's colour.
+        self.without_ink(out, |out| {
+            out.push(Draw::Tex { x: x0, y, w: lw, h, tex: left, alpha });
+            out.push(Draw::Tex { x: middle_x0, y: middle_y, w: middle_x1 - middle_x0, h, tex: middle, alpha });
+            out.push(Draw::Tex { x: x1 - rw, y, w: rw, h, tex: right, alpha });
+        });
+    }
+
+    /// The Light or Original page's ink (menu_style::ink_map), on the pages
+    /// that take it: not the in-game Screen page over the game, nor the core
+    /// picker, Save States or Multiplayer, which keep their own art.
+    pub(super) fn menu_ink(&self) -> Option<slot_gfx::InkMap> {
+        if self.screen_panel() || matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::Core
+            | ShelfOverlay::States | ShelfOverlay::Multiplayer) { return None; }
+        menu_style::ink_map()
+    }
+
+    /// Art among a page's text (carts, covers, the bar): drawn as it is.
+    pub(super) fn without_ink(&self, out: &mut Vec<Draw>, draw: impl FnOnce(&mut Vec<Draw>)) {
+        let ink = self.menu_ink();
+        if ink.is_some() { out.push(Draw::Ink(None)); }
+        draw(out);
+        if ink.is_some() { out.push(Draw::Ink(ink)); }
+    }
+
+    /// Light, Original (the console of the cart on the slot) or Dark's
+    /// theme colours; the bar redrawn when they change.
+    pub(super) fn update_menu_palette(&mut self) {
+        use crate::settings::Appearance;
+        let want = match self.settings.appearance {
+            Appearance::Light => Some(menu_style::MenuPalette::LIGHT),
+            Appearance::Original => self.shelves.get(self.active)
+                .and_then(|s| s.carts.get(s.index))
+                .map(|cart| menu_style::MenuPalette::original(slot_ui::bitmaps::console_slot_family(cart))),
+            Appearance::Dark | Appearance::Oled => None,
+        };
+        if want != menu_style::palette() {
+            menu_style::set_palette(want);
+            self.refresh_menu_pill();
+        }
+    }
+
+    pub(super) fn refresh_menu_pill(&mut self) {
+        for (face, (tex, _, _)) in menu_style::pill_faces().iter().zip(self.menu_pill) {
+            self.gpu.update_face(tex, face);
+        }
     }
 
     /// The selected row's bar on a page of `count` rows whose first row is
@@ -235,7 +286,7 @@ impl Engine {
         let (title_h, system_h) = (title.2 as f32 * title_scale, system.2 as f32 * system_scale);
         let block = h + 10.0 + title_h + system_h;
         let y = (top + shown as f32 * QUICK_PITCH / 2.0 - block / 2.0).round();
-        out.push(Draw::Tex { x: centre - w / 2.0, y, w, h, tex, alpha: fade });
+        self.without_ink(out, |out| out.push(Draw::Tex { x: centre - w / 2.0, y, w, h, tex, alpha: fade }));
         let title_w = title.1 as f32 * title_scale;
         out.push(Draw::Tex { x: (centre - title_w / 2.0).round(), y: y + h + 10.0,
             w: title_w, h: title_h, tex: title.0, alpha: 0.92 * fade });
@@ -375,6 +426,46 @@ mod render {
         let value = &glyphs[glyphs.len() - 2];
         assert!((mid(right_arrow) - mid(value)).abs() <= 1.0,
             "arrow centred at {} but the value at {}", mid(right_arrow), mid(value));
+    }
+
+    #[test]
+    fn light_and_original_menus_take_their_palette_and_dark_ink() {
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        engine.overlay = ShelfOverlay::Menu { row: 1 };
+        let pixel = |engine: &mut Engine, x: f32, y: f32| {
+            for _ in 0..30 {
+                engine.draw(0, || {});
+                std::thread::sleep(std::time::Duration::from_millis(12));
+            }
+            let rgba = engine.gpu.read_frame();
+            let (w, h) = panel_size();
+            let k = h as f32 / OUT_H as f32;
+            let at = (((y * k) as usize) * w as usize + (x * k) as usize) * 4;
+            [rgba[at], rgba[at + 1], rgba[at + 2]]
+        };
+        // Dark: no palette, no ink.
+        assert_eq!(pixel(&mut engine, 700.0, 460.0), menu_style::menu_ground_rgb());
+        assert!(engine.menu_ink().is_none());
+        // Dark > OLED > Light.
+        engine.cycle_appearance();
+        engine.cycle_appearance();
+        assert_eq!(pixel(&mut engine, 700.0, 460.0), menu_style::MenuPalette::LIGHT.ground);
+        assert!(engine.menu_ink().is_some());
+        // The selected row's bar is white and its label dark.
+        let top = engine.menu_rows_top(6) + QUICK_PITCH;
+        assert_eq!(pixel(&mut engine, 300.0, top + 8.0), [255, 255, 255]);
+        let darkest = (40..240).map(|x| pixel(&mut engine, x as f32, top + QUICK_PITCH / 2.0))
+            .map(|c| c.iter().map(|&v| v as u32).sum::<u32>()).min().unwrap();
+        assert!(darkest < 3 * 90, "the selected label isn't dark: {darkest}");
+        // Original on a GBA shelf: indigo, white text, nothing redrawn.
+        engine.cycle_appearance();
+        assert_eq!(pixel(&mut engine, 700.0, 460.0), menu_style::MenuPalette::original(6).ground);
+        assert!(engine.menu_ink().is_none());
+        // Back to Dark.
+        engine.cycle_appearance();
+        assert_eq!(pixel(&mut engine, 700.0, 460.0), menu_style::menu_ground_rgb());
+        assert!(menu_style::palette().is_none());
     }
 
     fn entries() -> Vec<RomEntry> {

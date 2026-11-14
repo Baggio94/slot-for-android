@@ -6,7 +6,7 @@ use slot_ui::{
 fn bottom_edge(d: &Draw) -> Option<f32> {
     match *d {
         Draw::Rect { y, h, .. } | Draw::Tex { y, h, .. } | Draw::Turned { y, h, .. } => Some(y + h),
-        Draw::Game | Draw::Shot { .. } => None,
+        Draw::Game | Draw::Shot { .. } | Draw::Ink(_) => None,
     }
 }
 

@@ -167,7 +167,7 @@ internal class SlotModalDialog(
         root.addView(View(activity), LinearLayout.LayoutParams(-1,
             SlotUi.menuPixel(activity, if (isRaLogin) 9 else 19)))
         if (message.isNotBlank()) {
-            val text = SlotUi.label(activity, message, 15f, SlotUi.muted,
+            val text = SlotUi.label(activity, message, 15f, SlotUi.menuMuted,
                 upper = false).apply {
                 setPadding(0, 0, 0, dp(14))
                 maxLines = if (isRaLogin) 1 else 5
@@ -204,7 +204,7 @@ internal class SlotModalDialog(
         val labelHeight = if (isRaLogin) SlotUi.menuPixel(activity, 22) else dp(27)
         val fieldHeight = if (isRaLogin) SlotUi.menuPixel(activity, 45) else dp(48)
         val fieldGap = if (isRaLogin) SlotUi.menuPixel(activity, 16) else dp(10)
-        val caption = SlotUi.label(activity, label, 13f, SlotUi.muted)
+        val caption = SlotUi.label(activity, label, 13f, SlotUi.menuMuted)
         body.addView(caption,
             LinearLayout.LayoutParams(-1, labelHeight).apply {
                 topMargin = if (isRaLogin) SlotUi.menuPixel(activity, 3) else dp(4)
@@ -236,7 +236,7 @@ internal class SlotModalDialog(
     }
 
     fun addButton(label: String, onClick: () -> Unit): TextView {
-        val button = SlotUi.label(activity, label, 16f, SlotUi.muted).apply {
+        val button = SlotUi.label(activity, label, 16f, SlotUi.menuMuted).apply {
             gravity = Gravity.CENTER_VERTICAL
             val inset = if (isRaLogin) {
                 SlotUi.menuPixel(activity, 16) + SlotUi.menuEntryInset(activity)
@@ -249,7 +249,7 @@ internal class SlotModalDialog(
             contentDescription = label
             setOnFocusChangeListener { view, focused ->
                 view.background = SlotUi.rowBackground(activity, focused)
-                setTextColor(if (focused) SlotUi.ink else SlotUi.muted)
+                setTextColor(if (focused) SlotUi.menuInk else SlotUi.menuMuted)
             }
             setOnClickListener { if (!busy) onClick() }
         }
@@ -265,14 +265,14 @@ internal class SlotModalDialog(
      */
     fun addChoice(label: String, values: List<String>, selected: Int, onChange: (Int) -> Unit): TextView {
         var index = selected.coerceIn(0, values.size - 1)
-        val row = SlotUi.label(activity, "", 16f, SlotUi.muted).apply {
+        val row = SlotUi.label(activity, "", 16f, SlotUi.menuMuted).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(SlotUi.menuEntryInset(activity), 0, SlotUi.menuEntryInset(activity), 0)
             isFocusable = true
             contentDescription = label
             setOnFocusChangeListener { view, focused ->
                 view.background = SlotUi.rowBackground(activity, focused)
-                setTextColor(if (focused) SlotUi.ink else SlotUi.muted)
+                setTextColor(if (focused) SlotUi.menuInk else SlotUi.menuMuted)
             }
         }
         fun show() { row.text = "$label   < ${values[index]} >" }

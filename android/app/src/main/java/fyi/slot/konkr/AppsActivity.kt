@@ -106,12 +106,12 @@ class AppsActivity : Activity() {
     }
     private fun text(label: String, size: Float, bright: Boolean = true) =
         slotSize(SlotUi.label(this, label, size,
-            if (bright) SlotUi.ink else SlotUi.muted, upper = false), size.toInt())
+            if (bright) SlotUi.menuInk else SlotUi.menuMuted, upper = false), size.toInt())
 
     private fun plate(color: Int, selected: Boolean = false) = GradientDrawable().apply {
         setColor(color)
         cornerRadius = SlotUi.menuPixel(this@AppsActivity, 11).toFloat()
-        if (selected) setStroke(dp(2), SlotUi.ink)
+        if (selected) setStroke(dp(2), SlotUi.menuInk)
     }
 
     private fun loadApps(): List<Entry> {
@@ -158,7 +158,7 @@ class AppsActivity : Activity() {
         }
         header.addView(SlotUi.menuHeader(this, "APPS"),
             LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 50), 1f))
-        homeButton = slotSize(SlotUi.label(this, "Set as Home", 13f), 13).apply {
+        homeButton = slotSize(SlotUi.label(this, "Set as Home", 13f, SlotUi.menuInk), 13).apply {
             gravity = Gravity.CENTER
             isSingleLine = true
             // Pixel units from the same 720x480 Slot canvas as the button's
@@ -243,7 +243,7 @@ class AppsActivity : Activity() {
                 root.contentDescription = entry.label
                 val selected = !homeSelected && position == selectedIndex
                 root.background = plate(
-                    if (selected) Color.rgb(68, 66, 77) else Color.rgb(37, 36, 43),
+                    SlotUi.appTile(selected),
                     selected
                 )
                 return root
@@ -350,6 +350,7 @@ class AppsActivity : Activity() {
             return ImageView(this).apply {
                 setImageBitmap(bitmap)
                 scaleType = ImageView.ScaleType.FIT_XY
+                colorFilter = SlotUi.menuInkFilter
                 contentDescription = when (asset) {
                     "move" -> "Left and right arrows: Move"
                     "open" -> "A: Open"
@@ -384,7 +385,7 @@ class AppsActivity : Activity() {
         val tile = grid.getChildAt(position - grid.firstVisiblePosition) ?: return
         val selected = !homeSelected && position == selectedIndex
         tile.background = plate(
-            if (selected) Color.rgb(68, 66, 77) else Color.rgb(37, 36, 43),
+            SlotUi.appTile(selected),
             selected
         )
     }
@@ -392,7 +393,7 @@ class AppsActivity : Activity() {
     private fun updateSelection(oldIndex: Int?, oldHome: Boolean) {
         if (homeSelected != oldHome || oldIndex == null) {
             homeButton.background = plate(
-                if (homeSelected) Color.rgb(89, 87, 102) else Color.rgb(56, 55, 64),
+                SlotUi.appTile(homeSelected, home = true),
                 homeSelected
             )
         }

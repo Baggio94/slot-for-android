@@ -997,7 +997,7 @@ impl Engine {
             let (dw, dh) = (layout.cart_w, layout.cart_h);
             let (x, y) = (left + (layout.cart_room - dw) / 2.0, layout.cart_y);
             cart_top = y;
-            out.push(Draw::Tex { x, y, w: dw, h: dh, tex, alpha: fade });
+            self.without_ink(out, |out| out.push(Draw::Tex { x, y, w: dw, h: dh, tex, alpha: fade }));
             below = y + dh + 12.0;
         }
         let centre = (left + right_edge) / 2.0;
@@ -1100,10 +1100,10 @@ impl Engine {
             Some((tex, w, h)) => {
                 let s = (bw / w as f32).min(bh / h as f32);
                 let (dw, dh) = (w as f32 * s, h as f32 * s);
-                out.push(Draw::Tex { x: bx + (bw - dw) / 2.0, y: by + (bh - dh) / 2.0, w: dw, h: dh, tex, alpha });
+                self.without_ink(out, |out| out.push(Draw::Tex { x: bx + (bw - dw) / 2.0, y: by + (bh - dh) / 2.0, w: dw, h: dh, tex, alpha }));
             }
             None => {
-                let mut c = edge();
+                let mut c = menu_style::highlight();
                 c[3] *= 0.4 * alpha;
                 out.push(Draw::Rect { x: bx + bw * 0.2, y: by + bh * 0.15, w: bw * 0.6, h: bh * 0.7, colour: c });
             }
@@ -1118,7 +1118,7 @@ impl Engine {
         let g = chart_grid(x0, x1, studio.fun_start, fun);
         let system_rows = studio.fun_start.div_ceil(g.cols);
         out.push(Draw::Rect { x: x0 - 10.0, y: 70.0, w: x1 - x0 + 20.0, h: STRIP_BOTTOM - 62.0,
-            colour: { let mut c = edge(); c[3] *= 0.35 * fade; c } });
+            colour: { let mut c = menu_style::highlight(); c[3] *= 0.35 * fade; c } });
         let small = |out: &mut Vec<Draw>, text: &str, lit: bool, x: f32, y: f32, right: bool| {
             if let Some((tex, w, h)) = face(text, lit) {
                 let s = 0.44f32.min((x1 - x0) / 2.0 / w.max(1) as f32);
@@ -1135,7 +1135,7 @@ impl Engine {
             let (cx, cy) = g.cell(section, row, col, system_rows);
             if i == studio.colour {
                 out.push(Draw::Rect { x: cx + 1.0, y: cy, w: g.cell_w - 2.0, h: g.cell_h - 2.0,
-                    colour: { let mut c = edge(); c[3] *= fade; c } });
+                    colour: { let mut c = menu_style::highlight(); c[3] *= fade; c } });
             }
             self.draw_mini(studio, i, cx + 4.0, cy + 3.0, g.cell_w - 8.0, g.cell_h - 8.0, fade, out);
         }
@@ -1164,7 +1164,7 @@ impl Engine {
             let cx = x0 + i as f32 * cell;
             if i == studio.finish {
                 out.push(Draw::Rect { x: cx + 1.0, y: top, w: cell - 2.0, h: STRIP_BOTTOM - top,
-                    colour: { let mut c = edge(); c[3] *= 0.8 * fade; c } });
+                    colour: { let mut c = menu_style::highlight(); c[3] *= 0.8 * fade; c } });
             }
             self.draw_mini(studio, i, cx + 4.0, top + 3.0, cell - 8.0, box_h, fade, out);
             if let Some((tex, w, h)) = face(FINISHES[i], i == studio.finish) {
@@ -1183,7 +1183,7 @@ impl Engine {
         let (x0, x1) = (split + 4.0, width - 18.0);
         let col = x1 - x0;
         // The query.
-        out.push(Draw::Rect { x: x0 - 6.0, y: 78.0, w: col + 12.0, h: 36.0, colour: { let mut c = edge(); c[3] *= 0.6 * fade; c } });
+        out.push(Draw::Rect { x: x0 - 6.0, y: 78.0, w: col + 12.0, h: 36.0, colour: { let mut c = menu_style::highlight(); c[3] *= 0.6 * fade; c } });
         let query = if search.query.is_empty() { "Type a name".to_owned() } else { search.query.clone() };
         if let Some((tex, w, h)) = face(&query, !search.query.is_empty()) {
             let scale = 0.56f32.min((col - 8.0) / w.max(1) as f32);
@@ -1201,7 +1201,7 @@ impl Engine {
             let y = 122.0 + slot as f32 * 34.0;
             if search.on_results && first + slot == search.result {
                 out.push(Draw::Rect { x: x0 - 6.0, y: y - 2.0, w: col + 12.0, h: 32.0,
-                    colour: { let mut c = edge(); c[3] *= fade; c } });
+                    colour: { let mut c = menu_style::highlight(); c[3] *= fade; c } });
             }
             let n = &search.names[i];
             if let Some((tex, w, h)) = face(&format!("{} · {}", n.name, n.platform), true) {
@@ -1216,7 +1216,7 @@ impl Engine {
             let (cx, cy) = (x0 + (k % 10) as f32 * key_w, 270.0 + (k / 10) as f32 * (key_h + 4.0));
             let chosen = !search.on_results && k == search.key;
             out.push(Draw::Rect { x: cx + 1.0, y: cy, w: key_w - 2.0, h: key_h,
-                colour: { let mut c = edge(); c[3] *= if chosen { fade } else { 0.35 * fade }; c } });
+                colour: { let mut c = menu_style::highlight(); c[3] *= if chosen { fade } else { 0.35 * fade }; c } });
             if let Some((tex, w, h)) = face(&key_face(*key), true) {
                 let scale = 0.42f32.min((key_w - 4.0) / w.max(1) as f32);
                 let (dw, dh) = (w as f32 * scale, h as f32 * scale);

@@ -3243,9 +3243,7 @@ impl Engine {
                     .as_ref().map(|(root, _)| root.clone());
                 if let Some(root) = root {
                     slot_ui::set_theme(slot_store::Theme::read(&root));
-                    for (face, (tex, _, _)) in menu_style::pill_faces().iter().zip(self.menu_pill) {
-                        self.gpu.update_face(tex, face);
-                    }
+                    self.refresh_menu_pill();
                     let custom_colours=root.join("Config/theme.txt").is_file();
                     self.slot_faces=if custom_colours { None }
                         else if self.settings.appearance == crate::settings::Appearance::Light {
@@ -6401,7 +6399,8 @@ impl Engine {
     fn draw_multiplayer(&self, out: &mut Vec<Draw>) {
         out.push(Draw::Rect {
             x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
-            colour: menu_ground(),
+            // Its cables and plugs are drawn for a dark ground, in every theme.
+            colour: menu_style::dark_ground(),
         });
         let Some(art) = &self.link_art else { return };
         link_screen::draw_link_art_with(self.link_phase, self.link_millis(), art, &self.link_marks,
@@ -6522,6 +6521,14 @@ impl Engine {
     }
 
     fn draw_overlay(&self, out: &mut Vec<Draw>) {
+        // Light and Original: the pages' text turns dark on their light grounds.
+        let ink = self.menu_ink();
+        if ink.is_some() { out.push(Draw::Ink(ink)); }
+        self.draw_overlay_page(out);
+        if ink.is_some() { out.push(Draw::Ink(None)); }
+    }
+
+    fn draw_overlay_page(&self, out: &mut Vec<Draw>) {
         match self.overlay {
             ShelfOverlay::None => {}
             ShelfOverlay::Menu { row } => {
@@ -6611,11 +6618,12 @@ impl Engine {
                 if let Some(tex) = self.about_texture {
                     let scale = ((width - 24.0) / STICKER_W as f32).min(1.0);
                     let (w, h) = (STICKER_W as f32 * scale, STICKER_H as f32 * scale);
-                    out.push(Draw::Tex {
+                    // The device's sticker, as printed, in every theme.
+                    self.without_ink(out, |out| out.push(Draw::Tex {
                         x: (width - w) / 2.0,
                         y: 30.0, w, h,
                         tex, alpha: 1.0,
-                    });
+                    }));
                 }
                 let fade = slot_ui::ease(
                     (self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
@@ -6915,6 +6923,7 @@ impl Engine {
     }
     fn draw(&mut self, vsync_frame_ns: i64, mut on_pcm_ready: impl FnMut()) {
         if !self.gpu.graphics_ready() { return; }
+        self.update_menu_palette();
         // Includes Slot-side input/menu/RA/status preparation in "other_us".
         // The enclosing JNI caller's library gate and later EGL swap remain
         // outside the scope; Kotlin times the broader nativeDrawFrame call.
@@ -8035,7 +8044,7 @@ fn ghost(draw: Draw) -> Option<Draw> {
             Some(Draw::Tex { x, y, w, h, tex, alpha: alpha * GHOST }),
         Draw::Turned { x, y, w, h, tex, alpha, turn } =>
             Some(Draw::Turned { x, y, w, h, tex, alpha: alpha * GHOST, turn }),
-        Draw::Game | Draw::Shot { .. } => None,
+        Draw::Game | Draw::Shot { .. } | Draw::Ink(_) => None,
     }
 }
 
@@ -8336,7 +8345,7 @@ fn shift_down(draws: &mut [Draw], dy: f32) {
     for draw in draws {
         match draw {
             Draw::Rect { y, .. } | Draw::Tex { y, .. } | Draw::Turned { y, .. } => *y += dy,
-            Draw::Game | Draw::Shot { .. } => {}
+            Draw::Game | Draw::Shot { .. } | Draw::Ink(_) => {}
         }
     }
 }

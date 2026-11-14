@@ -718,7 +718,7 @@ impl Engine {
         let width = out_w() as f32;
         let fade = slot_ui::ease((self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
         let face = |text: &str, lit: bool| self.controls_faces.get(&Self::face_key(text, lit)).copied();
-        let tint = |a: f32| { let mut c = edge(); c[3] *= a * fade; c };
+        let tint = |a: f32| { let mut c = menu_style::highlight(); c[3] *= a * fade; c };
         self.draw_page_title(out, "ROMM", fade);
         // Right of the title: how many are picked, or the download.
         if let Some((tex, w, h)) = corner_note(page).and_then(|t| face(&t, false)) {
@@ -765,7 +765,7 @@ impl Engine {
                 out.push(Draw::Rect { x: cx + 3.0, y: cy, w: g.cell_w - 6.0, h: name_y - cy - 2.0, colour: tint(0.55) });
             }
             match page.faces.get(&i) {
-                Some(&(tex, _)) => out.push(Draw::Tex { x: ix, y: iy, w: dw, h: dh, tex, alpha }),
+                Some(&(tex, _)) => self.without_ink(out, |out| out.push(Draw::Tex { x: ix, y: iy, w: dw, h: dh, tex, alpha })),
                 None => out.push(Draw::Rect { x: ix, y: iy, w: dw, h: dh, colour: tint(0.5) }),
             }
             let badge = if picked { Some("SELECTED") } else if system.on_shelf[i] { Some("ON SHELF") } else { None };
@@ -773,8 +773,11 @@ impl Engine {
                 let s = 0.42f32.min((dw - 8.0).max(10.0) / w.max(1) as f32);
                 let (tw, th) = (w as f32 * s, h as f32 * s);
                 let (tx, ty) = (ix + (dw - tw) / 2.0, iy + dh - th - 10.0);
-                out.push(Draw::Rect { x: tx - 6.0, y: ty - 3.0, w: tw + 12.0, h: th + 6.0, colour: [0.0, 0.0, 0.0, 0.72 * fade] });
-                out.push(Draw::Tex { x: tx, y: ty, w: tw, h: th, tex, alpha: fade });
+                // A badge on the cart: white on black, as the cart's own art.
+                self.without_ink(out, |out| {
+                    out.push(Draw::Rect { x: tx - 6.0, y: ty - 3.0, w: tw + 12.0, h: th + 6.0, colour: [0.0, 0.0, 0.0, 0.72 * fade] });
+                    out.push(Draw::Tex { x: tx, y: ty, w: tw, h: th, tex, alpha: fade });
+                });
             }
             if let Some((tex, w, h)) = face(&slot_ui::label_text(cart), true) {
                 let s = 0.5f32.min((g.cell_w - 14.0) / w.max(1) as f32);
@@ -837,7 +840,7 @@ const INFO_LINE: f32 = 23.0;
 impl Engine {
     fn draw_romm_info(&self, out: &mut Vec<Draw>, lines: &[(String, bool)], fade: f32) {
         let width = out_w() as f32;
-        out.push(Draw::Rect { x: 0.0, y: 64.0, w: width, h: 352.0, colour: [0.0, 0.0, 0.0, 0.82 * fade] });
+        out.push(Draw::Rect { x: 0.0, y: 64.0, w: width, h: 352.0, colour: menu_style::scrim(0.82 * fade) });
         let mut y = 78.0;
         for (i, (text, lit)) in lines.iter().enumerate() {
             let Some(&(tex, w, h)) = self.controls_faces.get(&Self::wide_face_key(text, *lit)) else { continue };

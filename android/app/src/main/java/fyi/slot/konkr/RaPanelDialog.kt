@@ -28,9 +28,9 @@ internal class RaPanelDialog(
     private val onSignOut: () -> Unit,
     private val onDismiss: () -> Unit = {},
 ) {
-    private val ink = SlotUi.ink
-    private val muted = SlotUi.muted
-    private val border = SlotUi.rule
+    private val ink = SlotUi.menuInk
+    private val muted = SlotUi.menuMuted
+    private val border = SlotUi.menuRule
     private val font: Typeface by lazy { SlotUi.font(activity) }
     private fun dp(x: Int): Int = (x * activity.resources.displayMetrics.density + .5f).toInt()
     private val dialog: Dialog = object : Dialog(
@@ -103,11 +103,11 @@ internal class RaPanelDialog(
     private fun badgeProgress(percent: Int?) {
         val pct = percent?.coerceIn(0, 100)
         val rail = FrameLayout(activity).apply {
-            setBackgroundColor(Color.rgb(60, 57, 66))
+            setBackgroundColor(SlotUi.menuRule)
             minimumHeight = dp(7)
         }
         val fill = View(activity).apply {
-            setBackgroundColor(SlotUi.ink)
+            setBackgroundColor(SlotUi.menuInk)
         }
         rail.addView(fill, FrameLayout.LayoutParams(0, dp(7), Gravity.START))
         content.addView(rail, LinearLayout.LayoutParams(-1, dp(7)).apply {

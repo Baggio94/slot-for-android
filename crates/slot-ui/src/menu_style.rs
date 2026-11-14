@@ -16,6 +16,87 @@ fn ground_rgb(housing: [u8; 3], oled: bool) -> [u8; 3] {
     if oled { [0; 3] } else { housing.map(|c| (c as f32 * 0.88).round() as u8) }
 }
 
+/// The Light and Original menus' colours; None is Dark's (and OLED's), from
+/// the theme. `ink` is set where the text turns dark on a light ground.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct MenuPalette {
+    pub ground: [u8; 3],
+    pub pill: [u8; 3],
+    pub ink: Option<[u8; 3]>,
+}
+
+const DARK_INK: [u8; 3] = [28, 28, 32];
+
+impl MenuPalette {
+    /// Light: light grey pages, a white bar, dark text.
+    pub const LIGHT: Self = Self { ground: [234, 233, 236], pill: [255, 255, 255], ink: Some(DARK_INK) };
+
+    /// Original: the plastic of the console whose bar is on screen
+    /// (`family` as bitmaps::home_slot): black text on the light plastics,
+    /// white on the GBA's indigo and the Mega Drive's black, as the clock on
+    /// their bars (bitmaps::console_slot_takes_dark_ink).
+    pub fn original(family: usize) -> Self {
+        let (ground, pill) = match family {
+            0 => ([226, 216, 200], [244, 237, 224]), // Famicom
+            1 => ([188, 188, 188], [214, 214, 214]), // NES
+            2 => ([196, 190, 198], [222, 216, 226]), // Super Nintendo
+            3 => ([34, 34, 36], [68, 68, 72]),       // Mega Drive
+            4 => ([178, 178, 170], [206, 206, 198]), // Game Boy
+            5 => ([236, 188, 20], [252, 224, 128]),  // Game Boy Color
+            _ => ([74, 80, 152], [108, 114, 184]),   // Game Boy Advance
+        };
+        let ink = crate::bitmaps::console_slot_takes_dark_ink(family, 0).then_some(DARK_INK);
+        Self { ground, pill, ink }
+    }
+}
+
+static PALETTE: std::sync::RwLock<Option<MenuPalette>> = std::sync::RwLock::new(None);
+pub fn set_palette(palette: Option<MenuPalette>) {
+    *PALETTE.write().unwrap_or_else(|e| e.into_inner()) = palette;
+}
+pub fn palette() -> Option<MenuPalette> {
+    *PALETTE.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The redrawing of the menus' text for a dark ink: Draw::Ink's colours.
+pub fn ink_map() -> Option<slot_gfx::InkMap> {
+    let palette = palette()?;
+    let ink = palette.ink?;
+    let f = |c: [u8; 3]| c.map(|v| v as f32 / 255.0);
+    Some(slot_gfx::InkMap { paper: f(palette.ground), ink: f(ink) })
+}
+
+/// The menus' text colour (Android's pages take it too).
+pub fn ink_rgb() -> [u8; 3] {
+    palette().and_then(|p| p.ink).unwrap_or(MENU_INK)
+}
+
+/// A chosen cell's or key's ground on the special pages: the theme's edge,
+/// or the palette's bar in Light and Original.
+pub fn highlight() -> [f32; 4] {
+    match palette() {
+        Some(p) => [p.pill[0] as f32 / 255.0, p.pill[1] as f32 / 255.0, p.pill[2] as f32 / 255.0, 1.0],
+        None => crate::slot_chrome::edge(),
+    }
+}
+
+/// A veil over a page's grid for a question or details: black, or the
+/// light ground itself where the text is dark.
+pub fn scrim(alpha: f32) -> [f32; 4] {
+    match palette().filter(|p| p.ink.is_some()) {
+        Some(p) => [p.ground[0] as f32 / 255.0, p.ground[1] as f32 / 255.0, p.ground[2] as f32 / 255.0,
+                    (alpha * 1.15).min(0.94)],
+        None => [0.0, 0.0, 0.0, alpha],
+    }
+}
+
+/// Dark's ground whatever the theme, for pages with their own dark art
+/// (Multiplayer): black in OLED.
+pub fn dark_ground() -> [f32; 4] {
+    let c = ground_rgb(theme().housing, oled());
+    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0]
+}
+
 /// Keep a specialised page's layout while making its plain ground OLED black.
 pub fn page_ground(original: [f32; 4]) -> [f32; 4] {
     if oled() { [0.0, 0.0, 0.0, original[3]] } else { original }
@@ -34,7 +115,7 @@ pub const PATH_H: u32 = 18;
 
 /// The menus' ground: the housing, a shade darker.
 pub fn menu_ground_rgb() -> [u8; 3] {
-    ground_rgb(theme().housing, oled())
+    palette().map_or_else(|| ground_rgb(theme().housing, oled()), |p| p.ground)
 }
 
 pub fn menu_ground() -> [f32; 4] {
@@ -44,6 +125,7 @@ pub fn menu_ground() -> [f32; 4] {
 
 /// The bar's colour: the theme's edge, settled into the ground.
 pub fn pill_rgb() -> [u8; 3] {
+    if let Some(p) = palette() { return p.pill; }
     // OLED retains Dark's selection colour.
     let (ground, edge) = (ground_rgb(theme().housing, false), theme().edge);
     [0, 1, 2].map(|i| (ground[i] as f32 + (edge[i] as f32 - ground[i] as f32) * 0.62).round() as u8)
@@ -111,6 +193,18 @@ pub fn menu_opens_face() -> UndoFace {
 mod tests {
     use super::*;
     use crate::density::Face as _;
+
+    #[test]
+    fn original_menus_write_as_the_clock_on_their_console_bar() {
+        for family in 0..7 {
+            let dark = crate::bitmaps::console_slot_takes_dark_ink(family, 0);
+            assert_eq!(MenuPalette::original(family).ink.is_some(), dark, "family {family}");
+        }
+        // The GBA's indigo and the Mega Drive's black keep white text.
+        assert!(MenuPalette::original(6).ink.is_none());
+        assert!(MenuPalette::original(3).ink.is_none());
+        assert!(MenuPalette::LIGHT.ink.is_some());
+    }
 
     #[test]
     fn oled_grounds_are_pure_black_even_with_a_custom_palette() {

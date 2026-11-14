@@ -150,6 +150,7 @@ class MainActivity : Activity() {
     external fun nativeSuspend()
     external fun nativePresentationResume()
     external fun nativeMenuPalette(): Long
+    external fun nativeMenuDarkInk(): Int
     external fun nativeIsPlaying(): Boolean
     external fun nativeCarouselQuiet(): Boolean
     external fun nativeWarmRomCandidate(): String?
@@ -868,7 +869,7 @@ class MainActivity : Activity() {
             }
             romm.poll()
             deleteRequestedGames()
-            SlotUi.updateMenuPalette(nativeMenuPalette())
+            SlotUi.updateMenuPalette(nativeMenuPalette(), nativeMenuDarkInk())
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
