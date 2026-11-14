@@ -6214,22 +6214,19 @@ impl Engine {
     /// The closed Rotate with no game, over the shelf already drawn: the
     /// shelf steps back from the top line (Drifting Shelf), or the cover
     /// rises over it (Last Played, Random Cart), or the screen goes dark.
-    fn push_lid_shelf(&self, commands: &mut Vec<Draw>) {
+    /// `row`: the shelf's carts in `commands`, all Drifting Shelf shrinks
+    /// (the slot bar keeps its size, Siham 2026-11-14).
+    fn push_lid_shelf(&self, commands: &mut Vec<Draw>, row: std::ops::Range<usize>) {
         let t = self.lid_t;
         match self.settings.rotate_shelf_cover {
             0 => {
                 // Shrunk from its foot, the shelf leaves the top line free.
                 let k = 1.0 - 0.12 * t;
                 let (cx, cy) = (out_w() as f32 / 2.0, OUT_H as f32);
-                // The wallpaper (what covers the whole screen) stays put.
-                let whole = |x: f32, y: f32, w: f32, h: f32|
-                    x <= 0.5 && y <= 0.5 && x + w >= out_w() as f32 - 0.5 && y + h >= OUT_H as f32 - 0.5;
-                for draw in commands.iter_mut() {
-                    let keep = match *draw {
-                        Draw::Rect { x, y, w, h, .. } | Draw::Tex { x, y, w, h, .. } => whole(x, y, w, h),
-                        _ => true,
-                    };
-                    if !keep { *draw = lid_place(*draw, cx, cy, k, 0.0, 1.0); }
+                // Only the carts: the wallpaper and the slot bar stay put.
+                let end = row.end.min(commands.len());
+                for draw in &mut commands[row.start.min(end)..end] {
+                    *draw = lid_place(*draw, cx, cy, k, 0.0, 1.0);
                 }
             }
             mode => {
@@ -8159,6 +8156,8 @@ impl Engine {
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_EJECT_SFX);
         }
 
+        // The shelf's carts in `commands` (the closed RG Rotate shrinks them).
+        let mut lid_row = 0..0;
         let mut commands = vec![Draw::Rect {
             x: 0.0,
             y: 0.0,
@@ -8190,7 +8189,9 @@ impl Engine {
                 let dim = 1.0 + (0.614 - 1.0) * t;
                 let span = Some(picker_span(shelf, openness));
                 let selected = shelf.carts.get(shelf.index).map(|c| c.stem.as_str());
+                let row_from = commands.len();
                 shelf.draw_row_clear_of(selected, 0.0, 0.26 * t, dim, span, &mut commands);
+                lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),
                     pick_closer(self.slot_faces, self.home_closers, shelf.carts.get(shelf.index)), &mut commands);
@@ -8198,7 +8199,9 @@ impl Engine {
                 // Match upstream Refusal: only the shelf carts shake.
                 // The physical slot stays fixed; no input delay or layout changes.
                 let shake = self.refusal.map_or(0.0, |r| r.offset(ms));
+                let row_from = commands.len();
                 shelf.draw_row(ejecting_stem.as_deref(), shake, 0.0, 1.0, &mut commands);
+                lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),
                     pick_closer(self.slot_faces, self.home_closers, shelf.carts.get(shelf.index)), &mut commands);
@@ -8346,7 +8349,7 @@ impl Engine {
             return;
         }
         let lid = self.game.is_none() && self.lid_t > 0.0;
-        if lid { self.push_lid_shelf(&mut commands); }
+        if lid { self.push_lid_shelf(&mut commands, lid_row); }
         // Keep the upper indicators on the identical visibility lifecycle
         // as Slot's footer: only on an idle, menu-free cartridge carousel.
         // A first run shows its sentence alone: no clock, battery or icons
