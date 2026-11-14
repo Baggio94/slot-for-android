@@ -392,6 +392,19 @@ impl Shader {
         Self::CrtGdvTrinitron, Self::CrtGeomDeluxe, Self::CrtRoyale,
         Self::SuperEagle, Self::XbrLv2, Self::Sabr,
     ];
+    /// PICO-8: every look slot. has. Off (sharp pixels at any size, so no
+    /// Sharp Bilinear), the handhelds' LCDs and Dot Matrix, the GBA screens,
+    /// then the home consoles' CRTs and smoothing filters. The GBA's own
+    /// Simpletex is left out: the same name as Simpletex.
+    pub const PICO8: [Self; 25] = [
+        Self::Off, Self::Grid, Self::Lcd1x, Self::Lcd3x, Self::ZfastLcd,
+        Self::Simpletex, Self::Dot, Self::LcdGridV2, Self::DotMatrixColor,
+        Self::DotMatrix, Self::LcdGridV2Gba, Self::Agb001, Self::Ags001,
+        Self::ZfastCrt, Self::Fakelottes, Self::CrtPi, Self::CrtEasymode,
+        Self::CrtHyllian, Self::CrtAperture, Self::CrtGdvTrinitron,
+        Self::CrtGeomDeluxe, Self::CrtRoyale, Self::SuperEagle, Self::XbrLv2,
+        Self::Sabr,
+    ];
     pub fn effect(self) -> ScreenEffect {
         match self {
             Self::Off => ScreenEffect::None,
@@ -469,6 +482,8 @@ pub struct Settings {
     pub shader_gbc: Shader,
     /// The home consoles' CRT shaders (new in 1.3.5: zfast-crt by default).
     pub shader_nes: Shader, pub shader_snes: Shader, pub shader_md: Shader,
+    /// PICO-8's: off by default, its pixels drawn sharp.
+    pub shader_p8: Shader,
     // Retain legacy field for old RC1 Settings.json and old desktop Link code;
     // the three platform fields below are authoritative after migration.
     pub colour_correction_gba: bool,
@@ -611,7 +626,7 @@ impl Default for Settings {
             rumble: true, shader_gba: Shader::Off, shader_gb: Shader::Off,
             shader_gbc: Shader::Off,
             shader_nes: Shader::ZfastCrt, shader_snes: Shader::ZfastCrt,
-            shader_md: Shader::ZfastCrt,
+            shader_md: Shader::ZfastCrt, shader_p8: Shader::Off,
             colour_correction_gba: false, colour_correction_gb: false,
             colour_correction_gbc: false,
             bezel_gba: Bezel::None, bezel_gbc: Bezel::Default, bezel_gb: Bezel::Default,
@@ -750,6 +765,7 @@ impl Settings {
                 for shader in [&mut s.shader_nes, &mut s.shader_snes, &mut s.shader_md] {
                     if !Shader::HOME.contains(shader) { *shader = Shader::ZfastCrt; }
                 }
+                if !Shader::PICO8.contains(&s.shader_p8) { s.shader_p8 = Shader::Off; }
                 if s.gb_palette as usize >= GbPalette::COUNT { s.gb_palette = 1; }
                 if !REWIND_SPEEDS.contains(&s.rewind_speed) { s.rewind_speed = 2; }
                 if s.run_ahead_frames > 2 { s.run_ahead_frames = 0; }
@@ -859,8 +875,7 @@ impl Settings {
             slot_store::Platform::Nes=>self.shader_nes,
             slot_store::Platform::Snes=>self.shader_snes,
             slot_store::Platform::Md=>self.shader_md,
-            // PICO-8's pixels stay sharp.
-            slot_store::Platform::Pico8=>Shader::Off,
+            slot_store::Platform::Pico8=>self.shader_p8,
         }
     }
     pub fn set_shader_for(&mut self,platform:slot_store::Platform,shader:Shader) {
@@ -871,15 +886,17 @@ impl Settings {
             slot_store::Platform::Nes=>self.shader_nes=shader,
             slot_store::Platform::Snes=>self.shader_snes=shader,
             slot_store::Platform::Md=>self.shader_md=shader,
-            slot_store::Platform::Pico8=>{}
+            slot_store::Platform::Pico8=>self.shader_p8=shader,
         }
     }
-    /// The Shader row's key of a home console (47 NES, 48 SNES, 49 MD).
+    /// The Shader row's key of a home console (47 NES, 48 SNES, 49 MD, 72
+    /// PICO-8).
     pub fn home_shader_key(platform:slot_store::Platform)->Option<usize> {
         match platform {
             slot_store::Platform::Nes=>Some(47),
             slot_store::Platform::Snes=>Some(48),
             slot_store::Platform::Md=>Some(49),
+            slot_store::Platform::Pico8=>Some(72),
             _=>None,
         }
     }
@@ -1043,6 +1060,7 @@ impl Settings {
             47 => self.shader_nes=self.shader_nes.step(&Shader::HOME,right),
             48 => self.shader_snes=self.shader_snes.step(&Shader::HOME,right),
             49 => self.shader_md=self.shader_md.step(&Shader::HOME,right),
+            72 => self.shader_p8=self.shader_p8.step(&Shader::PICO8,right),
             3 => step_palette(&mut self.gb_palettes, &mut self.gb_palette, right),
             4 => {
                 let at = SPEEDS.iter().position(|x| *x == self.ff_speed).unwrap_or(0);
@@ -1747,6 +1765,27 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"shader_md":"zfastcrt"}"#).unwrap();
         assert_eq!((old.lcd_effect_gbc, old.dither_blend_md), (LcdEffect::Off, false));
         assert_eq!(Settings::look_key(slot_store::Platform::Nes), None);
+    }
+    #[test]
+    fn pico8_has_its_own_shader_off_by_default() {
+        use slot_store::Platform::Pico8;
+        let mut s = Settings::default();
+        assert_eq!(s.shader_for(Pico8), Shader::Off);
+        assert_eq!(Settings::home_shader_key(Pico8), Some(72));
+        assert!(s.change(72, true) && s.shader_for(Pico8) == Shader::PICO8[1]);
+        // Every look slot. has but Sharp Bilinear (Off already is) and the
+        // GBA's same-named Simpletex.
+        assert!(Shader::PICO8.iter().all(|s| *s != Shader::SharpBilinear && *s != Shader::SimpletexGba));
+        for list in [&Shader::GBA[..], &Shader::DMG, &Shader::GBC, &Shader::HOME] {
+            for s in list {
+                assert!(Shader::PICO8.contains(s) || matches!(s, Shader::SharpBilinear | Shader::SimpletexGba), "{s:?}");
+            }
+        }
+        assert_eq!(Settings::look_key(Pico8), None);
+        assert_eq!(s.shader_md, Shader::ZfastCrt);
+        // Older settings files have no PICO-8 shader.
+        let old: Settings = serde_json::from_str(r#"{"shader_md":"xbrlv2"}"#).unwrap();
+        assert_eq!(old.shader_p8, Shader::Off);
     }
     #[test]
     fn gba_grid_v2_migration_keeps_original_gb_gbc() {
