@@ -162,6 +162,8 @@ struct p8tex {
 /* core.c */
 int p8_boot(const char *exe, const char *home, int argc, const char *const *argv, char *err, size_t errlen);
 int p8_frame(const uint8_t *keys);
+/* The running BBS cart's .nfo (title, author ...), for Splore's Favourite. */
+void p8_set_cart_info(const char *nfo_path);
 int p8_exited(void);
 const uint8_t *p8_screen(int *w, int *h, int *pitch);
 int p8_audio_rate(void);

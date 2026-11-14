@@ -7,6 +7,7 @@
 #include "p8.h"
 #include <time.h>
 
+#include <dirent.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -127,6 +128,93 @@ static int find_pico8(const char *sys, char *exe, size_t n) {
     return -1;
 }
 
+static uint8_t *read_all(const char *p, size_t len) {
+    FILE *f = fopen(p, "rb");
+    uint8_t *b = f ? malloc(len ? len : 1) : NULL;
+    if (b && fread(b, 1, len, f) != len) { free(b); b = NULL; }
+    if (f) fclose(f);
+    return b;
+}
+
+// A cart Splore saved to the shelf (a favourite) runs from Splore's own
+// copy in bbs/carts when that is the same file: PICO-8 then knows it as
+// that BBS cart, and its pause menu's heart is Splore's favourite.
+static const char *bbs_copy(const char *home, const char *path, char *out, size_t n) {
+    struct stat st;
+    if (stat(path, &st) || st.st_size <= 0 || st.st_size > (1 << 20)) return path;
+    size_t len = (size_t)st.st_size;
+    char dir[640];
+    snprintf(dir, sizeof dir, "%s/bbs/carts", home);
+    DIR *d = opendir(dir);
+    if (!d) return path;
+    uint8_t *cart = read_all(path, len);
+    const char *found = path;
+    for (struct dirent *e; cart && found == path && (e = readdir(d));) {
+        size_t l = strlen(e->d_name);
+        if (l < 8 || strcmp(e->d_name + l - 7, ".p8.png")) continue;
+        snprintf(out, n, "%s/%s", dir, e->d_name);
+        if (stat(out, &st) || (size_t)st.st_size != len) continue;
+        uint8_t *other = read_all(out, len);
+        if (other && !memcmp(cart, other, len)) found = out;
+        free(other);
+    }
+    closedir(d);
+    free(cart);
+    return found;
+}
+
+// What Splore knows of a BBS cart, as the .nfo PICO-8 reads when Splore
+// starts one: its line in favourites.txt ("|lid |mid |catsub |author |
+// |title"), Splore's own .nfo of it, or else just its id. The .nfo's path
+// is put in `out`; false when there is none.
+static bool cart_nfo(const char *home, const char *cart, char *out, size_t n) {
+    const char *base = strrchr(cart, '/');
+    base = base ? base + 1 : cart;
+    char lid[128], mid[128], col[7][128] = {{0}};
+    size_t l = strlen(base);
+    if (l <= 7 || l - 7 >= sizeof lid) return false;
+    snprintf(lid, sizeof lid, "%.*s", (int)(l - 7), base);
+    snprintf(mid, sizeof mid, "%s", lid);
+    char *dash = strrchr(mid, '-');
+    if (dash && dash[1] && strspn(dash + 1, "0123456789") == strlen(dash + 1)) *dash = 0;
+    snprintf(out, n, "%s/favourites.txt", home);
+    FILE *f = fopen(out, "r");
+    char line[1024];
+    bool found = false;
+    while (f && !found && fgets(line, sizeof line, f)) {
+        char *s = line;
+        for (int c = 0; c < 7; c++) {
+            char *bar = strchr(s, '|');
+            size_t len = bar ? (size_t)(bar - s) : strcspn(s, "\r\n");
+            while (len && (*s == ' ')) { s++; len--; }
+            while (len && (s[len - 1] == ' ' || s[len - 1] == '\n' || s[len - 1] == '\r')) len--;
+            snprintf(col[c], sizeof col[c], "%.*s", (int)len, s);
+            if (!bar) { for (c++; c < 7; c++) col[c][0] = 0; break; }
+            s = bar + 1;
+        }
+        found = !col[0][0] && !strcmp(col[1], lid);
+    }
+    if (f) fclose(f);
+    // Not a favourite: the .nfo Splore keeps of the cart it last fetched
+    if (!found) {
+        snprintf(out, n, "%s/bbs/carts/temp-%s.nfo", home, mid);
+        if ((f = fopen(out, "r"))) {
+            bool same = fgets(line, sizeof line, f) && !strncmp(line, "lid:", 4) &&
+                        !strncmp(line + 4, lid, strlen(lid)) && strchr("\r\n", line[4 + strlen(lid)]);
+            fclose(f);
+            if (same) return true;
+        }
+    }
+    snprintf(out, n, "%s/slot-cart.nfo", home);
+    if (!(f = fopen(out, "w"))) return false;
+    if (found)
+        fprintf(f, "lid:%s\nmid:%s\ntitle:%s\nauthor:%s\ncatsub:%s\n", lid, col[2][0] ? col[2] : mid,
+                col[6][0] ? col[6] : mid, col[4], col[3]);
+    else
+        fprintf(f, "lid:%s\nmid:%s\ntitle:%s\n", lid, mid, mid);
+    return !fclose(f);
+}
+
 static void mkdirs(const char *path) {
     char p[600];
     snprintf(p, sizeof p, "%s", path);
@@ -176,7 +264,12 @@ bool retro_load_game(const struct retro_game_info *game) {
                                                              : (!path || !strncasecmp(base, "splore.", 7));
     if (!path || splore) {
         args[n++] = "-splore";
+        p8_set_cart_info(NULL);
     } else {
+        static char bbs[700];
+        path = bbs_copy(home, path, bbs, sizeof bbs);
+        char nfo[700];
+        p8_set_cart_info(path == bbs && cart_nfo(home, bbs, nfo, sizeof nfo) ? nfo : NULL);
         args[n++] = "-run";
         args[n++] = path;
     }

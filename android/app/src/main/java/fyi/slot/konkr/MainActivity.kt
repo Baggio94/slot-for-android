@@ -216,6 +216,9 @@ class MainActivity : Activity() {
     private var pendingCartLabelUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
+    /** Saves Splore's favourites in the ROM folder; see Pico8Favourites. */
+    private val pico8Worker = Executors.newSingleThreadExecutor()
+    private var pico8Favourites: android.os.FileObserver? = null
     /** Folder scans asked and not finished. */
     private val scansRunning = AtomicInteger()
     private data class PendingLibraryIndex(
@@ -1368,6 +1371,25 @@ class MainActivity : Activity() {
         } else {
             // The native first-run keycap appears on an empty shelf.
             nativeSetShelfStatus(shelfNone)
+        }
+        pico8Favourites = Pico8Favourites.watch(this) { syncPico8Favourites() }
+        syncPico8Favourites()
+    }
+
+    /** Splore's favourites not yet in the ROM folder are saved there, then
+     *  put on the shelf without a folder scan (as RomM's downloads are). */
+    private fun syncPico8Favourites() {
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) ?: return
+        val root = Uri.parse(saved)
+        if (contentResolver.persistedUriPermissions.none { it.uri == root && it.isWritePermission }) return
+        pico8Worker.execute {
+            val files = try {
+                Pico8Favourites.sync(this, root)
+            } catch (error: Exception) {
+                Log.w(TAG, "PICO-8 favourites not saved", error)
+                emptyList()
+            }
+            if (files.isNotEmpty()) runOnUiThread { if (!isDestroyed) addDownloadedGames(files) }
         }
     }
 
@@ -3558,6 +3580,8 @@ class MainActivity : Activity() {
         pendingLibraryIndex = null
         if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
         scanner.shutdownNow()
+        pico8Favourites?.stopWatching()
+        pico8Worker.shutdownNow()
         raLoginWorker.shutdownNow()
         raSmartWorker.shutdownNow()
         gameLoader.shutdownNow()

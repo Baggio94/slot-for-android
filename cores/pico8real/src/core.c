@@ -19,6 +19,8 @@ void p8_set_keys(const uint8_t *keys);
 
 static struct p8image img;
 static int mapped, booted, exited;
+static uint64_t splore_init, splore_inited, load_config, set_running_item;  // PICO-8's own (see splore_ready)
+static char cart_info[700];
 
 extern int p8_threads;  // PICO-8's own threads still running (sdl.c)
 
@@ -162,6 +164,11 @@ int p8_boot(const char *exe, const char *home, int argc, const char *const *argv
     p8_imports_init();
     if (p8_load_image(exe, &img, p8_resolve, err, errlen)) return -1;
     uint64_t main_fn = p8_symbol("main", NULL);
+    splore_init = p8_symbol("splore_init", NULL);
+    splore_inited = p8_symbol("splore_inited", NULL);
+    if (!splore_inited) splore_init = 0;
+    load_config = p8_symbol("codo_load_stable_config", NULL);
+    set_running_item = p8_symbol("set_running_item_from_nfo", NULL);
     if (!main_fn) { snprintf(err, errlen, "pico8_64 has no main"); return -1; }
 
     // argv: pointers then strings, in the shim
@@ -202,9 +209,30 @@ int p8_boot(const char *exe, const char *home, int argc, const char *const *argv
     return 0;
 }
 
+// PICO-8 sets up Splore's lists (favourites.txt and the rest) as it boots,
+// but not for a cart it runs straight away (-run): the pause menu's
+// Favourite then adds to a list never made, and crashes, and its heart
+// can't show a favourite. They are set up once the cart runs; that only
+// reads PICO-8's own files. A state from before this has none either.
+// Favourite saves what Splore knows of the running cart (its title and
+// author), which Splore would have set as it started a BBS cart.
+static void splore_ready(void) {
+    if (!splore_init || !SHIM->frames || *(volatile int32_t *)splore_inited) return;
+    p8_call_on(P8_CBSTACK, (void *)splore_init, 0, 0, 0);
+    if (cart_info[0] && load_config && set_running_item) {
+        uint64_t nfo = p8_call_on(P8_CBSTACK, (void *)load_config, (uint64_t)cart_info, 0, 0);
+        if (nfo) p8_call_on(P8_CBSTACK, (void *)set_running_item, nfo, 0, 0);
+    }
+}
+
+void p8_set_cart_info(const char *nfo_path) {
+    snprintf(cart_info, sizeof cart_info, "%s", nfo_path ? nfo_path : "");
+}
+
 // Run PICO-8 up to its next presented frame.
 int p8_frame(const uint8_t *keys) {
     if (!booted || exited) return P8_EXIT;
+    splore_ready();
     if (keys) p8_set_keys(keys);
     *(uint64_t *)P8_STACK_LO = p8_get_x18();  // for the import thunks
     uint64_t r = p8_switch(&p8_host_ctx, &SHIM->ctx, 0);
