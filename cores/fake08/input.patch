@@ -1,0 +1,405 @@
+diff --git a/platform/libretro/libretro.cpp b/platform/libretro/libretro.cpp
+index 589d4f2..ff27a59 100644
+--- a/platform/libretro/libretro.cpp
++++ b/platform/libretro/libretro.cpp
+@@ -302,6 +302,8 @@ static std::array<int, 7> buttons
+ 
+ uint8_t kHeld = 0;
+ uint8_t kDown = 0;
++// players 1-7: held buttons last frame
++uint8_t playerHeld[8];
+ 
+ int16_t picoMouseX = 0;
+ int16_t picoMouseY = 0;
+@@ -341,6 +343,18 @@ EXPORT void retro_run()
+         }
+     }
+ 
++    // players 1-7 on the frontend's ports 2-8 (no pause button)
++    for (int p = 1; p < 8; p++) {
++        uint8_t held = 0;
++        for (int i = 0; i < 6; i++) {
++            if (input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, buttons[i])) {
++                held |= BITMASK(i);
++            }
++        }
++        setPlayerInputState(p, held & ~playerHeld[p], held);
++        playerHeld[p] = held;
++    }
++
+     mouseBtnState = 0;
+ 
+     if (_memory->drawState.devkitMode) {
+diff --git a/platform/libretro/libretrohost.cpp b/platform/libretro/libretrohost.cpp
+index 64c4a07..e6b4fa0 100644
+--- a/platform/libretro/libretrohost.cpp
++++ b/platform/libretro/libretrohost.cpp
+@@ -26,8 +26,11 @@ static uint8_t stubMouseBtns;
+ 
+ std::string _currentCartDirectory;
+ 
++static uint8_t stubPDown[7];
++static uint8_t stubPHeld[7];
++
+ void setInputState(uint8_t kDown, uint8_t kHeld, int16_t mouseX, int16_t mouseY, uint8_t mouseBtns) {
+-    stubCurrKDown = kDown;
++    stubCurrKDown |= kDown;
+     stubCurrKHeld = kHeld;
+     stubMouseX = mouseX;
+     stubMouseY = mouseY;
+@@ -65,8 +68,22 @@ void Host::forceStretch(StretchOption newStretch) {
+ 
+ 
+ 
++void setPlayerInputState(int player, uint8_t kDown, uint8_t kHeld) {
++    if (player < 1 || player > 7) return;
++    stubPDown[player - 1] |= kDown;
++    stubPHeld[player - 1] = kHeld;
++}
++
+ InputState_t Host::scanInput(){
+-    return InputState_t {stubCurrKDown, stubCurrKHeld, stubMouseX, stubMouseY, stubMouseBtns, stubCurrKBdown, stubCurrKBkey};
++    InputState_t state {stubCurrKDown, stubCurrKHeld, stubMouseX, stubMouseY, stubMouseBtns, stubCurrKBdown, stubCurrKBkey};
++    for (int p = 0; p < 7; p++) {
++        state.PDown[p] = stubPDown[p];
++        state.PHeld[p] = stubPHeld[p];
++        stubPDown[p] = 0;
++    }
++    // the cart has seen these presses
++    stubCurrKDown = 0;
++    return state;
+ }
+ 
+ bool Host::shouldQuit() {
+diff --git a/platform/libretro/libretrohosthelpers.h b/platform/libretro/libretrohosthelpers.h
+index a19735a..6fe1829 100644
+--- a/platform/libretro/libretrohosthelpers.h
++++ b/platform/libretro/libretrohosthelpers.h
+@@ -2,6 +2,7 @@
+ #include <cstdint>
+ 
+ 
++void setPlayerInputState(int player, uint8_t kDown, uint8_t kHeld);
+ void setInputState(
+     uint8_t kDown,
+     uint8_t kHeld,
+diff --git a/source/Input.cpp b/source/Input.cpp
+index e430d45..ffc3828 100644
+--- a/source/Input.cpp
++++ b/source/Input.cpp
+@@ -5,55 +5,62 @@
+ #include "PicoRam.h"
+ 
+ Input::Input(PicoRam* memory):
+-    _currentKDown(0),
+-    _currentKHeld(0)
++    _frameScale(1)
+ {
+     _memory = memory;
+ 
+-    std::fill(_framesHeld, _framesHeld + 8, 0);
++    std::fill(&_currentKDown[0], &_currentKDown[0] + 8, 0);
++    std::fill(&_currentKHeld[0], &_currentKHeld[0] + 8, 0);
++    std::fill(&_framesHeld[0][0], &_framesHeld[0][0] + 64, 0);
+ }
+ 
+-void Input::SetState(uint8_t kdown, uint8_t kheld){
+-    _currentKDown = kdown;
+-    _currentKHeld = kheld;
+-    //key 6 (PAUSE MENU) only fires for one frame, even if held
+-    if ((_currentKHeld & BITMASK(6)) && !(_currentKDown & BITMASK(6))) {
+-        _currentKHeld = _currentKHeld & ~(BITMASK(6));
+-    }
+-    //memory only stores buttons 0-5, not 6 or 7
+-    _memory->hwState.buttonStates[0] = kheld & 0x3F;
+-
+-    uint8_t repeatDelay = _memory->hwState.btnpRepeatDelay == 0 
+-        ? 15 
+-        : _memory->hwState.btnpRepeatDelay;
++void Input::SetFrameScale(uint8_t scale){
++    _frameScale = scale == 0 ? 1 : scale;
++}
+ 
+-    if (repeatDelay == 255){
+-        return;
+-    }
++void Input::SetState(uint8_t kdown, uint8_t kheld){
++    uint8_t down[8] = {kdown};
++    uint8_t held[8] = {kheld};
++    SetState(down, held, 8);
++}
+ 
+-    uint8_t repeatInterval = _memory->hwState.btnpRepeatInterval == 0 
+-        ? 4 
++void Input::SetState(const uint8_t* kdown, const uint8_t* kheld, int players){
++    // btnp() repeat, from the PICO-8 manual: held for 15 frames it counts as
++    // pressed again, then every 4 frames. Custom delays (0x5f5c, 0x5f5d) are
++    // in frames at 30 fps, 255 turns repeat off. SetState runs once per
++    // 30 fps frame or twice (_frameScale) at 60 Hz, so the counts scale.
++    uint8_t delayFrames = _memory->hwState.btnpRepeatDelay == 0
++        ? 15
+         : _memory->hwState.btnpRepeatDelay;
+-
+-    for (int i = 0; i < 7; i ++) {
+-        bool down = BITMASK(i) & kheld;
+-
+-        _framesHeld[i] = down ? _framesHeld[i] + 1 : 0;
+-
+-        //update kdown to be true if held for 15 frames, then every 4th after that.
+-        //from wiki:
+-        //btnp() implements a keyboard-like repeat mechanism: if the player holds 
+-        //the button for 15 frames, it registers as on again for one frame, then 
+-        //again every four frames after that. The frame counter resets when the 
+-        //player releases the button. 
+-
+-        bool repeatPressed = 
+-            (_framesHeld[i] == repeatDelay) ||
+-            (_framesHeld[i] / repeatDelay >= 1 && _framesHeld[i] % repeatInterval == 0);
+-
+-        if (repeatPressed) {
+-            _currentKDown = _currentKDown | BITMASK(i);
++    uint8_t intervalFrames = _memory->hwState.btnpRepeatInterval == 0
++        ? 4
++        : _memory->hwState.btnpRepeatInterval;
++    bool repeat = delayFrames != 255;
++    uint16_t delay = delayFrames * _frameScale;
++    uint16_t interval = intervalFrames * _frameScale;
++
++    for (int p = 0; p < 8; p++) {
++        uint8_t down = p < players ? kdown[p] : 0;
++        uint8_t held = p < players ? kheld[p] : 0;
++        if (p == 0) {
++            //key 6 (PAUSE MENU) only fires for one frame, even if held
++            if ((held & BITMASK(6)) && !(down & BITMASK(6))) {
++                held = held & ~(BITMASK(6));
++            }
++        }
++        _currentKHeld[p] = held;
++        //memory only stores buttons 0-5, not 6 or 7
++        _memory->hwState.buttonStates[p] = held & 0x3F;
++
++        for (int i = 0; i < 7; i++) {
++            bool isHeld = BITMASK(i) & held;
++            _framesHeld[p][i] = isHeld ? _framesHeld[p][i] + 1 : 0;
++            uint16_t f = _framesHeld[p][i];
++            if (repeat && (f == delay || (f > delay && (f - delay) % interval == 0))) {
++                down = down | BITMASK(i);
++            }
+         }
++        _currentKDown[p] = down;
+     }
+ }
+ 
+@@ -68,33 +75,29 @@ void Input::SetKeyboard(bool kbDown, std::string kbKey){
+ 	_kbKey = kbKey;
+ }
+ 
+-uint8_t Input::btn(){
+-    return _currentKHeld;
++// PICO-8: player 0 in bits 0-5 (and pause in 6), player 1 in bits 8-13
++uint16_t Input::btn(){
++    return _currentKHeld[0] | ((_currentKHeld[1] & 0x3F) << 8);
+ }
+ 
+-//todo: repetition behavior to match pico 8
+-uint8_t Input::btnp(){
+-    return _currentKDown;
++uint16_t Input::btnp(){
++    return _currentKDown[0] | ((_currentKDown[1] & 0x3F) << 8);
+ }
+ 
+ bool Input::btn(uint8_t i){
+-    return BITMASK(i) & btn();
++    return btn(i, 0);
+ }
+ 
+-//todo: repetition behavior to match pico 8
+ bool Input::btnp(uint8_t i){
+-    return BITMASK(i) & btnp();
++    return btnp(i, 0);
+ }
+ 
+ bool Input::btn(uint8_t i, uint8_t p){
+-    //no multiplayer support for now
+-    return p == 0 ? btn(i) : 0;
++    return i < 8 && p < 8 && (BITMASK(i) & _currentKHeld[p]);
+ }
+ 
+-//todo: repetition behavior to match pico 8
+ bool Input::btnp(uint8_t i, uint8_t p){
+-    //no multiplayer support for now
+-    return p == 0 ? btnp(i) : 0;
++    return i < 8 && p < 8 && (BITMASK(i) & _currentKDown[p]);
+ }
+ 
+ int16_t Input::getMouseX() {
+diff --git a/source/Input.h b/source/Input.h
+index 2fb0d26..cd1664f 100644
+--- a/source/Input.h
++++ b/source/Input.h
+@@ -5,10 +5,13 @@
+ 
+ class Input{
+     PicoRam* _memory;
+-	uint8_t _currentKDown;
+-    uint8_t _currentKHeld;
++	uint8_t _currentKDown[8];
++    uint8_t _currentKHeld[8];
+ 
+-	uint16_t _framesHeld[8];
++	// frames each button of each player has been held, in calls to SetState
++	uint16_t _framesHeld[8][8];
++	// calls to SetState per 30 fps frame: 2 when it runs at 60 Hz
++	uint8_t _frameScale;
+ 
+     int16_t _mouseX;
+     int16_t _mouseY;
+@@ -19,12 +22,16 @@ class Input{
+     public:
+     Input(PicoRam* memory);
+     void SetState(uint8_t kdown, uint8_t kheld);
++    // every player at once: player 0 first
++    void SetState(const uint8_t* kdown, const uint8_t* kheld, int players);
++    // 2 when SetState runs at 60 Hz (an _update60 cart, the pause menu)
++    void SetFrameScale(uint8_t scale);
+     void SetMouse(int16_t mouseX, int16_t mouseY, uint8_t mouseBtnState);
+ 	
+     void SetKeyboard(bool kbdown, std::string kbkey);
+ 
+-	uint8_t btn();
+-    uint8_t btnp();
++	uint16_t btn();
++    uint16_t btnp();
+ 
+     bool btn(uint8_t i);
+     bool btnp(uint8_t i);
+diff --git a/source/hostVmShared.h b/source/hostVmShared.h
+index b0e1dc7..a9dab8e 100644
+--- a/source/hostVmShared.h
++++ b/source/hostVmShared.h
+@@ -77,6 +77,11 @@ struct InputState_t {
+ 	uint8_t mouseBtnState;
+ 	bool KBdown;
+ 	std::string KBkey;
++
++	// players 1-7 (PICO-8 numbers players from 0); hosts that leave these
++	// out have one player
++	uint8_t PDown[7];
++	uint8_t PHeld[7];
+ };
+ 
+ enum PrintMode_t
+diff --git a/source/p8GlobalLuaFunctions.h b/source/p8GlobalLuaFunctions.h
+index 3158b96..79281b6 100644
+--- a/source/p8GlobalLuaFunctions.h
++++ b/source/p8GlobalLuaFunctions.h
+@@ -539,19 +539,15 @@ function __z8_run_cart(cart_code)
+         if _update or _update60 or _draw then
+             while true do
+                 if _update60 then
+-                    _update_buttons()
++                    _update_buttons(2)
+                     _update60()
+                 else
+                     yield() -- yield each other frame for 30fps
+                     _update_buttons()
+                     if (_update) _update()
+                 end
+-                if _draw then
+-                    _draw()
+-                    flip()
+-                else
+-                    yield()
+-                end
++                if (_draw) _draw()
++                yield()
+             end
+         end
+     ]]
+@@ -601,7 +597,7 @@ function __z8_tick()
+ 
+     -- Check if pause menu is active
+     if __ispaused() then
+-        _update_buttons()
++        _update_buttons(2)
+         __f08_menu_update()
+         __f08_menu_draw()
+         return 0
+diff --git a/source/picoluaapi.cpp b/source/picoluaapi.cpp
+index 721abb7..7f95083 100644
+--- a/source/picoluaapi.cpp
++++ b/source/picoluaapi.cpp
+@@ -765,7 +765,7 @@ int fillp(lua_State *L) {
+ int btn(lua_State *L){
+     int numArgs = lua_gettop(L);
+     if (numArgs == 0) {
+-        uint8_t btnstate = _inputForLuaApi->btn();
++        uint16_t btnstate = _inputForLuaApi->btn();
+ 
+         lua_pushnumber(L, btnstate);
+     }
+@@ -786,7 +786,7 @@ int btn(lua_State *L){
+ int btnp(lua_State *L){
+     int numArgs = lua_gettop(L);
+     if (numArgs == 0) {
+-        uint8_t btnpstate = _inputForLuaApi->btnp();
++        uint16_t btnpstate = _inputForLuaApi->btnp();
+ 
+         lua_pushnumber(L, btnpstate);
+     }
+@@ -1309,7 +1309,8 @@ int srand(lua_State *L) {
+ }
+ 
+ int _update_buttons(lua_State *L) {
+-    _vmForLuaApi->update_buttons();
++    int scale = lua_gettop(L) > 0 ? (int)lua_tonumber(L, 1) : 1;
++    _vmForLuaApi->update_buttons(scale == 2 ? 2 : 1);
+     
+     return 0;
+ }
+diff --git a/source/vm.cpp b/source/vm.cpp
+index 63a6a63..32cb4f4 100644
+--- a/source/vm.cpp
++++ b/source/vm.cpp
+@@ -1190,7 +1190,7 @@ void Vm::api_srand(fix32 seed)
+     }
+ }
+ 
+-void Vm::update_buttons() {
++void Vm::update_buttons(int scale) {
+     //get button states from hardware
+     auto inputState = _host->scanInput();
+     
+@@ -1208,7 +1208,17 @@ void Vm::update_buttons() {
+         return;
+     }
+     
+-    _input->SetState(inputState.KDown, inputState.KHeld);
++    // update_buttons runs once per cart frame: the Lua loop says whether
++    // that is 30 or 60 times a second (the libretro build's _targetFps is
++    // always 60)
++    _input->SetFrameScale(scale);
++    uint8_t down[8] = {inputState.KDown};
++    uint8_t held[8] = {inputState.KHeld};
++    for (int p = 1; p < 8; p++) {
++        down[p] = inputState.PDown[p - 1];
++        held[p] = inputState.PHeld[p - 1];
++    }
++    _input->SetState(down, held, 8);
+     if (_memory->drawState.devkitMode) {
+         _input->SetMouse(inputState.mouseX, inputState.mouseY, inputState.mouseBtnState);
+         _input->SetKeyboard(inputState.KBdown,inputState.KBkey);
+diff --git a/source/vm.h b/source/vm.h
+index 7206d7f..0152e05 100644
+--- a/source/vm.h
++++ b/source/vm.h
+@@ -138,7 +138,8 @@ class Vm {
+     fix32 api_rnd(fix32 inRange);
+     void api_srand(fix32 seed);
+ 
+-    void update_buttons();
++    // scale: calls per 30 fps frame (2 at 60 Hz)
++    void update_buttons(int scale = 1);
+ 
+     // void vm_flip();
+     void vm_run();
