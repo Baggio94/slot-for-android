@@ -1090,6 +1090,11 @@ impl GameSession {
         self.layouts[0].as_ref().and_then(|layout| layout.shoulders)
     }
 
+    /// Port 1's C / Z role, where C and Z are spare (as L1 / R1's).
+    pub fn cz_role(&self) -> Option<crate::controls::ShoulderRole> {
+        self.layouts[0].as_ref().and_then(|layout| layout.cz)
+    }
+
     /// slot.'s buttons on `port` as the core reads them on `frame`.
     fn pad(&self, port: usize, buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
         match &self.layouts[port] {

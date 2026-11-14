@@ -250,6 +250,10 @@ impl Engine {
         self.controls.hotkeys.sticks = reported || self.controls.builtin_sticks;
     }
 
+    /// A controller with C and Z is connected (Android says so): the
+    /// Systems' Controls offer a C / Z row.
+    pub(super) fn six_buttons(&self) -> bool { self.pad_devices.iter().any(|d| d.cz) }
+
     /// A key from one of Android's input devices.
     pub(super) fn pad_key(&mut self, device: i32, code: i32, pressed: bool, stick: bool) {
         let held = if stick { code | STICK_KEY } else { code };
@@ -556,7 +560,7 @@ impl Engine {
             }
             ShelfOverlay::LayoutPort { platform, game, port, row } => {
                 let scope = self.layout_scope(platform, game);
-                let rows = controls::layout_rows(scope.system());
+                let rows = controls::layout_rows(scope.system(), self.six_buttons());
                 let line = rows.get(row).copied().unwrap_or(LayoutRow::Reset);
                 let default_xy = self.default_xy(game);
                 match (code, line) {
@@ -577,6 +581,10 @@ impl Engine {
                     }
                     (21 | 22 | 96, LayoutRow::Xy) => {
                         self.controls.cycle_xy(&scope, port, code != 21, default_xy);
+                        self.persist_controls();
+                    }
+                    (21 | 22 | 96, LayoutRow::Cz) => {
+                        self.controls.cycle_cz(&scope, port, code != 21);
                         self.persist_controls();
                     }
                     (21 | 22 | 96, LayoutRow::Shoulders) => {
@@ -688,7 +696,7 @@ impl Engine {
                 let system = scope.system();
                 let listen = self.controls_listen;
                 let default_xy = self.default_xy(game);
-                let rows = controls::layout_rows(system);
+                let rows = controls::layout_rows(system, self.six_buttons());
                 let lines: Vec<ControlsLine> = rows.iter().map(|item| match *item {
                     LayoutRow::Button(button) => {
                         let (slot, own) = self.controls.bind(&scope, port, button);
@@ -703,6 +711,10 @@ impl Engine {
                         let (role, own) = self.controls.xy(&scope, port, default_xy);
                         dim(line("X / Y", role.label().into(), true), own)
                     }
+                    LayoutRow::Cz => {
+                        let (role, own) = self.controls.cz(&scope, port);
+                        dim(line("C / Z", role.cz_label().into(), true), own)
+                    }
                     LayoutRow::Shoulders => {
                         let (role, own) = self.controls.shoulders(&scope, port);
                         dim(line("L1 / R1", role.label().into(), true), own)
@@ -712,7 +724,7 @@ impl Engine {
                 let hints = match (listen, rows.get(row)) {
                     (Some(_), _) => vec![("SLOT", "Cancel")],
                     (None, Some(LayoutRow::Button(_))) => vec![("A", "Map"), ("Y", "Clear"), ("B", "Back")],
-                    (None, Some(LayoutRow::Xy | LayoutRow::Shoulders)) => vec![("SWAP", "Change"), ("B", "Back")],
+                    (None, Some(LayoutRow::Xy | LayoutRow::Cz | LayoutRow::Shoulders)) => vec![("SWAP", "Change"), ("B", "Back")],
                     _ => vec![("A", "Select"), ("B", "Back")],
                 };
                 let single = !controls::takes_port2(system);
