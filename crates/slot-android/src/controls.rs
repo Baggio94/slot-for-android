@@ -493,11 +493,12 @@ pub fn slot_button_name(slot: u16) -> &'static str {
 }
 
 /// A button of the console. `core` is the joypad bit the core reads it
-/// from; slot.'s button with that same bit plays it by default.
+/// from; `slot` is slot.'s button that plays it by default, mostly the
+/// one with that same bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ConsoleButton { pub name: &'static str, pub core: u16 }
+pub struct ConsoleButton { pub name: &'static str, pub core: u16, pub slot: u16 }
 
-const fn cb(name: &'static str, core: u16) -> ConsoleButton { ConsoleButton { name, core } }
+const fn cb(name: &'static str, core: u16) -> ConsoleButton { ConsoleButton { name, core, slot: core } }
 const DPAD: [ConsoleButton; 4] =
     [cb("Up", bit::UP), cb("Down", bit::DOWN), cb("Left", bit::LEFT), cb("Right", bit::RIGHT)];
 const GBA: [ConsoleButton; 10] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
@@ -515,9 +516,12 @@ const MD: [ConsoleButton; 12] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
     cb("X", bit::L), cb("Y", bit::X), cb("Z", bit::R),
     cb("Mode", bit::SELECT), cb("START", bit::START)];
 
-/// fake-08 reads PICO-8's O from B, X from A and Pause from START.
+/// fake-08 reads PICO-8's O from B, X from A and Pause from START. O, the
+/// button most carts jump or confirm with, is on A by default and X on B.
 const PICO8: [ConsoleButton; 7] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
-    cb("O", bit::B), cb("X", bit::A), cb("Pause", bit::START)];
+    ConsoleButton { name: "O", core: bit::B, slot: bit::A },
+    ConsoleButton { name: "X", core: bit::A, slot: bit::B },
+    cb("Pause", bit::START)];
 
 /// Systems, by the names slot. files their controls under.
 pub const SYSTEMS: [&str; 7] = ["gba", "gbc", "gb", "nes", "snes", "md", "p8"];
@@ -532,6 +536,21 @@ pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
     }
 }
 
+/// The console buttons slot.'s A and B play by default: what the "A / B"
+/// roles of X / Y, L1 / R1 and C / Z press, by name and core bit (O / X
+/// on PICO-8).
+fn role_buttons(system: &str) -> [ConsoleButton; 2] {
+    let by_slot = |slot: u16, fallback: ConsoleButton| console_buttons(system).iter()
+        .find(|button| button.slot == slot).copied().unwrap_or(fallback);
+    [by_slot(bit::A, cb("A", bit::A)), by_slot(bit::B, cb("B", bit::B))]
+}
+
+/// The slot. buttons the plain X / Y role plays A and B on: Y and X, or on
+/// PICO-8 X and Y, the order turbo has (X is O, Y is X).
+fn plain_xy(system: &str) -> [u16; 2] {
+    if system == "p8" { [bit::X, bit::Y] } else { [bit::Y, bit::X] }
+}
+
 /// Only NES, SNES and Mega Drive take a second player.
 pub fn takes_port2(system: &str) -> bool { matches!(system, "nes" | "snes" | "md") }
 
@@ -540,7 +559,8 @@ pub fn takes_port2(system: &str) -> bool { matches!(system, "nes" | "snes" | "md
 pub enum XyRole {
     /// Original slot.: X is turbo A, Y turbo B.
     TurboAB,
-    /// Y is a second A, X a second B.
+    /// Y is a second A, X a second B; on PICO-8, in turbo's order: X is
+    /// a second O, Y a second X (plain_xy).
     BA,
     Off,
     /// GBA only: Y is L, X is R (Siham 2026-11-16).
@@ -549,10 +569,15 @@ pub enum XyRole {
 
 impl XyRole {
     pub const ALL: [XyRole; 3] = [XyRole::TurboAB, XyRole::BA, XyRole::Off];
-    pub fn label(self) -> &'static str {
+    /// In the console's names: "Turbo O / X" on PICO-8.
+    pub fn label(self, system: &str) -> String {
+        let [a, b] = role_buttons(system).map(|button| button.name);
         match self {
-            XyRole::TurboAB => "Turbo A / B", XyRole::BA => "B / A", XyRole::Off => "None",
-            XyRole::LR => "L / R",
+            XyRole::TurboAB => format!("Turbo {a} / {b}"),
+            XyRole::BA if plain_xy(system) == [bit::X, bit::Y] => format!("{a} / {b}"),
+            XyRole::BA => format!("{b} / {a}"),
+            XyRole::Off => "None".into(),
+            XyRole::LR => "L / R".into(),
         }
     }
     /// The X / Y row's values on a system: L / R where the console has them.
@@ -570,24 +595,26 @@ impl XyRole {
 pub enum ShoulderRole { ScreenSize, States, TurboAB, AB, Palette, Shader, Off }
 
 impl ShoulderRole {
-    pub fn label(self) -> &'static str {
+    /// In the console's names: "Turbo O / X" on PICO-8.
+    pub fn label(self, system: &str) -> String {
+        let [a, b] = role_buttons(system).map(|button| button.name);
         match self {
-            ShoulderRole::ScreenSize => "Screen Size",
-            ShoulderRole::States => "Load / Save",
-            ShoulderRole::TurboAB => "Turbo A / B",
-            ShoulderRole::AB => "A / B",
-            ShoulderRole::Palette => "Palette - / +",
-            ShoulderRole::Shader => "Shader - / +",
-            ShoulderRole::Off => "None",
+            ShoulderRole::ScreenSize => "Screen Size".into(),
+            ShoulderRole::States => "Load / Save".into(),
+            ShoulderRole::TurboAB => format!("Turbo {a} / {b}"),
+            ShoulderRole::AB => format!("{a} / {b}"),
+            ShoulderRole::Palette => "Palette - / +".into(),
+            ShoulderRole::Shader => "Shader - / +".into(),
+            ShoulderRole::Off => "None".into(),
         }
     }
 
     /// The C / Z row's label: C saves and Z loads, so Load / Save reads
     /// Save / Load there. The first half is still C's.
-    pub fn cz_label(self) -> &'static str {
+    pub fn cz_label(self, system: &str) -> String {
         match self {
-            ShoulderRole::States => "Save / Load",
-            other => other.label(),
+            ShoulderRole::States => "Save / Load".into(),
+            other => other.label(system),
         }
     }
 
@@ -601,8 +628,8 @@ impl ShoulderRole {
 }
 
 /// X / Y and L1 / R1 rows: on which systems they are spare.
-pub fn spare_xy(system: &str) -> bool { matches!(system, "gba" | "gb" | "gbc" | "nes") }
-pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes") }
+pub fn spare_xy(system: &str) -> bool { matches!(system, "gba" | "gb" | "gbc" | "nes" | "p8") }
+pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes" | "p8") }
 /// C / Z row: every system but the Mega Drive, whose pad has them.
 pub fn spare_cz(system: &str) -> bool { system != "md" }
 
@@ -652,6 +679,10 @@ pub struct Resolved {
     pub shoulders: Option<ShoulderRole>,
     /// None where C and Z are console buttons, or play one.
     pub cz: Option<ShoulderRole>,
+    /// The core bits the "A / B" roles press (role_buttons).
+    pub ab: [u16; 2],
+    /// The slot. buttons the plain X / Y role plays them on (plain_xy).
+    pub plain_xy: [u16; 2],
 }
 
 impl Resolved {
@@ -668,14 +699,15 @@ impl Resolved {
         }
         // Original slot. turbo: on for three frames, off for three.
         let turbo_on = (frame / 3) % 2 == 0;
+        let [core_a, core_b] = self.ab;
         let mut second = |held: u16, a: u16, b: u16, turbo: bool| {
             if turbo && !turbo_on { return; }
-            if slot & held & a != 0 { out |= bit::A; }
-            if slot & held & b != 0 { out |= bit::B; }
+            if slot & held & a != 0 { out |= core_a; }
+            if slot & held & b != 0 { out |= core_b; }
         };
         match self.xy {
             Some(XyRole::TurboAB) => second(bit::X | bit::Y, bit::X, bit::Y, true),
-            Some(XyRole::BA) => second(bit::X | bit::Y, bit::Y, bit::X, false),
+            Some(XyRole::BA) => second(bit::X | bit::Y, self.plain_xy[0], self.plain_xy[1], false),
             _ => {}
         }
         match self.shoulders {
@@ -731,7 +763,7 @@ impl Controls {
         if let Some(slot) = own { return (slot, true); }
         let below = self.levels(scope, port).into_iter()
             .find_map(|level| level.binds.get(button.name).copied());
-        (below.unwrap_or(button.core), false)
+        (below.unwrap_or(button.slot), false)
     }
 
     /// Console button `index` <- slot.'s button `slot`. A console button
@@ -837,7 +869,8 @@ impl Controls {
         let cz = (spare_cz(system) && !used(bit::C | bit::Z))
             .then(|| self.cz(&scope, port).0)
             .filter(|role| *role != ShoulderRole::Off);
-        Resolved { pairs, xy, shoulders, cz }
+        Resolved { pairs, xy, shoulders, cz, ab: role_buttons(system).map(|button| button.core),
+            plain_xy: plain_xy(system) }
     }
 }
 
@@ -1471,15 +1504,54 @@ mod tests {
     }
 
     #[test]
-    fn pico8_plays_o_x_and_pause_from_b_a_and_start() {
+    fn pico8_plays_o_from_a_x_from_b_and_pause_from_start() {
         let resolved = Controls::default().resolve("p8", None, 0, XyRole::BA);
         let dpad = bit::UP | bit::DOWN | bit::LEFT | bit::RIGHT;
         assert_eq!(resolved.apply(dpad, 0), dpad);
-        assert_eq!(resolved.apply(bit::B, 0), bit::B, "O");
-        assert_eq!(resolved.apply(bit::A, 0), bit::A, "X");
+        // fake-08 reads O from the core's B and X from its A.
+        assert_eq!(resolved.apply(bit::A, 0), bit::B, "O");
+        assert_eq!(resolved.apply(bit::B, 0), bit::A, "X");
         assert_eq!(resolved.apply(bit::START, 0), bit::START, "Pause");
         let names: Vec<_> = console_buttons("p8").iter().map(|b| b.name).collect();
         assert_eq!(names, ["Up", "Down", "Left", "Right", "O", "X", "Pause"]);
+        let p8 = Scope::System("p8");
+        assert_eq!(Controls::default().bind(&p8, 0, 4), (bit::A, false));
+        assert_eq!(Controls::default().bind(&p8, 0, 5), (bit::B, false));
+    }
+
+    #[test]
+    fn pico8_takes_x_y_and_l1_r1_rows_in_o_x_terms() {
+        use ShoulderRole::*;
+        let rows = layout_rows("p8", true);
+        assert_eq!(&rows[rows.len() - 4..],
+            &[LayoutRow::Xy, LayoutRow::Cz, LayoutRow::Shoulders, LayoutRow::Reset]);
+        assert_eq!(XyRole::TurboAB.label("p8"), "Turbo O / X");
+        assert_eq!(XyRole::BA.label("p8"), "O / X");
+        assert_eq!(AB.label("p8"), "O / X");
+        assert_eq!(TurboAB.label("p8"), "Turbo O / X");
+        assert_eq!(TurboAB.label("nes"), "Turbo A / B");
+        assert_eq!(XyRole::BA.label("gb"), "B / A");
+        // Turbo O / X: X is turbo O, Y turbo X; O / X: X a second O, Y a second X.
+        let mut controls = Controls::default();
+        let layout = controls.resolve("p8", None, 0, XyRole::TurboAB);
+        assert_eq!(layout.apply(bit::X, 0), bit::B, "turbo O");
+        assert_eq!(layout.apply(bit::Y, 0), bit::A, "turbo X");
+        assert_eq!(layout.apply(bit::X, 3), 0, "turbo is off on frames 3-5");
+        let layout = controls.resolve("p8", None, 0, XyRole::BA);
+        assert_eq!(layout.apply(bit::X, 3), bit::B, "X plays O");
+        assert_eq!(layout.apply(bit::Y, 3), bit::A, "Y plays X");
+        // L1 / R1: Screen Size by default, O / X when chosen.
+        assert_eq!(layout.shoulders, Some(ScreenSize));
+        let p8 = Scope::System("p8");
+        controls.layout_mut(&p8).ports[0].shoulders = Some(AB);
+        let layout = controls.resolve("p8", None, 0, XyRole::BA);
+        assert_eq!(layout.apply(bit::L, 3), bit::B, "L1 plays O");
+        assert_eq!(layout.apply(bit::R, 3), bit::A, "R1 plays X");
+        // O on Y: X and Y are no longer spare, Y plays O itself.
+        controls.map_console(&p8, 0, 4, bit::Y);
+        let layout = controls.resolve("p8", None, 0, XyRole::BA);
+        assert_eq!(layout.xy, None);
+        assert_eq!(layout.apply(bit::Y, 0), bit::B);
     }
 
     /// game.rs's pad_buttons before Controls, for the comparison above.
@@ -1609,8 +1681,10 @@ mod tests {
         assert_eq!(layout.cz, Some(States));
         assert_eq!(layout.apply(bit::C | bit::Z, 0), 0);
         // C saves and Z loads, and the row says so in that order.
-        assert_eq!((States.label(), States.cz_label()), ("Load / Save", "Save / Load"));
-        assert_eq!(Shader.cz_label(), Shader.label());
+        assert_eq!((States.label("snes"), States.cz_label("snes")),
+            ("Load / Save".to_owned(), "Save / Load".to_owned()));
+        assert_eq!(Shader.cz_label("snes"), Shader.label("snes"));
+        assert_eq!(TurboAB.cz_label("p8"), "Turbo O / X");
         // A game's page starts from its system's; port 2 only gets buttons.
         let game = Scope::Game { system: "snes", game: "mario".into() };
         assert_eq!(controls.cz(&game, 0), (States, false));
