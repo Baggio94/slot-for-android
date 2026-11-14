@@ -249,6 +249,15 @@ impl LinkConfig {
                 digest.update(&portable_core_recipe(self.backend));
                 digest.update(self.core_file.file_name().map_or(&[][..],
                     |name| name.as_encoded_bytes()));
+                // fake-08's patches decide its state layout and its Lua
+                // tables' order: both consoles must carry the same ones.
+                if self.core_file.file_name().is_some_and(|name|
+                    name.as_encoded_bytes().starts_with(b"libfake08")) {
+                    for bytes in FAKE08_PATCHES {
+                        digest.update(&(bytes.len() as u64).to_be_bytes());
+                        digest.update(bytes);
+                    }
+                }
                 let mut hash = [0; 32];
                 hash.copy_from_slice(digest.finish().as_ref());
                 hash
@@ -257,6 +266,16 @@ impl LinkConfig {
         })
     }
 }
+
+const FAKE08_PATCHES: [&[u8]; 7] = [
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/input.patch")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/netplay-seed.patch")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/savestates.patch")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/sine-table.patch")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/text-cart-rom.patch")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/true-black.patch")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/vm-memmove.patch")),
+];
 
 /// How long an Internet host keeps its room open for the friend to type the
 /// code. Far longer than on Wi-Fi: the code travels by message first.
