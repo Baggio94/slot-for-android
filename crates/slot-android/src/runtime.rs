@@ -7334,14 +7334,6 @@ impl Engine {
             let goal = if self.lid_covered { 1.0 } else { 0.0 };
             let step = if self.settings.rotate_animations { elapsed.min(0.05) / LID_ANIMATION_S } else { 1.0 };
             self.lid_t = if goal > self.lid_t { (self.lid_t + step).min(goal) } else { (self.lid_t - step).max(goal) };
-            // Shut, the Rotate is held with L1/R1 up and the screen's top on
-            // the left: the whole picture turns a quarter clockwise as it
-            // closes, back as it opens (Siham 2026-11-14).
-            let turn = if rg_rotate() && self.lid_t > 0.0 {
-                let t = self.lid_t;
-                std::f32::consts::FRAC_PI_2 * t * t * (3.0 - 2.0 * t)
-            } else { 0.0 };
-            self.gpu.set_turn(turn);
         }
 
         // Measure real libretro simulation FPS independently of the optional

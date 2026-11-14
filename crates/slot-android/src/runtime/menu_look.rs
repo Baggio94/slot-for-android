@@ -674,15 +674,6 @@ mod render {
         enc.write_header().unwrap().write_image_data(&rgba).unwrap();
     }
 
-    fn save_window(engine: &Engine, dir: &std::path::Path, name: &str) {
-        let rgba = engine.gpu.read_window(engine.size);
-        let file = std::io::BufWriter::new(std::fs::File::create(dir.join(name)).unwrap());
-        let mut enc = png::Encoder::new(file, engine.size.0, engine.size.1);
-        enc.set_color(png::ColorType::Rgba);
-        enc.set_depth(png::BitDepth::Eight);
-        enc.write_header().unwrap().write_image_data(&rgba).unwrap();
-    }
-
     #[test]
     fn render_menus() {
         let Ok(dir) = std::env::var("SCRATCH_MENUS") else { return };
@@ -755,10 +746,7 @@ mod render {
             // Halfway through the close, then closed.
             for _ in 0..12 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
             save(&engine, &dir, &format!("1{mode}_{name}_closing.png"));
-            save_window(&engine, &dir, &format!("1{mode}_{name}_closing_window.png"));
             shoot(&mut engine, &dir, &format!("1{mode}_{name}.png"));
-            // What the panel shows: turned for the closed Rotate.
-            save_window(&engine, &dir, &format!("1{mode}_{name}_window.png"));
             engine.handle(Input::LidCover(false));
             shoot(&mut engine, &dir, &format!("1{mode}_{name}_open.png"));
         }

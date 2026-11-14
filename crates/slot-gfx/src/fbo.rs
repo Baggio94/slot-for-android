@@ -34,9 +34,6 @@ pub struct Compositor {
     blit: gl::types::GLuint,
     u_gain: gl::types::GLint,
     u_blit_uv: gl::types::GLint,
-    u_blit_turn: gl::types::GLint,
-    /// The whole picture's clockwise turn, in radians.
-    turn: f32,
     split: Option<f32>,
     gain: [f32; 3],
     shake: f32,
@@ -102,10 +99,7 @@ impl Compositor {
             let u_gain = crate::gl::uniform_location(blit, "u_gain");
             let u_blit_uv = crate::gl::uniform_location(blit, "u_uv");
             gl::Uniform4f(u_blit_uv, 0.0, 0.0, 1.0, 1.0);
-            let u_blit_turn = crate::gl::uniform_location(blit, "u_turn");
-            gl::Uniform2f(u_blit_turn, 1.0, 0.0);
             gl::UseProgram(bezel_prog);
-            gl::Uniform2f(crate::gl::uniform_location(bezel_prog, "u_turn"), 1.0, 0.0);
             gl::Uniform1i(crate::gl::uniform_location(bezel_prog, "u_tex"), 0);
             let u_bezel_gain = crate::gl::uniform_location(bezel_prog, "u_gain");
             let u_bezel_alpha = crate::gl::uniform_location(bezel_prog, "u_alpha");
@@ -125,8 +119,6 @@ impl Compositor {
                 blit,
                 u_gain,
                 u_blit_uv,
-                u_blit_turn,
-                turn: 0.0,
                 split: None,
                 gain: blue_light_gain(0),
                 shake: 0.0,
@@ -170,7 +162,6 @@ impl Compositor {
         fresh.split = self.split;
         fresh.gain = self.gain;
         fresh.shake = self.shake;
-        fresh.turn = self.turn;
         fresh.lift = self.lift;
         fresh.screen = self.screen;
         if let Some((w, h, rgba)) = &self.bezel_pixels {
@@ -365,13 +356,6 @@ impl Compositor {
         self.shake = dx;
     }
 
-    /// Turns the whole picture clockwise by `radians` as it reaches the
-    /// window (the closed RG Rotate, held the other way up). Square
-    /// windows only: elsewhere a turn would stretch it.
-    pub fn set_turn(&mut self, radians: f32) {
-        self.turn = radians;
-    }
-
     pub fn read_frame(&self) -> Vec<u8> {
         let (w, h) = self.size;
         let stride = w as usize * 4;
@@ -503,7 +487,6 @@ impl Compositor {
             gl::UseProgram(self.blit);
             gl::ActiveTexture(gl::TEXTURE0);
             gl::Uniform3f(self.u_gain, self.gain[0], self.gain[1], self.gain[2]);
-            gl::Uniform2f(self.u_blit_turn, self.turn.cos(), self.turn.sin());
             gl::BindTexture(gl::TEXTURE_2D, self.tex);
         }
         if let (Some(started), Some(p)) = (state_started, profile.as_deref_mut()) {
