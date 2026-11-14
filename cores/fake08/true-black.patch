@@ -1,0 +1,14 @@
+diff --git a/platform/libretro/libretro.cpp b/platform/libretro/libretro.cpp
+index 8d3fb65..b5f1616 100644
+--- a/platform/libretro/libretro.cpp
++++ b/platform/libretro/libretro.cpp
+@@ -227,6 +227,9 @@ EXPORT void retro_init()
+     for(int i = 0; i < 144; i++){
+         _rgb565Colors[i] = (((paletteColors[i].Red & 0xf8)<<8) + ((paletteColors[i].Green & 0xfc)<<3)+(paletteColors[i].Blue>>3));
+     }
++    // fake-08's black is {2, 4, 8} (a colour key on other platforms);
++    // PICO-8 shows #000000, and an OLED screen stays off
++    _rgb565Colors[0] = 0;
+ 
+     _vm->SetCartList(_host->listcarts());
+ 
