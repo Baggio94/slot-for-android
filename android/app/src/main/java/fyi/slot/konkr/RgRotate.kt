@@ -149,6 +149,10 @@ internal class LidCover(
     private val sleep = Runnable {
         if (!closed) return@Runnable
         if (canSleep && !noLock) {
+            // Asleep, the lock screen must take the lid's repeats: slot. on
+            // top of it would leave no window for them (isn't responding,
+            // 2.4.0-menus8 on Siham's Rotate). Back on top at screen-on.
+            activity.setShowWhenLocked(false)
             runCatching { policy?.lockNow() }
                 .onFailure { Log.w("SlotKonkr", "Rotate: lockNow refused", it) }
             handler.postDelayed(checkLocked, 500L)
@@ -305,7 +309,10 @@ internal class LidCover(
         if (screenReceiver != null) return
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                if (intent.action == Intent.ACTION_SCREEN_ON) awake()
+                if (intent.action == Intent.ACTION_SCREEN_ON) {
+                    showOverLockScreen()
+                    awake()
+                }
             }
         }
         activity.registerReceiver(receiver, IntentFilter(Intent.ACTION_SCREEN_ON))
