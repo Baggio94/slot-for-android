@@ -1859,6 +1859,7 @@ dependencies = [
  "slot-store",
  "slot-ui",
  "tempfile",
+ "ureq",
 ]
 
 [[package]]

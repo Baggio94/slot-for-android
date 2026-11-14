@@ -66,6 +66,7 @@ internal object Systems {
         "genesis_plus_gx" to "Genesis Plus GX",
         "picodrive" to "PicoDrive",
         "fake08" to "fake-08",
+        "pico8" to "PICO-8",
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
@@ -81,7 +82,7 @@ internal object Systems {
         NES -> listOf("fceumm", "nestopia")
         SNES -> listOf("snes9x", "bsnes")
         MD -> listOf("genesis_plus_gx", "picodrive")
-        P8 -> listOf("fake08")
+        P8 -> listOf("fake08", "pico8")
         else -> emptyList()
     }
 

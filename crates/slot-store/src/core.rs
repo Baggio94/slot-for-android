@@ -18,15 +18,18 @@ pub enum Core {
     Bsnes,
     GenesisPlusGx,
     Picodrive,
-    /// PICO-8's only core: both sockets of its board.
+    /// PICO-8's first socket: the open-source PICO-8 player.
     Fake08,
+    /// PICO-8's second socket: the player's own PICO-8 (the Raspberry Pi
+    /// build in the BIOS folder) run by slot.'s own core, with Splore.
+    Pico8,
 }
 
 impl Core {
-    pub const ALL: [Core; 10] = [
+    pub const ALL: [Core; 11] = [
         Core::Mgba, Core::Gpsp, Core::Gambatte,
         Core::Fceumm, Core::Nestopia, Core::Snes9x, Core::Bsnes,
-        Core::GenesisPlusGx, Core::Picodrive, Core::Fake08,
+        Core::GenesisPlusGx, Core::Picodrive, Core::Fake08, Core::Pico8,
     ];
 
     /// libretro's own core name: lib{as_str}_libretro.so, and the key
@@ -43,6 +46,7 @@ impl Core {
             Core::GenesisPlusGx => "genesis_plus_gx",
             Core::Picodrive => "picodrive",
             Core::Fake08 => "fake08",
+            Core::Pico8 => "pico8",
         }
     }
 
@@ -72,6 +76,7 @@ impl Core {
             Core::GenesisPlusGx => "Genesis Plus GX",
             Core::Picodrive => "PicoDrive",
             Core::Fake08 => "fake-08",
+            Core::Pico8 => "PICO-8",
         }
     }
 
@@ -96,8 +101,8 @@ impl Core {
     }
 
     /// The second socket on the board: gpSP for GBA, Gambatte for GB/GBC,
-    /// Nestopia for NES, bsnes for SNES, PicoDrive for Mega Drive. PICO-8
-    /// has fake-08 alone.
+    /// Nestopia for NES, bsnes for SNES, PicoDrive for Mega Drive, the
+    /// player's own PICO-8 for PICO-8.
     pub fn alternate_for(platform: Platform) -> Core {
         match platform {
             Platform::Gba => Core::Gpsp,
@@ -105,7 +110,7 @@ impl Core {
             Platform::Nes => Core::Nestopia,
             Platform::Snes => Core::Bsnes,
             Platform::Md => Core::Picodrive,
-            Platform::Pico8 => Core::Fake08,
+            Platform::Pico8 => Core::Pico8,
         }
     }
 
@@ -113,7 +118,8 @@ impl Core {
     pub fn socket(self) -> usize {
         match self {
             Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx | Core::Fake08 => 0,
-            Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive => 1,
+            Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive
+            | Core::Pico8 => 1,
         }
     }
 

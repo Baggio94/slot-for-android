@@ -4179,6 +4179,9 @@ impl Engine {
                                                 if !core_file.is_file() {
                                                     set_message(format!(
                                                         "{} isn't installed.", core.text()));
+                                                } else if core == Core::Pico8
+                                                    && !crate::pico8::installed(&storage) {
+                                                    set_message(crate::pico8::MISSING.to_string());
                                                 } else {
                                                     match core_selection::choose(&storage, &uri, platform, core) {
                                                         Ok(()) => {
@@ -4234,10 +4237,7 @@ impl Engine {
                             self.overlay = ShelfOverlay::Menu { row: 0 };
                             return;
                         }
-                        // PICO-8 has one core: its board has nothing to choose.
-                        109 if !self.inserted && !self.shelves[self.active].carts.is_empty()
-                            && self.shelves[self.active].carts[self.shelves[self.active].index].platform
-                                != Platform::Pico8 => {
+                        109 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
                             let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
                             let face = board_face(selected);
                             if let Some(texture) = self.board_texture {

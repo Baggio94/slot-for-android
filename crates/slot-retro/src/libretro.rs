@@ -112,8 +112,33 @@ unsafe extern "C" fn get_sensor_input(port: c_uint, id: c_uint) -> f32 {
     with_host(|h| h.sensors.input(id)).unwrap_or(0.0)
 }
 
+/// slot.'s own environment call: an HTTP fetch to a file, which the real
+/// PICO-8 core (cores/pico8real) uses for Splore's wget. Not libretro's.
+const SLOT_GET_HTTP: c_uint = 0x20000 | 0x5038;
+#[repr(C)]
+struct SlotHttp {
+    get: unsafe extern "C" fn(*const c_char, *const c_char, *const c_char) -> c_int,
+}
+/// Fetch `url` (POSTing the file at the second path, if any) into the file
+/// at the third path; true when it arrived.
+pub type HttpHook = fn(&str, Option<&std::path::Path>, &std::path::Path) -> bool;
+static HTTP_HOOK: std::sync::OnceLock<HttpHook> = std::sync::OnceLock::new();
+/// The frontend's HTTP fetch for cores that ask with SLOT_GET_HTTP.
+pub fn set_http_hook(hook: HttpHook) { let _ = HTTP_HOOK.set(hook); }
+unsafe extern "C" fn slot_http_get(url: *const c_char, post: *const c_char, out: *const c_char) -> c_int {
+    let (Some(hook), false, false) = (HTTP_HOOK.get(), url.is_null(), out.is_null()) else { return -1 };
+    let text = |p: *const c_char| std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned();
+    let post = (!post.is_null()).then(|| std::path::PathBuf::from(text(post)));
+    if hook(&text(url), post.as_deref(), std::path::Path::new(&text(out))) { 0 } else { -1 }
+}
+
 unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
     match cmd {
+        SLOT_GET_HTTP => {
+            if data.is_null() || HTTP_HOOK.get().is_none() { return false; }
+            (data as *mut SlotHttp).write(SlotHttp { get: slot_http_get });
+            true
+        }
         SET_MEMORY_MAPS => {
             if data.is_null() { return false; }
             let map = &*(data as *const MemoryMap);

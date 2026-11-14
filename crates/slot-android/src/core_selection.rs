@@ -31,7 +31,18 @@ fn platform_of(uri: &str) -> Option<Platform> {
 /// The core this cart actually runs on: a stale choice the platform
 /// cannot run (gpSP on a GB cart, Gambatte on a GBA cart) falls back.
 pub fn selected_for(storage: &Path, uri: &str, platform: Platform) -> Core {
+    // Splore is the player's own PICO-8 alone: fake-08 has none.
+    if platform == Platform::Pico8 && is_splore(uri) { return Core::Pico8; }
     core_for_platform(storage, &key(uri), platform)
+}
+
+/// A cart named Splore.p8 opens PICO-8's Splore (cores/pico8real).
+pub fn is_splore(uri: &str) -> bool {
+    let lower = uri.to_ascii_lowercase();
+    let name = lower.rsplit(['/', ':']).next().unwrap_or(&lower);
+    let name = name.rsplit("%2f").next().unwrap_or(name);
+    let name = name.rsplit("%3a").next().unwrap_or(name);
+    name == "splore.p8"
 }
 
 /// The board's pick for one cart; picking the system's default clears it.
@@ -50,6 +61,13 @@ pub fn set_default(storage: &Path, platform: Platform, core: Core) -> std::io::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn splore_is_a_cart_name() {
+        assert!(is_splore("content://com.android.externalstorage.documents/tree/primary%3ARoms/document/primary%3ARoms%2Fpico8%2FSplore.p8"));
+        assert!(is_splore("/sdcard/Roms/pico8/splore.p8"));
+        assert!(!is_splore("content://x/document/primary%3ARoms%2Fpico8%2Fnot_splore.p8"));
+        assert!(!is_splore("/sdcard/Roms/pico8/celeste.p8"));
+    }
     #[test]
     fn stable_unique_rom_uri_keys() {
         assert_eq!(key("content://roms/1"), "cd3adfea5b691b9d");

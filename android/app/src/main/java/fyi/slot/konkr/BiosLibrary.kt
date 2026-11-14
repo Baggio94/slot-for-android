@@ -66,8 +66,15 @@ internal object BiosLibrary {
             }
         } ?: error("Cannot read selected BIOS folder")
 
-        require(found.isNotEmpty()) {
-            "No valid gba_bios.bin, gbc_bios.bin or gb_bios.bin found"
+        // The player's own PICO-8 is staged on its own, cached between starts.
+        val pico8 = try {
+            Pico8Install.importFrom(context, folder)
+        } catch (error: Exception) {
+            android.util.Log.e("SlotKonkr", "PICO-8 staging failed", error)
+            false
+        }
+        require(found.isNotEmpty() || pico8) {
+            "No valid gba_bios.bin, gbc_bios.bin, gb_bios.bin or PICO-8 found"
         }
         val dest = File(context.filesDir, "BIOS").apply { mkdirs() }
         check(dest.isDirectory) { "BIOS destination unavailable" }
@@ -93,6 +100,6 @@ internal object BiosLibrary {
         } finally {
             pending.values.forEach { it.delete() }
         }
-        return found.keys.toList()
+        return found.keys.toList() + if (pico8) listOf(Pico8Install.DIR) else emptyList()
     }
 }

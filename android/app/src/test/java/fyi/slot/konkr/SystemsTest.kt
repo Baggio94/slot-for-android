@@ -38,6 +38,7 @@ class SystemsTest {
         assertEquals("P8", Systems.platformFor("p8"))
         assertEquals("P8", Systems.platformFor("PNG"))
         assertEquals("fake-08", Systems.coreFolder("", "png"))
+        assertEquals("PICO-8", Systems.coreFolder("pico8", "p8"))
         fun png(w: Int, h: Int) = ByteArray(0x150).also {
             byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(),
                 0x0d, 0x0a, 0x1a, 0x0a).copyInto(it)
