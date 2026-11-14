@@ -799,6 +799,21 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExitGame(
 ) { push(Input::Exit); }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSlotButtonReleased(
+    _env: *mut c_void, _this: *mut c_void, held: jboolean,
+) { push(Input::SlotButtonReleased { held: held != 0 }); }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLidCover(
+    _env: *mut c_void, _this: *mut c_void, closed: jboolean,
+) { push(Input::LidCover(closed != 0)); }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLidStep(
+    _env: *mut c_void, _this: *mut c_void,
+) { push(Input::LidStep); }
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSuspend(
     _env: *mut c_void, _this: *mut c_void,
 ) {

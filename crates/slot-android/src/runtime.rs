@@ -134,6 +134,14 @@ enum Input {
     RommFilter(romm::RommFilter),
     /// Android deleted (or couldn't delete) a game's ROM file.
     GameDeleted(String, bool),
+    /// A slot. button released by the system rather than by the player
+    /// (RG Rotate): `held` is a long press Android took over (eject), else
+    /// the press is just forgotten, with no tap.
+    SlotButtonReleased { held: bool },
+    /// RG Rotate lid: closed (true) or opened (false).
+    LidCover(bool),
+    /// While closed with no game: the shelf moves on by one cart.
+    LidStep,
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -1244,6 +1252,10 @@ struct Engine {
     home_launch_held: bool,
     fresh_launch: bool,
     mode_down_at: Option<Instant>,
+    /// RG Rotate closed over its controls: the game pauses under its
+    /// cartridge; with no game the shelf drifts, back where it was on opening.
+    lid_covered: bool,
+    lid_shelf_index: Option<(usize, usize)>,
     /// SELECT is physically down, whatever screen has the input.
     select_physical: bool,
     /// SELECT+X / SELECT+START presses whose releases are still to consume.
@@ -1916,6 +1928,8 @@ impl Engine {
             home_launch_held: false,
             fresh_launch: false,
             mode_down_at: None,
+            lid_covered: false,
+            lid_shelf_index: None,
             select_physical: false,
             combo_releases: 0,
             eject_sound_armed: false,
@@ -3389,6 +3403,43 @@ impl Engine {
                 }
                 self.buttons = 0;
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            }
+            Input::SlotButtonReleased { held } => {
+                let down = self.mode_down_at.take().is_some();
+                self.mode_last_tap = None;
+                self.home_launch_held = false;
+                if held && down && self.game.is_some() && !self.exiting_screen {
+                    crate::game::log_launch_timing("Exit requested by system long press");
+                    self.handle(Input::Exit);
+                }
+            }
+            Input::LidCover(closed) => {
+                if closed == self.lid_covered { return; }
+                self.lid_covered = closed;
+                if self.game.is_some() { return; }
+                if closed {
+                    if let Some(shelf) = self.shelves.get_mut(self.active) {
+                        let n = shelf.carts.len();
+                        if n > 1 {
+                            self.lid_shelf_index = Some((self.active, shelf.index));
+                            let seed = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |d| d.subsec_nanos() as usize);
+                            shelf.select(seed % n);
+                        }
+                    }
+                } else if let Some((active, index)) = self.lid_shelf_index.take() {
+                    if active == self.active {
+                        if let Some(shelf) = self.shelves.get_mut(active) {
+                            if index < shelf.carts.len() { shelf.select(index); }
+                        }
+                    }
+                }
+            }
+            Input::LidStep => {
+                if self.lid_covered && self.game.is_none() && matches!(self.overlay, ShelfOverlay::None) {
+                    if let Some(shelf) = self.shelves.get_mut(self.active) { shelf.right(); }
+                }
             }
             Input::Exit => {
                 // A failed battery/RTC/auto-state write must not destroy the
@@ -5950,6 +6001,26 @@ impl Engine {
         }
     }
 
+    /// The closed RG Rotate during a game: the hold scene's cartridge,
+    /// seated, in front of a switched-off screen.
+    fn push_lid_scene(&self, commands: &mut Vec<Draw>) {
+        commands.push(Draw::Rect {
+            x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+            colour: menu_style::page_ground([0.085, 0.085, 0.093, 1.0]),
+        });
+        let Some(shelf) = self.shelves.get(self.active) else { return };
+        let Some(cart) = shelf.carts.get(shelf.index) else { return };
+        let (rest, scale) = shelf.selected_at();
+        shelf.draw_row(Some(cart.stem.as_str()), 0.0, 1.0, 1.0, commands);
+        SlotChrome {
+            cart, face: shelf.face(shelf.index), rest, scale,
+            seat: 1.0, alert: None, dim: 0.0,
+            screen: 0.0, game: true, over: false,
+            slot_faces: pick_slot_faces(self.slot_faces, self.home_slot_faces, Some(cart)),
+        }.draw_with_closer(commands, self.clear_layers().0, self.clear_layers().1,
+            pick_closer(self.slot_faces, self.home_closers, Some(cart)), false);
+    }
+
     fn refresh_selected_title(&mut self) {
         if !self.settings.show_titles || self.game.is_some() {return;}
         // Original v1.7 shelf Game Titles use label_text() (cleaned
@@ -7292,6 +7363,19 @@ impl Engine {
             }
         }
 
+        if self.game.is_some() && self.lid_covered {
+            // RG Rotate closed: the game waits, its cartridge in the slot and
+            // the screen off. No libretro frame, so no audio either.
+            if let Some(game) = self.game.as_mut() { game.set_link_paused(true); }
+            self.game_accum = 0.0;
+            let mut commands = Vec::new();
+            self.push_lid_scene(&mut commands);
+            self.gpu.fit(self.size);
+            self.gpu.begin_frame();
+            self.gpu.draw_list(&commands);
+            self.gpu.end_frame(self.size);
+            return;
+        }
         if self.game.is_some() && matches!(self.overlay, ShelfOverlay::States) {
             // Polaroids are a full-screen, paused overlay. Render once per
             // display frame (not from a key event) and never advance libretro
