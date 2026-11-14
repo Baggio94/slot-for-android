@@ -629,7 +629,7 @@ mod render {
         // Dark > OLED: black.
         engine.cycle_appearance(true);
         assert_eq!(corner(&mut engine), [0, 0, 0]);
-        // Light: light grey, the words over it dark.
+        // Light: cream, the words over it dark.
         engine.cycle_appearance(true);
         assert_eq!(corner(&mut engine), menu_style::MenuPalette::LIGHT.shelf);
         assert!(engine.top_line_dark_ink() && engine.shelf_ink().is_some());

@@ -45,23 +45,24 @@ const DARK_INK: [u8; 3] = [28, 28, 32];
 impl MenuPalette {
     /// Light: light grey pages, a white bar, dark text.
     pub const LIGHT: Self = Self { ground: [234, 233, 236], pill: [255, 255, 255], ink: Some(DARK_INK),
-        shelf: [220, 219, 224] };
+        shelf: [238, 233, 222] };
 
     /// Original: the plastic of the console whose bar is on screen
     /// (`family` as bitmaps::home_slot): black text on the light plastics,
     /// white on the GBA's indigo and the Mega Drive's black, as the clock on
     /// their bars (bitmaps::console_slot_takes_dark_ink).
     pub fn original(family: usize) -> Self {
-        // The shelf: Famicom maroon, a deep red for the NES, blue grey for
-        // the Super Nintendo, a light anthracite the black Mega Drive carts
-        // stand out on, the Game Boy's plum buttons, a pale cream under the
-        // Color's yellow, lavender over the GBA's indigo.
+        // The shelf, light so every cart stands out (Siham 2026-11-14): a
+        // pale rose for the Famicom and the NES, a light blue grey for the
+        // Super Nintendo, a light grey the black Mega Drive carts stand out
+        // on, the Game Boy's screen green, a pale cream under the Color's
+        // yellow, lavender over the GBA's indigo.
         let (ground, pill, shelf) = match family {
-            0 => ([226, 216, 200], [244, 237, 224], [110, 30, 36]), // Famicom
-            1 => ([188, 188, 188], [214, 214, 214], [90, 21, 24]),  // NES
-            2 => ([196, 190, 198], [222, 216, 226], [85, 96, 112]), // Super Nintendo
-            3 => ([34, 34, 36], [68, 68, 72], [88, 90, 96]),        // Mega Drive
-            4 => ([178, 178, 170], [206, 206, 198], [74, 36, 64]),  // Game Boy
+            0 => ([226, 216, 200], [244, 237, 224], [239, 220, 217]), // Famicom
+            1 => ([188, 188, 188], [214, 214, 214], [228, 205, 203]),  // NES
+            2 => ([196, 190, 198], [222, 216, 226], [205, 211, 222]), // Super Nintendo
+            3 => ([34, 34, 36], [68, 68, 72], [185, 187, 192]),        // Mega Drive
+            4 => ([178, 178, 170], [206, 206, 198], [202, 211, 168]),  // Game Boy
             5 => ([236, 188, 20], [252, 224, 128], [243, 227, 160]), // Game Boy Color
             _ => ([74, 80, 152], [108, 114, 184], [196, 198, 228]), // Game Boy Advance
         };
