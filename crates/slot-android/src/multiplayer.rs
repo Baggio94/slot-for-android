@@ -257,6 +257,7 @@ impl LinkConfig {
                         digest.update(&(bytes.len() as u64).to_be_bytes());
                         digest.update(bytes);
                     }
+                    digest.update(FAKE08_Z8LUA.as_bytes());
                 }
                 let mut hash = [0; 32];
                 hash.copy_from_slice(digest.finish().as_ref());
@@ -265,6 +266,17 @@ impl LinkConfig {
             bios_sha256,
         })
     }
+}
+
+/// The z8lua commit fake-08 is built with (scripts/build-home-core-android.sh):
+/// it compiles the carts, so both consoles must have the same one.
+const FAKE08_Z8LUA: &str = "3f345520341534219d3ba2bb40dd10b6c1f2db9b";
+
+#[cfg(test)]
+#[test]
+fn fake08_z8lua_is_the_one_built() {
+    let script = include_str!("../../../scripts/build-home-core-android.sh");
+    assert!(script.contains(&format!("libs/z8lua={FAKE08_Z8LUA}")));
 }
 
 const FAKE08_PATCHES: [&[u8]; 7] = [
