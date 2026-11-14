@@ -72,7 +72,7 @@ pub use link_art::{
     PLUG_TIP_X, PLUG_W, PORT_H, PORT_W, PORT_Y,
 };
 pub use plate::{
-    arrows_hint_face, arrows_hint_face_ink, hint_face_ink, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
+    arrows_hint_face, arrows_hint_face_ink, hint_face_ink, hint_label_x, arrows_label_x, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
     hint_width, title_face, title_line_face, word_face, word_ink, word_width, platform_name_face, PLATFORM_NAME_SCALE,
     onboarding_instruction_face, onboarding_note_face, onboarding_max_w,
     Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,

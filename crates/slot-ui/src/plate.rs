@@ -81,6 +81,17 @@ pub fn hint_width(key: &str, label: &str) -> u32 {
     cap_width(key) + CAP_GAP + band_width(label) + EDGE
 }
 
+/// Between a legend's keycap and its word, in logical pixels: Android
+/// inks the word alone from there (export_apps_legend).
+pub fn hint_label_x(key: &str) -> u32 {
+    cap_width(key) + CAP_GAP / 2
+}
+
+/// As hint_label_x, for the arrows legend.
+pub fn arrows_label_x() -> u32 {
+    arrows_w() + CAP_GAP / 2
+}
+
 pub fn hint_face(key: &str, label: &str) -> UndoFace {
     hint_face_ink(key, label, INK)
 }

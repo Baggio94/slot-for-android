@@ -348,9 +348,8 @@ class AppsActivity : Activity() {
         fun hint(asset: String): ImageView {
             val bitmap = faces.getValue(asset)
             return ImageView(this).apply {
-                setImageBitmap(bitmap)
+                setImageBitmap(SlotUi.inkedLegend(this@AppsActivity, "$asset.png", bitmap))
                 scaleType = ImageView.ScaleType.FIT_XY
-                colorFilter = SlotUi.menuInkFilter
                 contentDescription = when (asset) {
                     "move" -> "Left and right arrows: Move"
                     "open" -> "A: Open"

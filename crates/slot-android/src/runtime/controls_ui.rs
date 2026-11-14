@@ -834,6 +834,10 @@ impl Engine {
             else { hint_face(key, label) };
         let hint = (self.gpu.create_face(&face), face.w);
         self.controls_hint_faces.insert((key, label), hint);
+        let spec = if key == "SWAP" { menu_look::HintSpec::Arrows(label.into()) }
+            else if label.is_empty() && slot_ui::key_art(key).is_some() { menu_look::HintSpec::Art(key.into()) }
+            else { menu_look::HintSpec::Key(key.into(), label.into()) };
+        self.register_ink_hint(hint.0, spec);
         hint
     }
 

@@ -660,7 +660,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 121] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 122] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -690,7 +690,7 @@ const SETTING_VALUE_NAMES: [&str; 121] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Pixel Transparency", "Sunlight Shimmer",
                                "Dot Matrix Color",
                                "Bilinear", "FSR", "Anime4K Fast", "Anime4K",
-                               "MAX", "crt-royale", "OLED"];
+                               "MAX", "crt-royale", "OLED", "Theme"];
 
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
@@ -747,6 +747,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             crate::settings::WallpaperPick::Shelf => 65,
             crate::settings::WallpaperPick::Default => 19,
             crate::settings::WallpaperPick::Blur => 20,
+            crate::settings::WallpaperPick::Theme => 121,
             crate::settings::WallpaperPick::File(_) => 26,
         },
         17 => match settings.wallpaper_tint {
@@ -1034,6 +1035,11 @@ struct Engine {
     controls_faces: std::collections::HashMap<String, (slot_gfx::TexId, u32, u32)>,
     controls_spare_faces: Vec<slot_gfx::TexId>,
     controls_hint_faces: std::collections::HashMap<(&'static str, &'static str), (slot_gfx::TexId, u32)>,
+    /// Each legend's twin for Light and Original: the keycap as drawn, the
+    /// word in the page's ink (menu_look::theme_hints).
+    ink_hints: Vec<menu_look::InkHint>,
+    /// The ink those twins are written in (None: the white of Dark).
+    hint_ink: Option<[u8; 3]>,
     controls_view: controls_ui::ControlsView,
     /// Game menu > Cheats: the game's cheat files, and the one shown.
     cheat_sources: Vec<crate::cheats::Source>,
@@ -1319,6 +1325,8 @@ fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperP
         (WallpaperPick::Default, _) => return (default(), false),
         (WallpaperPick::Blur, _) =>
             return (slot_ui::blur_background_native().map(|v|v.to_vec()), false),
+        // The theme's own colour: the ground drawn under no image.
+        (WallpaperPick::Theme, _) => return (None, false),
         // Shelves without their own file show the bundled default.
         (WallpaperPick::Shelf, _) => return (default(), false),
         (WallpaperPick::File(name), Some(root)) => {
@@ -1762,6 +1770,8 @@ impl Engine {
             controls_faces: Default::default(),
             controls_spare_faces: Vec::new(),
             controls_hint_faces: Default::default(),
+            ink_hints: Vec::new(),
+            hint_ink: None,
             controls_view: Default::default(),
             cheat_sources: Vec::new(),
             cheat_source: 0,
@@ -2001,6 +2011,7 @@ impl Engine {
     fn top_line_dark_ink(&self) -> bool {
         use crate::settings::WallpaperPick;
         if self.settings.wallpaper == WallpaperPick::None { return false; }
+        if self.settings.wallpaper == WallpaperPick::Theme { return menu_style::shelf_takes_dark_ink(); }
         let shelf = (self.settings.wallpaper == WallpaperPick::Shelf
             && self.shelf_wallpaper_ready.get(self.active).copied().unwrap_or(false))
             .then(|| self.shelf_wallpaper_luma.get(self.active).copied().flatten()).flatten();
@@ -2013,6 +2024,16 @@ impl Engine {
             self.settings.wallpaper_tint.alpha()
         } else { 0.0 };
         luma * (1.0 - tint) > slot_ui::LIGHT_WALLPAPER
+    }
+
+    /// The shelf's name and game title in dark ink over a light Theme
+    /// wallpaper (Light, and Original's GBA, Game Boy Color).
+    fn shelf_ink(&self) -> Option<slot_gfx::InkMap> {
+        if self.settings.wallpaper != crate::settings::WallpaperPick::Theme
+            || !menu_style::shelf_takes_dark_ink() { return None; }
+        let [r, g, b, _] = menu_style::shelf_ground();
+        let ink = menu_style::MenuPalette::LIGHT.ink.unwrap_or([0; 3]).map(|v| v as f32 / 255.0);
+        Some(slot_gfx::InkMap { paper: [r, g, b], ink })
     }
 
     /// Whether Delete Wallpaper has a file to remove: the current shelf's own
@@ -5809,7 +5830,7 @@ impl Engine {
             }
             133 => self.cycle_wallpaper_shelf(right),
             84 if self.show_general_tint() => self.cycle_wallpaper_tint(right),
-            85 => self.cycle_appearance(),
+            85 => self.cycle_appearance(right),
             86 => {
                 self.settings.show_recents=!self.settings.show_recents;
                 self.rebuild_recents();
@@ -5966,8 +5987,8 @@ impl Engine {
         self.persist_settings();
     }
 
-    fn cycle_appearance(&mut self) {
-        self.settings.appearance=self.settings.appearance.toggle();
+    fn cycle_appearance(&mut self, right: bool) {
+        self.settings.appearance=self.settings.appearance.step(right);
         menu_style::set_oled(self.settings.appearance == crate::settings::Appearance::Oled);
         self.home_slot_faces=self.home_slot_themes[self.settings.appearance.bar_theme()];
         let custom_colours = PATHS.lock().unwrap_or_else(|e| e.into_inner())
@@ -6524,8 +6545,12 @@ impl Engine {
         // Light and Original: the pages' text turns dark on their light grounds.
         let ink = self.menu_ink();
         if ink.is_some() { out.push(Draw::Ink(ink)); }
+        let start = out.len();
         self.draw_overlay_page(out);
-        if ink.is_some() { out.push(Draw::Ink(None)); }
+        if ink.is_some() {
+            self.theme_hints(start, out);
+            out.push(Draw::Ink(None));
+        }
     }
 
     fn draw_overlay_page(&self, out: &mut Vec<Draw>) {
@@ -7794,7 +7819,9 @@ impl Engine {
             y: 0.0,
             w: out_w() as f32,
             h: OUT_H as f32,
-            colour: menu_style::page_ground([0.085, 0.085, 0.093, 1.0]),
+            colour: if self.settings.wallpaper == crate::settings::WallpaperPick::Theme {
+                menu_style::shelf_ground()
+            } else { menu_style::page_ground(menu_style::DARK_SHELF) },
         }];
         // Slot v1.7 carousel ground: None has no wallpaper; personal images
         // receive only the selected Wallpaper Tint (never a fixed scrim).
@@ -7857,6 +7884,9 @@ impl Engine {
                         None
                     }
                 } else {None};
+                // The words over a light Theme wallpaper turn dark.
+                let shelf_ink = self.shelf_ink();
+                if shelf_ink.is_some() { commands.push(Draw::Ink(shelf_ink)); }
                 if let Some((face,elapsed,is_platform))=name {
                     let alpha=slot_name_alpha(elapsed);
                     if alpha>0.0 {
@@ -7869,6 +7899,7 @@ impl Engine {
                     let alpha=name.map_or(1.0,|(_,elapsed,_)|slot_title_alpha(elapsed));
                     slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
                 }
+                if shelf_ink.is_some() { commands.push(Draw::Ink(None)); }
             }
         } else {
             let cart = &shelf.carts[shelf.index];

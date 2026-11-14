@@ -16,11 +16,16 @@ pub enum WallpaperPick {
     #[default]
     Default,
     Blur,
+    /// A plain colour that follows the appearance: Dark's grey, OLED's
+    /// black, Light's light grey, Original's colour for the console on
+    /// the slot (menu_style::shelf_ground, Siham 2026-11-14). Saved as
+    /// Default plus THEME_WALLPAPER_KEY, so older versions keep the file.
+    Theme,
     File(String),
 }
 impl WallpaperPick {
     pub fn choices(root: &Path) -> Vec<Self> {
-        let mut choices=vec![Self::None, Self::Random, Self::Shelf, Self::Default, Self::Blur];
+        let mut choices=vec![Self::None, Self::Random, Self::Shelf, Self::Default, Self::Blur, Self::Theme];
         choices.extend(crate::wallpaper::list(root).into_iter().map(Self::File));
         choices
     }
@@ -37,6 +42,7 @@ impl WallpaperPick {
             Self::Shelf=>"Shelf".into(),
             Self::Default=>"Default".into(),
             Self::Blur=>"Default Blur".into(),
+            Self::Theme=>"Theme".into(),
             // The imported image reads "User", like the other values.
             Self::File(name)=>match name.rsplit_once('.').map(|(a,_)|a).unwrap_or(name) {
                 stem if stem.eq_ignore_ascii_case("user") => "User".into(),
@@ -64,6 +70,8 @@ impl WallpaperTint {
 
 /// Settings.json's own key for the OLED appearance (Settings::save).
 const OLED_KEY: &str = "appearance_oled";
+/// Settings.json's own key for the Theme wallpaper (Settings::save).
+const THEME_WALLPAPER_KEY: &str = "wallpaper_theme";
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,9 +79,13 @@ pub enum Appearance { #[default] Dark, Light, Original, Oled }
 impl Appearance {
     /// Dark, OLED, Light, then Original: the dark interface with every console
     /// bar in its console's own colours (Siham 2026-11-03).
-    pub fn toggle(self)->Self {
-        match self { Self::Dark=>Self::Oled, Self::Oled=>Self::Light,
-            Self::Light=>Self::Original, Self::Original=>Self::Dark }
+    /// Right walks Dark, OLED, Light, Original; left the same ring
+    /// backwards, as every other setting (Siham 2026-11-14).
+    pub fn step(self, right: bool)->Self {
+        const ALL: [Appearance; 4] = [Appearance::Dark, Appearance::Oled,
+            Appearance::Light, Appearance::Original];
+        let at = ALL.iter().position(|a| *a == self).unwrap_or(0);
+        ALL[if right { (at + 1) % 4 } else { (at + 3) % 4 }]
     }
     /// Which set of console bars `slot_ui::bitmaps::home_slot` draws.
     pub fn bar_theme(self)->usize {
@@ -661,6 +673,10 @@ impl Settings {
                             && json.get(OLED_KEY).and_then(serde_json::Value::as_bool) == Some(true) {
                             s.appearance = Appearance::Oled;
                         }
+                        if s.wallpaper == WallpaperPick::Default
+                            && json.get(THEME_WALLPAPER_KEY).and_then(serde_json::Value::as_bool) == Some(true) {
+                            s.wallpaper = WallpaperPick::Theme;
+                        }
                     }
                     // Beta RC1 imported user.png but lacked an option to turn
                     // it off. Preserve that picture on update to U1 instead
@@ -741,10 +757,17 @@ impl Settings {
         // A version from before OLED reads the whole file or none of it: an
         // appearance it doesn't know would reset every setting. Written as
         // Dark plus a key it ignores, it keeps them and shows Dark.
-        let bytes = if self.appearance == Appearance::Oled {
-            let dark = Self { appearance: Appearance::Dark, ..self.clone() };
-            let mut json = serde_json::to_value(&dark).map_err(io::Error::other)?;
-            json[OLED_KEY] = serde_json::json!(true);
+        // OLED and the Theme wallpaper go in keys of their own, so a version
+        // without them reads Dark and Default rather than resetting all.
+        let oled = self.appearance == Appearance::Oled;
+        let theme = self.wallpaper == WallpaperPick::Theme;
+        let bytes = if oled || theme {
+            let mut older = self.clone();
+            if oled { older.appearance = Appearance::Dark; }
+            if theme { older.wallpaper = WallpaperPick::Default; }
+            let mut json = serde_json::to_value(&older).map_err(io::Error::other)?;
+            if oled { json[OLED_KEY] = serde_json::json!(true); }
+            if theme { json[THEME_WALLPAPER_KEY] = serde_json::json!(true); }
             serde_json::to_vec_pretty(&json)
         } else {
             serde_json::to_vec_pretty(&self)
@@ -1130,14 +1153,15 @@ mod tests {
         std::fs::write(dir.join("another.png"), b"placeholder").unwrap();
         std::fs::write(dir.join("GBA.png"), b"placeholder").unwrap();
         let choices=WallpaperPick::choices(&root);
-        assert_eq!(choices, vec![None,Random,Shelf,Default,Blur,
+        assert_eq!(choices, vec![None,Random,Shelf,Default,Blur,Theme,
             File("another.png".into()),File("user.png".into())]);
         assert_eq!(None.step(&root,true), Random);
         assert_eq!(Random.step(&root,true), Shelf);
         assert_eq!(Shelf.step(&root,true), Default);
         assert_eq!(None.step(&root,false), File("user.png".into()));
         assert_eq!(Default.step(&root,true), Blur);
-        assert_eq!(Blur.step(&root,true), File("another.png".into()));
+        assert_eq!(Blur.step(&root,true), Theme);
+        assert_eq!(Theme.step(&root,true), File("another.png".into()));
         assert_eq!(File("missing.png".into()).step(&root,true), Blur);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1185,6 +1209,32 @@ mod tests {
     }
 
     #[test]
+    fn theme_wallpaper_is_saved_so_a_version_without_it_shows_default() {
+        let root = std::env::temp_dir().join(format!(
+            "slot-theme-wallpaper-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .unwrap().as_nanos()));
+        let mut settings = Settings::load(&root);
+        settings.wallpaper = WallpaperPick::Theme;
+        settings.appearance = Appearance::Oled;
+        settings.save(&root).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join(NAME)).unwrap()).unwrap();
+        assert_eq!(json["wallpaper"], "default");
+        assert_eq!(json["appearance"], "dark");
+        assert_eq!(Settings::load(&root), settings);
+        // Another wallpaper chosen in an older version over the key.
+        let mut blur = json;
+        blur["wallpaper"] = serde_json::json!("blur");
+        fs::write(root.join(NAME), serde_json::to_vec(&blur).unwrap()).unwrap();
+        assert_eq!(Settings::load(&root).wallpaper, WallpaperPick::Blur);
+        // Theme comes after Default Blur in the list, both ways.
+        assert_eq!(WallpaperPick::Blur.step(&root, true), WallpaperPick::Theme);
+        assert_eq!(WallpaperPick::Theme.step(&root, false), WallpaperPick::Blur);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn oled_is_saved_so_a_version_without_it_keeps_every_setting() {
         let root = std::env::temp_dir().join(format!(
             "slot-oled-{}-{}", std::process::id(),
@@ -1222,12 +1272,17 @@ mod tests {
     fn official_wallpaper_tint_alpha_and_theme_toggle_are_exact() {
         assert_eq!(WallpaperTint::ALL.map(WallpaperTint::alpha),
             [0.0,0.25,0.45,0.65]);
-        assert_eq!(Appearance::Dark.toggle(),Appearance::Oled);
-        assert_eq!(Appearance::Oled.toggle(),Appearance::Light);
+        assert_eq!(Appearance::Dark.step(true),Appearance::Oled);
+        assert_eq!(Appearance::Oled.step(true),Appearance::Light);
         assert_eq!(Appearance::Oled.bar_theme(),Appearance::Dark.bar_theme());
         assert_eq!(serde_json::from_str::<Appearance>("\"oled\"").unwrap(), Appearance::Oled);
-        assert_eq!(Appearance::Light.toggle(),Appearance::Original);
-        assert_eq!(Appearance::Original.toggle(),Appearance::Dark);
+        assert_eq!(Appearance::Light.step(true),Appearance::Original);
+        assert_eq!(Appearance::Original.step(true),Appearance::Dark);
+        // Left walks the same ring backwards.
+        assert_eq!(Appearance::Dark.step(false),Appearance::Original);
+        assert_eq!(Appearance::Original.step(false),Appearance::Light);
+        assert_eq!(Appearance::Light.step(false),Appearance::Oled);
+        assert_eq!(Appearance::Oled.step(false),Appearance::Dark);
     }
 
     #[test]

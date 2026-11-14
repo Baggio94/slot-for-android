@@ -35,6 +35,33 @@ pub(super) fn row_place(index: usize, count: usize, scroll: f32, max: f32) -> Op
     Some((dy, shows))
 }
 
+/// What a legend says, to write it again in another ink.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum HintSpec {
+    Key(String, String),
+    Arrows(String),
+    /// A controller button alone: no word, nothing to rewrite.
+    Art(String),
+}
+
+impl HintSpec {
+    fn face(&self, ink: Option<[u8; 3]>) -> slot_ui::UndoFace {
+        match (self, ink) {
+            (Self::Key(key, label), Some(ink)) => slot_ui::hint_face_ink(key, label, ink),
+            (Self::Key(key, label), None) => slot_ui::hint_face(key, label),
+            (Self::Arrows(label), Some(ink)) => slot_ui::arrows_hint_face_ink(label, ink),
+            (Self::Arrows(label), None) => slot_ui::arrows_hint_face(label),
+            (Self::Art(key), _) => slot_ui::key_art(key).unwrap_or_else(|| slot_ui::hint_face(key, "")),
+        }
+    }
+}
+
+pub(super) struct InkHint {
+    white: slot_gfx::TexId,
+    themed: slot_gfx::TexId,
+    spec: HintSpec,
+}
+
 impl Engine {
     /// How far the shown page's list is scrolled, and how far it can go.
     pub(super) fn menu_scroll(&self, count: usize) -> (f32, f32) {
@@ -97,9 +124,72 @@ impl Engine {
                 .map(|cart| menu_style::MenuPalette::original(slot_ui::bitmaps::console_slot_family(cart))),
             Appearance::Dark | Appearance::Oled => None,
         };
+        let oled = self.settings.appearance == Appearance::Oled;
+        if oled != menu_style::oled() { menu_style::set_oled(oled); }
         if want != menu_style::palette() {
             menu_style::set_palette(want);
             self.refresh_menu_pill();
+        }
+        self.refresh_ink_hints();
+    }
+
+    /// Light and Original: each legend drawn on a page keeps its keycap as
+    /// in Dark and writes its word in the page's ink, rather than the whole
+    /// face going through Draw::Ink, which muddied the keys (Siham
+    /// 2026-11-14). Swaps the legends among `out[start..]` for their twins.
+    pub(super) fn theme_hints(&self, start: usize, out: &mut Vec<Draw>) {
+        if self.hint_ink.is_none() { return; }
+        let tail = out.split_off(start);
+        let mut ink = self.menu_ink();
+        for draw in tail {
+            match draw {
+                Draw::Ink(now) => { ink = now; out.push(draw); }
+                Draw::Tex { x, y, w, h, tex, alpha } if ink.is_some() => {
+                    match self.ink_hints.iter().find(|hint| hint.white == tex) {
+                        Some(hint) => {
+                            out.push(Draw::Ink(None));
+                            out.push(Draw::Tex { x, y, w, h, tex: hint.themed, alpha });
+                            out.push(Draw::Ink(ink));
+                        }
+                        None => out.push(draw),
+                    }
+                }
+                _ => out.push(draw),
+            }
+        }
+    }
+
+    /// A legend's twin in the current ink (see theme_hints).
+    pub(super) fn register_ink_hint(&mut self, white: slot_gfx::TexId, spec: HintSpec) {
+        if self.ink_hints.iter().any(|hint| hint.white == white) { return; }
+        let themed = self.gpu.create_face(&spec.face(self.hint_ink));
+        self.ink_hints.push(InkHint { white, themed, spec });
+    }
+
+    /// The legends made with the engine; Controls, Cart Studio, the
+    /// library and RomM add theirs as they make them (controls_hint).
+    fn register_engine_hints(&mut self) {
+        use HintSpec::{Arrows, Key};
+        let key = |k: &str, l: &str| Key(k.into(), l.into());
+        let mut hints = vec![
+            (self.menu_hints[0].0, key("A", "Select")), (self.menu_hints[1].0, key("B", "Back")),
+            (self.game_menu_hints[0].0, key("B", "Back")), (self.game_menu_hints[1].0, key("SEL+R1", "Save")),
+            (self.game_menu_hints[2].0, key("SEL+L1", "Load")),
+            (self.settings_hints[0].0, key("B", "Back")), (self.settings_hints[1].0, Arrows("Change".into())),
+        ];
+        hints.push((self.screen_size_hint.0, key("L1+R1", "Size")));
+        for (white, spec) in hints { self.register_ink_hint(white, spec); }
+    }
+
+    /// The legends' twins rewritten when the ink changes.
+    fn refresh_ink_hints(&mut self) {
+        if self.ink_hints.is_empty() { self.register_engine_hints(); }
+        let ink = menu_style::palette().and_then(|p| p.ink);
+        if ink == self.hint_ink { return; }
+        self.hint_ink = ink;
+        for i in 0..self.ink_hints.len() {
+            let face = self.ink_hints[i].spec.face(ink);
+            self.gpu.update_face(self.ink_hints[i].themed, &face);
         }
     }
 
@@ -448,8 +538,8 @@ mod render {
         assert_eq!(pixel(&mut engine, 700.0, 460.0), menu_style::menu_ground_rgb());
         assert!(engine.menu_ink().is_none());
         // Dark > OLED > Light.
-        engine.cycle_appearance();
-        engine.cycle_appearance();
+        engine.cycle_appearance(true);
+        engine.cycle_appearance(true);
         assert_eq!(pixel(&mut engine, 700.0, 460.0), menu_style::MenuPalette::LIGHT.ground);
         assert!(engine.menu_ink().is_some());
         // The selected row's bar is white and its label dark.
@@ -459,13 +549,89 @@ mod render {
             .map(|c| c.iter().map(|&v| v as u32).sum::<u32>()).min().unwrap();
         assert!(darkest < 3 * 90, "the selected label isn't dark: {darkest}");
         // Original on a GBA shelf: indigo, white text, nothing redrawn.
-        engine.cycle_appearance();
+        engine.cycle_appearance(true);
         assert_eq!(pixel(&mut engine, 700.0, 460.0), menu_style::MenuPalette::original(6).ground);
         assert!(engine.menu_ink().is_none());
         // Back to Dark.
-        engine.cycle_appearance();
+        engine.cycle_appearance(true);
         assert_eq!(pixel(&mut engine, 700.0, 460.0), menu_style::menu_ground_rgb());
         assert!(menu_style::palette().is_none());
+    }
+
+    #[test]
+    fn light_legends_keep_their_keycaps_and_ink_only_their_words() {
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        engine.overlay = ShelfOverlay::Menu { row: 1 };
+        // Dark: the legends as made, nothing swapped.
+        engine.draw(0, || {});
+        let mut out = Vec::new();
+        engine.draw_overlay(&mut out);
+        let drawn = |out: &[Draw], tex| out.iter().position(|d| matches!(d, Draw::Tex { tex: t, .. } if *t == tex));
+        assert!(drawn(&out, engine.menu_hints[0].0).is_some());
+        // Light: each legend's twin, drawn with no ink map over it.
+        engine.cycle_appearance(true);
+        engine.cycle_appearance(true);
+        engine.draw(0, || {});
+        let mut out = Vec::new();
+        engine.draw_overlay(&mut out);
+        assert!(drawn(&out, engine.menu_hints[0].0).is_none());
+        let twin = engine.ink_hints.iter().find(|h| h.white == engine.menu_hints[0].0).unwrap().themed;
+        let at = drawn(&out, twin).expect("the Select legend's twin");
+        assert_eq!(out[at - 1], Draw::Ink(None));
+        assert_eq!(out[at + 1], Draw::Ink(engine.menu_ink()));
+        // Its word is dark, its keycap the same as Dark's.
+        let ink = menu_style::palette().unwrap().ink.unwrap();
+        let light = slot_ui::hint_face_ink("A", "Select", ink);
+        let dark = slot_ui::hint_face("A", "Select");
+        let split = slot_ui::density::px(slot_ui::hint_label_x("A")) as usize;
+        use slot_ui::density::Face;
+        let (w, _) = light.texels();
+        let rows = light.rgba.len() / 4 / w as usize;
+        for y in 0..rows { for x in 0..w as usize {
+            let at = (y * w as usize + x) * 4;
+            if x < split { assert_eq!(light.rgba[at..at + 4], dark.rgba[at..at + 4], "keycap at {x},{y}"); }
+        }}
+        let word_dark = (0..rows).flat_map(|y| (split..w as usize).map(move |x| (y, x)))
+            .any(|(y, x)| { let at = (y * w as usize + x) * 4; light.rgba[at + 3] > 200 && light.rgba[at] < 80 });
+        assert!(word_dark, "the word isn't in the dark ink");
+    }
+
+    #[test]
+    fn theme_wallpaper_takes_each_theme_s_shelf_colour() {
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Theme;
+        let corner = |engine: &mut Engine| {
+            for _ in 0..30 {
+                engine.draw(0, || {});
+                std::thread::sleep(std::time::Duration::from_millis(12));
+            }
+            let rgba = engine.gpu.read_frame();
+            let (w, _) = panel_size();
+            let at = (40 * w as usize + 4) * 4;
+            [rgba[at], rgba[at + 1], rgba[at + 2]]
+        };
+        let f = |c: [f32; 4]| [0, 1, 2].map(|i| (c[i] * 255.0).round() as u8);
+        assert_eq!(corner(&mut engine), f(menu_style::DARK_SHELF));
+        assert!(!engine.top_line_dark_ink());
+        // Dark > OLED: black.
+        engine.cycle_appearance(true);
+        assert_eq!(corner(&mut engine), [0, 0, 0]);
+        // Light: light grey, the words over it dark.
+        engine.cycle_appearance(true);
+        assert_eq!(corner(&mut engine), menu_style::MenuPalette::LIGHT.shelf);
+        assert!(engine.top_line_dark_ink() && engine.shelf_ink().is_some());
+        // Original on a GBA shelf: lavender.
+        engine.cycle_appearance(true);
+        assert_eq!(corner(&mut engine), menu_style::MenuPalette::original(6).shelf);
+        assert!(engine.shelf_ink().is_some());
+        // Left goes back the same way: Light.
+        engine.cycle_appearance(false);
+        assert_eq!(engine.settings.appearance, crate::settings::Appearance::Light);
+        engine.cycle_appearance(false);
+        engine.cycle_appearance(false);
+        assert_eq!(engine.settings.appearance, crate::settings::Appearance::Dark);
     }
 
     fn entries() -> Vec<RomEntry> {

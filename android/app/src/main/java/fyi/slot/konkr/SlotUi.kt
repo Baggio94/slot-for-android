@@ -107,6 +107,36 @@ internal object SlotUi {
         }
     }
 
+    @Volatile private var legendSplits: Map<String, Int>? = null
+
+    /** Where a legend asset's word starts, in texels (export_apps_legend). */
+    private fun legendSplit(context: Context, asset: String): Int? {
+        val splits = legendSplits ?: runCatching {
+            context.assets.open("apps_controls/legend-splits.txt").bufferedReader().use { reader ->
+                reader.readLines().mapNotNull { line ->
+                    val parts = line.trim().split(' ')
+                    if (parts.size == 2) parts[1].toIntOrNull()?.let { parts[0] to it } else null
+                }.toMap()
+            }
+        }.getOrDefault(emptyMap()).also { legendSplits = it }
+        return splits[asset]
+    }
+
+    /** Light and Original: a legend's keycap as drawn, its word alone in the
+     * menus' ink (as the native legends); unchanged in Dark and OLED. */
+    fun inkedLegend(context: Context, asset: String, image: android.graphics.Bitmap): android.graphics.Bitmap {
+        val filter = menuInkFilter ?: return image
+        val split = (legendSplit(context, asset) ?: 0).coerceIn(0, image.width)
+        val out = android.graphics.Bitmap.createBitmap(image.width, image.height,
+            android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        val keycap = android.graphics.Rect(0, 0, split, image.height)
+        val word = android.graphics.Rect(split, 0, image.width, image.height)
+        canvas.drawBitmap(image, keycap, keycap, null)
+        canvas.drawBitmap(image, word, word, android.graphics.Paint().apply { colorFilter = filter })
+        return out
+    }
+
     fun rowBackground(context: Context, focused: Boolean): GradientDrawable =
         GradientDrawable().apply {
             setColor(if (focused) selected else Color.TRANSPARENT)
@@ -305,10 +335,9 @@ internal object SlotUi {
         return android.widget.FrameLayout(context).apply {
             contentDescription = "$key $action"
             addView(ImageView(context).apply {
-                setImageBitmap(image)
+                setImageBitmap(inkedLegend(context, assetName, image))
                 scaleType = ImageView.ScaleType.FIT_CENTER
                 isClickable = false
-                colorFilter = menuInkFilter
             }, android.widget.FrameLayout.LayoutParams(
                 (image.width * scale).toInt().coerceAtLeast(1),
                 (image.height * scale).toInt().coerceAtLeast(1),
