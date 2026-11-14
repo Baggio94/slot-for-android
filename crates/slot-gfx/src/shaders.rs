@@ -1312,10 +1312,14 @@ void main() {
 pub const BLIT_VERT: &str = r#"
 attribute vec2 a_pos;
 uniform vec4 u_uv;
+/// cos, sin of the whole picture's clockwise turn (the closed RG Rotate).
+uniform vec2 u_turn;
 varying vec2 v_uv;
 void main() {
     v_uv = u_uv.xy + a_pos * u_uv.zw;
-    gl_Position = vec4(a_pos * 2.0 - 1.0, 0.0, 1.0);
+    vec2 p = a_pos * 2.0 - 1.0;
+    gl_Position = vec4(u_turn.x * p.x + u_turn.y * p.y,
+                       u_turn.x * p.y - u_turn.y * p.x, 0.0, 1.0);
 }
 "#;
 
