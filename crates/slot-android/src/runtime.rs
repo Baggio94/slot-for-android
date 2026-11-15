@@ -154,6 +154,8 @@ static PANEL_SIZE: AtomicU64 = AtomicU64::new(0);
 /// Paused Screen row choosing the game's size: GBA off the 3:2 KONKR, and
 /// the home consoles everywhere (Integer / Original Ratio / Stretch).
 const SCREEN_SIZE_KEY: usize = 40;
+/// Settings > Systems > PICO-8's Default Core: fake-08 or your own PICO-8.
+const PICO8_CORE_KEY: usize = 74;
 /// "INTEGER", "ORIGINAL RATIO", "STRETCH" in the setting value faces.
 const SCREEN_SIZE_VALUE: usize = 67;
 
@@ -660,7 +662,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 120] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 122] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -690,7 +692,7 @@ const SETTING_VALUE_NAMES: [&str; 120] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Pixel Transparency", "Sunlight Shimmer",
                                "Dot Matrix Color",
                                "Bilinear", "FSR", "Anime4K Fast", "Anime4K",
-                               "MAX", "crt-royale"];
+                               "MAX", "crt-royale", "fake-08", "PICO-8"];
 
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
@@ -782,7 +784,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         27 => bezel_value(scoped.bezel_gb),
         28 => if settings.time_format==crate::settings::TimeFormat::TwelveHour
             {35}else{36},
-        29..=31 | 41..=43 => core_value(Engine::core_key_platform(key)
+        29..=31 | 41..=43 | PICO8_CORE_KEY => core_value(Engine::core_key_platform(key)
             .map_or(Core::Mgba, |platform| cores[platform as usize])),
         // Frame Blending, LCD Effect and Dither Blending: the game's own in
         // game, the system's default in Settings > Systems.
@@ -882,6 +884,7 @@ fn dot_matrix_colours(view: &Settings) -> [u32; 4] {
 fn core_value(core: Core) -> usize {
     match core {
         Core::Mgba => 50, Core::Gpsp => 51, Core::Gambatte => 52,
+        Core::Fake08 => 120, Core::Pico8 => 121,
         other => 70 + other.index() - Core::Fceumm.index(),
     }
 }
@@ -5089,9 +5092,9 @@ impl Engine {
             (Platform::Nes|Platform::Snes|Platform::Md,true,_)=>&[118,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,false)=>&[118,120,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,true)=>&[118,120,124,90],
-            // One core, nothing to choose; Screen Size where the panel isn't square.
-            (Platform::Pico8,true,_)=>&[124],
-            (Platform::Pico8,false,_)=>&[120,124],
+            // Screen Size where the panel isn't square; no bezels.
+            (Platform::Pico8,true,_)=>&[118,124],
+            (Platform::Pico8,false,_)=>&[118,120,124],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -5119,14 +5122,15 @@ impl Engine {
             (Platform::Md,true,_)=>&[43,49],
             (Platform::Md,false,false)=>&[43,SCREEN_SIZE_KEY,49],
             (Platform::Md,false,true)=>&[43,SCREEN_SIZE_KEY,49,46],
-            (Platform::Pico8,true,_)=>&[72],
-            (Platform::Pico8,false,_)=>&[SCREEN_SIZE_KEY,72],
+            (Platform::Pico8,true,_)=>&[PICO8_CORE_KEY,72],
+            (Platform::Pico8,false,_)=>&[PICO8_CORE_KEY,SCREEN_SIZE_KEY,72],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
         match key {
             29=>Some(Platform::Gba), 30=>Some(Platform::Gbc), 31=>Some(Platform::Gb),
             41=>Some(Platform::Nes), 42=>Some(Platform::Snes), 43=>Some(Platform::Md),
+            PICO8_CORE_KEY=>Some(Platform::Pico8),
             _=>None,
         }
     }
@@ -5160,6 +5164,10 @@ impl Engine {
         } else { Core::primary_for(platform) };
         if !library.join(format!("lib{}_libretro.so", core.as_str())).is_file() {
             set_message(format!("{} isn't installed.", core.text()));
+            return;
+        }
+        if core == Core::Pico8 && !crate::pico8::installed(&storage) {
+            set_message(crate::pico8::MISSING.to_string());
             return;
         }
         match core_selection::set_default(&storage,platform,core) {
@@ -8419,13 +8427,14 @@ mod settings_value_tests {
     #[test]
     fn each_system_page_changes_only_its_own_system() {
         // Default core, shader, colour/palette and overlay keys of each page.
-        let own: [(Platform, &[usize]); 6] = [
+        let own: [(Platform, &[usize]); 7] = [
             (Platform::Gba, &[29, 0, 22, 25]),
             (Platform::Gbc, &[30, 21, 23, 26]),
             (Platform::Gb, &[31, 1, 3, 27]),
             (Platform::Nes, &[41, 47, 44]),
             (Platform::Snes, &[42, 48, 45]),
             (Platform::Md, &[43, 49, 46]),
+            (Platform::Pico8, &[PICO8_CORE_KEY, 72]),
         ];
         for (platform, keys) in own {
             for panel in PANELS {
@@ -8510,7 +8519,7 @@ mod settings_value_tests {
     #[test]
     fn every_core_and_bezel_has_a_name() {
         for core in Core::ALL {
-            assert!(core_value(core) < SETTING_VALUE_NAMES.len(), "{core:?}");
+            assert_eq!(SETTING_VALUE_NAMES[core_value(core)], core.text(), "{core:?}");
         }
         use crate::settings::Bezel;
         for bezel in Bezel::GB.into_iter().chain(Bezel::GBC).chain(Bezel::GBA)
