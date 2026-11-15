@@ -8689,7 +8689,12 @@ impl Engine {
             a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
                 stepped, a12_native_started.elapsed().as_micros() as u64,
                 MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
+            let shut_down = session.shut_down();
             if let Some(fault) = peer_fault { self.peer_link_stopped(fault); }
+            if shut_down {
+                crate::game::log_launch_timing("The game shut itself down: ejecting");
+                self.handle(Input::Exit);
+            }
             return;
         }
 
