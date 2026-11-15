@@ -340,6 +340,8 @@ fn controls(code: i32) -> u16 {
         21 => ButtonMask::LEFT, 22 => ButtonMask::RIGHT,
         96 => ButtonMask::A, 99 => ButtonMask::X,
         102 => ButtonMask::L, 103 => ButtonMask::R,
+        // Six-button pads: slot.'s own C and Z, which Controls can map.
+        98 => crate::controls::bit::C, 101 => crate::controls::bit::Z,
         _ => 0,
     }
 }
@@ -3927,23 +3929,27 @@ impl Engine {
                     // SNES and Mega Drive games use L/R themselves.
                     // Systems > Controls can give L1/R1 another shortcut, or
                     // make them buttons (then they reach the game below).
-                    if self.buttons & ButtonMask::SELECT == 0 && (code == 102 || code == 103) {
+                    // C / Z (six-button pads) take the same shortcuts.
+                    let cz_key = code == 98 || code == 101;
+                    if self.buttons & ButtonMask::SELECT == 0 && (code == 102 || code == 103 || cz_key) {
                         use crate::controls::ShoulderRole as Role;
                         let platform = self.current_cart_platform();
                         let session = self.game.as_ref();
                         let role = match session {
-                            Some(game) if game.has_layouts() => game.shoulder_role(),
-                            _ if !matches!(platform, Platform::Gba | Platform::Snes | Platform::Md) =>
+                            Some(game) if game.has_layouts() =>
+                                if cz_key { game.cz_role() } else { game.shoulder_role() },
+                            _ if !cz_key && !matches!(platform, Platform::Gba | Platform::Snes | Platform::Md) =>
                                 Some(Role::ScreenSize),
                             _ => None,
                         };
                         let linked = session.is_some_and(GameSession::linked);
-                        let first = code == 102;
+                        let first = code == 102 || code == 98;
                         let shortcut = match role {
                             Some(Role::ScreenSize) => Some(0),
                             // A Link never loads or saves a state on its own.
                             Some(Role::States) if linked => Some(-1),
-                            Some(Role::States) => Some(if first { 102 } else { 103 }),
+                            // L1 loads and R1 saves; C saves and Z loads.
+                            Some(Role::States) => Some(if first != cz_key { 102 } else { 103 }),
                             Some(Role::Shader) => Some(if first { 97 } else { 96 }),
                             Some(Role::Palette) => Some(if first { 104 } else { 105 }),
                             _ => None,

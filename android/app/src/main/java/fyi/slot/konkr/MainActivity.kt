@@ -1536,7 +1536,10 @@ class MainActivity : Activity() {
                 .put("fp", if (isBuiltIn(device)) "builtin" else device.descriptor)
                 // L3 / R3 (stick clicks): the Hotkeys page offers them only if present.
                 .put("sticks", device.hasKeys(KeyEvent.KEYCODE_BUTTON_THUMBL,
-                    KeyEvent.KEYCODE_BUTTON_THUMBR).all { it }))
+                    KeyEvent.KEYCODE_BUTTON_THUMBR).all { it })
+                // C and Z (six-button pads): Systems' Controls offer a C / Z row.
+                .put("cz", device.hasKeys(KeyEvent.KEYCODE_BUTTON_C,
+                    KeyEvent.KEYCODE_BUTTON_Z).all { it }))
         }
         nativeControllers(list.toString())
     }

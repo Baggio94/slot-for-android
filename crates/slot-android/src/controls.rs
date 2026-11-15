@@ -7,8 +7,8 @@
 //! same when a Bluetooth controller reconnects. A controller's bindings
 //! belong to it, not to its port: they follow it from Port 2 to Port 1.
 //!
-//! slot. itself only ever sees its own sixteen buttons (BUTTONS, as the
-//! Android key codes it has always read) plus the slot. button (MODE), which
+//! slot. itself only ever sees its own eighteen buttons (BUTTONS, as the
+//! Android key codes it reads) plus the slot. button (MODE), which
 //! can't be remapped, so a remapped controller drives the games, the menus
 //! and every shortcut alike. Pure: no Android, no GL.
 #![allow(unexpected_cfgs)]
@@ -25,12 +25,15 @@ pub const LISTEN_MS: u64 = 5_000;
 pub const FILE: &str = "slot-konkr-controls.json";
 
 /// slot.'s own buttons, in the Port page's order, with the Android key code
-/// each has always been read as.
-pub const BUTTONS: [(&str, i32); 16] = [
+/// each is read as. C and Z (BUTTON_C, BUTTON_Z) are the extra face buttons
+/// of six-button pads (Retroid Pocket Classic 6-button, Mega Drive style
+/// controllers); they come last so the older buttons keep their places.
+pub const BUTTONS: [(&str, i32); 18] = [
     ("Up", 19), ("Down", 20), ("Left", 21), ("Right", 22),
     ("A", 96), ("B", 97), ("X", 99), ("Y", 100),
     ("L1", 102), ("R1", 103), ("L2", 104), ("R2", 105),
     ("L3", 106), ("R3", 107), ("SELECT", 109), ("START", 108),
+    ("C", 98), ("Z", 101),
 ];
 
 /// slot.'s own menus can't be used without these (BUTTONS' Up, Down, A): A
@@ -55,9 +58,15 @@ pub struct Pad {
 impl Pad {
     pub fn bind(&self, button: usize) -> Option<i32> {
         let (name, default) = BUTTONS[button];
-        match self.binds.get(name).copied().unwrap_or(default) {
-            0 => None,
-            code => Some(code),
+        match self.binds.get(name).copied() {
+            Some(0) => None,
+            Some(code) => Some(code),
+            // Its own key, unless another button has it: a controller saved
+            // before C and Z existed may have given BUTTON_C or BUTTON_Z to
+            // another button, which keeps it. (Mapping always swaps, so for
+            // the older buttons this never happens.)
+            None if self.binds.values().any(|&code| code == default) => None,
+            None => Some(default),
         }
     }
 
@@ -132,6 +141,9 @@ pub struct Device {
     /// Android says it has L3 and R3.
     #[serde(default)]
     pub sticks: bool,
+    /// Android says it has C and Z: a six-button pad.
+    #[serde(default)]
+    pub cz: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -450,6 +462,10 @@ pub mod bit {
     pub const X: u16 = 1 << 9;
     pub const L: u16 = 1 << 10;
     pub const R: u16 = 1 << 11;
+    /// C and Z: slot.'s own, never a core's. A console button reads them
+    /// only where Controls maps it to them (Mega Drive C and Z).
+    pub const C: u16 = 1 << 12;
+    pub const Z: u16 = 1 << 13;
 }
 
 /// The name of one of slot.'s buttons, by its bit; "None" for no button.
@@ -458,6 +474,7 @@ pub fn slot_button_name(slot: u16) -> &'static str {
         bit::UP => "Up", bit::DOWN => "Down", bit::LEFT => "Left", bit::RIGHT => "Right",
         bit::A => "A", bit::B => "B", bit::X => "X", bit::Y => "Y",
         bit::L => "L1", bit::R => "R1", bit::SELECT => "SELECT", bit::START => "START",
+        bit::C => "C", bit::Z => "Z",
         _ => "None",
     }
 }
@@ -517,8 +534,10 @@ impl XyRole {
     }
 }
 
-/// What L1 and R1 do on a console without them (Game Boy, Color, NES).
-/// The first half is L1's, the second R1's.
+/// What L1 and R1 do on a console without them (Game Boy, Color, NES),
+/// and C and Z on one without them (every one but the Mega Drive). The
+/// first half is L1's (C's), the second R1's (Z's), except Load / Save:
+/// C saves and Z loads (see `cz_label`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShoulderRole { ScreenSize, States, TurboAB, AB, Palette, Shader, Off }
 
@@ -535,6 +554,15 @@ impl ShoulderRole {
         }
     }
 
+    /// The C / Z row's label: C saves and Z loads, so Load / Save reads
+    /// Save / Load there. The first half is still C's.
+    pub fn cz_label(self) -> &'static str {
+        match self {
+            ShoulderRole::States => "Save / Load",
+            other => other.label(),
+        }
+    }
+
     /// slot.'s own shortcuts are Port 1's: the second player only gets buttons.
     pub fn choices(system: &str, port: usize) -> &'static [ShoulderRole] {
         use ShoulderRole::*;
@@ -547,6 +575,8 @@ impl ShoulderRole {
 /// X / Y and L1 / R1 rows: on which systems they are spare.
 pub fn spare_xy(system: &str) -> bool { matches!(system, "gba" | "gb" | "gbc" | "nes") }
 pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes") }
+/// C / Z row: every system but the Mega Drive, whose pad has them.
+pub fn spare_cz(system: &str) -> bool { system != "md" }
 
 /// One port's choices at one level. Only what was changed there is kept.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -556,10 +586,13 @@ pub struct PortLayout {
     pub binds: BTreeMap<String, u16>,
     pub xy: Option<XyRole>,
     pub shoulders: Option<ShoulderRole>,
+    pub cz: Option<ShoulderRole>,
 }
 
 impl PortLayout {
-    fn is_empty(&self) -> bool { self.binds.is_empty() && self.xy.is_none() && self.shoulders.is_none() }
+    fn is_empty(&self) -> bool {
+        self.binds.is_empty() && self.xy.is_none() && self.shoulders.is_none() && self.cz.is_none()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -589,6 +622,8 @@ pub struct Resolved {
     pub xy: Option<XyRole>,
     /// None where L1 and R1 are console buttons, or play one.
     pub shoulders: Option<ShoulderRole>,
+    /// None where C and Z are console buttons, or play one.
+    pub cz: Option<ShoulderRole>,
 }
 
 impl Resolved {
@@ -613,6 +648,11 @@ impl Resolved {
         match self.shoulders {
             Some(ShoulderRole::TurboAB) => second(bit::L | bit::R, bit::L, bit::R, true),
             Some(ShoulderRole::AB) => second(bit::L | bit::R, bit::L, bit::R, false),
+            _ => {}
+        }
+        match self.cz {
+            Some(ShoulderRole::TurboAB) => second(bit::C | bit::Z, bit::C, bit::Z, true),
+            Some(ShoulderRole::AB) => second(bit::C | bit::Z, bit::C, bit::Z, false),
             _ => {}
         }
         out
@@ -699,6 +739,24 @@ impl Controls {
         (if fits { role } else { default }, false)
     }
 
+    /// C / Z: L1 / R1's choices, but None until a page chooses.
+    pub fn cz(&self, scope: &Scope, port: usize) -> (ShoulderRole, bool) {
+        if let Some(role) = self.layout(scope).and_then(|l| l.ports[port].cz) { return (role, true); }
+        let below = self.levels(scope, port).into_iter().find_map(|level| level.cz);
+        let role = below.unwrap_or(ShoulderRole::Off);
+        let fits = ShoulderRole::choices(scope.system(), port).contains(&role);
+        (if fits { role } else { ShoulderRole::Off }, false)
+    }
+
+    pub fn cycle_cz(&mut self, scope: &Scope, port: usize, right: bool) {
+        let (now, _) = self.cz(scope, port);
+        let all = ShoulderRole::choices(scope.system(), port);
+        let at = all.iter().position(|r| *r == now).unwrap_or(0);
+        let next = all[if right { (at + 1) % all.len() } else { (at + all.len() - 1) % all.len() }];
+        self.layout_mut(scope).ports[port].cz = Some(next);
+        self.tidy();
+    }
+
     pub fn cycle_xy(&mut self, scope: &Scope, port: usize, right: bool, default_xy: XyRole) {
         let (now, _) = self.xy(scope, port, default_xy);
         let all = XyRole::ALL;
@@ -743,17 +801,22 @@ impl Controls {
             .then(|| self.xy(&scope, port, default_xy).0);
         let shoulders = (spare_shoulders(system) && !used(bit::L | bit::R))
             .then(|| self.shoulders(&scope, port).0);
-        Resolved { pairs, xy, shoulders }
+        let cz = (spare_cz(system) && !used(bit::C | bit::Z))
+            .then(|| self.cz(&scope, port).0)
+            .filter(|role| *role != ShoulderRole::Off);
+        Resolved { pairs, xy, shoulders, cz }
     }
 }
 
 /// A row of a system's (or a game's) Port page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LayoutRow { Button(usize), Xy, Shoulders, Reset }
+pub enum LayoutRow { Button(usize), Xy, Cz, Shoulders, Reset }
 
-pub fn layout_rows(system: &str) -> Vec<LayoutRow> {
+/// `six_buttons`: a controller with C and Z is connected.
+pub fn layout_rows(system: &str, six_buttons: bool) -> Vec<LayoutRow> {
     let mut rows: Vec<LayoutRow> = (0..console_buttons(system).len()).map(LayoutRow::Button).collect();
     if spare_xy(system) { rows.push(LayoutRow::Xy); }
+    if six_buttons && spare_cz(system) { rows.push(LayoutRow::Cz); }
     if spare_shoulders(system) { rows.push(LayoutRow::Shoulders); }
     rows.push(LayoutRow::Reset);
     rows
@@ -1047,7 +1110,60 @@ mod tests {
             assert_eq!(controls.slot_code(BUILTIN, code, false), Some(code));
         }
         assert_eq!(controls.slot_code(BUILTIN, MODE, false), Some(MODE));
-        assert_eq!(controls.slot_code(BUILTIN, 98, false), None, "BUTTON_C isn't a slot. button");
+        assert_eq!(controls.slot_code(BUILTIN, 98, false), Some(98), "BUTTON_C is slot.'s C");
+        assert_eq!(controls.slot_code(BUILTIN, 101, false), Some(101), "BUTTON_Z is slot.'s Z");
+        assert_eq!(controls.slot_code(BUILTIN, 188, false), None, "Button 1 isn't a slot. button");
+    }
+
+    #[test]
+    fn a_controller_saved_with_c_on_another_button_keeps_it_there() {
+        // Before C and Z were slot. buttons, the C key could only be used
+        // by mapping it to one: L1 here.
+        let mut pad = Pad::default();
+        pad.binds.insert("L1".into(), 98);
+        let c = BUTTONS.iter().position(|(name, _)| *name == "C").unwrap();
+        let z = BUTTONS.iter().position(|(name, _)| *name == "Z").unwrap();
+        assert_eq!(pad.bind(8), Some(98));
+        assert_eq!(pad.bind(c), None, "C has no key: L1 has it");
+        assert_eq!(pad.button_for(98), Some(8));
+        assert_eq!(pad.bind(z), Some(101));
+        assert!(pad.map(c, 98), "giving it back swaps with L1");
+        assert_eq!((pad.bind(c), pad.bind(8)), (Some(98), None));
+    }
+
+    #[test]
+    fn mega_drive_c_and_z_can_be_the_six_button_pad_s_own() {
+        let mut controls = Controls::default();
+        let scope = Scope::System("md");
+        let index = |name: &str| console_buttons("md").iter().position(|b| b.name == name).unwrap();
+        // Defaults unchanged: C is played by A, Z by R1.
+        assert_eq!(controls.bind(&scope, 0, index("C")), (bit::A, false));
+        assert_eq!(controls.bind(&scope, 0, index("Z")), (bit::R, false));
+        controls.map_console(&scope, 0, index("C"), bit::C);
+        controls.map_console(&scope, 0, index("Z"), bit::Z);
+        controls.map_console(&scope, 0, index("A"), bit::A);
+        controls.map_console(&scope, 0, index("X"), bit::X);
+        controls.map_console(&scope, 0, index("Y"), bit::Y);
+        let resolved = controls.resolve("md", None, 0, XyRole::BA);
+        // Each of the pad's six face buttons plays the Mega Drive button of
+        // the same name, read by the core as RetroArch does.
+        assert_eq!(resolved.apply(bit::A, 0), bit::Y, "A");
+        assert_eq!(resolved.apply(bit::B, 0), bit::B, "B");
+        assert_eq!(resolved.apply(bit::C, 0), bit::A, "C");
+        assert_eq!(resolved.apply(bit::X, 0), bit::L, "X");
+        assert_eq!(resolved.apply(bit::Y, 0), bit::X, "Y");
+        assert_eq!(resolved.apply(bit::Z, 0), bit::R, "Z");
+        assert_eq!(slot_button_name(bit::C), "C");
+        assert_eq!(slot_button_name(bit::Z), "Z");
+    }
+
+    #[test]
+    fn c_and_z_play_nothing_unless_controls_map_them() {
+        let controls = Controls::default();
+        for system in SYSTEMS {
+            let resolved = controls.resolve(system, None, 0, XyRole::BA);
+            assert_eq!(resolved.apply(bit::C | bit::Z, 0), 0, "{system}");
+        }
     }
 
     #[test]
@@ -1249,7 +1365,7 @@ mod tests {
     #[test]
     fn names_are_remembered_only_for_controllers_slot_keeps() {
         let mut controls = Controls::default();
-        let device = Device { id: 9, name: "8BitDo SN30 Pro".into(), fp: PAD.into(), sticks: true };
+        let device = Device { id: 9, name: "8BitDo SN30 Pro".into(), fp: PAD.into(), sticks: true, cz: false };
         assert!(!controls.remember(&device), "a controller on no port leaves no trace");
         controls.assign(1, PAD);
         assert!(controls.remember(&device));
@@ -1261,11 +1377,11 @@ mod tests {
     fn port_pages_scroll_with_the_selection() {
         assert_eq!(port_rows(false), vec![PortRow::Controller]);
         let rows = port_rows(true).len();
-        assert_eq!(rows, 19);
+        assert_eq!(rows, 21);
         assert_eq!(scroll_offset(0, rows), 0);
         assert_eq!(scroll_offset(2, rows), 0);
         assert_eq!(scroll_offset(3, rows), 1);
-        assert_eq!(scroll_offset(18, rows), rows - VISIBLE_ROWS);
+        assert_eq!(scroll_offset(20, rows), rows - VISIBLE_ROWS);
         assert_eq!(scroll_offset(3, 4), 0, "a short page never scrolls");
     }
 
@@ -1380,10 +1496,74 @@ mod tests {
     fn mega_drive_buttons_have_their_own_names() {
         let names: Vec<&str> = console_buttons("md").iter().map(|b| b.name).collect();
         assert_eq!(&names[4..], &["A", "B", "C", "X", "Y", "Z", "Mode", "START"]);
-        assert!(layout_rows("md").iter().all(|r| !matches!(r, LayoutRow::Xy | LayoutRow::Shoulders)));
-        assert!(layout_rows("gba").contains(&LayoutRow::Xy));
-        assert!(!layout_rows("gba").contains(&LayoutRow::Shoulders));
+        assert!(layout_rows("md", true).iter()
+            .all(|r| !matches!(r, LayoutRow::Xy | LayoutRow::Cz | LayoutRow::Shoulders)));
+        assert!(layout_rows("gba", false).contains(&LayoutRow::Xy));
+        assert!(!layout_rows("gba", false).contains(&LayoutRow::Shoulders));
         assert!(takes_port2("nes") && !takes_port2("gbc"));
+    }
+
+    #[test]
+    fn the_c_z_row_shows_only_with_a_six_button_pad() {
+        for system in ["gba", "gbc", "gb", "nes", "snes"] {
+            assert!(layout_rows(system, true).contains(&LayoutRow::Cz), "{system}");
+            assert!(!layout_rows(system, false).contains(&LayoutRow::Cz), "{system}");
+        }
+        assert!(!layout_rows("md", true).contains(&LayoutRow::Cz));
+        // Just above Reset, after X / Y: SNES gets it after its buttons.
+        let gb = layout_rows("gb", true);
+        assert_eq!(&gb[gb.len() - 4..], &[LayoutRow::Xy, LayoutRow::Cz, LayoutRow::Shoulders, LayoutRow::Reset]);
+        let snes = layout_rows("snes", true);
+        assert_eq!(&snes[snes.len() - 2..], &[LayoutRow::Cz, LayoutRow::Reset]);
+    }
+
+    #[test]
+    fn c_and_z_take_a_role_where_the_console_lacks_them() {
+        use ShoulderRole::*;
+        let mut controls = Controls::default();
+        let snes = Scope::System("snes");
+        assert_eq!(controls.cz(&snes, 0), (Off, false));
+        assert_eq!(controls.resolve("snes", None, 0, XyRole::BA).cz, None);
+        // L1 / R1's choices, starting from None: Palette only on the Game Boy.
+        let mut seen = Vec::new();
+        for _ in 0..ShoulderRole::choices("snes", 0).len() {
+            controls.cycle_cz(&snes, 0, true);
+            seen.push(controls.cz(&snes, 0).0);
+        }
+        assert_eq!(seen, [ScreenSize, States, TurboAB, AB, Shader, Off]);
+        let gb = Scope::System("gb");
+        controls.cycle_cz(&gb, 0, false);
+        controls.cycle_cz(&gb, 0, false);
+        assert_eq!(controls.cz(&gb, 0), (Palette, true));
+        // Turbo A / B and A / B play the console's A and B.
+        controls.layout_mut(&snes).ports[0].cz = Some(TurboAB);
+        let layout = controls.resolve("snes", None, 0, XyRole::BA);
+        assert_eq!((layout.apply(bit::C, 0), layout.apply(bit::Z, 0)), (bit::A, bit::B));
+        assert_eq!(layout.apply(bit::C, 3), 0, "turbo is off on frames 3-5");
+        controls.layout_mut(&snes).ports[0].cz = Some(AB);
+        let layout = controls.resolve("snes", None, 0, XyRole::BA);
+        assert_eq!((layout.apply(bit::C, 3), layout.apply(bit::Z, 3)), (bit::A, bit::B));
+        // A shortcut reaches slot., not the game.
+        controls.layout_mut(&snes).ports[0].cz = Some(States);
+        let layout = controls.resolve("snes", None, 0, XyRole::BA);
+        assert_eq!(layout.cz, Some(States));
+        assert_eq!(layout.apply(bit::C | bit::Z, 0), 0);
+        // C saves and Z loads, and the row says so in that order.
+        assert_eq!((States.label(), States.cz_label()), ("Load / Save", "Save / Load"));
+        assert_eq!(Shader.cz_label(), Shader.label());
+        // A game's page starts from its system's; port 2 only gets buttons.
+        let game = Scope::Game { system: "snes", game: "mario".into() };
+        assert_eq!(controls.cz(&game, 0), (States, false));
+        assert_eq!(controls.cz(&snes, 1), (Off, false));
+        controls.cycle_cz(&snes, 1, true);
+        assert_eq!(controls.cz(&snes, 1).0, TurboAB);
+        // C playing a console button: the role steps aside.
+        controls.map_console(&snes, 0, 4, bit::C);
+        assert_eq!(controls.resolve("snes", None, 0, XyRole::BA).cz, None);
+        // The Mega Drive's C and Z are its own buttons.
+        let mut md = Controls::default();
+        md.layout_mut(&Scope::System("md")).ports[0].cz = Some(AB);
+        assert_eq!(md.resolve("md", None, 0, XyRole::BA).cz, None);
     }
 
     // ---- Hotkeys ----
