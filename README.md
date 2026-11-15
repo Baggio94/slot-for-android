@@ -17,7 +17,7 @@ The port has since grown to other Android handhelds and home consoles. The goal 
 ## Highlights
 
 - **Cartridges first.** Your library is a shelf of cartridges with their real labels, insertion and ejection animations and sounds.
-- **Seven systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive, each with two emulation cores to choose from, and PICO-8, played by fake-08.
+- **Seven systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive, each with two emulation cores to choose from, and PICO-8, played by fake-08 or by your own copy of PICO-8.
 - **Any screen shape.** The interface adapts to square, 4:3, 3:2 and widescreen handhelds at their native resolution.
 - **Cart Studio.** Change a cartridge's label, shell colour, finish and shape, right on the handheld.
 - **Screen options.** LCD and CRT shaders, overlays, color correction, Frame Blending and LCD effects, per system or per game.
@@ -34,6 +34,8 @@ The port has since grown to other Android handhelds and home consoles. The goal 
 3. Pick a cartridge and press **A**.
 
 Supported files: `.gba`, `.gb`, `.gbc`, `.nes`, `.fc`, `.unf`, `.unif`, `.sfc`, `.smc`, `.md`, `.gen`, `.smd`, `.bin`, `.p8`, `.p8.png`, and `.zip` archives with one game each. Games can sit directly in that folder or in one subfolder per system (ES-DE style).
+
+**Your own PICO-8 (optional):** slot. does not include PICO-8. If you own it, copy `pico8_64` and `pico8.dat` from its Raspberry Pi download (or the `pico-8_*_raspi.zip` itself) into your BIOS folder (**START → Library → Choose BIOS Folder**). PICO-8 carts can then run on the real PICO-8 (tested with 0.2.7), and Splore is the first cart on the PICO-8 shelf. Pick the core per cart with **SELECT**, or for every cart in **START → Settings → Systems → PICO-8 → Default Core**.
 
 **Updating:** slot. checks for updates in **START → About**. You can also install a newer APK over the current one. Don't uninstall slot. or clear its data first, or you will lose your settings and the saves stored inside the app.
 
