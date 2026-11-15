@@ -132,6 +132,7 @@ class MainActivity : Activity() {
     external fun nativeEglPresentationTick(pressedNs: Long)
     external fun nativeEglPresentationReport(): String
     external fun nativeKey(code: Int, pressed: Boolean)
+    external fun nativeTouch(action: Int, x: Float, y: Float, timeMs: Long)
     /** A key of a controller: Settings > Controls picks its port and button. */
     external fun nativePadKey(device: Int, code: Int, pressed: Boolean, stick: Boolean)
     /** Every controller connected now, as [{"id","name","fp"}]. */
@@ -1711,7 +1712,35 @@ class MainActivity : Activity() {
             lidCover.awake()
             return true
         }
+        sendTouch(event)
         return super.dispatchTouchEvent(event)
+    }
+
+    /** Touch on the carousel (runtime/touch.rs): one finger, its position
+     *  from 0 to 1 across the view. The native side ignores it anywhere but
+     *  on the carousel. A second finger cancels. */
+    private fun sendTouch(event: MotionEvent) {
+        if (!::view.isInitialized || nativeIsPlaying()) return
+        val w = view.surfaceView.width.toFloat()
+        val h = view.surfaceView.height.toFloat()
+        if (w <= 0f || h <= 0f) return
+        val action = when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> 0
+            MotionEvent.ACTION_MOVE -> 1
+            MotionEvent.ACTION_UP -> 2
+            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> 3
+            else -> return
+        }
+        if (action == 1) {
+            // Android batches moves to the frame: its samples in between
+            // keep a fling's speed exact.
+            for (i in 0 until event.historySize) {
+                nativeTouch(1, event.getHistoricalX(0, i) / w,
+                    event.getHistoricalY(0, i) / h, event.getHistoricalEventTime(i))
+            }
+        }
+        nativeTouch(action, event.getX(0) / w, event.getY(0) / h, event.eventTime)
+        wakeCarouselRender()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

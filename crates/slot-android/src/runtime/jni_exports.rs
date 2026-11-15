@@ -1158,3 +1158,14 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRommFilter(
         push(Input::RommFilter(filter));
     }
 }
+
+/// A finger on the screen (runtime/touch.rs): `action` 0 down, 1 move,
+/// 2 up, 3 cancel; `x` and `y` from 0 to 1 across the view; Android's event
+/// time in milliseconds.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeTouch(
+    _env: *mut c_void, _this: *mut c_void, action: i32, x: f32, y: f32, ms: i64,
+) {
+    if !(0..=3).contains(&action) || !x.is_finite() || !y.is_finite() { return; }
+    push(Input::Touch(action as u8, x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), ms));
+}

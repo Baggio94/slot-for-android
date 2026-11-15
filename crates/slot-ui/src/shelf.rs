@@ -61,6 +61,26 @@ const SLOTS: i32 = 3;
 const REPEAT_DELAY_MS: Millis = 400;
 const REPEAT_MS: [Millis; 4] = [110, 85, 65, 50];
 
+/// Touch (Siham 2026-11-16): a fling's speed is lost at this rate a second
+/// (about a tenth of it left after one second, as on a phone).
+const COAST_FRICTION: f32 = 2.3;
+/// Below this speed, in carts a second, a fling hands over to the spring
+/// that settles the shelf on a cart, as the D-pad does.
+const COAST_END: f32 = 3.0;
+/// The fastest fling, in carts a second.
+const COAST_MAX: f32 = 45.0;
+/// A one-cart shelf only gives a little under the finger.
+const LONE_GIVE: f32 = 0.25;
+
+/// What moves the shelf: the spring (D-pad, and after touch), the finger,
+/// or a fling coasting on.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Motion {
+    Spring,
+    Finger,
+    Coast,
+}
+
 pub struct Shelf {
     pub carts: Vec<Cart>,
     pub index: usize,
@@ -82,6 +102,7 @@ pub struct Shelf {
     /// A cart was taken out of the middle: the carts on its right start one
     /// place further right and slide into the gap (1 down to 0).
     closing: f32,
+    motion: Motion,
 }
 
 /// Seconds the carts on the right take to close a deleted cart's gap.
@@ -106,6 +127,7 @@ impl Shelf {
             held: None,
             held_letter: None,
             closing: 0.0,
+            motion: Motion::Spring,
         }
     }
 
@@ -328,6 +350,7 @@ impl Shelf {
     }
 
     fn hold(&mut self, by: i32, now: Millis) {
+        self.motion = Motion::Spring;
         self.held_letter = None;
         self.step(by);
         self.held = Some((by, now + REPEAT_DELAY_MS, 0));
@@ -342,6 +365,7 @@ impl Shelf {
     }
 
     fn hold_letter(&mut self, by: i32, now: Millis) {
+        self.motion = Motion::Spring;
         self.held = None;
         self.jump(by);
         self.held_letter = Some((by, now + REPEAT_DELAY_MS, 0));
@@ -482,6 +506,98 @@ impl Shelf {
     /// True while spring-driven shelf scrolling is visibly in flight.
     pub fn is_scrolling(&self) -> bool {
         (self.scroll_target()-self.scroll).abs()>0.03 || self.vel.abs()>0.05 || self.closing > 0.0
+            || self.motion != Motion::Spring
+    }
+
+    /// Screen pixels from one cart to the next, where the shelf is now.
+    fn pixels_per_cart(&self) -> f32 {
+        let u = self.scroll - self.scroll_target();
+        self.pitch(u.floor() as i32, u).max(1.0)
+    }
+
+    /// A finger is on the shelf: it stops any motion and holds the carts.
+    pub fn grab(&mut self) {
+        self.held = None;
+        self.held_letter = None;
+        self.motion = Motion::Finger;
+        self.vel = 0.0;
+    }
+
+    /// The finger moved `dx` screen pixels: the carts follow it exactly, and
+    /// the cart nearest the centre becomes the selected one as it passes.
+    pub fn drag_by(&mut self, dx: f32) {
+        if self.motion != Motion::Finger { self.grab(); }
+        let by = dx / self.pixels_per_cart();
+        if self.carts.len() < 2 {
+            let target = self.scroll_target();
+            self.scroll = target + (self.scroll - target - by * LONE_GIVE).clamp(-0.3, 0.3);
+            return;
+        }
+        self.scroll -= by;
+        self.follow();
+    }
+
+    /// The finger left at `speed` screen pixels a second: a quick one coasts
+    /// on and slows down, then the spring settles on a cart in the same way
+    /// as after the D-pad.
+    pub fn let_go(&mut self, speed: f32) {
+        if self.motion != Motion::Finger { return; }
+        let speed = if self.carts.len() < 2 { 0.0 }
+            else { (-speed / self.pixels_per_cart()).clamp(-COAST_MAX, COAST_MAX) };
+        self.vel = speed;
+        if speed.abs() > COAST_END {
+            self.motion = Motion::Coast;
+        } else {
+            self.settle();
+        }
+    }
+
+    /// Takes the cart `by` places away to the centre, as the D-pad would.
+    pub fn go_by(&mut self, by: i32) {
+        self.motion = Motion::Spring;
+        self.step(by);
+    }
+
+    /// Hands over to the spring, on the cart it would come to rest on.
+    fn settle(&mut self) {
+        self.motion = Motion::Spring;
+        if self.carts.len() < 2 { return; }
+        let land = self.scroll - self.scroll_target() + self.vel / OMEGA;
+        let by = land.round() as i32;
+        if by != 0 { self.step(by); }
+    }
+
+    /// The selected cart is the one nearest the centre.
+    fn follow(&mut self) {
+        if self.carts.len() < 2 { return; }
+        while self.scroll - self.scroll_target() > 0.5 { self.step(1); }
+        while self.scroll - self.scroll_target() < -0.5 { self.step(-1); }
+    }
+
+    /// Which cart is under (`x`, `y`), as places from the selected one.
+    pub fn cart_under(&self, x: f32, y: f32) -> Option<i32> {
+        let target = self.scroll_target();
+        let order = [0, -1, 1, -2, 2, -3, 3];
+        order.into_iter().filter(|s| s.abs() <= SLOTS).find(|&slot| {
+            let Some(i) = self.cart_at_offset(slot) else { return false };
+            if slot != 0 && self.carts.len() < 2 { return false; }
+            let cart = &self.carts[i];
+            let shift = self.shift(slot);
+            let offset = target + slot as f32 - self.scroll + shift;
+            let scale = fit() * shrink(offset);
+            let (cw, ch) = shelf_box_for(cart);
+            let (w, h) = (cw * scale, ch * scale);
+            let centre = if shift > 0.0 {
+                let (here, next) = (self.centre(slot), self.centre(slot + 1));
+                here + (next - here) * shift
+            } else { self.centre(slot) };
+            let body = self.shells.get(i).copied().unwrap_or_else(|| body_of(cart));
+            let foot = body_foot_y(body);
+            // A little room around each cart, so a tap on its edge counts.
+            const ROOM: f32 = 12.0;
+            (centre - w / 2.0 - ROOM..=centre + w / 2.0 + ROOM).contains(&x)
+                && (foot - h - ROOM..=foot + ROOM).contains(&y)
+        })
     }
 
     /// How far right of their place the carts at and after the selected one
@@ -494,6 +610,17 @@ impl Shelf {
 
     pub fn update(&mut self, dt: f32) {
         self.closing = (self.closing - dt / CLOSE_S).max(0.0);
+        match self.motion {
+            Motion::Finger => { self.vel = 0.0; return; }
+            Motion::Coast => {
+                self.vel *= (-COAST_FRICTION * dt).exp();
+                self.scroll += self.vel * dt;
+                self.follow();
+                if self.vel.abs() <= COAST_END { self.settle(); }
+                return;
+            }
+            Motion::Spring => {}
+        }
         let accel = -2.0 * OMEGA * self.vel - OMEGA * OMEGA * (self.scroll - self.scroll_target());
         self.vel += accel * dt;
         self.scroll += self.vel * dt;

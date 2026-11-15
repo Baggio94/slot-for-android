@@ -92,6 +92,9 @@ impl Surface for AndroidSurface {
 #[derive(Clone)]
 enum Input {
     Key(i32, bool),
+    /// A finger on the screen (runtime/touch.rs): action, x and y from 0
+    /// to 1 across the screen, Android's event time in ms.
+    Touch(u8, f32, f32, i64),
     /// A key of one of Android's input devices (Settings > Controls).
     PadKey { device: i32, code: i32, pressed: bool, stick: bool },
     /// Every controller connected now.
@@ -1267,6 +1270,7 @@ struct Engine {
     romm: Option<romm::RommPage>,
     /// L2 / R2 on the carousel: delete held, GBA Video tapped.
     triggers: carousel_delete::Triggers,
+    touch: Option<touch::Touch>,
     /// The GBA Video shelf was the one of the two used last.
     gba_video: bool,
     /// Textures Cart Studio drew its small carts in, free to draw again.
@@ -2009,6 +2013,7 @@ impl Engine {
             cart_library: None,
             romm: None,
             triggers: Default::default(),
+            touch: None,
             gba_video: false,
             studio_pool: Vec::new(),
             settings,
@@ -3824,6 +3829,7 @@ impl Engine {
             Input::PadKey { device, code, pressed, stick } =>
                 self.pad_key(device, code, pressed, stick),
             Input::Controllers(devices) => self.controllers_changed(devices),
+            Input::Touch(action, x, y, ms) => self.touch(action, x, y, ms),
             Input::Key(code, pressed) => {
                 // A Map or Detect waits for a controller's button (pad_key);
                 // the slot. button cancels it.
@@ -9337,6 +9343,7 @@ mod cart_studio;
 mod cart_library;
 mod romm;
 mod carousel_delete;
+mod touch;
 use carousel_delete::VIDEO_RACK;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) use jni_exports::exercise_session_graphics_recovery;
