@@ -1,12 +1,13 @@
 package fyi.slot.konkr
 
+import com.github.luben.zstd.Zstd
+import com.github.luben.zstd.ZstdException
 import java.io.ByteArrayOutputStream
 import java.util.zip.Inflater
 import java.util.zip.Deflater
 
 /** RetroArch libretro-common rzip_stream.c chunk format, strict bounded v1
- * (zlib) decoding. RZIP v2 is zstd, not Android's built-in zlib; preserve it
- * untouched until a tested zstd decoder is available.
+ * (zlib) and v2 (zstd) decoding. Writes remain v1 for existing RetroArch builds.
  */
 internal object RetroArchCompression {
     private val marker = byteArrayOf(35,82,90,73,80,118) // #RZIPv
@@ -66,7 +67,7 @@ internal object RetroArchCompression {
         return result
     }
 
-    /** Refuse overwriting unknown, legacy raw, v2 or corrupt external states.
+    /** Refuse overwriting unknown, legacy raw or corrupt external states.
      * A valid header alone is insufficient: require a complete MEM and END
      * block before replacing a RetroArch state.
      */
@@ -112,9 +113,8 @@ internal object RetroArchCompression {
     fun decode(data: ByteArray): ByteArray {
         if (!isRzip(data)) return data
         val version=data[6].toInt() and 255
-        require(version==1) {
-            if (version==2) "RetroArch RZIP zstd states are not supported yet"
-            else "Unknown RetroArch RZIP version"
+        require(version==1 || version==2) {
+            "Unknown RetroArch RZIP version"
         }
         fun readLE32(offset:Int):Long =
             (0..3).fold(0L){total,k->total or ((data[offset+k].toLong() and 255L) shl (8*k))}
@@ -130,6 +130,12 @@ internal object RetroArchCompression {
             offset+=4
             require(compressed in 1..(block*2) && offset+compressed<=data.size) {
                 "Invalid RetroArch RZIP compressed chunk size"
+            }
+            if (version==2) {
+                val expected=minOf(block.toInt(),total.toInt()-output.size())
+                output.write(decodeZstdChunk(data,offset,compressed.toInt(),expected))
+                offset+=compressed.toInt()
+                continue
             }
             val inflater=Inflater(false)  // independent zlib stream per chunk
             try {
@@ -158,5 +164,24 @@ internal object RetroArchCompression {
         }
         require(offset==data.size) {"Unexpected trailing RZIP data"}
         return output.toByteArray()
+    }
+
+    private fun decodeZstdChunk(data: ByteArray, offset: Int, size: Int, expected: Int): ByteArray {
+        // Allocate only the already-bounded RZIP size, never a size advertised
+        // inside an untrusted zstd frame. Each RZIP chunk is independent.
+        val output = ByteArray(expected)
+        val written = try {
+            Zstd.decompressByteArray(output, 0, expected, data, offset, size)
+        } catch (error: ZstdException) {
+            throw IllegalArgumentException("Malformed RetroArch RZIP zstd chunk", error)
+        } catch (error: LinkageError) {
+            // Keep the existing import/export fallback if a device cannot
+            // load the decoder; an unavailable codec must not crash a save.
+            throw IllegalStateException("RetroArch zstd decoder unavailable; state preserved", error)
+        }
+        require(written == expected.toLong()) {
+            "Incomplete or oversized RetroArch RZIP zstd chunk"
+        }
+        return output
     }
 }

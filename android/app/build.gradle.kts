@@ -94,6 +94,10 @@ android {
 
 dependencies {
     implementation("androidx.core:core:1.13.1")
+    // RetroArch RZIP v2 states. The AAR supplies Android's native decoder;
+    // the matching JAR supplies the host decoder for local JVM tests.
+    implementation("com.github.luben:zstd-jni:1.5.7-28@aar")
+    testImplementation("com.github.luben:zstd-jni:1.5.7-28")
     testImplementation("junit:junit:4.13.2")
     // Android's org.json methods are stubbed in local JVM tests.
     testImplementation("org.json:json:20240303")
