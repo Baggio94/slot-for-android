@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #define RETRO_API_VERSION 1
+#define ENV_SHUTDOWN 7
 #define ENV_GET_SYSTEM_DIRECTORY 9
 #define ENV_SET_PIXEL_FORMAT 10
 #define ENV_GET_LOG_INTERFACE 27
@@ -352,7 +353,13 @@ void retro_run(void) {
     double vclock = SHIM->vclock_ms;
     if (host_ms < vclock - 100 || host_ms > vclock + 100) host_ms = vclock;
     for (int i = 0; i < 3 && running && SHIM->vclock_ms < host_ms; i++)
-        if (p8_frame(keys) == P8_EXIT) { running = false; p8_logf("pico8: exited"); }
+        if (p8_frame(keys) == P8_EXIT) {
+            // PICO-8 shut down (its menu's Shutdown): the game is over, so
+            // slot. ejects it rather than showing the last picture for good.
+            running = false;
+            p8_logf("pico8: exited");
+            env(ENV_SHUTDOWN, NULL);
+        }
     present();
     static unsigned runs;
     if (++runs % 600 == 1) {
