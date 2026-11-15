@@ -73,8 +73,13 @@ impl Engine {
         if pressed {
             if t.down[1 - side] {
                 t.both = true;
-                let has_cart = self.shelves.get(self.active).is_some_and(|s| !s.carts.is_empty());
-                if has_cart && t.ejecting.is_none() { t.hold = Some(Instant::now()); }
+                let shelf = self.shelves.get(self.active);
+                let has_cart = shelf.is_some_and(|s| !s.carts.is_empty());
+                // Splore is no file: there is nothing to delete.
+                if shelf.and_then(|s| s.carts.get(s.index))
+                    .is_some_and(|c| core_selection::is_splore(&c.rom.to_string_lossy())) {
+                    set_message(crate::pico8::SPLORE_KEPT.to_string());
+                } else if has_cart && t.ejecting.is_none() { t.hold = Some(Instant::now()); }
             }
             return;
         }

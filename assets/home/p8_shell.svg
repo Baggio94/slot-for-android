@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 312 400" width="312" height="400">
+  <defs><linearGradient id="wallShade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity=".6"/><stop offset=".06" stop-color="#000" stop-opacity="0"/></linearGradient></defs>
+  <path d="M14.0 0 L284.0 0 L312 28.0 L312 386.0 Q312 400 298.0 400 L14.0 400 Q0 400 0 386.0 L0 14.0 Q0 0 14.0 0 Z" fill="#ff00ff"/>
+  <path d="M18.0 8 L280.0 8 L304 32.0 L304 382.0 Q304 392 294.0 392 L18.0 392 Q8 392 8 382.0 L8 18.0 Q8 8 18.0 8 Z" fill="#800080"/>
+  <path d="M18.0 8 L280.0 8 L304 32.0 L304 382.0 Q304 392 294.0 392 L18.0 392 Q8 392 8 382.0 L8 18.0 Q8 8 18.0 8 Z" fill="url(#wallShade)"/>
+  <circle cx="34" cy="78" r="10" fill="#ff00ff" stroke="#400040" stroke-width="1.24"/>
+  <circle cx="34" cy="78" r="4" fill="#400040"/>
+  <circle cx="278" cy="78" r="10" fill="#ff00ff" stroke="#400040" stroke-width="1.24"/>
+  <circle cx="278" cy="78" r="4" fill="#400040"/>
+</svg>

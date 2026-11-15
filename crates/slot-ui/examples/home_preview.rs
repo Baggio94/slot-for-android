@@ -1,6 +1,8 @@
-//! Renders the NES / Famicom / Super Nintendo / Mega Drive carts the way the
-//! shelf and the core picker draw them, one PNG per face, for previews.
-//! usage: cargo run -p slot-ui --example home_preview -- OUT_DIR [SCALE]
+//! Renders the NES / Famicom / Super Nintendo / Mega Drive and PICO-8 carts
+//! the way the shelf and the core picker draw them, one PNG per face, for
+//! previews. PICO8_LABEL is a 128x128 label (Pico8Labels' cut) for the
+//! PICO-8 cart; without it the cart wears slot.'s text label.
+//! usage: cargo run -p slot-ui --example home_preview -- OUT_DIR [SCALE] [PICO8_LABEL]
 use std::path::PathBuf;
 
 use slot_store::{Cart, Platform, ShellChoice, ShellFinish};
@@ -19,6 +21,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let dir = PathBuf::from(args.next().expect("OUT_DIR"));
     let scale: f32 = args.next().map_or(1.0, |s| s.parse().unwrap());
+    let pico8_label = args.next().map(PathBuf::from);
     slot_ui::density::set_scale(scale);
     std::fs::create_dir_all(&dir).unwrap();
     let games: &[(&str, Platform, bool, &str, Option<&str>)] = &[
@@ -34,6 +37,7 @@ fn main() {
         ("Sonic The Hedgehog (USA, Europe)", Platform::Md, false, "(C)SEGA 1991.APR", None),
         ("Sonic The Hedgehog 2 (Japan)", Platform::Md, false, "(C)SEGA 1992.NOV", None),
         ("Road Rash (USA, Europe)", Platform::Md, true, "(C)T-50 1991.SEP", None),
+        ("Celeste Classic 2", Platform::Pico8, false, "", None),
     ];
     for (i, (stem, platform, battery, maker, chosen)) in games.iter().enumerate() {
         let auto = slot_ui::home_shell(*platform, stem, "", maker);
@@ -42,7 +46,7 @@ fn main() {
             platform: *platform,
             stem: stem.to_string(),
             rom: PathBuf::from(format!("{stem}.rom")),
-            label: None,
+            label: (*platform == Platform::Pico8).then(|| pico8_label.clone()).flatten(),
             title: stem.to_string(),
             code: String::new(),
             shell,
@@ -54,7 +58,7 @@ fn main() {
         let finish = shell.map_or(ShellFinish::Solid, |s| s.finish);
         println!("{i:02}\t{stem}\t{:?}\t{:?}\tbattery={battery}", slot_ui::body_of(&cart), finish);
     }
-    for (p, name) in [(Platform::Nes, "nes"), (Platform::Snes, "snes"), (Platform::Md, "md")] {
+    for (p, name) in [(Platform::Nes, "nes"), (Platform::Snes, "snes"), (Platform::Md, "md"), (Platform::Pico8, "p8")] {
         let core = slot_store::Core::primary_for(p);
         save(&dir, &format!("chip_{name}.png"), &slot_ui::home_chip_face(p, Some(core)));
     }

@@ -84,6 +84,7 @@ impl Engine {
         match platform {
             Platform::Gba => "gba", Platform::Gbc => "gbc", Platform::Gb => "gb",
             Platform::Nes => "nes", Platform::Snes => "snes", Platform::Md => "md",
+            Platform::Pico8 => "p8",
         }
     }
 
@@ -701,11 +702,11 @@ impl Engine {
                     }
                     LayoutRow::Xy => {
                         let (role, own) = self.controls.xy(&scope, port, default_xy);
-                        dim(line("X / Y", role.label().into(), true), own)
+                        dim(line("X / Y", role.label(system), true), own)
                     }
                     LayoutRow::Shoulders => {
                         let (role, own) = self.controls.shoulders(&scope, port);
-                        dim(line("L1 / R1", role.label().into(), true), own)
+                        dim(line("L1 / R1", role.label(system), true), own)
                     }
                     LayoutRow::Reset => line("Reset to Default", String::new(), false),
                 }).collect();

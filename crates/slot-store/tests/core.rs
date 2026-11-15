@@ -277,3 +277,15 @@ fn each_home_console_board_holds_its_two_cores() {
     }
     assert_eq!(Core::parse("genesis_plus_gx"), Some(Core::GenesisPlusGx));
 }
+
+#[test]
+fn pico8_has_fake08_alone() {
+    use slot_store::{Core, Platform};
+    assert_eq!(Core::default_for(Platform::Pico8), Core::Fake08);
+    assert_eq!(Core::alternate_for(Platform::Pico8), Core::Pico8);
+    assert!(Core::Pico8.runs(Platform::Pico8) && !Core::Pico8.netplay());
+    assert_eq!(Core::parse("pico8"), Some(Core::Pico8));
+    assert_eq!(Core::Pico8.socket(), 1);
+    assert!(Core::Fake08.runs(Platform::Pico8) && !Core::Fake08.runs(Platform::Md));
+    assert_eq!(Core::parse("fake08"), Some(Core::Fake08));
+}

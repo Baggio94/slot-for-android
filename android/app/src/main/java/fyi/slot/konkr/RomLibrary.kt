@@ -151,7 +151,7 @@ internal object RomLibrary {
                     }
 
                     val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-                    if (!isSupportedRomExtension(extension)) continue
+                    if (!isSupportedRomExtension(extension) || !Systems.acceptsName(name)) continue
                     if (found.size >= MAX_CANDIDATES) {
                         truncated = true
                         break
@@ -193,7 +193,7 @@ internal object RomLibrary {
                           old: JSONObject?): ReadEntry? {
         val resolver = context.contentResolver
         // Keep the shelf title identical to the RetroArch save basename.
-        val title = name.substringBeforeLast('.').trim().take(200)
+        val title = Systems.titleOf(name).trim().take(200)
         if (title.isEmpty()) return null
         val uriText = fileUri.toString()
         val reuse = old != null && canReuseHeader(
@@ -360,7 +360,7 @@ internal object RomLibrary {
             } ?: return null
             if (name.startsWith(".")) return null
             val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-            if (!isSupportedRomExtension(extension)) return null
+            if (!isSupportedRomExtension(extension) || !Systems.acceptsName(name)) return null
             added += readEntry(context, fileUri, name, extension, size, modified,
                 file.folder, null)?.game ?: return null
         }

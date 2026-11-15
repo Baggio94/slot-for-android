@@ -16,16 +16,27 @@ internal object Systems {
     const val NES = "NES"
     const val SNES = "SNES"
     const val MD = "MD"
+    const val P8 = "P8"
+
+    /** Splore, PICO-8's cart browser: slot.'s own cart on the PICO-8 shelf
+     *  (core_selection::SPLORE_URI), not a file in the ROM folder. */
+    const val SPLORE_URI = "slot://pico8/Splore.p8"
+    /** What the core is handed for Splore; it boots with -splore instead. */
+    const val SPLORE_CART = "pico-8 cartridge // http://www.pico-8.com\nversion 41\n__lua__\n-- splore\n"
 
     private val NES_EXT = setOf("nes", "fc", "unf", "unif")
     private val SNES_EXT = setOf("sfc", "smc")
     // .bin is shared with other systems: only a SEGA header makes it a Mega Drive cart.
     private val MD_EXT = setOf("md", "gen", "smd", "bin")
+    // PICO-8: .p8 text carts and .p8.png pictures of carts. Only a 160x205
+    // PNG is a cart (acceptsHeader).
+    private val P8_EXT = setOf("p8", "png")
 
     /** Every cartridge extension, without the .zip container. */
-    val ROM_EXTENSIONS: Set<String> = setOf("gba", "gb", "gbc") + NES_EXT + SNES_EXT + MD_EXT
+    val ROM_EXTENSIONS: Set<String> = setOf("gba", "gb", "gbc") + NES_EXT + SNES_EXT + MD_EXT + P8_EXT
 
-    val HOME_PLATFORMS = setOf(NES, SNES, MD)
+    /** Carts drawn in a home mould: the consoles, and slot.'s PICO-8 cart. */
+    val HOME_PLATFORMS = setOf(NES, SNES, MD, P8)
 
     private fun lower(ext: String) = ext.lowercase(Locale.ROOT)
 
@@ -37,10 +48,17 @@ internal object Systems {
         in NES_EXT -> NES
         in SNES_EXT -> SNES
         in MD_EXT -> MD
+        in P8_EXT -> P8
         else -> null
     }
 
     fun isHome(ext: String) = platformFor(ext) in HOME_PLATFORMS
+
+    /** A cart's file name: a PNG only as NAME.p8.png, never cover art. */
+    fun acceptsName(filename: String): Boolean {
+        val name = lower(filename)
+        return name.substringAfterLast('.', "") != "png" || name.endsWith(".p8.png")
+    }
 
     /** libretro key -> RetroArch core name, also its saves/states folder. */
     private val FOLDERS = linkedMapOf(
@@ -53,6 +71,8 @@ internal object Systems {
         "bsnes" to "bsnes",
         "genesis_plus_gx" to "Genesis Plus GX",
         "picodrive" to "PicoDrive",
+        "fake08" to "fake-08",
+        "pico8" to "PICO-8",
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
@@ -68,6 +88,7 @@ internal object Systems {
         NES -> listOf("fceumm", "nestopia")
         SNES -> listOf("snes9x", "bsnes")
         MD -> listOf("genesis_plus_gx", "picodrive")
+        P8 -> listOf("fake08", "pico8")
         else -> emptyList()
     }
 
@@ -83,6 +104,11 @@ internal object Systems {
     /** A save flush names its core by key; unknown keys keep the old mGBA fallback. */
     fun folderForKey(key: String): String = FOLDERS[key.lowercase(Locale.ROOT)] ?: "mGBA"
 
+    /** The smallest file that can be a cartridge: a .p8 text cart can be a
+     *  one-line program (the "pico-8 cartridge" header and a few bytes). */
+    fun minRomBytes(ext: String): Int =
+        if (platformFor(ext) == P8) 16 else RomSource.MIN_ROM_BYTES
+
     /** How many leading bytes the scanner needs to identify a cartridge. */
     fun headerBytes(ext: String): Int = when (platformFor(ext)) {
         // Both LoROM and HiROM headers, behind a possible 512-byte copier header.
@@ -91,8 +117,10 @@ internal object Systems {
         else -> RomSource.MIN_ROM_BYTES
     }
 
-    /** A .bin only counts as a Mega Drive cart with "SEGA" in its header. */
+    /** A .bin only counts as a Mega Drive cart with "SEGA" in its header,
+     *  a .png as a PICO-8 cart only at a cart picture's 160x205. */
     fun acceptsHeader(ext: String, header: ByteArray): Boolean {
+        if (lower(ext) == "png") return isPico8Png(header)
         if (lower(ext) != "bin") return true
         if (header.size < 0x110) return false
         val text = String(header, 0x100, 0x10, Charsets.ISO_8859_1)
@@ -150,6 +178,23 @@ internal object Systems {
             System.arraycopy(buffer, end - carried, buffer, 0, carried)
         }
         return false
+    }
+
+    /** A PNG signature, then IHDR with PICO-8's 160x205 cart picture. */
+    fun isPico8Png(header: ByteArray): Boolean {
+        val signature = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(),
+            0x0d, 0x0a, 0x1a, 0x0a)
+        if (header.size < 24 || !header.copyOfRange(0, 8).contentEquals(signature)) return false
+        if (String(header, 12, 4, Charsets.US_ASCII) != "IHDR") return false
+        fun int(at: Int) = (0 until 4).fold(0) { v, i -> (v shl 8) or (header[at + i].toInt() and 0xff) }
+        return int(16) == 160 && int(20) == 205
+    }
+
+    /** The shelf title of a cart file: its name without the extension,
+     *  and without .p8 for a PICO-8 .p8.png. */
+    fun titleOf(filename: String): String {
+        val bare = filename.substringBeforeLast('.')
+        return if (lower(filename).endsWith(".p8.png")) bare.dropLast(3) else bare
     }
 
     fun homeHeader(ext: String, header: ByteArray, filename: String): HomeHeader {

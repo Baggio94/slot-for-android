@@ -47,7 +47,7 @@ internal object RomWarmCache {
             else if (now - moved > STALL_MS) return false
             Thread.sleep(10L)
         }
-        return target.isFile && target.length() >= 0x150L
+        return target.isFile && target.length() >= Systems.minRomBytes(target.extension)
     }
 
     /** A ROM launched: the cache keeps it before the ones not played since. */
@@ -74,7 +74,7 @@ internal object RomWarmCache {
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
         val dir = File(context.cacheDir, "rom-cache").apply { mkdirs() }
         val target = File(dir, "$digest.$ext")
-        if (target.isFile && target.length() >= 0x150L) return
+        if (target.isFile && target.length() >= Systems.minRomBytes(ext)) return
 
         val temporary = File(dir, "$digest.warm.tmp")
         // A key pauses the copy (no reading while slot. answers it), then
@@ -116,7 +116,7 @@ internal object RomWarmCache {
                     }
                 }
             }
-            if (count < 0x150 || !goOn()) return
+            if (count < Systems.minRomBytes(ext) || !goOn()) return
             // Do not replace a file materialized concurrently by the real
             // launcher; all writes are atomic from the perspective of readers.
             if (!target.exists()) {

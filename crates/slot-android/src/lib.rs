@@ -51,6 +51,7 @@ mod retroarch_state;
 // Reuse the upstream 20 MiB XOR/LZ4 rewind ring without forking its algorithm.
 mod rewind;
 mod core_selection;
+mod pico8;
 // GB/GBC chip swap between mGBA and Gambatte: palettes and battery carry.
 #[cfg(any(test, target_os = "android"))]
 mod gb_core_switch;
@@ -198,6 +199,16 @@ mod original_picker_integration_tests {
         assert_eq!(picker.press(Press::Left, 1500), Outcome::Nothing);
         assert_eq!(picker.chip(1500 + HOP_MS).across, 0.0);
         assert_eq!(picker.press(Press::Keep, 2000), Outcome::Write(Core::Mgba));
+    }
+
+    #[test]
+    fn splore_keeps_its_chip_on_pico8() {
+        let mut picker = CorePicker::open_between(Core::Pico8, Core::Fake08, Core::Pico8, 0).only(Core::Pico8);
+        picker.start(0);
+        assert!(!picker.allows(Core::Fake08));
+        assert_eq!(picker.press(Press::Left, 500), Outcome::Refused);
+        assert_eq!(picker.seat(), Core::Pico8);
+        assert_eq!(picker.press(Press::Keep, 1000), Outcome::Write(Core::Pico8));
     }
 }
 

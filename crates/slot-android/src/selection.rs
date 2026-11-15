@@ -30,7 +30,8 @@ mod tests {
         let focus=Focus { rack: 7,uri:"content://roms/emerald".into() };
         store(&dir,&focus).unwrap();
         assert_eq!(load(&dir),Some(focus));
-        store(&dir, &Focus { rack: 9, uri: "content://roms/bad".into() }).unwrap();
+        let bad = slot_store::Platform::ALL.len() + 3;
+        store(&dir, &Focus { rack: bad, uri: "content://roms/bad".into() }).unwrap();
         assert_eq!(load(&dir), None, "out-of-range rack must not restore");
         std::fs::remove_dir_all(dir).unwrap();
     }

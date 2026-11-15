@@ -216,6 +216,9 @@ class MainActivity : Activity() {
     private var pendingCartLabelUri: String? = null
     private lateinit var cartSounds: CartSounds
     private val scanner = Executors.newSingleThreadExecutor()
+    /** Saves Splore's favourites in the ROM folder; see Pico8Favourites. */
+    private val pico8Worker = Executors.newSingleThreadExecutor()
+    private var pico8Favourites: android.os.FileObserver? = null
     /** Folder scans asked and not finished. */
     private val scansRunning = AtomicInteger()
     private data class PendingLibraryIndex(
@@ -1369,6 +1372,25 @@ class MainActivity : Activity() {
             // The native first-run keycap appears on an empty shelf.
             nativeSetShelfStatus(shelfNone)
         }
+        pico8Favourites = Pico8Favourites.watch(this) { syncPico8Favourites() }
+        syncPico8Favourites()
+    }
+
+    /** Splore's favourites not yet in the ROM folder are saved there, then
+     *  put on the shelf without a folder scan (as RomM's downloads are). */
+    private fun syncPico8Favourites() {
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) ?: return
+        val root = Uri.parse(saved)
+        if (contentResolver.persistedUriPermissions.none { it.uri == root && it.isWritePermission }) return
+        pico8Worker.execute {
+            val files = try {
+                Pico8Favourites.sync(this, root)
+            } catch (error: Exception) {
+                Log.w(TAG, "PICO-8 favourites not saved", error)
+                emptyList()
+            }
+            if (files.isNotEmpty()) runOnUiThread { if (!isDestroyed) addDownloadedGames(files) }
+        }
     }
 
     /** The unmodified, original Slot v1.5.0 firmware bootlogo.bmp is a 24-bit BMP.
@@ -1771,7 +1793,8 @@ class MainActivity : Activity() {
                 // SAF ZIPs contain an actual cartridge, not a libretro ZIP
                 // input. Inspect the embedded extension before selecting a
                 // core, a save target or a private cache extension.
-                val ext = if (RomSource.isContainer(name)) {
+                val splore = rawUri == Systems.SPLORE_URI
+                val ext = if (splore) "p8" else if (RomSource.isContainer(name)) {
                     contentResolver.openInputStream(uri)?.use { input ->
                         RomSource.inspect(input, name).extension
                     } ?: error("Cannot inspect cartridge ZIP")
@@ -1784,8 +1807,11 @@ class MainActivity : Activity() {
                 val target = File(dir, "$digest.$ext")
                 // Always open via Android SAF; no assumptions about physical filesystem paths.
                 // A warm copy of this ROM under way is waited for, not made twice.
-                if (!target.isFile || target.length() < 0x150) RomWarmCache.awaitCopy(rawUri, target)
-                if (!target.isFile || target.length() < 0x150) {
+                // Splore is no file: PICO-8 opens it with -splore, and the
+                // cart it is given only names it.
+                if (splore && !target.isFile) target.writeText(Systems.SPLORE_CART)
+                if (!target.isFile || target.length() < Systems.minRomBytes(ext)) RomWarmCache.awaitCopy(rawUri, target)
+                if (!target.isFile || target.length() < Systems.minRomBytes(ext)) {
                     val temp = File(dir, "$digest.tmp")
                     try {
                         contentResolver.openInputStream(uri)?.use { input ->
@@ -1803,7 +1829,7 @@ class MainActivity : Activity() {
                                         }
                                         output.write(buffer, 0, n)
                                     }
-                                    require(copied >= RomSource.MIN_ROM_BYTES) { "ROM too small" }
+                                    require(copied >= Systems.minRomBytes(ext)) { "ROM too small" }
                                 }
                             }
                         } ?: error("Cannot read this ROM")
@@ -1826,7 +1852,7 @@ class MainActivity : Activity() {
                 val saves = storage.savesRoot?.let(Uri::parse)
                 val states = storage.statesRoot?.let(Uri::parse)
                 val shared = RetroArchStorage.target(this, rawUri, core, saves, states,
-                    scannedFileName = if (RomSource.isContainer(name))
+                    scannedFileName = if (splore) "Splore.p8" else if (RomSource.isContainer(name))
                         RomSource.archiveSaveFilename(name, ext) else null,
                     shareGbaSaves = storage.shareGbaSaves)
                 try {
@@ -2387,6 +2413,10 @@ class MainActivity : Activity() {
                     autoLabelsChainBase = AutoCartLabelDiagnostics.snapshot().saved
                 }
                 try {
+                    // PICO-8 carts carry their labels: no network needed.
+                    Pico8Labels.fill(applicationContext,
+                        shouldContinue = { autoLabelsMayRun() },
+                        onSaved = { uri -> autoLabelUpdates.add(uri) })
                     val manager = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
                     val caps = manager?.getNetworkCapabilities(manager.activeNetwork)
                     if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) {
@@ -3550,6 +3580,8 @@ class MainActivity : Activity() {
         pendingLibraryIndex = null
         if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
         scanner.shutdownNow()
+        pico8Favourites?.stopWatching()
+        pico8Worker.shutdownNow()
         raLoginWorker.shutdownNow()
         raSmartWorker.shutdownNow()
         gameLoader.shutdownNow()

@@ -154,6 +154,8 @@ static PANEL_SIZE: AtomicU64 = AtomicU64::new(0);
 /// Paused Screen row choosing the game's size: GBA off the 3:2 KONKR, and
 /// the home consoles everywhere (Integer / Original Ratio / Stretch).
 const SCREEN_SIZE_KEY: usize = 40;
+/// Settings > Systems > PICO-8's Default Core: fake-08 or your own PICO-8.
+const PICO8_CORE_KEY: usize = 74;
 /// "INTEGER", "ORIGINAL RATIO", "STRETCH" in the setting value faces.
 const SCREEN_SIZE_VALUE: usize = 67;
 
@@ -507,7 +509,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 138] = [
+const MENU_TEXT: [&str; 139] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -646,20 +648,21 @@ const MENU_TEXT: [&str; 138] = [
     "RomM Server",                        // 135, Library, after Choose ROM Folder
     "Upscaler",                           // 136, GBA Video Screen (Siham 2026-11-10)
     "Sensitivity",                        // 137, tilt and gyro games (Siham 2026-11-12)
+    "PICO-8",                             // 138, Settings > Systems
 ];
 
 /// Settings > Systems, top to bottom.
-const SYSTEM_ORDER: [Platform; 6] = [
+const SYSTEM_ORDER: [Platform; 7] = [
     Platform::Gba, Platform::Gbc, Platform::Gb,
-    Platform::Nes, Platform::Snes, Platform::Md,
+    Platform::Nes, Platform::Snes, Platform::Md, Platform::Pico8,
 ];
-const SYSTEM_TITLES: [usize; 6] = [91, 92, 93, 121, 122, 123];
+const SYSTEM_TITLES: [usize; 7] = [91, 92, 93, 121, 122, 123, 138];
 // Special racks follow the supported platforms, not hard-coded GB-era indices.
 const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 120] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 122] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -689,7 +692,7 @@ const SETTING_VALUE_NAMES: [&str; 120] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Pixel Transparency", "Sunlight Shimmer",
                                "Dot Matrix Color",
                                "Bilinear", "FSR", "Anime4K Fast", "Anime4K",
-                               "MAX", "crt-royale"];
+                               "MAX", "crt-royale", "fake-08", "PICO-8"];
 
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
@@ -765,6 +768,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         47 => shader(scoped.shader_nes),
         48 => shader(scoped.shader_snes),
         49 => shader(scoped.shader_md),
+        72 => shader(scoped.shader_p8),
         22 => if scoped.shader_gba.includes_gba_color() { 42 }
             else if scoped.colour_correction_gba {4}else{5},
         23 => if scoped.colour_correction_gbc {4}else{5},
@@ -780,7 +784,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         27 => bezel_value(scoped.bezel_gb),
         28 => if settings.time_format==crate::settings::TimeFormat::TwelveHour
             {35}else{36},
-        29..=31 | 41..=43 => core_value(Engine::core_key_platform(key)
+        29..=31 | 41..=43 | PICO8_CORE_KEY => core_value(Engine::core_key_platform(key)
             .map_or(Core::Mgba, |platform| cores[platform as usize])),
         // Frame Blending, LCD Effect and Dither Blending: the game's own in
         // game, the system's default in Settings > Systems.
@@ -833,6 +837,9 @@ fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
             // Only app-private labels are used; never rewrite ROMs.
             cart.label = Some(root.join("Labels").join(filename));
         }
+        if let Some(splore) = library.and_then(|_| crate::pico8::splore_cart(root)) {
+            systems[Platform::Pico8 as usize].insert(0, splore);
+        }
     }
     let video = systems.pop().unwrap_or_default();
     (systems, video)
@@ -877,6 +884,7 @@ fn dot_matrix_colours(view: &Settings) -> [u32; 4] {
 fn core_value(core: Core) -> usize {
     match core {
         Core::Mgba => 50, Core::Gpsp => 51, Core::Gambatte => 52,
+        Core::Fake08 => 120, Core::Pico8 => 121,
         other => 70 + other.index() - Core::Fceumm.index(),
     }
 }
@@ -1215,7 +1223,7 @@ struct Engine {
     pak_chip_textures: [slot_gfx::TexId; Core::ALL.len()],
     pak_chip_blank: slot_gfx::TexId,
     /// The NES, Super Nintendo and Mega Drive chips with no core name.
-    home_chip_blanks: [slot_gfx::TexId; 3],
+    home_chip_blanks: [slot_gfx::TexId; 4],
     chip_shadow: slot_gfx::TexId,
     core_legend_faces: [(slot_gfx::TexId, u32); 3],
     a_down_at: Option<Instant>,
@@ -1636,7 +1644,7 @@ impl Engine {
         // GB/GBC boards hop their own big pak chip between two footprints.
         let pak_chip_textures = Core::ALL.map(|core| gpu.create_face(&pak_chip_face(Some(core))));
         let pak_chip_blank = gpu.create_face(&pak_chip_face(None));
-        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md]
+        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md, Platform::Pico8]
             .map(|p| gpu.create_face(&slot_ui::home_chip_face(p, None)));
         let shadow = chip_shadow_face();
         let chip_shadow = gpu.create_face(&shadow);
@@ -4161,8 +4169,14 @@ impl Engine {
                                 let now = self.born.elapsed().as_millis() as u64;
                                 if let Some(picker) = self.picker.as_mut() {
                                     match code {
-                                        21 => { picker.press(Press::Left, now); }
-                                        22 => { picker.press(Press::Right, now); }
+                                        21 | 22 => {
+                                            let press = if code == 21 { Press::Left } else { Press::Right };
+                                            let to = if code == 21 { picker.left() } else { picker.right() };
+                                            if picker.press(press, now) == crate::core_picker::Outcome::Refused
+                                                && !picker.allows(to) {
+                                                set_message(crate::pico8::SPLORE_ONLY.to_string());
+                                            }
+                                        }
                                         96 => {
                                             let core = picker.seat();
                                             let cart = &self.shelves[self.active].carts
@@ -4177,6 +4191,9 @@ impl Engine {
                                                 if !core_file.is_file() {
                                                     set_message(format!(
                                                         "{} isn't installed.", core.text()));
+                                                } else if core == Core::Pico8
+                                                    && !crate::pico8::installed(&storage) {
+                                                    set_message(crate::pico8::MISSING.to_string());
                                                 } else {
                                                     match core_selection::choose(&storage, &uri, platform, core) {
                                                         Ok(()) => {
@@ -4250,6 +4267,9 @@ impl Engine {
                             let mut picker = CorePicker::open_between(current_core,
                                 Core::primary_for(selected.platform),
                                 Core::alternate_for(selected.platform), now);
+                            if core_selection::is_splore(&selected.rom.to_string_lossy()) {
+                                picker = picker.only(Core::Pico8);
+                            }
                             // A clear cart's lid waits for its plastic without
                             // the board (start_waiting_picker), or the shelf
                             // face would lift with the board drawn on it.
@@ -4287,7 +4307,9 @@ impl Engine {
                             self.insert_started = Some(Instant::now());
                             self.a_down_at = self.insert_started;
                             self.fresh_launch = false;
-                            if uri.starts_with("content://") {
+                            // ROM files, and Splore (no file: Android hands the
+                            // core a stand-in, MainActivity.loadGameFromSaf)
+                            if uri.starts_with("content://") || core_selection::is_splore(&uri) {
                                 let uri = uri.into_owned();
                                 let platform = selected.platform;
                                 *LAUNCH_CORE.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -4575,6 +4597,8 @@ impl Engine {
                 core = Core::Mgba;
             }
             let core_file = library.join(format!("lib{}_libretro.so", core.as_str()));
+            // The core sees a cached copy, never the cart's name.
+            crate::pico8::set_splore(core == Core::Pico8 && core_selection::is_splore(uri));
             // First game still wakes RA if the asynchronous SAF scan has not run.
             // Perform this mutable operation BEFORE borrowing rom_stem.
             // GBA, GB and GBC use the verified per-console memory maps.
@@ -4975,6 +4999,8 @@ impl Engine {
             (Platform::Nes,true)=>&[124,90],
             (Platform::Snes|Platform::Md,false)=>&[120,124],
             (Platform::Snes|Platform::Md,true)=>&[120,124,90],
+            // PICO-8: Screen Size and Shader.
+            (Platform::Pico8,_)=>&[120,124],
         }
     }
     fn screen_keys(platform: Platform)-> &'static [usize] {
@@ -4995,6 +5021,7 @@ impl Engine {
             (Platform::Nes,true)=>&[47,44],
             (Platform::Snes,true)=>&[SCREEN_SIZE_KEY,48,45],
             (Platform::Md,true)=>&[SCREEN_SIZE_KEY,49,46],
+            (Platform::Pico8,_)=>&[SCREEN_SIZE_KEY,72],
         }
     }
     // Settings > Systems opens with the system's default core, then its
@@ -5007,6 +5034,7 @@ impl Engine {
     fn look_rows(platform: Platform) -> (Vec<usize>, Vec<usize>) {
         let mut rows = Vec::new();
         let mut keys = Vec::new();
+        if platform == Platform::Pico8 { return (rows, keys); }
         if let Some(key) = Settings::look_key(platform) {
             rows.push(if platform == Platform::Md { 132 } else { 131 });
             keys.push(key);
@@ -5064,6 +5092,9 @@ impl Engine {
             (Platform::Nes|Platform::Snes|Platform::Md,true,_)=>&[118,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,false)=>&[118,120,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,true)=>&[118,120,124,90],
+            // Screen Size where the panel isn't square; no bezels.
+            (Platform::Pico8,true,_)=>&[118,124],
+            (Platform::Pico8,false,_)=>&[118,120,124],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -5091,12 +5122,15 @@ impl Engine {
             (Platform::Md,true,_)=>&[43,49],
             (Platform::Md,false,false)=>&[43,SCREEN_SIZE_KEY,49],
             (Platform::Md,false,true)=>&[43,SCREEN_SIZE_KEY,49,46],
+            (Platform::Pico8,true,_)=>&[PICO8_CORE_KEY,72],
+            (Platform::Pico8,false,_)=>&[PICO8_CORE_KEY,SCREEN_SIZE_KEY,72],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
         match key {
             29=>Some(Platform::Gba), 30=>Some(Platform::Gbc), 31=>Some(Platform::Gb),
             41=>Some(Platform::Nes), 42=>Some(Platform::Snes), 43=>Some(Platform::Md),
+            PICO8_CORE_KEY=>Some(Platform::Pico8),
             _=>None,
         }
     }
@@ -5130,6 +5164,10 @@ impl Engine {
         } else { Core::primary_for(platform) };
         if !library.join(format!("lib{}_libretro.so", core.as_str())).is_file() {
             set_message(format!("{} isn't installed.", core.text()));
+            return;
+        }
+        if core == Core::Pico8 && !crate::pico8::installed(&storage) {
+            set_message(crate::pico8::MISSING.to_string());
             return;
         }
         match core_selection::set_default(&storage,platform,core) {
@@ -5308,7 +5346,7 @@ impl Engine {
         let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
-        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70)) {
+        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70|72)) {
             set_message("Not available during Multiplayer.".into());
             return;
         }
@@ -5338,7 +5376,7 @@ impl Engine {
         self.game_emulation=Some(profile);
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
-        if matches!(key,0|1|3|21|47|48|49|66..=68|70) {
+        if matches!(key,0|1|3|21|47|48|49|66..=68|70|72) {
             self.apply_game_look();
         }
         // A shader change can switch to/from a preset with its own GBA Color.
@@ -6674,7 +6712,8 @@ impl Engine {
             out.push(Draw::Tex {
                 x: x.round(), y: y.round(),
                 w: SOCKET_W as f32 * zoom, h: SOCKET_H as f32 * zoom,
-                tex, alpha: 1.0,
+                // a core this cart can't run on (fake-08 for Splore) is greyed
+                tex, alpha: if picker.allows(core) { 1.0 } else { 0.3 },
             });
         }
 
@@ -6696,6 +6735,7 @@ impl Engine {
                 Platform::Nes => self.home_chip_blanks[0],
                 Platform::Snes => self.home_chip_blanks[1],
                 Platform::Md => self.home_chip_blanks[2],
+                Platform::Pico8 => self.home_chip_blanks[3],
                 _ => self.pak_chip_blank,
             };
             (&self.pak_chip_textures, blank)
@@ -7656,7 +7696,12 @@ impl Engine {
             a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
                 stepped, a12_native_started.elapsed().as_micros() as u64,
                 MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
+            let shut_down = session.shut_down();
             if let Some(fault) = peer_fault { self.peer_link_stopped(fault); }
+            if shut_down {
+                crate::game::log_launch_timing("The game shut itself down: ejecting");
+                self.handle(Input::Exit);
+            }
             return;
         }
 
@@ -7690,6 +7735,8 @@ impl Engine {
             self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map(|cart|cart.rom.to_string_lossy().into_owned())
+                // only ROM files are copied ahead (Splore is none)
+                .filter(|uri|uri.starts_with("content://"))
         } else { None };
         let mut last = WARM_ROM_URI.lock().unwrap_or_else(|e|e.into_inner());
         if *last != candidate { *last = candidate; }
@@ -8380,13 +8427,14 @@ mod settings_value_tests {
     #[test]
     fn each_system_page_changes_only_its_own_system() {
         // Default core, shader, colour/palette and overlay keys of each page.
-        let own: [(Platform, &[usize]); 6] = [
+        let own: [(Platform, &[usize]); 7] = [
             (Platform::Gba, &[29, 0, 22, 25]),
             (Platform::Gbc, &[30, 21, 23, 26]),
             (Platform::Gb, &[31, 1, 3, 27]),
             (Platform::Nes, &[41, 47, 44]),
             (Platform::Snes, &[42, 48, 45]),
             (Platform::Md, &[43, 49, 46]),
+            (Platform::Pico8, &[PICO8_CORE_KEY, 72]),
         ];
         for (platform, keys) in own {
             for panel in PANELS {
@@ -8471,7 +8519,7 @@ mod settings_value_tests {
     #[test]
     fn every_core_and_bezel_has_a_name() {
         for core in Core::ALL {
-            assert!(core_value(core) < SETTING_VALUE_NAMES.len(), "{core:?}");
+            assert_eq!(SETTING_VALUE_NAMES[core_value(core)], core.text(), "{core:?}");
         }
         use crate::settings::Bezel;
         for bezel in Bezel::GB.into_iter().chain(Bezel::GBC).chain(Bezel::GBA)

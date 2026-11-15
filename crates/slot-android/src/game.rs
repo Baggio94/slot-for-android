@@ -755,7 +755,12 @@ impl GameSession {
                 // Sega CD and the lock-on adapters are not carts slot. shows.
                 core.set_option("genesis_plus_gx_lock_on", "disabled");
             }
-            Core::Picodrive => {}
+            Core::Picodrive | Core::Fake08 => {}
+            // Splore fetches through slot. (cores/pico8real has no HTTP of its own).
+            Core::Pico8 => {
+                crate::pico8::install_http();
+                core.set_option("pico8_boot", if crate::pico8::splore() { "splore" } else { "cart" });
+            }
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
@@ -763,6 +768,8 @@ impl GameSession {
         let console = match platform {
             Platform::Gb => 4, Platform::Gba => 5, Platform::Gbc => 6,
             Platform::Nes => 7, Platform::Snes => 3, Platform::Md => 1,
+            // RetroAchievements has no PICO-8.
+            Platform::Pico8 => 0,
         };
         // Second-instance Run-Ahead boots its copy from these, solo only.
         let runahead_secondary_spec = linked_boot.is_none().then(|| crate::runahead_secondary::Spec {
@@ -775,8 +782,8 @@ impl GameSession {
             native_video: !platform.handheld(),
         });
         let mut core: Box<dyn RetroCore> = match achievements {
-            Some(service) => service.wrap_for_console(Box::new(core), console),
-            None => Box::new(core),
+            Some(service) if console != 0 => service.wrap_for_console(Box::new(core), console),
+            _ => Box::new(core),
         };
         // bsnes keeps its battery itself, named after the ROM file and
         // written to the save directory when the game unloads, as in
@@ -1010,7 +1017,11 @@ impl GameSession {
             runahead_video: Vec::new(), runahead_size: (0, 0), runahead_state: Vec::new(),
             // bsnes shows the frame before an unserialize on the first run
             // after it, so a predicted picture would be stale: no Run-Ahead.
-            runahead_unavailable: which == Core::Bsnes,
+            // The real PICO-8's state is 33 MB, none can be taken while
+            // Splore downloads (a rollback then fails and pauses the game),
+            // and a second instance would map over the first: no Run-Ahead
+            // or Preemptive Frames either.
+            runahead_unavailable: which == Core::Bsnes || which == Core::Pico8,
             runahead_rollback_failed: false,
             runahead_discard_confirm: false,
             runahead_probe: RunaheadProbe::default(),
@@ -1556,6 +1567,8 @@ impl GameSession {
     /// True only after prediction has mutated the core and full restoration
     /// failed. Treat all save paths as unsafe until a fresh session is loaded.
     pub fn runahead_rollback_failed(&self) -> bool { self.runahead_rollback_failed }
+    /// The game ended itself (PICO-8's Shutdown): it is ejected.
+    pub fn shut_down(&self) -> bool { self.core.shut_down() }
 
     /// Require two deliberate Exit actions before discarding a poisoned
     /// in-memory session. Do not touch existing on-disk checkpoints.
@@ -2196,6 +2209,12 @@ impl GameSession {
             return Err("Run-Ahead rollback failed; exit without saving instead".into());
         }
         let battery = self.save_sram_checked()?;
+        if self.core.shut_down() {
+            // A game that shut itself down has nothing to resume: the next
+            // launch starts it afresh (older auto-states are kept).
+            self.retire_auto_state();
+            return Ok(battery);
+        }
         if !with_state && !self.in_multiplayer() {
             self.mark_state_stale_if_saved();
         }
@@ -2220,11 +2239,17 @@ impl GameSession {
     /// Ejected without a state after saving in-game: the auto-state on disk
     /// is older than the battery, so the next resume must not bring it back.
     fn mark_state_stale_if_saved(&mut self) {
-        let Some(marker) = self.stale_state.as_ref() else { return };
+        if self.stale_state.is_none() { return; }
         let now = self.core.save_ram_verified().ok().flatten().map(|ram| battery_hash(&ram));
         if now.is_none() || now == self.opening_battery { return; }
+        self.retire_auto_state();
+    }
+
+    /// The auto-state on disk won't resume: the next launch starts a new one.
+    fn retire_auto_state(&mut self) {
+        let Some(marker) = self.stale_state.as_ref() else { return };
         match atomic_write(marker, b"battery newer than the auto-state") {
-            Ok(()) => log_launch_timing("Saved in-game without a state: the older auto-state won't resume"),
+            Ok(()) => log_launch_timing("The older auto-state won't resume"),
             Err(error) => log_launch_timing(&format!("Stale auto-state guard not written: {error}")),
         }
     }

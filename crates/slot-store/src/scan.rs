@@ -64,7 +64,7 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
             if is_hidden(&rom) || !rom.is_file() || !platform.accepts(&rom) {
                 continue;
             }
-            let Some(stem) = rom.file_stem().and_then(|s| s.to_str()) else {
+            let Some(stem) = rom.file_name().and_then(|s| s.to_str()).map(crate::cart_stem) else {
                 continue;
             };
             let label = root

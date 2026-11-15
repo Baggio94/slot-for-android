@@ -107,6 +107,8 @@ pub trait RetroCore: Send {
     fn set_port2(&mut self, _input: ButtonMask) {}
     /// Reject incomplete native GB/GBC lockstep frames before advancing netplay.
     fn link_step_fault(&self) -> bool { false }
+    /// The game ended itself (libretro's SHUTDOWN: PICO-8's Shutdown).
+    fn shut_down(&self) -> bool { false }
     fn set_option(&mut self, _key: &str, _value: &str) {}
     /// The cheats to play with, replacing any before: each a code as the
     /// cheat files give it ("+" between the lines of a multi-line code).
