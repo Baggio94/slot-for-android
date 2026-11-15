@@ -399,6 +399,18 @@ fn set_message(message: String) {
     *MESSAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
 }
 
+/// What the player reads when Android couldn't prepare a game: Kotlin
+/// puts the step that failed before the reason (Siham 2026-11-16).
+fn game_error_text(message: &str) -> &'static str {
+    if message.starts_with("rom:") {
+        "Couldn't read this game file. Refresh the library, or choose your ROM folder again."
+    } else if message.starts_with("saves:") {
+        "Couldn't read your save folder. Choose it again in Library."
+    } else {
+        "Couldn't open this game. Check the ROM and core."
+    }
+}
+
 /// Short user-facing sentence on screen; the technical cause goes to logcat.
 fn set_error_message(message: &str, detail: &dyn std::fmt::Display) {
     crate::game::log_launch_timing(&format!("{message} ({detail})"));
@@ -3810,7 +3822,7 @@ impl Engine {
                 {
                     return;
                 }
-                set_error_message("Couldn't open this game. Check the ROM and core.", &message);
+                set_error_message(game_error_text(&message), &message);
                 self.awaiting_game = false;
                 self.inserted = false;
                 self.requested_uri = None;

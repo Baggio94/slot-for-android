@@ -136,8 +136,35 @@ internal object RetroArchStorage {
         }
     }
 
+    /** Where a game whose save the folder kept is noted until it next
+     *  starts: its core's folder name and save name, under the app's files. */
+    internal fun folderSaveMark(files: File, core: String, stem: String): File =
+        File(files, "FolderSaves/$core/$stem.once")
+
+    internal fun markFolderSave(files: File, core: String, stem: String) {
+        val mark = folderSaveMark(files, core, stem)
+        mark.parentFile?.mkdirs()
+        mark.writeBytes(byteArrayOf(1))
+    }
+
+    /** A game whose save the folder kept starts from that save, not from
+     *  slot.'s older save state: the same one-shot guard as a session that
+     *  saved in-game but ejected without a state (game.rs). True if so. */
+    internal fun applyFolderSaveMark(files: File, core: String, stem: String,
+                                     romIdentity: String): Boolean {
+        val mark = folderSaveMark(files, core, stem)
+        if (!mark.isFile) return false
+        stage(File(files, "Saves/$romIdentity.${coreLower(core)}.state-stale.once"),
+            byteArrayOf(1))
+        mark.delete()
+        return true
+    }
+
     fun importBeforeLaunch(context: Context, target: Target) {
         val started = SystemClock.elapsedRealtime()
+        if (applyFolderSaveMark(context.filesDir, target.core, target.stem, target.romIdentity)) {
+            Log.i(TAG, "Folder save kept for ${target.core}/${target.stem}: starting from it")
+        }
         // The original implementation enumerated the entire save/state
         // directory SIX times per game launch. Large ROM collections with
         // Syncthing conflict files make SAF queries very expensive.
@@ -1202,6 +1229,12 @@ internal object RetroArchStorage {
                 } else {
                     writeSaf(context, plan.root, item.core, "${item.name}.slot-$stamp", bytes,
                         item.state, createOnly = true, backup = false)
+                    // The folder's save wins: slot.'s own save state, from
+                    // before, must not bring slot.'s old save back over it
+                    // at the next start (amadeus12, 2026-11-15).
+                    if (!plan.states && item.name.endsWith(".srm")) {
+                        markFolderSave(context.filesDir, item.core, item.name.removeSuffix(".srm"))
+                    }
                     kept++
                 }
             } catch (error: Exception) {

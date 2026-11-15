@@ -1964,6 +1964,8 @@ class MainActivity : Activity() {
             if (queueWait > 20) {
                 Log.i(TAG, "Slot launch queue delay: ${queueWait}ms (waiting for preceding save exports)")
             }
+            // Which step failed, for the message on screen (runtime.rs).
+            var step = "rom"
             try {
                 // Document-provider IDs may contain the complete tree path:
                 // keep only the terminal basename before using it for a
@@ -2013,6 +2015,7 @@ class MainActivity : Activity() {
                 }
                 RomWarmCache.launching.compareAndSet(rawUri, null)
                 RomWarmCache.played(target)
+                step = "saves"
                 val romReadyAt = SystemClock.elapsedRealtime()
                 val savedCore = nativeCoreForUri(rawUri)
                 // The native pick when it runs this system, else its default core.
@@ -2030,30 +2033,50 @@ class MainActivity : Activity() {
                     scannedFileName = if (RomSource.isContainer(name))
                         RomSource.archiveSaveFilename(name, ext) else null,
                     shareGbaSaves = storage.shareGbaSaves)
-                try {
-                    RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
-                } catch (error: RetroArchStorage.SaveConflict) {
-                    Log.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
-                    when (val choice = askSharedGbaConflict()) {
-                        SharedGbaChoice.CANCEL -> {
-                            nativeGameError(rawUri, "Shared save selection cancelled")
-                            return@execute
-                        }
-                        SharedGbaChoice.MGBA, SharedGbaChoice.GPSP -> {
-                            val source = if (choice == SharedGbaChoice.MGBA)
-                                "mGBA" else "gpSP"
-                            RetroArchStorage.resolveSharedGbaConflict(
-                                this@MainActivity, shared, source)
-                            RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                // A save folder that can't be read no longer stops the game
+                // (amadeus12, 2026-11-15): it starts with slot.'s own saves,
+                // and nothing is copied to the folder this time, so a save
+                // there that slot. couldn't read is never overwritten.
+                val folderFailed = try {
+                    try {
+                        RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                    } catch (error: RetroArchStorage.SaveConflict) {
+                        Log.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
+                        when (val choice = askSharedGbaConflict()) {
+                            SharedGbaChoice.CANCEL -> {
+                                nativeGameError(rawUri, "Shared save selection cancelled")
+                                return@execute
+                            }
+                            SharedGbaChoice.MGBA, SharedGbaChoice.GPSP -> {
+                                val source = if (choice == SharedGbaChoice.MGBA)
+                                    "mGBA" else "gpSP"
+                                RetroArchStorage.resolveSharedGbaConflict(
+                                    this@MainActivity, shared, source)
+                                RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                            }
                         }
                     }
+                    false
+                } catch (error: Exception) {
+                    if (shared.savesTree == null && shared.statesTree == null) throw error
+                    Log.e(TAG, "Save folder unreadable; starting with slot.'s own saves", error)
+                    true
                 }
+                if (folderFailed) {
+                    runOnUiThread {
+                        if (!isDestroyed) SlotToast.makeText(this@MainActivity,
+                            "Couldn't read your save folder, so this game uses slot.'s own save. " +
+                                "Choose the folder again in START > Library.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                }
+                step = "core"
                 // Share Saves never silently chooses an old same-core state
                 // over freshly imported cross-core SRAM. A direct same-core
                 // launch has no dialogue and behaves exactly as before.
                 val previous = if (ext == "gba")
                     prefs.getString("last_gba_core_$digest", null) else null
-                val switched = ext == "gba" && shared.shareGbaSaves &&
+                val switched = !folderFailed && ext == "gba" && shared.shareGbaSaves &&
                     previous != null && previous != core
                 var resumeChoice = -1 // Existing default Slot behavior.
                 if (switched) {
@@ -2119,7 +2142,7 @@ class MainActivity : Activity() {
                         resumeChoice = 0
                     }
                 }
-                activeTargets[rawUri] = shared
+                if (folderFailed) activeTargets.remove(rawUri) else activeTargets[rawUri] = shared
                 val readyAt = SystemClock.elapsedRealtime()
                 Log.i(TAG, "Slot launch preparation: ROM cache=${romReadyAt - launchStart}ms, " +
                     "RetroArch import=${readyAt - romReadyAt}ms, total=${readyAt - launchStart}ms")
@@ -2127,8 +2150,8 @@ class MainActivity : Activity() {
                 nativeGameReady(rawUri, target.absolutePath)
                 if (ext == "gba") prefs.edit().putString("last_gba_core_$digest", core).apply()
             } catch (error: Exception) {
-                Log.e(TAG, "Could not prepare ROM", error)
-                nativeGameError(rawUri, error.message ?: "Cannot open ROM")
+                Log.e(TAG, "Could not prepare ROM ($step)", error)
+                nativeGameError(rawUri, "$step: " + (error.message ?: "Cannot open ROM"))
             } finally {
                 RomWarmCache.launching.compareAndSet(rawUri, null)
             }

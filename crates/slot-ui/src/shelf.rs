@@ -577,8 +577,8 @@ impl Shelf {
     /// Which cart is under (`x`, `y`), as places from the selected one.
     pub fn cart_under(&self, x: f32, y: f32) -> Option<i32> {
         let target = self.scroll_target();
-        let order = [0, -1, 1, -2, 2, -3, 3];
-        order.into_iter().filter(|s| s.abs() <= SLOTS).find(|&slot| {
+        let order: [i32; 7] = [0, -1, 1, -2, 2, -3, 3];
+        order.into_iter().filter(|s: &i32| s.abs() <= SLOTS).find(|&slot| {
             let Some(i) = self.cart_at_offset(slot) else { return false };
             if slot != 0 && self.carts.len() < 2 { return false; }
             let cart = &self.carts[i];
