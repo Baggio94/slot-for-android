@@ -1014,7 +1014,11 @@ impl GameSession {
             runahead_video: Vec::new(), runahead_size: (0, 0), runahead_state: Vec::new(),
             // bsnes shows the frame before an unserialize on the first run
             // after it, so a predicted picture would be stale: no Run-Ahead.
-            runahead_unavailable: which == Core::Bsnes,
+            // The real PICO-8's state is 33 MB, none can be taken while
+            // Splore downloads (a rollback then fails and pauses the game),
+            // and a second instance would map over the first: no Run-Ahead
+            // or Preemptive Frames either.
+            runahead_unavailable: which == Core::Bsnes || which == Core::Pico8,
             runahead_rollback_failed: false,
             runahead_discard_confirm: false,
             runahead_probe: RunaheadProbe::default(),
