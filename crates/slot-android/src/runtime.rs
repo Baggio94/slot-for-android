@@ -104,6 +104,8 @@ enum Input {
     /// A scan's progress: carts read and how many, 0 while listing folders.
     ScanProgress(u32, u32),
     UpdateStatus(u8, String, String, bool),
+    /// The update's download, 0 to 100 %.
+    UpdateProgress(u8),
     Reset,
     GameReady { uri: String, path: String },
     GameError { uri: String, message: String },
@@ -3784,7 +3786,14 @@ impl Engine {
                 self.game_emulation = None;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
+            Input::UpdateProgress(percent) => {
+                if self.update_status == 3 {
+                    self.set_download_text(&format!("DOWNLOADING {}%", percent.min(100)));
+                }
+            }
             Input::UpdateStatus(status, installed, available, automatic) => {
+                // A new download starts without a percentage until the first.
+                if status == 3 && self.update_status != 3 { self.set_download_text(MENU_TEXT[114]); }
                 self.update_status = status.min(5);
                 self.update_auto = automatic;
                 // Two selection rows regardless of update status.
@@ -7300,6 +7309,14 @@ impl Engine {
             return x + width;
         }
         x
+    }
+
+    /// About's DOWNLOADING line, with its percentage once known.
+    fn set_download_text(&mut self, text: &str) {
+        let Some(&(tex, _, _)) = self.menu_textures.get(114) else { return };
+        let face = quick_value_face(text, true);
+        self.gpu.update_face(tex, &face);
+        self.menu_textures[114] = (tex, face.w, face.h);
     }
 
     fn draw_update_status_centered(&self, index: usize, x: f32, center_y: f32,

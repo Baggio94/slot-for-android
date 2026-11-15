@@ -1169,3 +1169,11 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeTouch(
     if !(0..=3).contains(&action) || !x.is_finite() || !y.is_finite() { return; }
     push(Input::Touch(action as u8, x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), ms));
 }
+
+/// The update's download, 0 to 100 % (About shows DOWNLOADING 42%).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeUpdateProgress(
+    _env: *mut c_void, _this: *mut c_void, percent: i32,
+) {
+    push(Input::UpdateProgress(percent.clamp(0, 100) as u8));
+}

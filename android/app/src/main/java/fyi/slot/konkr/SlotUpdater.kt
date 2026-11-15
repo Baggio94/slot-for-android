@@ -86,6 +86,9 @@ internal class SlotUpdater(private val context: Context, private val notify: (In
 
     private data class Release(val version: String, val page: String, val apk: String, val sha: String)
     private val prefs = context.getSharedPreferences("slot-updater-v1", Context.MODE_PRIVATE)
+    /** The download's progress, 0 to 100, on the main thread (Siham
+     *  2026-11-15: 45 MB with only "DOWNLOADING..." felt stuck). */
+    var onProgress: (Int) -> Unit = {}
     private val running = AtomicBoolean(false)
     private var latest: Release? = null
 
@@ -265,6 +268,8 @@ internal class SlotUpdater(private val context: Context, private val notify: (In
                     require(conn.responseCode == 200)
                     require(conn.contentLengthLong < 0 || conn.contentLengthLong <= MAX_APK)
                     val digest = MessageDigest.getInstance("SHA-256")
+                    val total = conn.contentLengthLong
+                    var shown = -1
                     var count = 0L
                     conn.inputStream.use { input ->
                         FileOutputStream(destination).use { output ->
@@ -276,6 +281,13 @@ internal class SlotUpdater(private val context: Context, private val notify: (In
                                 require(count <= MAX_APK)
                                 digest.update(buf, 0, n)
                                 output.write(buf, 0, n)
+                                if (total > 0) {
+                                    val percent = (count * 100 / total).toInt().coerceIn(0, 100)
+                                    if (percent != shown) {
+                                        shown = percent
+                                        Handler(Looper.getMainLooper()).post { onProgress(percent) }
+                                    }
+                                }
                             }
                             output.fd.sync()
                         }

@@ -133,6 +133,7 @@ class MainActivity : Activity() {
     external fun nativeEglPresentationReport(): String
     external fun nativeKey(code: Int, pressed: Boolean)
     external fun nativeTouch(action: Int, x: Float, y: Float, timeMs: Long)
+    external fun nativeUpdateProgress(percent: Int)
     /** A key of a controller: Settings > Controls picks its port and button. */
     external fun nativePadKey(device: Int, code: Int, pressed: Boolean, stick: Boolean)
     /** Every controller connected now, as [{"id","name","fp"}]. */
@@ -426,6 +427,45 @@ class MainActivity : Activity() {
                 nativeUpdateStatus(status,
                     packageManager.getPackageInfo(packageName, 0).versionName.orEmpty(),
                     version, automatic)
+            }
+        }.apply {
+            onProgress = { percent -> if (!isDestroyed) nativeUpdateProgress(percent) }
+        }
+    }
+    /** Install was pressed before Android let slot. install updates: the
+     *  download starts once the player comes back with it allowed. */
+    private var updateAfterPermission = false
+
+    /** Asks Android's "install unknown apps" for slot. first, so the
+     *  installer follows the download at once (Siham 2026-11-15). */
+    private fun installUpdate() {
+        if (nativeIsPlaying()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()) {
+            try {
+                updateAfterPermission = true
+                SlotToast.makeText(this, "Allow slot. to install updates, then come back.",
+                    Toast.LENGTH_LONG).show()
+                returnFromSlotChild = true
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")))
+                return
+            } catch (error: Exception) {
+                updateAfterPermission = false
+                returnFromSlotChild = false
+                Log.w(TAG, "Cannot open the install permission; downloading first", error)
+            }
+        }
+        slotUpdater.downloadAndInstall { apk ->
+            if (!isDestroyed && resumed && !nativeIsPlaying()) {
+                try {
+                    slotUpdater.startInstaller(apk)
+                } catch (error: Exception) {
+                    Log.w(TAG, "User-confirmed installer not available", error)
+                    SlotToast.makeText(this@MainActivity,
+                        "Allow updates from slot. in Android settings.",
+                        Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -946,22 +986,7 @@ class MainActivity : Activity() {
                 40 -> saveScreenshot()
                 19 -> slotUpdater.check(true)
                 20 -> slotUpdater.openNotes()
-                21 -> {
-                    if (!nativeIsPlaying()) {
-                        slotUpdater.downloadAndInstall { apk ->
-                            if (!isDestroyed && resumed && !nativeIsPlaying()) {
-                                try {
-                                    slotUpdater.startInstaller(apk)
-                                } catch (error: Exception) {
-                                    Log.w(TAG, "User-confirmed installer not available", error)
-                                    SlotToast.makeText(this@MainActivity,
-                                        "Allow updates from slot. in Android settings.",
-                                        Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }
-                }
+                21 -> installUpdate()
                 22 -> {
                     val enabled = slotUpdater.toggle()
                     slotUpdater.refreshVisibleStatus()
@@ -1102,7 +1127,7 @@ class MainActivity : Activity() {
                                     }
                                     val notice = if (onlyMirrors)
                                         "Game saved. The copy for the other core will be made later."
-                                    else "Game saved, but some copies to your save folders failed."
+                                    else exportNotice(failures)
                                     SlotToast.makeText(this@MainActivity, notice, Toast.LENGTH_LONG).show()
                                 }
                             }
@@ -1704,6 +1729,20 @@ class MainActivity : Activity() {
             uiHandler.removeCallbacks(rotateMiddleHold)
             if (!rotateMiddleHeld) nativeSlotButtonReleased(true)
             rotateMiddleHeld = false
+        }
+    }
+
+    /** What a failed copy to the save folders says: which copy (Daniel
+     *  Byon, 2026-11-15). The full reasons go to logcat. */
+    private fun exportNotice(failures: List<String>): String {
+        val kinds = failures.filterNot { it.startsWith("Shared GBA save sync deferred") }
+        val saves = kinds.any { it.startsWith("Save sync") || it.startsWith("RTC sync") }
+        val states = kinds.any { it.startsWith("State sync") || it.startsWith("Manual state") }
+        return when {
+            saves && states -> "Game saved in slot., but it couldn't be copied to your save folders."
+            saves -> "Game saved in slot., but the save couldn't be copied to your save folder."
+            states -> "Game saved in slot., but the save state couldn't be copied to your state folder."
+            else -> "Game saved, but some copies to your save folders failed."
         }
     }
 
@@ -3868,6 +3907,12 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (updateAfterPermission) {
+            updateAfterPermission = false
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+                uiHandler.post { installUpdate() }
+            }
+        }
         if (homeHoldPause) {
             homeHoldPause = false
             if (::lidCover.isInitialized) lidCover.onResume()
