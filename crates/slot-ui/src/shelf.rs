@@ -61,14 +61,16 @@ const SLOTS: i32 = 3;
 const REPEAT_DELAY_MS: Millis = 400;
 const REPEAT_MS: [Millis; 4] = [110, 85, 65, 50];
 
-/// Touch (Siham 2026-11-16): a fling's speed is lost at this rate a second
-/// (about a tenth of it left after one second, as on a phone).
-const COAST_FRICTION: f32 = 2.3;
+/// Touch (Siham 2026-11-16): a fling's speed is lost at this rate a second.
+/// 2.3 at first felt slow on a quick swipe (Siham, same night).
+const COAST_FRICTION: f32 = 1.6;
+/// A fling goes this much faster than the finger, as on a phone's lists.
+const FLING_GAIN: f32 = 1.8;
 /// Below this speed, in carts a second, a fling hands over to the spring
 /// that settles the shelf on a cart, as the D-pad does.
 const COAST_END: f32 = 3.0;
 /// The fastest fling, in carts a second.
-const COAST_MAX: f32 = 45.0;
+const COAST_MAX: f32 = 90.0;
 /// A one-cart shelf only gives a little under the finger.
 const LONE_GIVE: f32 = 0.25;
 
@@ -103,6 +105,9 @@ pub struct Shelf {
     /// place further right and slide into the gap (1 down to 0).
     closing: f32,
     motion: Motion,
+    /// The coasting speed a finger caught: a new fling the same way adds
+    /// to it, so swipe after swipe goes faster.
+    carried: f32,
 }
 
 /// Seconds the carts on the right take to close a deleted cart's gap.
@@ -128,6 +133,7 @@ impl Shelf {
             held_letter: None,
             closing: 0.0,
             motion: Motion::Spring,
+            carried: 0.0,
         }
     }
 
@@ -519,6 +525,7 @@ impl Shelf {
     pub fn grab(&mut self) {
         self.held = None;
         self.held_letter = None;
+        self.carried = if self.motion == Motion::Coast { self.vel } else { 0.0 };
         self.motion = Motion::Finger;
         self.vel = 0.0;
     }
@@ -542,8 +549,11 @@ impl Shelf {
     /// as after the D-pad.
     pub fn let_go(&mut self, speed: f32) {
         if self.motion != Motion::Finger { return; }
-        let speed = if self.carts.len() < 2 { 0.0 }
-            else { (-speed / self.pixels_per_cart()).clamp(-COAST_MAX, COAST_MAX) };
+        let mut speed = if self.carts.len() < 2 { 0.0 }
+            else { -speed * FLING_GAIN / self.pixels_per_cart() };
+        if speed.abs() > COAST_END && speed * self.carried > 0.0 { speed += self.carried; }
+        self.carried = 0.0;
+        let speed = speed.clamp(-COAST_MAX, COAST_MAX);
         self.vel = speed;
         if speed.abs() > COAST_END {
             self.motion = Motion::Coast;

@@ -114,3 +114,26 @@ fn a_lone_cart_only_gives_a_little() {
     assert!(!s.is_scrolling());
     assert_eq!(s.index, 0);
 }
+
+#[test]
+fn a_second_fling_the_same_way_goes_further() {
+    let one = {
+        let mut s = shelf_with(200);
+        run(&mut s, 1.0);
+        s.grab();
+        s.let_go(-2500.0);
+        run(&mut s, 6.0);
+        s.index
+    };
+    let mut s = shelf_with(200);
+    run(&mut s, 1.0);
+    s.grab();
+    s.let_go(-2500.0);
+    run(&mut s, 0.1);
+    let at = s.index;
+    s.grab();
+    s.let_go(-2500.0);
+    run(&mut s, 6.0);
+    assert!(s.index - at > one, "{} after {} vs {}", s.index, at, one);
+    assert!(!s.is_scrolling());
+}
