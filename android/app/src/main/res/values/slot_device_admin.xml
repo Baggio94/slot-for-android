@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="slot_device_admin_description">Turns the screen off when your RG Rotate is closed, after it has dimmed. slot. asks for nothing else.</string>
+</resources>

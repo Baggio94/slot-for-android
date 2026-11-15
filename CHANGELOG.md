@@ -2,6 +2,19 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v2.4.0 — 15 November 2026
+
+- Interface redesign: anthracite ground, rounded selection bar with margins, dimmed unselected rows, path line and page title, thin scroll bar, long pages that slide only near the edge; the same style on Cart Studio, Library, RomM and the Android pages (Apps, RetroAchievements, dialogs).
+- Themes: Dark, OLED, Light and Original on every page (ink remapped on the GPU), shelf colours per theme (Light cream, Original pale console tints). Wallpaper None shows the theme's colour, including during insert and eject; the Theme wallpaper is removed. OLED is saved so older versions still read the settings.
+- Settings: Interface (Theme, Wallpaper ›, Recents, Game Titles, Status Bar ›), Systems, Gameplay, Emulation, Controls, and Handheld on the RG Rotate. Interface → Wallpaper: Shelf (General, then each shelf with games), Wallpaper, Wallpaper Tint, Import, Delete; a wallpaper per shelf (`wallpaper_shelves`), the old Shelf mode converted on load.
+- Anbernic RG Rotate: square screen held in its orientation (no upside-down start); the middle button as the slot. cap (tap, double-tap, hold 0.4 s to eject), the side button left to Android; one slot. when it is the home app. Closed cover (Hall sensor): Playing (Inserted Cart, Full Cart, Last Frame), Game Info (Off, Title, Time, All: Now Playing, title, system, time played while the game runs), Standby (Drifting Shelf from the cart in view, Last Played, Random Cart, Black, Digital Clock, Analog Clock), Dim After, Sleep After, Sleep When Closed (DevicePolicyManager.lockNow under a Swipe lock screen, NEEDS SWIPE LOCK without one). Opening returns straight to the game or the cart shown. The screen going off shut (power key, timeout) hands over to the lock screen, so the lid's keys never reach slot. without a window. Retrogame_Joypad is the built-in controller. Apps takes slot.'s orientation.
+- C and Z for six-button pads (#108, Eugene Yunak): slot. buttons C (98) and Z (101), appended; Mega Drive defaults unchanged; a C / Z row with L1 / R1's choices on the other systems when a six-button pad is connected.
+- MainActivity is singleTask (#109): a second launch brings back the one instance instead of opening a copy whose core stays locked.
+- Menus: L1 / R1 page by six rows without wrapping (L2 / R2 in Cheats); labels at full size, long values and cheat names cut with a fade and scrolling while selected (Draw::Span), a few pixels too long shrunk instead; the in-game Screen page shows three rows.
+- About: a rounded rectangle label with shadow and edge, printed at the screen's width (440-660) on narrow screens with slot.'s wordmark beside the name; rows right under it; Automatic Checks at the rows' size.
+- RomM and RetroAchievements dialogs aligned with the RA page, legends fitted to narrow screens, back to the top on the first item, RA sentence on two lines. Apps: slot.'s own key repeat. Light theme: Mega Drive slot inside in the SNES greys.
+- A running game keeps the screen on (FLAG_KEEP_SCREEN_ON) on every handheld.
+
 ## v2.3.0 — 13 November 2026
 
 - RomM: START → Library → RomM (row after Choose ROM Folder) lists the carts of the player's own RomM server per system (L1/R1), A selects, Y downloads into the system's folder with its label, SELECT filters (search, region, official only, hide carts already on the shelves, RomM favorites), START shows a game's info. Sign-in with a RomM 5 pairing code or username/password, http on the LAN or https; the list is cached and refreshed in parallel; downloads join their shelf without a folder rescan.

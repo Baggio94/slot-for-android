@@ -186,12 +186,12 @@ impl Polaroids {
                 y: 0.0,
                 w,
                 h,
-                colour: [
+                colour: crate::menu_style::page_ground([
                     BLANK[0] as f32 / 255.0,
                     BLANK[1] as f32 / 255.0,
                     BLANK[2] as f32 / 255.0,
                     1.0,
-                ],
+                ]),
             },
         });
     }
@@ -274,7 +274,7 @@ impl Polaroids {
         } else {
             let (pad, h) = (DOT_GAP, DOT + 2.0 * DOT_GAP);
             let plate_y = top - h;
-            out.push(Draw::Rect { x: x - pad, y: plate_y, w: row + 2.0 * pad, h, colour: PLATE });
+            out.push(Draw::Rect { x: x - pad, y: plate_y, w: row + 2.0 * pad, h, colour: crate::menu_style::page_ground(PLATE) });
             plate_y + DOT_GAP
         };
         for i in 0..n {
@@ -314,6 +314,6 @@ fn plate(y: f32) -> Draw {
         y,
         w: out_w() as f32,
         h: PLATE_H,
-        colour: PLATE,
+        colour: crate::menu_style::page_ground(PLATE),
     }
 }

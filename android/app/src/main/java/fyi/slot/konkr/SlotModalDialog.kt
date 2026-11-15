@@ -116,7 +116,7 @@ internal class SlotModalDialog(
     }
     private val root = LinearLayout(activity).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(SlotUi.menuPixel(activity, 32), SlotUi.menuPixel(activity, 33),
+        setPadding(SlotUi.menuPixel(activity, 32), SlotUi.menuPixel(activity, 20),
             SlotUi.menuPixel(activity, 32), dp(9))
         setBackgroundColor(SlotUi.menuBackground)
     }
@@ -127,14 +127,14 @@ internal class SlotModalDialog(
         // menu entries begin 5 pixels after the title's visible ink.
         // Match the account dashboard: text and inputs begin at x=53.
         // Keep the smaller trailing inset to preserve input-field width.
-        val inset = if (isRaLogin) {
-            SlotUi.menuPixel(activity, 16) + SlotUi.menuEntryInset(activity)
-        } else if (isRaSignOut) {
+        // Every form (RomM's too) lines up with it, as the RA page: they
+        // sat 16 px left of the title (Siham 2026-11-15).
+        val inset = if (isRaSignOut) {
             SlotUi.dp(activity, 12)
         } else {
-            SlotUi.menuEntryInset(activity)
+            SlotUi.menuPixel(activity, 16) + SlotUi.menuEntryInset(activity)
         }
-        setPadding(inset, 0, if (isRaLogin) SlotUi.menuEntryInset(activity) else inset, 0)
+        setPadding(inset, 0, if (isRaSignOut) inset else SlotUi.menuEntryInset(activity), 0)
     }
     private val scroll = ScrollView(activity).apply {
         isVerticalScrollBarEnabled = false
@@ -159,18 +159,61 @@ internal class SlotModalDialog(
         val next = if (active < 0) 0
             else (active + delta + items.size) % items.size
         items[next].requestFocus()
+        // Back on the first item: the page's top, the sentence under the
+        // title in view again (Siham 2026-11-15).
+        if (next == 0) scroll.post { scroll.smoothScrollTo(0, 0) }
     }
 
+    /** Hints' gap: 35 where they fit, down to 18 on a narrow screen; still
+     *  too wide, the obvious key goes (A SELECT, else B BACK), as slot.'s
+     *  own legends (Siham 2026-11-15). */
+    private fun fitLegend() {
+        val room = activity.resources.displayMetrics.widthPixels -
+            root.paddingLeft - root.paddingRight
+        fun widths(): Int {
+            var total = 0
+            for (i in 0 until legend.childCount) {
+                val child = legend.getChildAt(i)
+                child.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+                total += child.measuredWidth
+            }
+            return total
+        }
+        fun setGap(gap: Int) {
+            for (i in 1 until legend.childCount) {
+                (legend.getChildAt(i).layoutParams as? LinearLayout.LayoutParams)?.leftMargin = gap
+            }
+            legend.requestLayout()
+        }
+        var gaps = (legend.childCount - 1).coerceAtLeast(0)
+        if (widths() + gaps * dp(35) <= room) { setGap(dp(35)); return }
+        val gap = if (gaps == 0) 0 else ((room - widths()) / gaps).coerceAtLeast(dp(18))
+        setGap(gap.coerceAtMost(dp(35)))
+        if (widths() + gaps * gap <= room || legend.childCount < 2) return
+        val obvious = legendKeys.indexOfFirst { it == "A" }.takeIf { it >= 0 }
+            ?: legendKeys.indexOfFirst { it == "B" }.takeIf { it >= 0 } ?: return
+        legend.removeViewAt(obvious)
+        legendKeys.removeAt(obvious)
+        (legend.getChildAt(0)?.layoutParams as? LinearLayout.LayoutParams)?.leftMargin = 0
+        gaps = (legend.childCount - 1).coerceAtLeast(0)
+        if (gaps > 0) setGap(((room - widths()) / gaps).coerceIn(dp(18), dp(35)))
+    }
+
+    /** The keys in the legend, in order (fitLegend drops one by name). */
+    private val legendKeys = mutableListOf<String>()
+
     init {
-        root.addView(SlotUi.menuHeading(activity, title),
-            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 32)))
+        root.addView(SlotUi.menuHeader(activity, title),
+            LinearLayout.LayoutParams(-1, SlotUi.menuPixel(activity, 50)))
         root.addView(View(activity), LinearLayout.LayoutParams(-1,
             SlotUi.menuPixel(activity, if (isRaLogin) 9 else 19)))
         if (message.isNotBlank()) {
-            val text = SlotUi.label(activity, message, 15f, SlotUi.muted,
+            val text = SlotUi.label(activity, message, 15f, SlotUi.menuMuted,
                 upper = false).apply {
                 setPadding(0, 0, 0, dp(14))
-                maxLines = if (isRaLogin) 1 else 5
+                // Two lines: "Sign in to earn achievements (Casual mode)."
+                // was cut on narrow screens (Siham 2026-11-15).
+                maxLines = if (isRaLogin) 2 else 5
             }
             messageText = text
             body.addView(text)
@@ -186,6 +229,8 @@ internal class SlotModalDialog(
         legend.addView(SlotUi.nativeHint(activity, "A", "SELECT"))
         legend.addView(SlotUi.nativeHint(activity, "B", "BACK"),
             LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(35) })
+        legendKeys.addAll(listOf("A", "B"))
+        fitLegend()
         root.addView(legend, LinearLayout.LayoutParams(-1,
             SlotUi.menuPixel(activity, 53)))
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -204,7 +249,7 @@ internal class SlotModalDialog(
         val labelHeight = if (isRaLogin) SlotUi.menuPixel(activity, 22) else dp(27)
         val fieldHeight = if (isRaLogin) SlotUi.menuPixel(activity, 45) else dp(48)
         val fieldGap = if (isRaLogin) SlotUi.menuPixel(activity, 16) else dp(10)
-        val caption = SlotUi.label(activity, label, 13f, SlotUi.muted)
+        val caption = SlotUi.label(activity, label, 13f, SlotUi.menuMuted)
         body.addView(caption,
             LinearLayout.LayoutParams(-1, labelHeight).apply {
                 topMargin = if (isRaLogin) SlotUi.menuPixel(activity, 3) else dp(4)
@@ -236,20 +281,18 @@ internal class SlotModalDialog(
     }
 
     fun addButton(label: String, onClick: () -> Unit): TextView {
-        val button = SlotUi.label(activity, label, 16f, SlotUi.muted).apply {
+        val button = SlotUi.label(activity, label, 16f, SlotUi.menuMuted).apply {
             gravity = Gravity.CENTER_VERTICAL
-            val inset = if (isRaLogin) {
-                SlotUi.menuPixel(activity, 16) + SlotUi.menuEntryInset(activity)
-            } else if (isRaSignOut) {
+            val inset = if (isRaSignOut) {
                 SlotUi.dp(activity, 12)
-            } else SlotUi.menuEntryInset(activity)
+            } else SlotUi.menuPixel(activity, 16) + SlotUi.menuEntryInset(activity)
             setPadding(inset, 0, inset, 0)
             isFocusable = true
             isClickable = true
             contentDescription = label
             setOnFocusChangeListener { view, focused ->
-                view.setBackgroundColor(if (focused) SlotUi.selected else Color.TRANSPARENT)
-                setTextColor(if (focused) SlotUi.ink else SlotUi.muted)
+                view.background = SlotUi.rowBackground(activity, focused)
+                setTextColor(if (focused) SlotUi.menuInk else SlotUi.menuMuted)
             }
             setOnClickListener { if (!busy) onClick() }
         }
@@ -265,14 +308,14 @@ internal class SlotModalDialog(
      */
     fun addChoice(label: String, values: List<String>, selected: Int, onChange: (Int) -> Unit): TextView {
         var index = selected.coerceIn(0, values.size - 1)
-        val row = SlotUi.label(activity, "", 16f, SlotUi.muted).apply {
+        val row = SlotUi.label(activity, "", 16f, SlotUi.menuMuted).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(SlotUi.menuEntryInset(activity), 0, SlotUi.menuEntryInset(activity), 0)
             isFocusable = true
             contentDescription = label
             setOnFocusChangeListener { view, focused ->
-                view.setBackgroundColor(if (focused) SlotUi.selected else Color.TRANSPARENT)
-                setTextColor(if (focused) SlotUi.ink else SlotUi.muted)
+                view.background = SlotUi.rowBackground(activity, focused)
+                setTextColor(if (focused) SlotUi.menuInk else SlotUi.menuMuted)
             }
         }
         fun show() { row.text = "$label   < ${values[index]} >" }
@@ -292,10 +335,13 @@ internal class SlotModalDialog(
     /** The legend's keys, in place of A SELECT and B BACK. */
     fun setLegend(vararg keys: Pair<String, String>) {
         legend.removeAllViews()
+        legendKeys.clear()
         keys.forEachIndexed { i, (key, action) ->
             legend.addView(SlotUi.nativeHint(activity, key, action),
                 LinearLayout.LayoutParams(-2, -2).apply { if (i > 0) leftMargin = dp(35) })
+            legendKeys.add(key)
         }
+        fitLegend()
     }
 
     /** The sentence under the title, for a form with several modes. */
@@ -322,6 +368,9 @@ internal class SlotModalDialog(
             LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(35) })
         legend.addView(SlotUi.nativeHint(activity, "B", "BACK"),
             LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(35) })
+        legendKeys.clear()
+        legendKeys.addAll(listOf("L1", "R1", "B"))
+        fitLegend()
     }
 
     /** The first field or button shown, focused. */
@@ -365,7 +414,7 @@ internal class SlotModalDialog(
         // Safe first choice on confirmations; first editable field on forms.
         // The initial focused EditText must not rely on D-pad scrolling to
         // finish its layout. Start at the top after all inputs are measured.
-        if (isRaLogin) scroll.post { scroll.scrollTo(0, 0) }
+        scroll.post { scroll.scrollTo(0, 0) }
         (fields.firstOrNull { it.visibility == View.VISIBLE } ?: buttons.firstOrNull())?.let { first ->
             focusStart(first)
             // A window not laid out yet can refuse it: once more after.

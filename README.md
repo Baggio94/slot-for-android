@@ -17,8 +17,9 @@ The port has since grown to other Android handhelds and home consoles. The goal 
 ## Highlights
 
 - **Cartridges first.** Your library is a shelf of cartridges with their real labels, insertion and ejection animations and sounds.
+- **Themes.** Dark, OLED, Light and Original, with a wallpaper for each shelf.
 - **Six systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo and Mega Drive, each with two emulation cores to choose from.
-- **Any screen shape.** The interface adapts to square, 4:3, 3:2 and widescreen handhelds at their native resolution.
+- **Any screen shape.** The interface adapts to square, 4:3, 3:2 and widescreen handhelds at their native resolution, including the Anbernic RG Rotate.
 - **Cart Studio.** Change a cartridge's label, shell colour, finish and shape, right on the handheld.
 - **Screen options.** LCD and CRT shaders, overlays, color correction, Frame Blending and LCD effects, per system or per game.
 - **Saves.** Save states, automatic saving on eject, rewind and fast-forward. Compatible with RetroArch saves and Syncthing.
@@ -41,7 +42,7 @@ More in [Getting Started](https://github.com/Baggio94/slot-for-android/wiki/Gett
 
 ## Essential controls
 
-The KONKR's round top button is the **slot. cap**. On a Retroid Pocket, it's the round centre key.
+The KONKR's round top button is the **slot. cap**. On a Retroid Pocket, it's the round centre key. On the Anbernic RG Rotate, it's the middle button.
 
 | Button | Action |
 |---|---|
@@ -61,7 +62,7 @@ The [wiki](https://github.com/Baggio94/slot-for-android/wiki) explains every scr
 - [Getting Started](https://github.com/Baggio94/slot-for-android/wiki/Getting-Started) · [Controls & Hotkeys](https://github.com/Baggio94/slot-for-android/wiki/Controls-and-Hotkeys) · [Shelves](https://github.com/Baggio94/slot-for-android/wiki/Shelves) · [Game Menu](https://github.com/Baggio94/slot-for-android/wiki/Game-Menu)
 - [Settings](https://github.com/Baggio94/slot-for-android/wiki/Settings) · [Screen, Shaders & Effects](https://github.com/Baggio94/slot-for-android/wiki/Screen-Shaders-and-Effects) · [Cores & Saves](https://github.com/Baggio94/slot-for-android/wiki/Cores-and-Saves)
 - [Cart Studio](https://github.com/Baggio94/slot-for-android/wiki/Cart-Studio) · [RomM](https://github.com/Baggio94/slot-for-android/wiki/RomM) · [RetroAchievements](https://github.com/Baggio94/slot-for-android/wiki/RetroAchievements) · [Multiplayer](https://github.com/Baggio94/slot-for-android/wiki/Multiplayer) · [Cheats](https://github.com/Baggio94/slot-for-android/wiki/Cheats)
-- [Special Games](https://github.com/Baggio94/slot-for-android/wiki/Special-Games) (Boktai, motion games) · [Apps & Home Launcher](https://github.com/Baggio94/slot-for-android/wiki/Apps-and-Home-Launcher)
+- [Special Games](https://github.com/Baggio94/slot-for-android/wiki/Special-Games) (Boktai, motion games) · [Apps & Home Launcher](https://github.com/Baggio94/slot-for-android/wiki/Apps-and-Home-Launcher) · [RG Rotate](https://github.com/Baggio94/slot-for-android/wiki/RG-Rotate)
 
 ## Credits & License
 

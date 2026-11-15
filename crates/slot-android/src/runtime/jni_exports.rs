@@ -1,6 +1,24 @@
 //! JNI entry points called by MainActivity, plus the EGL recovery test fixture.
 use super::*;
 
+/// The same page and selected-row colours for Android-owned forms and Apps.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeMenuPalette(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jni::sys::jlong {
+    let rgb = |c: [u8; 3]| (u64::from(c[0]) << 16) | (u64::from(c[1]) << 8) | u64::from(c[2]);
+    ((rgb(menu_style::menu_ground_rgb()) << 24) | rgb(menu_style::pill_rgb())) as i64
+}
+
+/// The menus' dark text in Light and Original (RGB), or -1 for white.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeMenuDarkInk(
+    _env: *mut c_void, _activity: *mut c_void,
+) -> jni::sys::jint {
+    menu_style::palette().and_then(|p| p.ink)
+        .map_or(-1, |c| (i32::from(c[0]) << 16) | (i32::from(c[1]) << 8) | i32::from(c[2]))
+}
+
 // The primitive JNI ABI is sufficient for this stage; no Java objects are touched.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
@@ -239,6 +257,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                     ).collect::<Vec<_>>(),
                 ));
             // Other ROMs: the shelves take them in place, their faces kept.
+            let library_page = holder.borrow().as_ref().and_then(|engine| {
+                matches!(engine.overlay, ShelfOverlay::Library { .. } | ShelfOverlay::Menu { .. })
+                    .then_some((engine.overlay, engine.external_pending))
+            });
             let in_place = holder.borrow_mut().as_mut()
                 .is_some_and(|engine| engine.shelves.iter().any(|s| !s.carts.is_empty())
                     && engine.update_library(version, snapshot.as_deref()));
@@ -249,6 +271,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 match Engine::new(version, snapshot.as_deref()) {
                     Ok(mut engine) => {
                         engine.size = size;
+                        if let Some((overlay, pending)) = library_page {
+                            engine.overlay = overlay;
+                            engine.external_pending = pending;
+                        }
                         if let Some((active, uris)) = selected_uris {
                             let active = restore_shelf_focus(&mut engine.shelves, active, &uris);
                             engine.active = super::gba_before_video(&engine.shelves, active);
@@ -703,9 +729,22 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSystemStatus(
             charge: if charging != 0 { Charge::Charging } else { Charge::Discharging } })
     } else { None };
     {
-        *SYSTEM_STATUS.lock().unwrap_or_else(|p| p.into_inner()) = SystemStatus { clock, battery };
+        let mut status = SYSTEM_STATUS.lock().unwrap_or_else(|p| p.into_inner());
+        status.clock = clock;
+        status.battery = battery;
     }
     SYSTEM_STATUS_REV.fetch_add(1, Ordering::Release);
+}
+
+/// Today's date in Android's language, sent just before nativeSystemStatus
+/// (which bumps the revision): the closed RG Rotate's clocks show it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSystemDate(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, date: JString<'_>,
+) {
+    let Ok(date) = env.get_string(&date) else { return; };
+    let date = date.to_string_lossy().chars().take(32).collect::<String>();
+    SYSTEM_STATUS.lock().unwrap_or_else(|p| p.into_inner()).date = date;
 }
 
 /// App-private files directory and nativeLibraryDir (where mGBA is packaged).
@@ -773,6 +812,50 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExitGame(
 ) { push(Input::Exit); }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSlotButtonReleased(
+    _env: *mut c_void, _this: *mut c_void, held: jboolean,
+) { push(Input::SlotButtonReleased { held: held != 0 }); }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLidCover(
+    _env: *mut c_void, _this: *mut c_void, closed: jboolean,
+) { push(Input::LidCover(closed != 0, false)); }
+
+/// The lid with no cover animation: the RG Rotate opened out of sleep.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLidCoverNow(
+    _env: *mut c_void, _this: *mut c_void, closed: jboolean,
+) { push(Input::LidCover(closed != 0, true)); }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRotateSleepState(
+    _env: *mut c_void, _this: *mut c_void, state: jint,
+) { ROTATE_SLEEP_STATE.store(state.clamp(0, 2) as u8, Ordering::Release); }
+
+/// Settings > Interface > RG Rotate: [dim after s, sleep after s (0 never),
+/// black cover with no game, animations].
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRotateDelays<'a>(
+    mut env: JNIEnv<'a>, _this: JObject<'a>,
+) -> jni::sys::jintArray {
+    let packed = ROTATE_DELAYS.load(Ordering::Acquire);
+    let values = [((packed >> 16) & 0x3fff) as i32, (packed & 0xffff) as i32,
+        ((packed >> 30) & 1) as i32, ((packed >> 31) & 1) as i32];
+    match env.new_int_array(4) {
+        Ok(array) => {
+            let _ = env.set_int_array_region(&array, 0, &values);
+            array.into_raw()
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLidStep(
+    _env: *mut c_void, _this: *mut c_void,
+) { push(Input::LidStep); }
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSuspend(
     _env: *mut c_void, _this: *mut c_void,
 ) {
@@ -785,6 +868,11 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSuspend(
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeIsPlaying(
     _env: *mut c_void, _this: *mut c_void,
 ) -> jboolean { PLAYING.load(Ordering::Acquire) as jboolean }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeGameUnpaused(
+    _env: *mut c_void, _this: *mut c_void,
+) -> jboolean { GAME_UNPAUSED.load(Ordering::Acquire) as jboolean }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeAudioSpeedPermille(

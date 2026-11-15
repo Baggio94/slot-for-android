@@ -245,6 +245,15 @@ internal class SlotStatusIndicators(
         }
     }
 
+    /** The closed RG Rotate: the icons fade out, and back in on opening. */
+    fun fadeForLid(closed: Boolean, animate: Boolean) {
+        val to = if (closed) 0f else 1f
+        for (group in listOf(left, right)) {
+            group.animate().cancel()
+            if (animate) group.animate().alpha(to).setDuration(300L).start() else group.alpha = to
+        }
+    }
+
     fun onResume() {
         if (subscribed) return
         val filter = IntentFilter("com.chiller3.basicsync.STATE_CHANGED")

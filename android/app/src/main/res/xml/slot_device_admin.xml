@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RG Rotate: only the right to turn the screen off (lock it) once the
+     closed Rotate has dimmed. Nothing else: no wipe, no password rules. -->
+<device-admin>
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>

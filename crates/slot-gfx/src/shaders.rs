@@ -34,13 +34,16 @@ uniform vec4 u_rect;
 uniform vec2 u_target;
 uniform vec2 u_turn;
 varying vec2 v_uv;
+varying float v_x;
 void main() {
     v_uv = a_pos;
     vec2 mid = u_rect.zw * 0.5;
     vec2 local = a_pos * u_rect.zw - mid;
     vec2 turned = vec2(u_turn.x * local.x - u_turn.y * local.y,
                        u_turn.y * local.x + u_turn.x * local.y);
-    vec2 p = (u_rect.xy + a_pos * u_rect.zw + (turned - local)) / u_target;
+    vec2 canvas = u_rect.xy + a_pos * u_rect.zw + (turned - local);
+    v_x = canvas.x;
+    vec2 p = canvas / u_target;
     gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
 }
 "#;
@@ -1295,9 +1298,23 @@ pub const SPRITE_FRAG: &str = r#"
 precision mediump float;
 uniform sampler2D u_tex;
 uniform vec4 u_colour;
+// Draw::Ink: light ink (text, glyphs) redrawn from u_paper to u_ink by its
+// brightness, for menus on a light ground; u_map 0 leaves the texel alone.
+uniform float u_map;
+uniform vec3 u_paper;
+uniform vec3 u_ink;
+// Draw::Span: left, right (canvas x) and the fade at each edge.
+uniform vec4 u_span;
 varying vec2 v_uv;
+varying float v_x;
 void main() {
-    FRAG_COLOR = texture2D(u_tex, v_uv) * u_colour;
+    vec4 texel = texture2D(u_tex, v_uv);
+    float light = clamp(dot(texel.rgb, vec3(0.299, 0.587, 0.114)) * 1.04, 0.0, 1.0);
+    texel.rgb = mix(texel.rgb, mix(u_paper, u_ink, light), u_map);
+    vec4 colour = texel * u_colour;
+    colour.a *= clamp((v_x - u_span.x) / u_span.z, 0.0, 1.0)
+        * clamp((u_span.y - v_x) / u_span.w, 0.0, 1.0);
+    FRAG_COLOR = colour;
 }
 "#;
 

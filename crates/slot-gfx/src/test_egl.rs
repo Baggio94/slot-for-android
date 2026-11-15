@@ -141,9 +141,10 @@ impl Drop for TestEgl {
             self.lib
                 .get::<unsafe extern "C" fn(Ptr, Ptr) -> u32>(b"eglDestroySurface\0")
                 .unwrap()(self.display, self.surface);
-            self.lib
-                .get::<unsafe extern "C" fn(Ptr) -> u32>(b"eglTerminate\0")
-                .unwrap()(self.display);
+            // No eglTerminate: every fixture gets the same surfaceless
+            // display, so terminating it here pulled the context from under
+            // the tests still drawing on other threads ("make-current
+            // failed", blank read-backs). The process ends them all.
         }
     }
 }

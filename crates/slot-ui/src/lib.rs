@@ -12,6 +12,8 @@ mod battery;
 mod board;
 mod cart;
 mod clock;
+mod lid_clock;
+pub use lid_clock::{analog_clock_face, clock_hours_minutes};
 pub mod density;
 mod draw;
 mod footer;
@@ -35,13 +37,14 @@ mod silhouette;
 mod slot_chrome;
 mod sticker;
 pub mod text;
+pub mod menu_style;
 mod button_art;
 mod hold_ring;
 mod toast;
 
 pub use backdrop::{bezel_face, blur_background, blur_background_native, default_background, default_background_native, draw_backdrop, draw_ground_tinted, top_line_luma, wallpaper_face, wallpaper_face_native, LIGHT_WALLPAPER};
 pub use barcode::{code39, CODE39_NARROW, CODE39_WIDE};
-pub use battery::{draw_gauge, BOLT_PX, GAUGE_H, GAUGE_W, WALL};
+pub use battery::{draw_gauge, draw_status_gauge, status_gauge_width, BOLT_PX, GAUGE_H, GAUGE_W, WALL};
 pub use board::{
     board_at, board_face, pak_chip_face, home_chip_face, board_layout_body, lid_rest_body, picker_span_body, shelf_cart_body, board_layout, board_toward, BoardLayout, board_from, board_zoom, chip_face, chip_shadow_face, grown, lid_at,
     lid_from, lid_rest, lid_toward, lift_of, on_board, padded, pak_marking_face, picker_span, rom_marking, rom_marking_face, shelf_cart, shelf_cart_at, shelf_cart_for,
@@ -59,7 +62,7 @@ pub use home::{home_mould_of, home_shell, title_key, HomeMould, HOME_CART_W};
 pub use clock::{clock_label, date_time_text, hhmm, set_clock_hint_face, ClockPicker, Field};
 pub use density::Face;
 pub use draw::{Draw, TexId, OUT_H, out_w};
-pub use footer::{draw_footer, draw_footer_with_ink, draw_status_clock, footer_ink, Printed};
+pub use footer::{draw_footer, draw_footer_with_ink, draw_status_clock, draw_status_clock_grown, footer_ink, Printed};
 pub use hud::{
     badge_at, ff_badge, FfState, Hud, HudKind, LinkBadge, Millis, HUD_ICON_PX, HUD_INK, HUD_MS,
     LINK_HOST_INK, LINK_JOIN_INK, PLATE_H,
@@ -71,8 +74,8 @@ pub use link_art::{
     PLUG_TIP_X, PLUG_W, PORT_H, PORT_W, PORT_Y,
 };
 pub use plate::{
-    arrows_hint_face, arrows_hint_face_ink, hint_face_ink, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
-    hint_width, title_face, title_line_face, word_face, word_ink, word_width, platform_name_face, PLATFORM_NAME_SCALE,
+    arrows_hint_face, arrows_hint_face_ink, hint_face_ink, hint_label_x, arrows_label_x, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
+    hint_width, title_face, title_line_face, word_face, word_ink, word_ink_scaled, word_width, platform_name_face, PLATFORM_NAME_SCALE,
     onboarding_instruction_face, onboarding_note_face, onboarding_max_w,
     Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,
     HINT_EDGE, HINT_GAP, HINT_H, LEGEND_GAP, TITLE_H, TITLE_W,
@@ -83,7 +86,7 @@ pub use polaroids::{
 pub use power_menu::{menu_face, PowerChoice, MENU_PAD};
 pub use quick_menu::{
     quick_value_width, quick_value_width_within, quick_value_face_within,
-    quick_caret_face, quick_label_face, quick_legend_faces, quick_value_face, QuickMenu,
+    quick_caret_face, quick_caret_mid, quick_label_face, quick_legend_faces, quick_value_face, QuickMenu,
     QuickMenuFaces, QuickRow, QuickValue, QUICK_EDGE, QUICK_PITCH, QUICK_SPLIT, QUICK_TOP,
 };
 pub use rebuild::{rebuild_count_face, rebuild_title_face, RebuildScreen};
@@ -105,8 +108,8 @@ pub use slot_chrome::{
     ALERT_PX, LIP_H, MOUTH_H, MOUTH_W,
 };
 pub use sticker::{
-    draw_sticker, head_rows, sticker_face, sticker_face_handheld, sticker_face_konkr, sticker_lines, StickerFields, COPYRIGHT, CREDITS, DC,
-    HOME, ORIGIN, STICKER_H, STICKER_W,
+    draw_sticker, head_rows, sticker_face, sticker_face_handheld, sticker_face_handheld_w, sticker_face_konkr, sticker_lines, StickerFields, COPYRIGHT, CREDITS, DC,
+    HOME, ORIGIN, STICKER_H, STICKER_MIN_W, STICKER_W,
 };
 pub use button_art::{key_art, BUTTON_H};
 pub use hold_ring::{hold_ring_face, HOLD_RING};

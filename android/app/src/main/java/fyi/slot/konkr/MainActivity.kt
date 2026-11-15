@@ -29,6 +29,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.ActivityNotFoundException
 import android.graphics.Color
 import android.graphics.Bitmap
@@ -65,6 +66,7 @@ import android.view.InputEvent
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowManager
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -93,6 +95,7 @@ class MainActivity : Activity() {
         private const val LABEL_REQUEST = 4707
         private const val STUDIO_PICTURE_REQUEST = 4712
         private const val PREFS = "slot_konkr_library"
+        internal const val PREFS_NAME = PREFS
         private const val ROM_ROOT = "rom_root_uri"
         private const val BIOS_ROOT = "bios_root_uri"
         private const val SAVE_ROOT = "saves_root_uri"
@@ -148,7 +151,20 @@ class MainActivity : Activity() {
     external fun nativeGameError(uri: String, message: String)
     external fun nativeExitGame()
     external fun nativeSuspend()
+    external fun nativePresentationResume()
+    external fun nativeMenuPalette(): Long
+    external fun nativeMenuDarkInk(): Int
     external fun nativeIsPlaying(): Boolean
+    external fun nativeGameUnpaused(): Boolean
+    external fun nativeSlotButtonReleased(held: Boolean)
+    external fun nativeLidCover(closed: Boolean)
+    /** The lid, with no cover animation (opened straight out of sleep). */
+    external fun nativeLidCoverNow(closed: Boolean)
+    external fun nativeLidStep()
+    /** Settings > Handheld (RG Rotate): [dim after s, sleep after s (0 never),
+     *  black cover with no game (1), animations (1)]. */
+    external fun nativeRotateDelays(): IntArray
+    external fun nativeRotateSleepState(state: Int)
     external fun nativeCarouselQuiet(): Boolean
     external fun nativeWarmRomCandidate(): String?
     external fun nativeCanRefreshLibrary(): Boolean
@@ -174,6 +190,7 @@ class MainActivity : Activity() {
     external fun nativeRaFlushReady(): Boolean
     external fun nativeRaStopReady(): Boolean
     external fun nativeSystemStatus(clock: String, batteryPercent: Int, charging: Boolean)
+    external fun nativeSystemDate(date: String)
     external fun nativePollUiAction(): Int
     external fun nativeTakeScreenshot(): ByteArray?
     external fun nativeUpdateStatus(status: Int, installed: String, available: String, automatic: Boolean)
@@ -552,9 +569,17 @@ class MainActivity : Activity() {
     // The engine still runs every frame while animating, scrolling, playing,
     // or preparing cartridge art. A settled shelf is refreshed at 4 Hz for
     // clocks, library scans and asynchronous UI changes.
+    /** Keeps the shelf drawing every frame for a while (RG Rotate lid). */
+    internal fun wakeCarouselFor(ms: Long) {
+        // Kept even before onResume (the lid opening out of sleep): the
+        // cover animation then runs at full rate from its first frame.
+        carouselAwakeUntil = maxOf(carouselAwakeUntil, SystemClock.uptimeMillis() + ms)
+        wakeCarouselRender()
+    }
+
     private fun wakeCarouselRender() {
         if (!::view.isInitialized || !resumed) return
-        carouselAwakeUntil = SystemClock.uptimeMillis() + 500L
+        carouselAwakeUntil = maxOf(carouselAwakeUntil, SystemClock.uptimeMillis() + 500L)
         if (carouselDozing) {
             carouselDozing = false
             view.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
@@ -851,11 +876,13 @@ class MainActivity : Activity() {
                 }
             }
             updateRomWarmCandidate()
-            if (resumed && nativeIsPlaying()) {
+            val playing = resumed && nativeIsPlaying() && !(::lidCover.isInitialized && lidCover.closed)
+            if (playing) {
                 if (!audioRunning.get()) startAudio()
             } else if (audioRunning.get()) {
                 stopAudio()
             }
+            keepScreenOn(playing && nativeGameUnpaused())
             drainPendingSaveFlush()
             val request = nativePollLaunchUri()
             if (request != null) {
@@ -866,6 +893,7 @@ class MainActivity : Activity() {
             }
             romm.poll()
             deleteRequestedGames()
+            SlotUi.updateMenuPalette(nativeMenuPalette(), nativeMenuDarkInk())
             when (nativePollUiAction()) {
                 1 -> openRomFolderPicker()
                 2 -> refreshLibrary()
@@ -891,6 +919,9 @@ class MainActivity : Activity() {
                 10 -> resetVisualFile(WALLPAPER_REQUEST)
                 11 -> openCartLabelPicker()
                 12 -> removeSelectedCartLabel()
+                60 -> if (::lidCover.isInitialized) lidCover.requestAdmin()
+                61 -> if (::lidCover.isInitialized) lidCover.confirmRemoveAdmin()
+                62 -> if (::lidCover.isInitialized) lidCover.openLockSettings()
                 30 -> requestStudioArt()
                 32 -> requestStudioGameArt(1)
                 33 -> requestStudioPicture()
@@ -1101,6 +1132,23 @@ class MainActivity : Activity() {
     private lateinit var view: SlotPresenter
     private var startupSplash: View? = null
     private lateinit var raAchievementOverlay: RaAchievementOverlay
+    private lateinit var lidCover: LidCover
+    /** RG Rotate's middle button is down: a Home Android sends meanwhile is
+     *  its long press, the slot. button held. */
+    private var rotateMiddleDown = false
+    /** The middle button was held long enough: slot. ejected on its own. */
+    private var rotateMiddleHeld = false
+    /** Android takes the middle button at 0.5 s (Home, its release lost),
+     *  so slot. counts the hold itself and ejects just before (measured on
+     *  Siham's Rotate, 2026-11-14: Home came, the game only paused). */
+    private val rotateMiddleHold = Runnable {
+        if (!rotateMiddleDown) return@Runnable
+        rotateMiddleHeld = true
+        nativeSlotButtonReleased(true)
+        wakeCarouselRender()
+    }
+    /** Keys swallowed by the closed RG Rotate, whose releases go too. */
+    private val lidSwallowed = HashSet<Int>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -1122,6 +1170,11 @@ class MainActivity : Activity() {
         windowManager.maximumWindowMetrics.bounds.let { panel ->
             Log.i(TAG, "Panel ${panel.width()}x${panel.height()}")
             nativeSetPanelSize(panel.width(), panel.height())
+            // A square panel (RG Rotate) has no landscape: asking for one
+            // turned the screen 90 degrees for an instant on each unlock.
+            if (panel.width() == panel.height()) {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_NOSENSOR
+            }
         }
         // App-private A12 A/B marker; no save or ROM folders are touched.
         val a12Recovery = !File(filesDir, "a12-mgba-legacy-pacing.flag").exists()
@@ -1133,6 +1186,27 @@ class MainActivity : Activity() {
         cartSounds = CartSounds(this)
         val renderer = object : GLSurfaceView.Renderer {
             var ready = false
+            private val graphicsRecovery = SlotGraphicsRecovery()
+            private var surfaceWidth = 0
+            private var surfaceHeight = 0
+
+            private fun restoreGraphics(): Boolean {
+                val restored = graphicsRecovery.attempt(SystemClock.uptimeMillis()) {
+                    nativeSurfaceCreated().also { ok ->
+                        if (!ok) Log.e(TAG, "Slot GLES recovery failed; retrying with session retained")
+                    }
+                }
+                if (restored) {
+                    if (surfaceWidth > 0 && surfaceHeight > 0)
+                        nativeSurfaceChanged(surfaceWidth, surfaceHeight)
+                    nativePresentationResume()
+                    runOnUiThread {
+                        pushControllers()
+                        uiHandler.postDelayed({ hideSlotStartupSplash() }, 650L)
+                    }
+                }
+                return restored
+            }
             private var probeStartNs = 0L
             private var lastDrawNs = 0L
             private var callbacks = 0
@@ -1167,20 +1241,17 @@ class MainActivity : Activity() {
                 }
                 resetTiming()
                 nativeEglPresentationReset()
-                ready = nativeSurfaceCreated()
+                graphicsRecovery.reset()
+                ready = restoreGraphics()
                 glPacingCorrelation.reset()
-                if (!ready) Log.e(TAG, "Slot GLES initialization failed")
-                else runOnUiThread {
-                    // The engine is new: tell it every controller.
-                    pushControllers()
-                    // Wait for the renderer to exist before revealing the shelf.
-                    uiHandler.postDelayed({ hideSlotStartupSplash() }, 650L)
-                }
             }
             override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-                if (ready) nativeSurfaceChanged(width, height)
+                surfaceWidth = width
+                surfaceHeight = height
+                nativeSurfaceChanged(width, height)
             }
             override fun onDrawFrame(gl: GL10?) {
+                if (!ready) ready = restoreGraphics()
                 val a12StartedNs = SystemClock.elapsedRealtimeNanos()
                 // Beta8 observer: age of last Choreographer timestamp
                 // when GL starts, not a measured display-present time.
@@ -1325,6 +1396,17 @@ class MainActivity : Activity() {
                 bottomMargin = (12 * resources.displayMetrics.density).toInt()
             })
         raAchievementOverlay = RaAchievementOverlay(this, frame)
+        lidCover = LidCover(this) { if (::shelfStatus.isInitialized) shelfStatus else null }
+        if (RgRotate.device) {
+            // Android's own rotation (Anbernic "Direction follows system")
+            // turns a frozen snapshot for 0.35 s over slot.'s cover
+            // animation (videos, Siham 2026-11-14). A straight cut (446)
+            // still showed slot.'s last frames sideways for 0.2 s: seamless
+            // keeps each frame in the orientation it was drawn for.
+            window.attributes = window.attributes.apply {
+                rotationAnimation = WindowManager.LayoutParams.ROTATION_ANIMATION_SEAMLESS
+            }
+        }
         showSlotStartupSplash(frame)
         setContentView(frame)
         immersive()
@@ -1457,6 +1539,19 @@ class MainActivity : Activity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (RgRotate.lidKey(keyCode, event) && ::lidCover.isInitialized) {
+            // Repeats too: a held lid is shut, even if a release was misread.
+            lidCover.close()
+            return true
+        }
+        if (::lidCover.isInitialized && lidCover.closed) {
+            // Shut, the Rotate hides its face buttons: one of them means the
+            // lid is open again (its own key may have been missed asleep).
+            if (event.repeatCount == 0 && RgRotate.opensLid(keyCode, event)) lidCover.open()
+            else lidCover.awake()
+            lidSwallowed.add(keyCode)
+            return true
+        }
         SlotBuildBehavior.emulatorButton(keyCode)?.let { button ->
             EmulationDiagnostics.input(keyCode, true, event, button)
             if (event.repeatCount == 0) {
@@ -1466,10 +1561,18 @@ class MainActivity : Activity() {
             }
             return true
         }
-        if (isRetroidSlotKey(keyCode, event)) {
+        if (isRetroidSlotKey(keyCode, event) || RgRotate.middleKey(keyCode, event)) {
             // The Retroid's round centre key sends BACK: there it is the
-            // slot. button, with the KONKR top key's exact behaviour.
+            // slot. button, with the KONKR top key's exact behaviour. So is
+            // the RG Rotate's middle (BACK) button. Its round side button
+            // (F10) is left to Android, which switches launchers with it.
             if (event.repeatCount == 0) {
+                if (RgRotate.middleKey(keyCode, event)) {
+                    rotateMiddleDown = true
+                    rotateMiddleHeld = false
+                    uiHandler.removeCallbacks(rotateMiddleHold)
+                    uiHandler.postDelayed(rotateMiddleHold, RgRotate.HOLD_MS)
+                }
                 EmulationDiagnostics.input(keyCode, true, event, KeyEvent.KEYCODE_BUTTON_MODE)
                 warmedCandidate.set(null)
                 // Stage the key before waking a dozing shelf: no stale frame.
@@ -1546,11 +1649,13 @@ class MainActivity : Activity() {
 
     /** The handheld's own controls. Some report as external: the KONKR's
      *  are an internal USB "Microsoft X-box 360 pad" (045e:028e, dumpsys
-     *  input 2026-11-06), and a Retroid's may be too. */
+     *  input 2026-11-06), and a Retroid's may be too. Anbernic's (the RG
+     *  Rotate's) is an external "Retrogame_Joypad" (Siham 2026-11-15). */
     private fun isBuiltIn(device: InputDevice): Boolean =
         !device.isExternal ||
             (device.vendorId == 0x045e && device.productId == 0x028e) ||
-            device.name.orEmpty().contains("Retroid", ignoreCase = true)
+            device.name.orEmpty().contains("Retroid", ignoreCase = true) ||
+            device.name.orEmpty().equals("Retrogame_Joypad", ignoreCase = true)
 
     /** A key (or hat direction) of a controller: to Settings > Controls. */
     private fun sendKey(event: InputEvent, code: Int, pressed: Boolean, stick: Boolean = false) {
@@ -1570,8 +1675,44 @@ class MainActivity : Activity() {
 
     /** Keys slot. reads: its own, plus any gamepad button a controller may
      *  send instead (C, Z, 1-16...), which Settings > Controls can map. */
+    private var screenKeptOn = false
+
+    /** A game running (not paused, not under the closed RG Rotate's cover)
+     *  keeps the screen on: a cut-scene or a slow puzzle without a press no
+     *  longer sends the console to sleep (Siham, 2026-11-14). Menus and the
+     *  shelf keep Android's own screen timeout. */
+    private fun keepScreenOn(on: Boolean) {
+        if (on == screenKeptOn) return
+        screenKeptOn = on
+        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
     private fun readsKey(keyCode: Int): Boolean =
         keyCode in BUTTONS || KeyEvent.isGamepadButton(keyCode)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // RG Rotate: holding the middle button sends Android Home, which
+        // brings back slot. (the home app). That hold is the slot. button's.
+        val home = intent.hasCategory(Intent.CATEGORY_HOME) ||
+            intent.getBooleanExtra(SlotHomeActivity.EXTRA_HOME, false)
+        if (rotateMiddleDown && home) {
+            rotateMiddleDown = false
+            uiHandler.removeCallbacks(rotateMiddleHold)
+            if (!rotateMiddleHeld) nativeSlotButtonReleased(true)
+            rotateMiddleHeld = false
+        }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (::lidCover.isInitialized && lidCover.closed) {
+            lidCover.awake()
+            return true
+        }
+        return super.dispatchTouchEvent(event)
+    }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
@@ -1637,6 +1778,18 @@ class MainActivity : Activity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (RgRotate.lidKey(keyCode, event) && ::lidCover.isInitialized) {
+            // Android cancels the held lid key when slot. loses focus (the
+            // lock screen taking over at sleep): that release is not the
+            // lid opening (2.4.0-menus9 on Siham's Rotate, 2026-11-14).
+            if (event.isCanceled) {
+                Log.i(TAG, "Rotate: canceled lid release ignored, still closed")
+                return true
+            }
+            lidCover.open()
+            return true
+        }
+        if (lidSwallowed.remove(keyCode)) return true
         SlotBuildBehavior.emulatorButton(keyCode)?.let { button ->
             EmulationDiagnostics.input(keyCode, false, event, button)
             warmedCandidate.set(null)
@@ -1644,11 +1797,27 @@ class MainActivity : Activity() {
             nativeKey(button, false)
             return true
         }
-        if (isRetroidSlotKey(keyCode, event)) {
+        if (isRetroidSlotKey(keyCode, event) || RgRotate.middleKey(keyCode, event)) {
             EmulationDiagnostics.input(keyCode, false, event, KeyEvent.KEYCODE_BUTTON_MODE)
             warmedCandidate.set(null)
             wakeCarouselRender()
-            nativeKey(KeyEvent.KEYCODE_BUTTON_MODE, false)
+            val middle = RgRotate.middleKey(keyCode, event)
+            if (middle) {
+                rotateMiddleDown = false
+                uiHandler.removeCallbacks(rotateMiddleHold)
+                // Already ejected by the hold: the release is nothing more.
+                if (rotateMiddleHeld) {
+                    rotateMiddleHeld = false
+                    return true
+                }
+            }
+            if (event.isCanceled) {
+                // The system took a long press (RG Rotate): no tap. The
+                // middle button's is the slot. button held: eject.
+                nativeSlotButtonReleased(middle)
+            } else {
+                nativeKey(KeyEvent.KEYCODE_BUTTON_MODE, false)
+            }
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_BACK) return true
@@ -2727,6 +2896,12 @@ class MainActivity : Activity() {
         login.show()
     }
 
+    /** The clock and battery now (the Rotate woken shut: no old time). */
+    internal fun refreshSystemStatus() {
+        lastStatusPoll = -15000L
+        pollSystemStatus()
+    }
+
     private fun pollSystemStatus() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastStatusPoll < 15000L) return
@@ -2746,6 +2921,8 @@ class MainActivity : Activity() {
         val plugged = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
         val charging = state == BatteryManager.BATTERY_STATUS_CHARGING ||
             state == BatteryManager.BATTERY_STATUS_FULL || plugged != 0
+        nativeSystemDate(java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault())
+            .format(java.util.Date()))
         nativeSystemStatus(clock, percent, charging)
 
     }
@@ -2793,6 +2970,7 @@ class MainActivity : Activity() {
     private fun openSharedFolderPicker(requestCode: Int) {
         check(requestCode == SAVE_REQUEST || requestCode == STATE_REQUEST)
         SlotBuildBehavior.externalFolderRestrictionMessage(packageName)?.let { restriction ->
+            nativeExternalReturn()
             SlotToast.makeText(this, restriction, Toast.LENGTH_LONG).show()
             return
         }
@@ -2805,6 +2983,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, requestCode)
         } catch (error: ActivityNotFoundException) {
+            nativeExternalReturn()
             SlotToast.makeText(this, "Couldn't open the folder picker.", Toast.LENGTH_LONG).show()
         }
     }
@@ -2820,6 +2999,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, BIOS_REQUEST)
         } catch (error: ActivityNotFoundException) {
+            nativeExternalReturn()
             SlotToast.makeText(this, "Couldn't open the folder picker.", Toast.LENGTH_LONG).show()
         }
     }
@@ -2888,6 +3068,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, FOLDER_REQUEST)
         } catch (error: ActivityNotFoundException) {
+            nativeExternalReturn()
             nativeSetShelfStatus(shelfPickerError)
             Log.w(TAG, "Android folder picker unavailable", error)
         }
@@ -2903,6 +3084,7 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             startActivityForResult(intent, kind)
         } catch (error: ActivityNotFoundException) {
+            nativeExternalReturn()
             SlotToast.makeText(this, "Couldn't open the file picker.", Toast.LENGTH_LONG).show()
         }
     }
@@ -3214,6 +3396,11 @@ class MainActivity : Activity() {
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode in setOf(FOLDER_REQUEST, BIOS_REQUEST, SAVE_REQUEST, STATE_REQUEST,
+                THEME_REQUEST, WALLPAPER_REQUEST, LABEL_REQUEST, STUDIO_PICTURE_REQUEST)) {
+            nativeExternalReturn()
+            wakeCarouselRender()
+        }
         if (requestCode == STUDIO_PICTURE_REQUEST) {
             val cart = pendingStudioPictureUri
             pendingStudioPictureUri = null
@@ -3541,6 +3728,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        if (::lidCover.isInitialized) lidCover.onDestroy()
         getSystemService(InputManager::class.java)?.unregisterInputDeviceListener(controllerListener)
         releaseLinkMulticast()
         Choreographer.getInstance().removeFrameCallback(vsyncCallback)
@@ -3568,7 +3756,32 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    /** Paused by the Home Android sends for the RG Rotate's held middle
+     *  button, which slot. (the home app) answers itself: no suspend, the
+     *  eject carries on as smoothly as SELECT + START. */
+    private var homeHoldPause = false
+
     override fun onPause() {
+        if (RgRotate.device && rotateMiddleDown) {
+            homeHoldPause = true
+            Log.i(TAG, "Rotate: middle button Home; light pause")
+            super.onPause()
+            return
+        }
+        suspendForPause()
+        super.onPause()
+    }
+
+    override fun onStop() {
+        // Home really took slot. away: the suspend the light pause skipped.
+        if (homeHoldPause) {
+            homeHoldPause = false
+            suspendForPause()
+        }
+        super.onStop()
+    }
+
+    private fun suspendForPause() {
         resumed = false
         warmedCandidate.set(null)
         uiHandler.removeCallbacks(pulse)
@@ -3599,14 +3812,19 @@ class MainActivity : Activity() {
         // The final SRAM write above can enqueue a RetroArch/Sync export.
         drainPendingSaveFlush()
         nativeResetInput()
-        super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
+        if (homeHoldPause) {
+            homeHoldPause = false
+            if (::lidCover.isInitialized) lidCover.onResume()
+            wakeCarouselRender()
+            immersive()
+            return
+        }
         if (returnFromSlotChild) {
-            // Clear the preserved native menu ONLY after Apps/Studio has
-            // finished and the shelf itself is about to be visible again.
+            // Release the external-page guard, retaining the menu and its row.
             returnFromSlotChild = false
             nativeExternalReturn()
         }
@@ -3621,6 +3839,7 @@ class MainActivity : Activity() {
         uiHandler.removeCallbacks(pulse)
         uiHandler.post(pulse)
         if (::shelfStatus.isInitialized) shelfStatus.onResume()
+        if (::lidCover.isInitialized) lidCover.onResume()
         // Android's quick settings may return without a fresh onAvailable().
         // Waking a retry is safe even when no network is present.
         nativeRaNetworkAvailable()
@@ -3633,6 +3852,8 @@ class MainActivity : Activity() {
         lastStatusPoll = -15000L
         cartSounds.resume()
         view.onResume()
+        view.queueEvent { nativePresentationResume() }
+        wakeCarouselRender()
         updateDisplaySyncMode()
         immersive()
     }

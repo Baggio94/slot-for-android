@@ -147,7 +147,7 @@ pub(super) struct Studio {
     minis: Minis,
     stale: bool,
     /// Opened from the library page: B and A go back there.
-    from_library: bool,
+    pub(super) from_library: bool,
 }
 
 fn outlines(platform: Platform) -> Vec<(&'static str, Outline)> {
@@ -701,7 +701,7 @@ impl Engine {
         }
         let rows = studio.rows().len();
         match code {
-            19 | 20 => studio.row = move_menu_row(studio.row, code, rows),
+            19 | 20 => studio.row = move_menu_row(studio.row, code, rows, self.menu_repeat_dispatch),
             21 | 102 => studio.cycle(false),
             22 | 103 => studio.cycle(true),
             100 => {
@@ -997,7 +997,7 @@ impl Engine {
             let (dw, dh) = (layout.cart_w, layout.cart_h);
             let (x, y) = (left + (layout.cart_room - dw) / 2.0, layout.cart_y);
             cart_top = y;
-            out.push(Draw::Tex { x, y, w: dw, h: dh, tex, alpha: fade });
+            self.without_ink(out, |out| out.push(Draw::Tex { x, y, w: dw, h: dh, tex, alpha: fade }));
             below = y + dh + 12.0;
         }
         let centre = (left + right_edge) / 2.0;
@@ -1019,7 +1019,6 @@ impl Engine {
             return;
         }
         let (x0, x1) = (layout.x0, layout.x1);
-        let tint = |a: f32| { let mut c = edge(); c[3] *= a * fade; c };
         let hint_keys: Vec<(&str, &str)> = if studio.chart.is_some() {
             self.draw_chart(studio, x0, x1, fade, out);
             vec![("B", "BACK"), ("SWAP", "MOVE"), ("A", "CHOOSE")]
@@ -1029,10 +1028,8 @@ impl Engine {
             let rows = studio.rows();
             let lowest = STRIP_BOTTOM - FINISH_STRIP_H - rows.len() as f32 * QUICK_PITCH;
             let rows_top = (cart_top - 8.0).clamp(ROWS_TOP, lowest.max(ROWS_TOP));
-            out.push(Draw::Rect {
-                x: x0 - 8.0, y: rows_top + studio.row as f32 * QUICK_PITCH + 4.0, w: x1 - x0 + 16.0, h: QUICK_PITCH - 8.0,
-                colour: tint(1.0),
-            });
+            self.draw_menu_pill(x0 - 8.0, x1 + 8.0,
+                rows_top + studio.row as f32 * QUICK_PITCH + 4.0, fade, out);
             for (slot, &row) in rows.iter().enumerate() {
                 let y = rows_top + slot as f32 * QUICK_PITCH + 8.0;
                 let (value, lit) = studio.value(row);
@@ -1049,6 +1046,7 @@ impl Engine {
                     if carets {
                         let (lt, lw, lh) = self.setting_carets[0];
                         let (rt, rw, rh) = self.setting_carets[1];
+                        let y = self.caret_y(y, scale);
                         out.push(Draw::Tex { x: x - lw as f32 - 8.0, y, w: lw as f32, h: lh as f32, tex: lt, alpha: fade });
                         out.push(Draw::Tex { x: x1 - rw as f32, y, w: rw as f32, h: rh as f32, tex: rt, alpha: fade });
                     }
@@ -1073,7 +1071,7 @@ impl Engine {
             vec![("B", "BACK"), ("Y", "RESET"), ("SWAP", "CHANGE"), a]
         };
         // The legend, under its own band.
-        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: opening() });
+        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: menu_ground() });
         let hints_of = |keys: &[(&'static str, &'static str)]| -> Vec<(slot_gfx::TexId, u32)> {
             keys.iter().filter_map(|key| self.controls_hint_faces.get(key).copied()).collect()
         };
@@ -1092,11 +1090,8 @@ impl Engine {
 
     /// A page's title, top left like every menu page's (Siham 2026-11-08).
     pub(super) fn draw_page_title(&self, out: &mut Vec<Draw>, title: &str, fade: f32) {
-        if let Some((tex, w, h)) = self.controls_faces.get(&Self::face_key(title, true)).copied() {
-            let width = out_w() as f32;
-            let scale = 0.79f32.min((width - 70.0) / w.max(1) as f32);
-            out.push(Draw::Tex { x: 32.0, y: 33.0, w: w as f32 * scale, h: h as f32 * scale, tex, alpha: 0.68 * fade });
-        }
+        let title = self.controls_faces.get(&Self::face_key(title, true)).copied();
+        self.draw_menu_header(self.studio_page_path(), title, fade, out);
     }
 
     /// A mini cart centred in its box.
@@ -1105,10 +1100,10 @@ impl Engine {
             Some((tex, w, h)) => {
                 let s = (bw / w as f32).min(bh / h as f32);
                 let (dw, dh) = (w as f32 * s, h as f32 * s);
-                out.push(Draw::Tex { x: bx + (bw - dw) / 2.0, y: by + (bh - dh) / 2.0, w: dw, h: dh, tex, alpha });
+                self.without_ink(out, |out| out.push(Draw::Tex { x: bx + (bw - dw) / 2.0, y: by + (bh - dh) / 2.0, w: dw, h: dh, tex, alpha }));
             }
             None => {
-                let mut c = edge();
+                let mut c = menu_style::highlight();
                 c[3] *= 0.4 * alpha;
                 out.push(Draw::Rect { x: bx + bw * 0.2, y: by + bh * 0.15, w: bw * 0.6, h: bh * 0.7, colour: c });
             }
@@ -1123,7 +1118,7 @@ impl Engine {
         let g = chart_grid(x0, x1, studio.fun_start, fun);
         let system_rows = studio.fun_start.div_ceil(g.cols);
         out.push(Draw::Rect { x: x0 - 10.0, y: 70.0, w: x1 - x0 + 20.0, h: STRIP_BOTTOM - 62.0,
-            colour: { let mut c = edge(); c[3] *= 0.35 * fade; c } });
+            colour: { let mut c = menu_style::highlight(); c[3] *= 0.35 * fade; c } });
         let small = |out: &mut Vec<Draw>, text: &str, lit: bool, x: f32, y: f32, right: bool| {
             if let Some((tex, w, h)) = face(text, lit) {
                 let s = 0.44f32.min((x1 - x0) / 2.0 / w.max(1) as f32);
@@ -1140,7 +1135,7 @@ impl Engine {
             let (cx, cy) = g.cell(section, row, col, system_rows);
             if i == studio.colour {
                 out.push(Draw::Rect { x: cx + 1.0, y: cy, w: g.cell_w - 2.0, h: g.cell_h - 2.0,
-                    colour: { let mut c = edge(); c[3] *= fade; c } });
+                    colour: { let mut c = menu_style::highlight(); c[3] *= fade; c } });
             }
             self.draw_mini(studio, i, cx + 4.0, cy + 3.0, g.cell_w - 8.0, g.cell_h - 8.0, fade, out);
         }
@@ -1169,7 +1164,7 @@ impl Engine {
             let cx = x0 + i as f32 * cell;
             if i == studio.finish {
                 out.push(Draw::Rect { x: cx + 1.0, y: top, w: cell - 2.0, h: STRIP_BOTTOM - top,
-                    colour: { let mut c = edge(); c[3] *= 0.8 * fade; c } });
+                    colour: { let mut c = menu_style::highlight(); c[3] *= 0.8 * fade; c } });
             }
             self.draw_mini(studio, i, cx + 4.0, top + 3.0, cell - 8.0, box_h, fade, out);
             if let Some((tex, w, h)) = face(FINISHES[i], i == studio.finish) {
@@ -1188,7 +1183,7 @@ impl Engine {
         let (x0, x1) = (split + 4.0, width - 18.0);
         let col = x1 - x0;
         // The query.
-        out.push(Draw::Rect { x: x0 - 6.0, y: 78.0, w: col + 12.0, h: 36.0, colour: { let mut c = edge(); c[3] *= 0.6 * fade; c } });
+        out.push(Draw::Rect { x: x0 - 6.0, y: 78.0, w: col + 12.0, h: 36.0, colour: { let mut c = menu_style::highlight(); c[3] *= 0.6 * fade; c } });
         let query = if search.query.is_empty() { "Type a name".to_owned() } else { search.query.clone() };
         if let Some((tex, w, h)) = face(&query, !search.query.is_empty()) {
             let scale = 0.56f32.min((col - 8.0) / w.max(1) as f32);
@@ -1206,7 +1201,7 @@ impl Engine {
             let y = 122.0 + slot as f32 * 34.0;
             if search.on_results && first + slot == search.result {
                 out.push(Draw::Rect { x: x0 - 6.0, y: y - 2.0, w: col + 12.0, h: 32.0,
-                    colour: { let mut c = edge(); c[3] *= fade; c } });
+                    colour: { let mut c = menu_style::highlight(); c[3] *= fade; c } });
             }
             let n = &search.names[i];
             if let Some((tex, w, h)) = face(&format!("{} · {}", n.name, n.platform), true) {
@@ -1221,7 +1216,7 @@ impl Engine {
             let (cx, cy) = (x0 + (k % 10) as f32 * key_w, 270.0 + (k / 10) as f32 * (key_h + 4.0));
             let chosen = !search.on_results && k == search.key;
             out.push(Draw::Rect { x: cx + 1.0, y: cy, w: key_w - 2.0, h: key_h,
-                colour: { let mut c = edge(); c[3] *= if chosen { fade } else { 0.35 * fade }; c } });
+                colour: { let mut c = menu_style::highlight(); c[3] *= if chosen { fade } else { 0.35 * fade }; c } });
             if let Some((tex, w, h)) = face(&key_face(*key), true) {
                 let scale = 0.42f32.min((key_w - 4.0) / w.max(1) as f32);
                 let (dw, dh) = (w as f32 * scale, h as f32 * scale);
@@ -1229,9 +1224,9 @@ impl Engine {
                     alpha: if chosen { fade } else { 0.7 * fade } });
             }
         }
-        out.push(Draw::Rect { x: 0.0, y: 26.0, w: width, h: 40.0, colour: opening() });
+        out.push(Draw::Rect { x: 0.0, y: 26.0, w: width, h: 40.0, colour: menu_ground() });
         self.draw_page_title(out, "SEARCH GAME", fade);
-        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: opening() });
+        out.push(Draw::Rect { x: 0.0, y: 420.0, w: width, h: 60.0, colour: menu_ground() });
         let keys = [("B", "BACK"), ("X", "DELETE"),
             if search.on_results { ("R1", "KEYS") } else { ("R1", "RESULTS") },
             if search.on_results { ("A", "USE") } else { ("A", "TYPE") }];

@@ -3,8 +3,9 @@
 //! for the game and applied again at its next start (crate::cheats).
 use super::*;
 
-/// The longest cheat name shown whole; longer ones end in "…".
-const NAME_CHARS: usize = 44;
+/// The longest cheat name shown whole (it scrolls through its row);
+/// longer ones end in "…".
+const NAME_CHARS: usize = 72;
 
 /// One row of the Cheats page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +69,8 @@ impl Engine {
         let ShelfOverlay::Cheats { row } = self.overlay else { return };
         let rows = self.cheat_rows();
         match code {
-            19 | 20 => self.overlay = ShelfOverlay::Cheats { row: move_menu_row(row, code, rows.len()) },
+            // L2 / R2 page through the cheats: L1 / R1 switch files here.
+            19 | 20 | 104 | 105 => self.overlay = ShelfOverlay::Cheats { row: move_menu_row(row, match code { 104 => 102, 105 => 103, c => c }, rows.len(), self.menu_repeat_dispatch) },
             // L1 / R1: the game's other cheat file (Codes, Game Genie...),
             // from its first cheat.
             102 | 103 if self.cheat_sources.len() > 1 => {
@@ -109,14 +111,14 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::short_name;
+    use super::{short_name, NAME_CHARS};
 
     #[test]
     fn long_names_end_in_an_ellipsis() {
         assert_eq!(short_name("Infinite Lives"), "Infinite Lives");
-        let long = "Have All Items In The Inventory Except The Ones You Need";
+        let long = "Have All Items In The Inventory Except The Ones You Need To Finish The Game Early";
         let short = short_name(long);
         assert!(short.ends_with('…'));
-        assert!(short.chars().count() <= 44);
+        assert!(short.chars().count() <= NAME_CHARS);
     }
 }

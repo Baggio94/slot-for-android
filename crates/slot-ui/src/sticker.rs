@@ -7,7 +7,6 @@ use crate::plate::UndoFace;
 use crate::text;
 
 const STICKER_SVG: &str = include_str!("../assets/sticker.svg");
-const STICKER_KONKR_SVG: &str = include_str!("../assets/sticker-konkr.svg");
 
 const WORDMARK_SVG: &str = include_str!("../assets/wordmark.svg");
 // Scalable artwork traced from the KONKR and Pocket Advance branding
@@ -226,7 +225,7 @@ impl Canvas {
 }
 
 pub fn sticker_face(f: &StickerFields) -> UndoFace {
-    sticker_face_custom(f, &CREDITS, &ORIGIN, COPYRIGHT, HOME, "MODEL NO. AGS-102", Lower::Original)
+    sticker_face_custom(f, &CREDITS, &ORIGIN, COPYRIGHT, HOME, "MODEL NO. AGS-102", Lower::Original, STICKER_W)
 }
 
 /// Credits shared by the KONKR and every other Android handheld, after the
@@ -263,7 +262,7 @@ pub fn sticker_face_konkr(f: &StickerFields) -> UndoFace {
         f, &all, &["S/LOT-KONKR", ""],
         "2026 SLOT. COMMUNITY",
         option_env!("SLOT_KONKR_VERSION").unwrap_or("DEV BUILD"),
-        "MODEL NO. KONKR ADV", Lower::Konkr,
+        "MODEL NO. KONKR ADV", Lower::Konkr, STICKER_W,
     )
 }
 
@@ -272,6 +271,18 @@ pub fn sticker_face_konkr(f: &StickerFields) -> UndoFace {
 /// `name` is what the device calls itself ("RETROID POCKET CLASSIC"),
 /// `model` its Android model ("Retroid Pocket Classic").
 pub fn sticker_face_handheld(f: &StickerFields, name: &str, model: &str) -> UndoFace {
+    sticker_face_handheld_w(f, name, model, STICKER_W)
+}
+
+/// The narrowest label: the credits column and a barcode panel still wide
+/// enough for the serial.
+pub const STICKER_MIN_W: u32 = 440;
+
+/// sticker_face_handheld `w` wide (STICKER_MIN_W..=STICKER_W), for a screen
+/// narrower than the KONKR's: printed at full size rather than shrunk, the
+/// barcode panel narrower, slot.'s wordmark beside the name (the RG Rotate,
+/// Siham 2026-11-15).
+pub fn sticker_face_handheld_w(f: &StickerFields, name: &str, model: &str, w: u32) -> UndoFace {
     let mut all = [""; 10];
     all[..2].copy_from_slice(&["SLOT. FOR ANDROID", "HANDHELDS. ORIGINAL SLOT."]);
     all[2..].copy_from_slice(&PORT_CREDITS_TAIL);
@@ -282,6 +293,7 @@ pub fn sticker_face_handheld(f: &StickerFields, name: &str, model: &str) -> Undo
         "2026 SLOT. COMMUNITY",
         option_env!("SLOT_KONKR_VERSION").unwrap_or("DEV BUILD"),
         &model, Lower::Handheld(if name.is_empty() { "ANDROID HANDHELD" } else { name.as_str() }),
+        w.clamp(STICKER_MIN_W, STICKER_W),
     )
 }
 
@@ -310,15 +322,25 @@ fn measure(s: &str, px: f32) -> f32 {
 
 fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
                        origin: &[&str; 2], copyright: &str,
-                       home: &str, model: &str, mark: Lower) -> UndoFace {
-    let mut c = Canvas::shape(
-        if matches!(mark, Lower::Original) { STICKER_SVG } else { STICKER_KONKR_SVG },
-        STICKER_W, STICKER_H
-    );
+                       home: &str, model: &str, mark: Lower, width: u32) -> UndoFace {
     let panel_x = (PANEL_FX * STICKER_W as f32).round() as u32;
     let panel_y = (PANEL_FY * STICKER_H as f32).round() as u32;
-    let panel_w = (PANEL_FW * STICKER_W as f32).round() as u32;
+    // The panel's right margin stays; a narrower label narrows the panel.
+    let right_margin = STICKER_W - panel_x - (PANEL_FW * STICKER_W as f32).round() as u32;
+    let panel_w = width - panel_x - right_margin;
     let panel_h = (PANEL_FH * STICKER_H as f32).round() as u32;
+    let mut c = if matches!(mark, Lower::Original) {
+        Canvas::shape(STICKER_SVG, STICKER_W, STICKER_H)
+    } else {
+        // A plain rounded rectangle: the original's socket notch showed
+        // the ground through it (Siham 2026-11-15).
+        let svg = format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {h}"><rect x="0.4" y="0.4" width="{bw}" height="{bh}" rx="11.8" fill="#231f20"/><rect x="{px}" y="{py}" width="{panel_w}" height="{panel_h}" rx="8.5" fill="#ffffff"/></svg>"##,
+            h = STICKER_H, bw = width as f32 - 0.8, bh = STICKER_H as f32 - 0.8,
+            px = panel_x, py = panel_y,
+        );
+        Canvas::shape(&svg, width, STICKER_H)
+    };
 
     let left = MARGIN;
     let mut y = MARGIN;
@@ -393,7 +415,30 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
 
     let mut ry = panel_y as f32 + panel_h as f32 + 10.0;
     let right_edge = (panel_x + panel_w) as f32;
-    if let Lower::Handheld(name) = mark {
+    if let (Lower::Handheld(name), true) = (mark, width < 600) {
+        // A narrow label: slot.'s wordmark left of the name on one line,
+        // then the copyright and version.
+        ry = panel_y as f32 + panel_h as f32 + 5.0;
+        let room = panel_w as f32 - 14.0;
+        let mark = vector_mark(SLOT_WORDMARK_SVG, 86);
+        let (mw, mh) = mark.as_ref().map_or((0.0, 0.0), |m| (m.1 .0 as f32, m.1 .1 as f32));
+        let gap = if mark.is_some() { 12.0 } else { 0.0 };
+        let mut px = 22.0;
+        while px > 8.0 && mw + gap + c.print_measure(name, px) > room { px -= 0.5; }
+        let nw = c.print_measure(name, px);
+        let line_h = mh.max(px * 1.6);
+        if let Some((logo, _, (tw, th))) = mark {
+            c.blit((right_edge - 14.0 - nw - gap - mw) as u32, (ry + (line_h - mh) / 2.0) as u32, &logo, tw, th);
+        }
+        // The name's capitals centred on the wordmark's height.
+        c.print(right_edge - nw - 14.0, ry + line_h / 2.0 - px * 0.82, name, px, WHITE);
+        ry += line_h + 4.0;
+        for line in [copyright, home] {
+            let px = SMALL_PX * 0.88;
+            let lw = c.print_measure(line, px);
+            ry = c.print(right_edge - lw - 14.0, ry, line, px, WHITE);
+        }
+    } else if let Lower::Handheld(name) = mark {
         // The KONKR layout's four rows: slot.'s wordmark where the KONKR
         // logo is, the device's name where POCKET ADVANCE is, sized to its
         // width, then the copyright and version.
@@ -454,7 +499,7 @@ fn sticker_face_custom(f: &StickerFields, credits: &[&str; 10],
 
     UndoFace {
         rgba: c.px,
-        w: STICKER_W,
+        w: width,
         h: STICKER_H,
     }
 }

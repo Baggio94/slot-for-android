@@ -81,6 +81,17 @@ pub fn hint_width(key: &str, label: &str) -> u32 {
     cap_width(key) + CAP_GAP + band_width(label) + EDGE
 }
 
+/// Between a legend's keycap and its word, in logical pixels: Android
+/// inks the word alone from there (export_apps_legend).
+pub fn hint_label_x(key: &str) -> u32 {
+    cap_width(key) + CAP_GAP / 2
+}
+
+/// As hint_label_x, for the arrows legend.
+pub fn arrows_label_x() -> u32 {
+    arrows_w() + CAP_GAP / 2
+}
+
 pub fn hint_face(key: &str, label: &str) -> UndoFace {
     hint_face_ink(key, label, INK)
 }
@@ -183,6 +194,18 @@ pub fn word_ink(text: &str, ink: [u8; 3]) -> UndoFace {
     let mut face = Canvas::new(word_width(text), HINT_H);
     if let Some(font) = text::label_font() {
         let layout = text::fit(font, text, face.w as f32, 1, LABEL_PX, LABEL_MIN_PX);
+        face.text(&layout, ink);
+    }
+    face.into_undo()
+}
+
+/// `word_ink` drawn `k` times finer, for the same logical size: the closed
+/// RG Rotate grows its clock and battery without blurring them.
+pub fn word_ink_scaled(text: &str, ink: [u8; 3], k: u32) -> UndoFace {
+    let k = k.max(1);
+    let mut face = Canvas::new(word_width(text) * k, HINT_H * k);
+    if let Some(font) = text::label_font() {
+        let layout = text::fit(font, text, face.w as f32, 1, LABEL_PX * k as f32, LABEL_MIN_PX * k as f32);
         face.text(&layout, ink);
     }
     face.into_undo()

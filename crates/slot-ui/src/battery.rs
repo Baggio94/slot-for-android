@@ -18,6 +18,9 @@ const GAP: f32 = 7.0;
 const BOLT_W: f32 = 14.0;
 const BOLT_H: f32 = 14.0;
 const BOLT_GAP: f32 = 5.0;
+/// The bolt to its percent: with it, the ink gaps gauge-bolt and
+/// bolt-percent are the same (10 px each on the RG Rotate, Siham 2026-11-14).
+const BOLT_TEXT_GAP: f32 = 3.0;
 const _: () = assert!(BOLT_GAP > 0.0);
 
 const INK: [f32; 4] = [
@@ -110,8 +113,8 @@ pub fn draw_gauge_with_ink(
 /// charging, so on battery the gauge sits right next to its percent.
 pub fn status_gauge_width(battery: Option<Battery>, percent: Printed) -> f32 {
     let Some(b) = battery else { return 0.0 };
-    let bolt = if b.charge == Charge::Charging { BOLT_GAP + BOLT_W } else { 0.0 };
-    GAUGE_W + NUB_W + bolt + GAP + percent.w as f32
+    let after = if b.charge == Charge::Charging { BOLT_GAP + BOLT_W + BOLT_TEXT_GAP } else { GAP };
+    GAUGE_W + NUB_W + after + percent.w as f32
 }
 
 /// The Status Bar's battery like a phone's (Siham 2026-11-09): gauge, then
@@ -141,7 +144,7 @@ pub fn draw_status_gauge(
         if let Some(tex) = bolt {
             out.push(Draw::Tex { x: bx, y: y + (GAUGE_H - BOLT_H) / 2.0, w: BOLT_W, h: BOLT_H, tex, alpha: 1.0 });
         }
-        px = bx + BOLT_W + GAP;
+        px = bx + BOLT_W + BOLT_TEXT_GAP;
     }
     if percent.w > 0 {
         let py = y + (GAUGE_H - HINT_H as f32) / 2.0;
@@ -160,10 +163,10 @@ mod status_tests {
 
     #[test]
     fn status_gauge_ends_at_right_and_bolt_only_when_charging() {
-        for (charge, bolt_room) in [(Charge::Charging, BOLT_GAP + BOLT_W), (Charge::Discharging, 0.0)] {
+        for (charge, after) in [(Charge::Charging, BOLT_GAP + BOLT_W + BOLT_TEXT_GAP), (Charge::Discharging, GAP)] {
             let b = Some(Battery { percent: 78, charge });
             let w = status_gauge_width(b, printed(30));
-            assert!((w - (GAUGE_W + NUB_W + bolt_room + GAP + 30.0)).abs() < 0.01);
+            assert!((w - (GAUGE_W + NUB_W + after + 30.0)).abs() < 0.01);
             let mut out = Vec::new();
             draw_status_gauge(600.0, 10.0, b, printed(30), Some(TexId::from_raw(7)), INK, &mut out);
             let ends = out.iter().map(|d| match d {

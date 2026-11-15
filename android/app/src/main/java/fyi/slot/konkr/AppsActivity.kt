@@ -44,6 +44,8 @@ class AppsActivity : Activity() {
 
     companion object {
         private const val TAG = "SlotApps"
+        private const val REPEAT_AFTER_MS = 350L
+        private const val REPEAT_EVERY_MS = 110L
         /** Five columns on the KONKR's 3:2 screen, as many per width elsewhere. */
         private fun columnsFor(context: Context): Int {
             val bounds = context.getSystemService(android.view.WindowManager::class.java)
@@ -106,12 +108,12 @@ class AppsActivity : Activity() {
     }
     private fun text(label: String, size: Float, bright: Boolean = true) =
         slotSize(SlotUi.label(this, label, size,
-            if (bright) SlotUi.ink else SlotUi.muted, upper = false), size.toInt())
+            if (bright) SlotUi.menuInk else SlotUi.menuMuted, upper = false), size.toInt())
 
     private fun plate(color: Int, selected: Boolean = false) = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = dp(4).toFloat()
-        if (selected) setStroke(dp(2), SlotUi.ink)
+        cornerRadius = SlotUi.menuPixel(this@AppsActivity, 11).toFloat()
+        if (selected) setStroke(dp(2), SlotUi.menuInk)
     }
 
     private fun loadApps(): List<Entry> {
@@ -146,7 +148,7 @@ class AppsActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(SlotUi.menuBackground)
             setPadding(SlotUi.menuPixel(this@AppsActivity, 32),
-                SlotUi.menuPixel(this@AppsActivity, 33),
+                SlotUi.menuPixel(this@AppsActivity, 20),
                 SlotUi.menuPixel(this@AppsActivity, 32), dp(4))
             isFocusableInTouchMode = true
         }
@@ -156,9 +158,9 @@ class AppsActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        header.addView(SlotUi.menuHeading(this, "APPS"),
-            LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 32), 1f))
-        homeButton = slotSize(SlotUi.label(this, "Set as Home", 13f), 13).apply {
+        header.addView(SlotUi.menuHeader(this, "APPS"),
+            LinearLayout.LayoutParams(0, SlotUi.menuPixel(this, 50), 1f))
+        homeButton = slotSize(SlotUi.label(this, "Set as Home", 13f, SlotUi.menuInk), 13).apply {
             gravity = Gravity.CENTER
             isSingleLine = true
             // Pixel units from the same 720x480 Slot canvas as the button's
@@ -243,7 +245,7 @@ class AppsActivity : Activity() {
                 root.contentDescription = entry.label
                 val selected = !homeSelected && position == selectedIndex
                 root.background = plate(
-                    if (selected) Color.rgb(68, 66, 77) else Color.rgb(37, 36, 43),
+                    SlotUi.appTile(selected),
                     selected
                 )
                 return root
@@ -348,7 +350,7 @@ class AppsActivity : Activity() {
         fun hint(asset: String): ImageView {
             val bitmap = faces.getValue(asset)
             return ImageView(this).apply {
-                setImageBitmap(bitmap)
+                setImageBitmap(SlotUi.inkedLegend(this@AppsActivity, "$asset.png", bitmap))
                 scaleType = ImageView.ScaleType.FIT_XY
                 contentDescription = when (asset) {
                     "move" -> "Left and right arrows: Move"
@@ -384,7 +386,7 @@ class AppsActivity : Activity() {
         val tile = grid.getChildAt(position - grid.firstVisiblePosition) ?: return
         val selected = !homeSelected && position == selectedIndex
         tile.background = plate(
-            if (selected) Color.rgb(68, 66, 77) else Color.rgb(37, 36, 43),
+            SlotUi.appTile(selected),
             selected
         )
     }
@@ -392,7 +394,7 @@ class AppsActivity : Activity() {
     private fun updateSelection(oldIndex: Int?, oldHome: Boolean) {
         if (homeSelected != oldHome || oldIndex == null) {
             homeButton.background = plate(
-                if (homeSelected) Color.rgb(89, 87, 102) else Color.rgb(56, 55, 64),
+                SlotUi.appTile(homeSelected, home = true),
                 homeSelected
             )
         }
@@ -505,13 +507,49 @@ class AppsActivity : Activity() {
         SlotTransitions.close(this)
     }
 
+    /** slot.'s own repeat, as in its menus: one step a press, then steady
+     *  steps while held. Android's own repeat ran on by itself on the RG
+     *  Rotate (Siham 2026-11-15). */
+    private val repeatHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var heldKey = 0
+    private val repeatStep = object : Runnable {
+        override fun run() {
+            if (heldKey == 0) return
+            navigate(heldKey)
+            repeatHandler.postDelayed(this, REPEAT_EVERY_MS)
+        }
+    }
+
+    private fun stopRepeat() {
+        heldKey = 0
+        repeatHandler.removeCallbacks(repeatStep)
+    }
+
+    override fun onPause() {
+        stopRepeat()
+        super.onPause()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) stopRepeat()
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Only physical controller codes in the production application.
         val mapped = event.keyCode
         when (mapped) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (event.action == KeyEvent.ACTION_DOWN) navigate(mapped)
+                when (event.action) {
+                    KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) {
+                        stopRepeat()
+                        navigate(mapped)
+                        heldKey = mapped
+                        repeatHandler.postDelayed(repeatStep, REPEAT_AFTER_MS)
+                    }
+                    KeyEvent.ACTION_UP -> if (mapped == heldKey) stopRepeat()
+                }
                 return true
             }
             KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER,

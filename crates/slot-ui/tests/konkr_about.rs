@@ -30,3 +30,19 @@ fn other_handhelds_get_their_own_name_on_the_same_label() {
     let unnamed = sticker_face_handheld(&fields, "", "");
     assert!(unnamed.rgba.chunks_exact(4).any(|p| p[3] > 0));
 }
+
+#[test]
+fn a_narrow_screen_gets_a_narrower_label_at_full_size() {
+    use slot_ui::{sticker_face_handheld_w, STICKER_MIN_W};
+    let fields = StickerFields { battery: Some(76), serial: "0000130", dirty_digit: '0' };
+    let rotate = sticker_face_handheld_w(&fields, "RG ROTATE", "RG Rotate", 456);
+    assert_eq!((rotate.w, rotate.h), (456, STICKER_H));
+    assert_eq!(rotate.rgba.len(), (456 * STICKER_H * 4) as usize);
+    // A plain rectangle: its bottom row is printed all along (no notch).
+    let w = rotate.w as usize;
+    let bottom = (STICKER_H as usize - 3) * w;
+    assert!((20..w - 20).all(|x| rotate.rgba[(bottom + x) * 4 + 3] > 200));
+    // Never narrower than the credits and the serial need.
+    assert_eq!(sticker_face_handheld_w(&fields, "X", "X", 100).w, STICKER_MIN_W);
+    assert_eq!(sticker_face_handheld_w(&fields, "X", "X", 900).w, STICKER_W);
+}

@@ -42,6 +42,33 @@ pub enum Draw {
     Shot {
         tex: TexId,
     },
+    /// From here on, textures' light ink is redrawn from `paper` (its
+    /// darkest) to `ink` (its brightest); None draws them as they are.
+    /// Rects are never changed. Each draw_list starts with None.
+    Ink(Option<InkMap>),
+    /// From here on, sprites show only between `left` and `right` (canvas
+    /// x), fading out over `feather` units at each edge; None shows them
+    /// whole. Each draw_list starts with None.
+    Span(Option<Span>),
+}
+
+/// Draw::Span's window: a long value scrolling in its row, cut softly.
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub struct Span {
+    pub left: f32,
+    pub right: f32,
+    pub feather_left: f32,
+    pub feather_right: f32,
+}
+
+// Inside mediump range (the fragment shader's), well past any canvas.
+const SPAN_ALL: [f32; 4] = [-30_000.0, 30_000.0, 1.0, 1.0];
+
+/// Draw::Ink's colours, straight RGB in 0..1.
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub struct InkMap {
+    pub paper: [f32; 3],
+    pub ink: [f32; 3],
 }
 
 #[derive(Clone)]
@@ -63,6 +90,14 @@ pub struct Sprites {
     u_rect: gl::types::GLint,
     u_colour: gl::types::GLint,
     u_turn: gl::types::GLint,
+    u_map: gl::types::GLint,
+    u_paper: gl::types::GLint,
+    u_ink: gl::types::GLint,
+    u_span: gl::types::GLint,
+    /// The Draw::Ink in force, kept across a list split by Game draws.
+    ink: std::cell::Cell<Option<InkMap>>,
+    /// The Draw::Span in force, the same way.
+    span: std::cell::Cell<Option<Span>>,
 }
 
 impl Sprites {
@@ -107,7 +142,7 @@ impl Sprites {
             gl::RGBA,
             Some(&[255u8; 4]),
         );
-        let (u_rect, u_colour, u_turn);
+        let (u_rect, u_colour, u_turn, u_map, u_paper, u_ink, u_span);
         unsafe {
             gl::UseProgram(prog);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_tex"), 0);
@@ -119,6 +154,12 @@ impl Sprites {
             u_rect = crate::gl::uniform_location(prog, "u_rect");
             u_colour = crate::gl::uniform_location(prog, "u_colour");
             u_turn = crate::gl::uniform_location(prog, "u_turn");
+            u_map = crate::gl::uniform_location(prog, "u_map");
+            u_paper = crate::gl::uniform_location(prog, "u_paper");
+            u_ink = crate::gl::uniform_location(prog, "u_ink");
+            u_span = crate::gl::uniform_location(prog, "u_span");
+            gl::Uniform1f(u_map, 0.0);
+            gl::Uniform4f(u_span, SPAN_ALL[0], SPAN_ALL[1], SPAN_ALL[2], SPAN_ALL[3]);
         }
         Ok(Sprites {
             context_lost: false,
@@ -131,6 +172,12 @@ impl Sprites {
             u_rect,
             u_colour,
             u_turn,
+            u_map,
+            u_paper,
+            u_ink,
+            u_span,
+            ink: std::cell::Cell::new(None),
+            span: std::cell::Cell::new(None),
         })
     }
 
@@ -205,8 +252,25 @@ impl Sprites {
             gl::UseProgram(self.prog);
             gl::ActiveTexture(gl::TEXTURE0);
         }
+        self.set_span(self.span.get());
+        let mut mapped = false;
         for item in items {
             let (x, y, w, h, tex, colour, turn) = match *item {
+                Draw::Ink(map) => {
+                    self.ink.set(map);
+                    if let Some(map) = map {
+                        unsafe {
+                            gl::Uniform3f(self.u_paper, map.paper[0], map.paper[1], map.paper[2]);
+                            gl::Uniform3f(self.u_ink, map.ink[0], map.ink[1], map.ink[2]);
+                        }
+                    }
+                    continue;
+                }
+                Draw::Span(span) => {
+                    self.span.set(span);
+                    self.set_span(span);
+                    continue;
+                }
                 Draw::Rect { x, y, w, h, colour } => (x, y, w, h, self.white, colour, 0.0),
                 Draw::Tex {
                     x,
@@ -237,6 +301,12 @@ impl Sprites {
                 },
                 Draw::Game | Draw::Shot { .. } => continue,
             };
+            // Only textures take the ink; a Rect keeps its own colour.
+            let map = self.ink.get().is_some() && !matches!(item, Draw::Rect { .. });
+            if map != mapped {
+                mapped = map;
+                unsafe { gl::Uniform1f(self.u_map, if map { 1.0 } else { 0.0 }) };
+            }
             let (cos, sin) = if turn == 0.0 {
                 (1.0, 0.0)
             } else {
@@ -250,7 +320,26 @@ impl Sprites {
             }
             quad.draw();
         }
+        if mapped {
+            unsafe { gl::Uniform1f(self.u_map, 0.0) };
+        }
+        if self.span.get().is_some() {
+            self.set_span(None);
+        }
         unsafe { gl::Disable(gl::BLEND) };
+    }
+
+    fn set_span(&self, span: Option<Span>) {
+        let [l, r, fl, fr] = span.map_or(SPAN_ALL, |s| {
+            [s.left, s.right, s.feather_left.max(0.01), s.feather_right.max(0.01)]
+        });
+        unsafe { gl::Uniform4f(self.u_span, l, r, fl, fr) };
+    }
+
+    /// Every list starts with its textures drawn as they are.
+    pub(crate) fn reset_ink(&self) {
+        self.ink.set(None);
+        self.span.set(None);
     }
 }
 

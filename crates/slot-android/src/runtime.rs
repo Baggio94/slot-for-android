@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_void, CString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU8, AtomicU64, Ordering};
 use crate::game::GameSession;
 use crate::settings::Settings;
 use crate::emulation::EmulationProfile;
@@ -38,6 +38,7 @@ use slot_ui::{
     sticker_face_konkr, StickerFields, STICKER_W, STICKER_H, quick_caret_face,
     onboarding_instruction_face, onboarding_note_face,
 };
+use slot_ui::menu_style::{self, menu_ground, PILL_H, PILL_LEFT, PILL_R, PILL_RIGHT};
 
 /// Upload a Slot face at whatever density it was rendered at. Draws keep
 /// using the face's logical `w`/`h`; only the texel count differs.
@@ -133,6 +134,15 @@ enum Input {
     RommFilter(romm::RommFilter),
     /// Android deleted (or couldn't delete) a game's ROM file.
     GameDeleted(String, bool),
+    /// A slot. button released by the system rather than by the player
+    /// (RG Rotate): `held` is a long press Android took over (eject), else
+    /// the press is just forgotten, with no tap.
+    SlotButtonReleased { held: bool },
+    /// RG Rotate lid: closed (true) or opened (false).
+    /// Shut, and whether at once (no cover animation).
+    LidCover(bool, bool),
+    /// While closed with no game: the shelf moves on by one cart.
+    LidStep,
 }
 
 static INPUT: Mutex<VecDeque<Input>> = Mutex::new(VecDeque::new());
@@ -325,9 +335,11 @@ static LINK_SHARE_TEXT: Mutex<Option<String>> = Mutex::new(None);
 struct SystemStatus {
     clock: String,
     battery: Option<Battery>,
+    /// Today in Android's language ("Sat 14 Nov"), for the Rotate's clocks.
+    date: String,
 }
 static SYSTEM_STATUS: Mutex<SystemStatus> = Mutex::new(SystemStatus {
-    clock: String::new(), battery: None,
+    clock: String::new(), battery: None, date: String::new(),
 });
 // Android's existing status push owns the generation. The GL loop should not
 // clone a String, acquire SYSTEM_STATUS, or reformat the clock every frame.
@@ -479,8 +491,14 @@ enum ShelfOverlay {
     ScreenSystemSettings { platform: Platform, row: usize },
     GameplaySettings { row: usize },
     EmulationSettings { row: usize },
+    /// Settings > Interface > Status Bar.
     InterfaceSettings { row: usize },
+    /// Settings > Handheld: the RG Rotate's own page.
+    RotateSettings { row: usize },
+    /// Settings > Interface.
     GeneralSettings { row: usize },
+    /// Settings > Interface > Wallpaper: General's, or a shelf's own.
+    WallpaperSettings { row: usize },
     /// Settings > Controls, and its Port 1 / Port 2 pages.
     ControlsSettings { row: usize },
     ControlsPort { port: usize, row: usize },
@@ -509,7 +527,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 138] = [
+const MENU_TEXT: [&str; 149] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -648,6 +666,19 @@ const MENU_TEXT: [&str; 138] = [
     "RomM Server",                        // 135, Library, after Choose ROM Folder
     "Upscaler",                           // 136, GBA Video Screen (Siham 2026-11-10)
     "Sensitivity",                        // 137, tilt and gyro games (Siham 2026-11-12)
+    "RG Rotate",                          // 138, Interface, on that console only (Siham 2026-11-14)
+    "RG ROTATE",                          // 139
+    // 140-141: what the closed Rotate shows in a game and with none
+    // (renamed Siham 2026-11-15).
+    "Playing",                            // 140
+    "Standby",                            // 141
+    "Dim After",                          // 142
+    "Sleep After",                        // 143
+    "Sleep When Closed",                  // 144, the "Lock the screen" right
+    "Game Info",                          // 145, Playing's title / time (Siham 2026-11-15)
+    "Handheld",                           // 146, Settings: this console's own page (Siham 2026-11-14)
+    "HANDHELD \u{b7} RG ROTATE",            // 147
+    "WALLPAPER",                          // 148, Interface > Wallpaper
 ];
 
 /// Settings > Systems, top to bottom.
@@ -661,7 +692,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 120] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 143] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -691,7 +722,93 @@ const SETTING_VALUE_NAMES: [&str; 120] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Pixel Transparency", "Sunlight Shimmer",
                                "Dot Matrix Color",
                                "Bilinear", "FSR", "Anime4K Fast", "Anime4K",
-                               "MAX", "crt-royale"];
+                               "MAX", "crt-royale", "OLED",
+                               // 121: a shelf showing General's wallpaper.
+                               "GENERAL",
+                               // RG Rotate (ROTATE_VALUES on): keep these 21 last.
+                               "INSERTED CART", "FULL CART", "LAST FRAME",
+                               "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
+                               "5 S", "10 S", "15 S", "30 S", "1 MIN", "2 MIN", "5 MIN", "NEVER",
+                               "NEEDS SWIPE LOCK", "DIGITAL CLOCK", "ANALOG CLOCK",
+                               // 18-20: Game Info.
+                               "TITLE", "TIME", "ALL"];
+/// The first RG Rotate value in SETTING_VALUE_NAMES.
+const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
+/// Settings > Interface > RG Rotate: its rows and their keys (85, Sleep
+/// When Closed, is Android's "Lock the screen" right, not a setting).
+/// Game Info (84) right under Playing, which it shows on; Animations are
+/// always on (Siham 2026-11-15).
+const ROTATE_ROWS: [usize; 6] = [140, 145, 141, 142, 143, 144];
+const ROTATE_KEYS: [usize; 6] = [80, 84, 81, 82, 83, 85];
+/// A game runs with nothing over it (Android keeps the screen on).
+pub(crate) static GAME_UNPAUSED: AtomicBool = AtomicBool::new(false);
+/// Sleep When Closed (RG Rotate): 0 off, 1 on (slot. holds Android's "Lock
+/// the screen" right), 2 on but the Rotate has no lock screen to sleep under.
+pub(crate) static ROTATE_SLEEP_STATE: AtomicU8 = AtomicU8::new(0);
+/// RG Rotate's dim and sleep delays in s, packed dim << 16 | sleep, bit 30
+/// the black cover with no game, bit 31 animations on.
+pub(crate) static ROTATE_DELAYS: AtomicU32 = AtomicU32::new(15 << 16 | 60 | 1 << 31);
+
+/// An Anbernic RG Rotate (ro.product.model "RG Rotate", Siham's, 2026-11-14).
+fn rg_rotate() -> bool {
+    DEVICE_NAME.lock().unwrap_or_else(|e| e.into_inner()).1.contains("RG Rotate")
+}
+
+/// A near-square panel (the RG Rotate, the Retroid Pocket Classic): no room
+/// on the console bar for the clock, battery or icons, so they stay on top
+/// and Status Bar doesn't offer the bar (Siham 2026-11-14). 4:3 still does.
+fn near_square_panel() -> bool {
+    let packed = PANEL_SIZE.load(Ordering::Acquire);
+    let (w, h) = ((packed >> 32) as u32, packed as u32);
+    if w == 0 || h == 0 { return false; }
+    (w.max(h) as f32 / w.min(h) as f32) < 1.25
+}
+
+/// The RG Rotate's close and open animations, in s.
+const LID_ANIMATION_S: f32 = 0.45;
+
+/// A draw scaled `k` times about (`cx`, `cy`), moved down `dy`, faded.
+/// The closed Rotate's clocks, in canvas units (480 high). Faces are drawn
+/// LID_CLOCK_FINE times finer than the status bar's, so they stay sharp.
+const LID_CLOCK_FINE: u32 = 8;
+/// A console slot bar's middle (slot_ui::refit_band keeps 160 px either side
+/// of the centre), where its opening and housing sit.
+const HOME_SLOT_BAY_W: f32 = 320.0;
+/// Inserted Cart: the time's middle and size, above the seated cart.
+const LID_INSERTED_CLOCK_Y: f32 = 175.0;
+const LID_INSERTED_CLOCK_SCALE: f32 = 4.0;
+/// Digital Clock: the time's middle and size.
+const LID_DIGITAL_CLOCK_Y: f32 = 190.0;
+const LID_DIGITAL_CLOCK_SCALE: f32 = 5.0;
+/// Analog Clock: the dial's size and top.
+const LID_DIAL_SIZE: f32 = 290.0;
+const LID_DIAL_TOP: f32 = 52.0;
+const LID_DATE_SCALE: f32 = 1.5;
+const LID_BATTERY_SCALE: f32 = 1.4;
+
+fn lid_place(draw: Draw, cx: f32, cy: f32, k: f32, dy: f32, fade: f32) -> Draw {
+    let place = |x: f32, y: f32, w: f32, h: f32| (cx + (x - cx) * k, cy + (y - cy) * k + dy, w * k, h * k);
+    match draw {
+        Draw::Rect { x, y, w, h, colour } => {
+            let (x, y, w, h) = place(x, y, w, h);
+            Draw::Rect { x, y, w, h, colour: [colour[0], colour[1], colour[2], colour[3] * fade] }
+        }
+        Draw::Tex { x, y, w, h, tex, alpha } => {
+            let (x, y, w, h) = place(x, y, w, h);
+            Draw::Tex { x, y, w, h, tex, alpha: alpha * fade }
+        }
+        Draw::Turned { x, y, w, h, tex, alpha, turn } => {
+            let (x, y, w, h) = place(x, y, w, h);
+            Draw::Turned { x, y, w, h, tex, alpha: alpha * fade, turn }
+        }
+        other => other,
+    }
+}
+
+fn interface_rows() -> (&'static [usize], &'static [usize]) {
+    if near_square_panel() { (&INTERFACE_ROWS[2..], &INTERFACE_KEYS[2..]) }
+    else { (&INTERFACE_ROWS, &INTERFACE_KEYS) }
+}
 
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
@@ -760,6 +877,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             crate::settings::Appearance::Dark => 21,
             crate::settings::Appearance::Light => 22,
             crate::settings::Appearance::Original => 76,
+            crate::settings::Appearance::Oled => 120,
         },
         19 => if settings.show_recents {4}else{5},
         20 => if settings.show_titles {4}else{5},
@@ -803,6 +921,17 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             }
         }
         69 => if scoped.dither_blend_md { 4 } else { 5 },
+        80 => ROTATE_VALUES + usize::from(settings.rotate_game_cover.min(2)),
+        81 => match settings.rotate_shelf_cover {
+            4 => ROTATE_VALUES + 16, 5 => ROTATE_VALUES + 17,
+            n => ROTATE_VALUES + 3 + usize::from(n.min(3)) },
+        82 => ROTATE_VALUES + 7 + usize::from(settings.rotate_dim.min(3)),
+        83 => match settings.rotate_delays().1 { 30 => ROTATE_VALUES + 10, 60 => ROTATE_VALUES + 11,
+            120 => ROTATE_VALUES + 12, 300 => ROTATE_VALUES + 13, _ => ROTATE_VALUES + 14 },
+        // Game Info: Off, Title, Time, All.
+        84 => match settings.rotate_game_info { 0 => 5, n => ROTATE_VALUES + 17 + usize::from(n.min(3)) },
+        85 => match ROTATE_SLEEP_STATE.load(Ordering::Acquire) {
+            1 => 4, 2 => ROTATE_VALUES + 15, _ => 5 },
         70 => match scoped.upscaler_gbav {
             crate::settings::Upscaler::Off => 5,
             crate::settings::Upscaler::Bilinear => 114,
@@ -890,8 +1019,13 @@ const SUN_KEY: usize = 100;
 const MOTION_KEY: usize = 102;
 /// The longest a core picker waits for a clear cart's lid before opening.
 const PICKER_LID_WAIT_MS: u64 = 600;
-/// Interface > Shelf's value: a shelf name, no Settings key.
+/// Interface > Wallpaper > Shelf's value: GENERAL or a shelf name.
 const SHELF_PICK_KEY: usize = 101;
+/// "GENERAL" among the setting values: a shelf showing General's wallpaper.
+const GENERAL_VALUE: usize = 121;
+/// Interface > Wallpaper > Wallpaper's value: the edited shelf's own
+/// wallpaper (GENERAL when it shows General's), or General's.
+const WALLPAPER_PICK_KEY: usize = 103;
 
 /// Hand a motion game's sensitivity to the sensors; every other game
 /// reads them as they are.
@@ -924,8 +1058,24 @@ fn bezel_value(bezel: crate::settings::Bezel) -> usize {
 
 /// Gameplay page labels and the Settings keys they change, in row order.
 /// Settings: General, Systems, Controls, Gameplay, Emulation, Status Bar.
-// General, Systems, Gameplay, Emulation, Controls, Status Bar.
-const SETTINGS_ROWS: [usize; 6] = [81, 117, 33, 49, 125, 58];
+// Interface, Systems, Gameplay, Emulation, Controls, then Handheld on a
+// console with a page of its own (the RG Rotate). Status Bar is under
+// Interface (Siham 2026-11-14).
+const SETTINGS_ROWS: [usize; 6] = [81, 117, 33, 49, 125, 146];
+fn settings_rows() -> &'static [usize] {
+    if rg_rotate() { &SETTINGS_ROWS } else { &SETTINGS_ROWS[..5] }
+}
+
+/// Settings > Interface: Theme, Wallpaper (its page), Recents, Game Titles,
+/// Status Bar (its page).
+const INTERFACE_PAGE_ROWS: [usize; 5] = [85, 83, 86, 87, 58];
+const INTERFACE_PAGE_KEYS: [usize; 5] = [18, usize::MAX, 19, 20, usize::MAX];
+const INTERFACE_WALLPAPER_ROW: usize = 1;
+const INTERFACE_STATUS_ROW: usize = 4;
+/// Settings > Interface > Wallpaper: Shelf (General or a shelf), its
+/// Wallpaper, Wallpaper Tint (for every image), Import, Delete.
+const WALLPAPER_ROWS: [usize; 5] = [133, 83, 84, 43, 45];
+const WALLPAPER_KEYS: [usize; 5] = [SHELF_PICK_KEY, WALLPAPER_PICK_KEY, 17, usize::MAX, usize::MAX];
 
 /// Library: ROM folder, RomM, BIOS, Save and State folders, Share Saves,
 /// Refresh. Seven rows: the page scrolls, six shown (Siham 2026-11-09).
@@ -1034,6 +1184,11 @@ struct Engine {
     controls_faces: std::collections::HashMap<String, (slot_gfx::TexId, u32, u32)>,
     controls_spare_faces: Vec<slot_gfx::TexId>,
     controls_hint_faces: std::collections::HashMap<(&'static str, &'static str), (slot_gfx::TexId, u32)>,
+    /// Each legend's twin for Light and Original: the keycap as drawn, the
+    /// word in the page's ink (menu_look::theme_hints).
+    ink_hints: Vec<menu_look::InkHint>,
+    /// The ink those twins are written in (None: the white of Dark).
+    hint_ink: Option<[u8; 3]>,
     controls_view: controls_ui::ControlsView,
     /// Game menu > Cheats: the game's cheat files, and the one shown.
     cheat_sources: Vec<crate::cheats::Source>,
@@ -1128,11 +1283,18 @@ struct Engine {
     shelf_wallpaper_texs: Vec<Option<slot_gfx::TexId>>,
     shelf_wallpaper_ready: Vec<bool>,
     shelf_wallpaper_luma: Vec<Option<f32>>,
-    shelf_wallpaper_rx: Option<std::sync::mpsc::Receiver<(usize, Vec<u8>, f32)>>,
+    /// A shelf's own wallpaper is an image (Wallpaper Tint darkens it).
+    shelf_wallpaper_personal: Vec<bool>,
+    shelf_wallpaper_rx: Option<std::sync::mpsc::Receiver<(usize, Vec<u8>, f32, bool)>>,
     wallpaper_name_face: Option<(slot_gfx::TexId, u32, u32)>,
-    /// Interface > Shelf: the shelf (SHELF_KEYS) whose wallpaper Import and
-    /// Delete act on while the Shelf wallpaper is picked, and its names.
-    wallpaper_shelf: usize,
+    /// Interface > Wallpaper > Shelf: None for General, else the shelf
+    /// (SHELF_KEYS) whose own wallpaper the page shows and changes.
+    wallpaper_edit: Option<usize>,
+    /// The shelf an Import Wallpaper writes Wallpapers/<shelf>.png for,
+    /// until the reload after it makes that the shelf's wallpaper.
+    wallpaper_import: Option<usize>,
+    /// The edited shelf's image name, as Wallpaper's value.
+    wallpaper_edit_face: Option<(slot_gfx::TexId, u32, u32)>,
     shelf_name_faces: Vec<(slot_gfx::TexId, u32, u32)>,
     /// Live rear/front v1.7.0 slot textures. Always draw in proper depth order.
     slot_faces: Option<(slot_gfx::TexId, slot_gfx::TexId)>,
@@ -1168,9 +1330,14 @@ struct Engine {
     // The live Palette row shows the palette's own name, one face per palette.
     palette_values: Vec<(slot_gfx::TexId, u32, u32)>,
     setting_carets: [(slot_gfx::TexId, u32, u32); 2],
+    /// slot_ui::quick_caret_mid: where the carets' ink is centred.
+    caret_mid: f32,
     settings_hints: [(slot_gfx::TexId, u32); 2],
     /// The in-game Screen page's L1 R1 Size, right of the cart.
     screen_size_hint: (slot_gfx::TexId, u32),
+    /// The in-game Screen page's legends as keys alone (B, L1+R1, arrows),
+    /// beside a slot too wide for their words.
+    screen_key_hints: [(slot_gfx::TexId, u32); 3],
     about_texture: Option<slot_gfx::TexId>,
     update_status: u8,
     update_auto: bool,
@@ -1178,7 +1345,22 @@ struct Engine {
     update_version_face: Option<(slot_gfx::TexId,u32,u32)>,
     menu_seen: u8,
     menu_opened: Instant,
+    /// The long text scrolling now (page, row) and since when.
+    /// (page, row, travel), since when, last drawn.
+    marquee: std::cell::Cell<Option<((usize, usize, u32), Instant, Instant)>>,
     menu_cursor_y: f32,
+    /// A long page's first row shown, and where its list is on the way there.
+    menu_scroll_top: usize,
+    menu_scroll_y: f32,
+    /// The selected row's bar: left end, strip, right end.
+    menu_pill: [(slot_gfx::TexId, u32, u32); 3],
+    /// The mark on a row that opens a page.
+    menu_opens: (slot_gfx::TexId, u32, u32),
+    /// Each page's path line, made when first shown.
+    menu_paths: std::collections::HashMap<&'static str, (slot_gfx::TexId, u32, u32)>,
+    /// The cart beside the main and game menus: its name, then its title
+    /// and system lines.
+    menu_side: Option<(String, [(slot_gfx::TexId, u32, u32); 2])>,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
     first_run_hint: (slot_gfx::TexId, u32),
@@ -1224,6 +1406,25 @@ struct Engine {
     home_launch_held: bool,
     fresh_launch: bool,
     mode_down_at: Option<Instant>,
+    /// RG Rotate closed over its controls: the game pauses under its
+    /// cartridge; with no game the shelf drifts, back where it was on opening.
+    lid_covered: bool,
+    lid_shelf_index: Option<(usize, usize)>,
+    /// 0 open .. 1 closed: the close and open animations' progress.
+    lid_t: f32,
+    /// LidStep ticks (6 s) since the last Random Cart.
+    lid_ticks: u32,
+    /// The clock and battery percentage drawn three times finer, so they
+    /// grow without blurring: (text, dark ink, texture, logical width).
+    lid_faces: [(String, bool, Option<slot_gfx::TexId>, u32); 2],
+    /// The closed Rotate's big time, date and dial: (what they show, texture,
+    /// pixel width, pixel height), redrawn only when that changes.
+    /// 0 time, 1 date, 2 dial; 3-5 Game Info: NOW PLAYING, the title, the
+    /// system and time.
+    lid_clock_faces: [(String, Option<slot_gfx::TexId>, u32, u32); 6],
+    /// The game's time played this session, in s: only while it runs (no
+    /// menu, no cover, slot. on screen); from 0 at each start.
+    play_time: f32,
     /// SELECT is physically down, whatever screen has the input.
     select_physical: bool,
     /// SELECT+X / SELECT+START presses whose releases are still to consume.
@@ -1235,6 +1436,8 @@ struct Engine {
     polaroid_title_texture: Option<slot_gfx::TexId>,
     hud: Hud,
     clock_text: String,
+    /// SystemStatus::date, as last read.
+    date_text: String,
     last_system_status_rev: u64,
     clock_texture: Option<slot_gfx::TexId>,
     clock_face: Printed,
@@ -1349,6 +1552,7 @@ impl Engine {
         // Upstream Slot delegates colour correction to libretro core options.
         // Disable the dev13 approximate GPU grade to avoid double correction.
         gpu.enable_context_recovery();
+        menu_style::set_oled(settings.appearance == crate::settings::Appearance::Oled);
         gpu.set_colour_correction(false);
         FF_AUDIO_ENABLED.store(settings.ff_sound, Ordering::Release);
         let visuals_root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
@@ -1604,6 +1808,11 @@ impl Engine {
             let face = quick_value_face(core.text(), true);
             (gpu.create_face(&face), face.w, face.h)
         });
+        let menu_pill = menu_style::pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
+        let menu_opens = {
+            let face = menu_style::menu_opens_face();
+            (gpu.create_face(&face), face.w, face.h)
+        };
         let setting_carets = [false, true].map(|right| {
             let face = quick_caret_face(right);
             let tex = gpu.create_face(&face);
@@ -1619,6 +1828,8 @@ impl Engine {
             let face = hint_face("L1+R1", "Size");
             (gpu.create_face(&face), face.w)
         };
+        let screen_key_hints = [hint_face("B", ""), hint_face("L1+R1", ""), arrows_hint_face("")]
+            .map(|face| (gpu.create_face(&face), face.w));
         // Rasterize the detailed barcode About label only when opened.
         // Creating SVG / fonts during every cold boot needlessly delays shelf.
         let about_texture = None;
@@ -1742,6 +1953,8 @@ impl Engine {
             controls_faces: Default::default(),
             controls_spare_faces: Vec::new(),
             controls_hint_faces: Default::default(),
+            ink_hints: Vec::new(),
+            hint_ink: None,
             controls_view: Default::default(),
             cheat_sources: Vec::new(),
             cheat_source: 0,
@@ -1808,9 +2021,12 @@ impl Engine {
             shelf_wallpaper_texs: Vec::new(),
             shelf_wallpaper_ready: Vec::new(),
             shelf_wallpaper_luma: Vec::new(),
+            shelf_wallpaper_personal: Vec::new(),
             shelf_wallpaper_rx: None,
             wallpaper_name_face,
-            wallpaper_shelf: 0,
+            wallpaper_edit: None,
+            wallpaper_import: None,
+            wallpaper_edit_face: None,
             shelf_name_faces,
             slot_faces,
             slot_dark_faces,
@@ -1831,8 +2047,10 @@ impl Engine {
             system_video_modes: Platform::ALL.map(|platform| video_mode::default_mode(platform, panel_size())),
             palette_values,
             setting_carets,
+            caret_mid: slot_ui::quick_caret_mid(),
             settings_hints,
             screen_size_hint,
+            screen_key_hints,
             about_texture,
             update_status: 0,
             update_auto: true,
@@ -1840,7 +2058,14 @@ impl Engine {
             update_version_face: None,
             menu_seen: 0,
             menu_opened: now,
+            marquee: std::cell::Cell::new(None),
             menu_cursor_y: 0.0,
+            menu_scroll_top: 0,
+            menu_scroll_y: 0.0,
+            menu_pill,
+            menu_opens,
+            menu_paths: Default::default(),
+            menu_side: None,
             menu_textures,
             menu_hints,
             first_run_hint,
@@ -1879,6 +2104,13 @@ impl Engine {
             home_launch_held: false,
             fresh_launch: false,
             mode_down_at: None,
+            lid_covered: false,
+            lid_shelf_index: None,
+            lid_t: 0.0,
+            lid_ticks: 0,
+            lid_faces: Default::default(),
+            lid_clock_faces: Default::default(),
+            play_time: 0.0,
             select_physical: false,
             combo_releases: 0,
             eject_sound_armed: false,
@@ -1888,6 +2120,7 @@ impl Engine {
             polaroid_title_texture: None,
             hud,
             clock_text: String::new(),
+            date_text: String::new(),
             last_system_status_rev: 0,
             clock_texture: None,
             clock_face: Printed::default(),
@@ -1921,29 +2154,44 @@ impl Engine {
     }
 
     /// Upstream Slot v1.13 decodes shelf wallpapers on a worker after boot so
-    /// L1/R1 never waits on a PNG. The current shelf is decoded first.
+    /// L1/R1 never waits on a PNG. The current shelf is decoded first. Only
+    /// the shelves with a wallpaper of their own get a texture: the others
+    /// draw General's, and None draws the theme's ground.
     fn reload_shelf_wallpapers(&mut self, root: Option<&Path>) {
+        use crate::settings::WallpaperPick;
         let count = self.shelves.len();
         self.shelf_wallpaper_texs.resize(count, None);
         self.shelf_wallpaper_ready = vec![false; count];
         self.shelf_wallpaper_luma = vec![None; count];
+        self.shelf_wallpaper_personal = vec![false; count];
         self.shelf_wallpaper_rx = None;
-        let (crate::settings::WallpaperPick::Shelf, Some(root)) = (&self.settings.wallpaper, root)
-            else { return };
         let mut order: Vec<usize> = (0..count).collect();
         order.sort_by_key(|i| *i != self.active);
-        let files: Vec<(usize, PathBuf)> = order.into_iter()
-            .filter_map(|i| crate::wallpaper::for_shelf(root, i)
-                .map(|name| (i, root.join("Wallpapers").join(name))))
+        let jobs: Vec<(usize, WallpaperPick)> = order.into_iter()
+            .filter_map(|i| self.settings.shelf_wallpaper(i).cloned().map(|pick| (i, pick)))
+            .filter(|(_, pick)| matches!(pick,
+                WallpaperPick::Default | WallpaperPick::Blur | WallpaperPick::File(_)))
             .collect();
-        if files.is_empty() { return; }
+        if jobs.is_empty() { return; }
+        let root = root.map(Path::to_path_buf);
         let (tx, rx) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new().name("slot-wallpaper".into()).spawn(move || {
-            for (index, path) in files {
-                if let Some(rgba) = slot_ui::wallpaper_face_native(&path) {
-                    let luma = slot_ui::top_line_luma(&rgba, slot_ui::native_w());
-                    if tx.send((index, rgba, luma)).is_err() { return; }
-                }
+            for (index, pick) in jobs {
+                let (rgba, personal) = match &pick {
+                    WallpaperPick::Default =>
+                        (slot_ui::default_background_native().map(|v| v.to_vec()), false),
+                    WallpaperPick::Blur =>
+                        (slot_ui::blur_background_native().map(|v| v.to_vec()), false),
+                    WallpaperPick::File(name) => (root.as_ref()
+                        .map(|root| root.join("Wallpapers").join(name))
+                        .filter(|path| path.is_file())
+                        .and_then(|path| slot_ui::wallpaper_face_native(&path)), true),
+                    _ => (None, false),
+                };
+                // A missing or unreadable image: the shelf shows General's.
+                let Some(rgba) = rgba else { continue };
+                let luma = slot_ui::top_line_luma(&rgba, slot_ui::native_w());
+                if tx.send((index, rgba, luma, personal)).is_err() { return; }
             }
         });
         match spawned {
@@ -1955,16 +2203,42 @@ impl Engine {
     /// Upload at most one decoded shelf wallpaper per frame.
     fn poll_shelf_wallpapers(&mut self) {
         let Some(rx) = self.shelf_wallpaper_rx.as_ref() else { return };
-        let Ok((index, rgba, luma)) = rx.try_recv() else { return };
+        let Ok((index, rgba, luma, personal)) = rx.try_recv() else { return };
         let Some(slot) = self.shelf_wallpaper_texs.get_mut(index) else { return };
+        // The size General's wallpaper is made at (reload_wallpaper).
+        let (w, h) = (slot_ui::native_w(), slot_ui::native_h());
         *slot = Some(if let Some(tex) = *slot {
-            self.gpu.update_texture(tex, slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba);
+            self.gpu.update_texture(tex, w, h, &rgba);
             tex
         } else {
-            self.gpu.create_texture(slot_ui::NATIVE_W, slot_ui::NATIVE_H, &rgba)
+            self.gpu.create_texture(w, h, &rgba)
         });
         self.shelf_wallpaper_ready[index] = true;
         if let Some(slot) = self.shelf_wallpaper_luma.get_mut(index) { *slot = Some(luma); }
+        if let Some(slot) = self.shelf_wallpaper_personal.get_mut(index) { *slot = personal; }
+    }
+
+    /// The wallpaper the shelf on screen shows: its own once decoded, else
+    /// General's; with whether it is an image (tinted) and its top line's
+    /// luma. None for Wallpaper None, the theme's ground.
+    fn active_wallpaper(&self) -> Option<(slot_gfx::TexId, bool, Option<f32>)> {
+        use crate::settings::WallpaperPick;
+        let shelf = self.active;
+        if *self.settings.wallpaper_on(shelf) == WallpaperPick::None { return None; }
+        if self.settings.shelf_wallpaper(shelf).is_some()
+            && self.shelf_wallpaper_ready.get(shelf).copied().unwrap_or(false) {
+            if let Some(tex) = self.shelf_wallpaper_texs.get(shelf).copied().flatten() {
+                return Some((tex, self.shelf_wallpaper_personal.get(shelf).copied().unwrap_or(false),
+                    self.shelf_wallpaper_luma.get(shelf).copied().flatten()));
+            }
+        }
+        if self.settings.wallpaper == WallpaperPick::None { return None; }
+        self.wallpaper_texture.map(|tex| (tex, self.wallpaper_personal, self.wallpaper_top_luma))
+    }
+
+    /// The shelf on screen shows Wallpaper None: the theme's own colour.
+    fn wallpaper_none(&self) -> bool {
+        *self.settings.wallpaper_on(self.active) == crate::settings::WallpaperPick::None
     }
 
     /// The status bar's top line is inked black on a light wallpaper, white
@@ -1972,35 +2246,34 @@ impl Engine {
     /// (the shelf's own wallpaper, else the chosen one, darkened by Wallpaper
     /// Tint; None is the dark ground). Siham 2026-11-11.
     fn top_line_dark_ink(&self) -> bool {
-        use crate::settings::WallpaperPick;
-        if self.settings.wallpaper == WallpaperPick::None { return false; }
-        let shelf = (self.settings.wallpaper == WallpaperPick::Shelf
-            && self.shelf_wallpaper_ready.get(self.active).copied().unwrap_or(false))
-            .then(|| self.shelf_wallpaper_luma.get(self.active).copied().flatten()).flatten();
-        let luma = match shelf {
-            Some(luma) => luma,
-            None if self.wallpaper_texture.is_some() => self.wallpaper_top_luma.unwrap_or(0.0),
-            None => return false,
-        };
-        let tint = if self.wallpaper_personal || shelf.is_some() {
-            self.settings.wallpaper_tint.alpha()
-        } else { 0.0 };
-        luma * (1.0 - tint) > slot_ui::LIGHT_WALLPAPER
+        // None is the theme's own colour (menu_style::shelf_ground).
+        if self.wallpaper_none() { return menu_style::shelf_takes_dark_ink(); }
+        let Some((_, personal, luma)) = self.active_wallpaper() else { return false };
+        let tint = if personal { self.settings.wallpaper_tint.alpha() } else { 0.0 };
+        luma.unwrap_or(0.0) * (1.0 - tint) > slot_ui::LIGHT_WALLPAPER
     }
 
-    /// Whether Delete Wallpaper has a file to remove: the current shelf's own
-    /// wallpaper while Shelf is picked, user.png otherwise.
+    /// The shelf's name and game title in dark ink over the light colour
+    /// Wallpaper None shows in Light, and Original's GBA and Game Boy Color.
+    fn shelf_ink(&self) -> Option<slot_gfx::InkMap> {
+        if !self.wallpaper_none() || !menu_style::shelf_takes_dark_ink() { return None; }
+        let [r, g, b, _] = menu_style::shelf_ground();
+        let ink = menu_style::MenuPalette::LIGHT.ink.unwrap_or([0; 3]).map(|v| v as f32 / 255.0);
+        Some(slot_gfx::InkMap { paper: [r, g, b], ink })
+    }
+
+    /// Whether Delete Wallpaper has a file to remove: the edited shelf's own
+    /// Wallpapers/<shelf>.png, user.png for General.
     fn removable_wallpaper(&self) -> bool {
-        if self.settings.wallpaper == crate::settings::WallpaperPick::Shelf {
-            Self::recents_root().is_some_and(|root|
-                crate::wallpaper::for_shelf(&root, self.wallpaper_shelf).is_some())
-        } else { self.custom_wallpaper_present }
+        match self.wallpaper_edit {
+            Some(shelf) => Self::recents_root().is_some_and(|root|
+                crate::wallpaper::for_shelf(&root, shelf).is_some()),
+            None => self.custom_wallpaper_present,
+        }
     }
 
     fn set_wallpaper_target(&self) {
-        let target = if self.settings.wallpaper == crate::settings::WallpaperPick::Shelf {
-            crate::wallpaper::shelf_target(self.wallpaper_shelf)
-        } else { None };
+        let target = self.wallpaper_edit.and_then(crate::wallpaper::shelf_target);
         *WALLPAPER_TARGET.lock().unwrap_or_else(|e| e.into_inner()) = target;
     }
 
@@ -2054,13 +2327,17 @@ impl Engine {
             }
         }
         self.battery = status.battery;
+        self.date_text = status.date;
         let percent = self.battery.map(|b| b.percent);
         if percent != self.battery_percent {
             self.battery_percent = percent;
             // Just as with original Slot, the About label reflects the live
             // battery without rebuilding it on every animation frame.
             if let Some(tex) = self.about_texture {
-                let sticker = sticker_face_konkr(&StickerFields {
+                // The same sticker as prepare_about: the KONKR's own, or the
+                // handheld's (it went back to the KONKR's on every battery
+                // step, Siham 2026-11-15).
+                let sticker = about_sticker(&StickerFields {
                     battery: percent, serial: "0000130", dirty_digit: '0',
                 });
                 self.gpu.update_face(tex, &sticker);
@@ -3216,6 +3493,7 @@ impl Engine {
                     .as_ref().map(|(root, _)| root.clone());
                 if let Some(root) = root {
                     slot_ui::set_theme(slot_store::Theme::read(&root));
+                    self.refresh_menu_pill();
                     let custom_colours=root.join("Config/theme.txt").is_file();
                     self.slot_faces=if custom_colours { None }
                         else if self.settings.appearance == crate::settings::Appearance::Light {
@@ -3223,11 +3501,16 @@ impl Engine {
                         } else { Some(self.slot_dark_faces) };
                     self.custom_wallpaper_present = root.join("Wallpapers/user.png").is_file();
                     // A freshly imported user.png shows at once, whatever was
-                    // picked, None included (Siham 2026-11-09); the Shelf
-                    // wallpaper keeps its pick, its shelf's file was updated.
+                    // picked, None included (Siham 2026-11-09). An image
+                    // imported for a shelf becomes that shelf's wallpaper.
                     let stamp = user_wallpaper_stamp(&root);
-                    if stamp.is_some() && stamp != self.user_wallpaper_stamp &&
-                        self.settings.wallpaper != crate::settings::WallpaperPick::Shelf {
+                    if let Some(shelf) = self.wallpaper_import.take() {
+                        if let Some(file) = crate::wallpaper::for_shelf(&root, shelf) {
+                            self.settings.set_shelf_wallpaper(shelf,
+                                Some(crate::settings::WallpaperPick::File(file)));
+                            self.persist_settings();
+                        }
+                    } else if stamp.is_some() && stamp != self.user_wallpaper_stamp {
                         self.settings.wallpaper =
                             crate::settings::WallpaperPick::File("user.png".into());
                         self.persist_settings();
@@ -3241,13 +3524,18 @@ impl Engine {
                             self.persist_settings();
                         }
                     }
-                    // A row may have gone with the wallpaper.
-                    if let ShelfOverlay::GeneralSettings { row } = self.overlay {
-                        let last = self.general_rows().len().saturating_sub(1);
-                        self.overlay = ShelfOverlay::GeneralSettings { row: row.min(last) };
+                    // A shelf whose image is gone shows General's again.
+                    let gone: Vec<String> = self.settings.wallpaper_shelves.iter()
+                        .filter(|(_, pick)| matches!(pick, crate::settings::WallpaperPick::File(name)
+                            if !root.join("Wallpapers").join(name).is_file()))
+                        .map(|(key, _)| key.clone()).collect();
+                    if !gone.is_empty() {
+                        for key in gone { self.settings.wallpaper_shelves.remove(&key); }
+                        self.persist_settings();
                     }
                     self.reload_wallpaper(Some(&root));
                     self.refresh_wallpaper_name();
+                    self.refresh_wallpaper_edit_face();
                 }
             }
             Input::StudioArt { uri, real, logo, kind, name } => self.studio_art(uri, real, logo, kind, name),
@@ -3263,12 +3551,15 @@ impl Engine {
             Input::ExternalReturn => {
                 if self.external_pending {
                     self.external_pending = false;
+                    self.menu_held = None;
+                    self.menu_seen = 0;
                     // Keep the original Menu and selected row when coming back
                     // from Cart Studio, Apps or the RetroAchievements panel.
                 }
             }
             Input::Reset => {
                 self.reset_time_controls();
+                self.menu_held = None;
                 self.buttons = 0;
                 // Android won't tell the releases of keys held while away.
                 self.buttons2 = 0;
@@ -3337,6 +3628,55 @@ impl Engine {
                 }
                 self.buttons = 0;
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            }
+            Input::SlotButtonReleased { held } => {
+                let down = self.mode_down_at.take().is_some();
+                self.mode_last_tap = None;
+                self.home_launch_held = false;
+                if held && down && self.game.is_some() && !self.exiting_screen {
+                    crate::game::log_launch_timing("Exit requested by system long press");
+                    self.handle(Input::Exit);
+                }
+            }
+            Input::LidCover(closed, now) => {
+                if closed == self.lid_covered { return; }
+                self.lid_covered = closed;
+                // Animations are always on (Siham 2026-11-15).
+                if now { self.lid_t = if closed { 1.0 } else { 0.0 }; }
+                if self.game.is_some() { return; }
+                if closed {
+                    self.lid_ticks = 0;
+                    self.lid_shelf_index = self.shelves.get(self.active).map(|s| (self.active, s.index));
+                    // Drifting Shelf drifts on from the cart in view
+                        // (Siham 2026-11-15); Random Cart draws one.
+                    match self.settings.rotate_shelf_cover {
+                        2 => self.lid_random_cart(),
+                        1 => self.lid_last_played(),
+                        _ => {}
+                    }
+                } else if let Some((active, index)) = self.lid_shelf_index.take() {
+                    // Drifting Shelf, Last Played, Random Cart: opened on the
+                    // cart shown while closed (Siham 2026-11-15). The clocks
+                    // and the black screen give the cart left before.
+                    if matches!(self.settings.rotate_shelf_cover, 0..=2) { return; }
+                    if active < self.shelves.len() && !self.shelves[active].carts.is_empty() {
+                        self.active = active;
+                        if index < self.shelves[active].carts.len() { self.shelves[active].select(index); }
+                    }
+                }
+            }
+            Input::LidStep => {
+                if self.lid_covered && self.game.is_none() && matches!(self.overlay, ShelfOverlay::None) {
+                    match self.settings.rotate_shelf_cover {
+                        0 => if let Some(shelf) = self.shelves.get_mut(self.active) { shelf.right(); },
+                        2 => {
+                            self.lid_ticks += 1;
+                            // One a minute: ten of Android's 6 s steps.
+                            if self.lid_ticks >= 10 { self.lid_ticks = 0; self.lid_random_cart(); }
+                        }
+                        _ => {}
+                    }
+                }
             }
             Input::Exit => {
                 // A failed battery/RTC/auto-state write must not destroy the
@@ -3742,8 +4082,8 @@ impl Engine {
                         let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
                         if let ShelfOverlay::GameMenu { row } = self.overlay {
                             match code {
-                                19 | 20 => self.overlay = ShelfOverlay::GameMenu {
-                                    row: move_menu_row(row, code, pause_rows(linked, relaunch).len()),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::GameMenu {
+                                    row: move_menu_row(row, code, pause_rows(linked, relaunch).len(), self.menu_repeat_dispatch),
                                 },
                                 96 => match pause_rows(linked, relaunch).get(row).copied() {
                                     Some(PauseRow::SaveEject) => self.handle(Input::Exit),
@@ -3802,8 +4142,8 @@ impl Engine {
                             ShelfOverlay::LayoutPorts { .. } | ShelfOverlay::LayoutPort { .. } =>
                                 self.controls_menu_key(code),
                             ShelfOverlay::PauseSettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::PauseSettings {
-                                    row: move_menu_row(row, code, self.pause_settings_rows().len()),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::PauseSettings {
+                                    row: move_menu_row(row, code, self.pause_settings_rows().len(), self.menu_repeat_dispatch),
                                 },
                                 96 => {
                                     let linked=self.game.as_ref().is_some_and(GameSession::linked);
@@ -3833,7 +4173,7 @@ impl Engine {
                                     self.step_screen_size(code == 102);
                                 },
                                 19 | 20 => self.overlay = ShelfOverlay::PauseScreenSettings {
-                                    row: move_menu_row(row,code,self.pause_screen_page_rows().len()),
+                                    row: move_menu_row(row,code,self.pause_screen_page_rows().len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 => if let Some(key)=self.pause_screen_page_key(row) {
                                     self.change_game_screen_or_gameplay(key,code==22);
@@ -3849,16 +4189,16 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::PauseGameplaySettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::PauseGameplaySettings {
-                                    row: move_menu_row(row,code,GAMEPLAY_KEYS.len()),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::PauseGameplaySettings {
+                                    row: move_menu_row(row,code,GAMEPLAY_KEYS.len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 => self.change_game_screen_or_gameplay(GAMEPLAY_KEYS[row],code==22),
                                 97 => self.overlay = ShelfOverlay::PauseSettings { row: 1 },
                                 _ => {}
                             },
                             ShelfOverlay::PauseEmulationSettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::PauseEmulationSettings {
-                                    row: move_menu_row(row, code, self.pause_emulation_rows().len()),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::PauseEmulationSettings {
+                                    row: move_menu_row(row, code, self.pause_emulation_rows().len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 if row == 3 && self.game.as_ref().is_some_and(GameSession::motion) =>
                                     self.change_game_motion(code == 22),
@@ -3981,8 +4321,8 @@ impl Engine {
                     if pressed {
                         match self.overlay {
                             ShelfOverlay::Menu { row } => match code {
-                                19 | 20 => {
-                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 6) };
+                                19 | 20 | 102 | 103 => {
+                                    self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 6, self.menu_repeat_dispatch) };
                                 }
                                 // Debounce taps while Apps, Studio or RA is opening.
                                 96 if !self.external_pending => {
@@ -4017,9 +4357,9 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::Library { row } => match code {
-                                19 | 20 => {
+                                19 | 20 | 102 | 103 => {
                                     let n = LIBRARY_ROWS.len();
-                                    let next = if code == 19 { (row + n - 1) % n } else { (row + 1) % n };
+                                    let next = move_menu_row(row, code, n, self.menu_repeat_dispatch);
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
                                 // Identical left/right + A toggle to Settings.
@@ -4030,7 +4370,7 @@ impl Engine {
                                 }
                                 // RomM, right after the ROM folder (Siham 2026-11-09).
                                 96 if row == 1 && !self.external_pending => self.open_romm(),
-                                96 => if let Some(action) = match row {
+                                96 if !self.external_pending => if let Some(action) = match row {
                                     // ROM, BIOS, SRAM root, State root, Refresh.
                                     0 => Some(1),
                                     2 => Some(4),
@@ -4041,7 +4381,11 @@ impl Engine {
                                 } {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
                                         .push_back(action);
-                                    self.overlay = ShelfOverlay::None;
+                                    // Keep Library and its row behind the Android picker:
+                                    // both selection and cancellation send ExternalReturn.
+                                    // Refresh has no picker and shows its scan on the shelf.
+                                    if action == 2 { self.overlay = ShelfOverlay::None; }
+                                    else { self.external_pending = true; }
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 0 },
                                 108 => self.overlay = ShelfOverlay::None,
@@ -4055,19 +4399,16 @@ impl Engine {
                             ShelfOverlay::CartLibrary => self.cart_library_key(code),
                             ShelfOverlay::Romm => self.romm_key(code),
                             ShelfOverlay::Settings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::Settings {
-                                    row: move_menu_row(row, code, SETTINGS_ROWS.len()),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::Settings {
+                                    row: move_menu_row(row, code, settings_rows().len(), self.menu_repeat_dispatch),
                                 },
-                                96 => match row {
-                                    0 => {
-                                        self.wallpaper_shelf = self.active;
-                                        self.overlay = ShelfOverlay::GeneralSettings { row: 0 };
-                                    }
-                                    1 => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
-                                    2 => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
-                                    3 => self.overlay = ShelfOverlay::EmulationSettings { row: 0 },
-                                    4 => self.overlay = ShelfOverlay::ControlsSettings { row: 0 },
-                                    5 => self.overlay = ShelfOverlay::InterfaceSettings { row: 0 },
+                                96 => match settings_rows().get(row).copied() {
+                                    Some(81) => self.overlay = ShelfOverlay::GeneralSettings { row: 0 },
+                                    Some(117) => self.overlay = ShelfOverlay::ScreenSettings { row: 0 },
+                                    Some(33) => self.overlay = ShelfOverlay::GameplaySettings { row: 0 },
+                                    Some(49) => self.overlay = ShelfOverlay::EmulationSettings { row: 0 },
+                                    Some(125) => self.overlay = ShelfOverlay::ControlsSettings { row: 0 },
+                                    Some(146) => self.overlay = ShelfOverlay::RotateSettings { row: 0 },
                                     _ => return,
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 4 },
@@ -4075,8 +4416,8 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::GeneralSettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::GeneralSettings {
-                                    row: move_menu_row(row, code, self.general_rows().len()),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::GeneralSettings {
+                                    row: move_menu_row(row, code, self.general_rows().len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 | 96 => {
                                     self.cycle_general_row(row,code!=21,code==96);
@@ -4085,22 +4426,50 @@ impl Engine {
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
+                            ShelfOverlay::WallpaperSettings { row } => match code {
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::WallpaperSettings {
+                                    row: move_menu_row(row, code, WALLPAPER_ROWS.len(), self.menu_repeat_dispatch),
+                                },
+                                21 | 22 | 96 => self.cycle_wallpaper_row(row, code != 21, code == 96),
+                                97 => self.overlay = ShelfOverlay::GeneralSettings { row: INTERFACE_WALLPAPER_ROW },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
                             ShelfOverlay::InterfaceSettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::InterfaceSettings {
-                                    row: move_menu_row(row, code, INTERFACE_ROWS.len()),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::InterfaceSettings {
+                                    row: move_menu_row(row, code, interface_rows().0.len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 | 96 => {
-                                    if let Some(&key) = INTERFACE_KEYS.get(row) {
+                                    if let Some(&key) = interface_rows().1.get(row) {
                                         self.change_setting(key, code != 21);
                                     }
                                 },
-                                97 => self.overlay = ShelfOverlay::Settings { row: 5 },
+                                97 => self.overlay = ShelfOverlay::GeneralSettings { row: INTERFACE_STATUS_ROW },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::RotateSettings { row } => match code {
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::RotateSettings {
+                                    row: move_menu_row(row, code, ROTATE_ROWS.len(), self.menu_repeat_dispatch),
+                                },
+                                21 | 22 | 96 => match ROTATE_KEYS.get(row).copied() {
+                                    // Android's own page grants the right; slot. gives it back,
+                                    // asked first, on the arrows as on A (Siham 2026-11-15).
+                                    Some(85) => UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                        .push_back(match ROTATE_SLEEP_STATE.load(Ordering::Acquire) {
+                                            1 => 61, 2 => 62, _ => 60 }),
+                                    Some(key) => self.change_setting(key, code != 21),
+                                    None => {}
+                                },
+                                97 => self.overlay = ShelfOverlay::Settings {
+                                    row: settings_rows().iter().position(|&r| r == 146).unwrap_or(0),
+                                },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
                             ShelfOverlay::ScreenSettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::ScreenSettings {
-                                    row: move_menu_row(row, code, SYSTEM_ORDER.len()),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::ScreenSettings {
+                                    row: move_menu_row(row, code, SYSTEM_ORDER.len(), self.menu_repeat_dispatch),
                                 },
                                 96 => {
                                     self.load_default_cores();
@@ -4113,8 +4482,8 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::ScreenSystemSettings { platform,row } => match code {
-                                19 | 20 => self.overlay=ShelfOverlay::ScreenSystemSettings {
-                                    platform,row:move_menu_row(row,code,Self::system_page_rows(platform).len()),
+                                19 | 20 | 102 | 103 => self.overlay=ShelfOverlay::ScreenSystemSettings {
+                                    platform,row:move_menu_row(row,code,Self::system_page_rows(platform).len(), self.menu_repeat_dispatch),
                                 },
                                 96 if row+1==Self::system_page_rows(platform).len() =>
                                     self.overlay=Self::layout_entry(platform, false),
@@ -4129,8 +4498,8 @@ impl Engine {
                                 _=>{}
                             },
                             ShelfOverlay::EmulationSettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::EmulationSettings {
-                                    row: move_menu_row(row, code, 3),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::EmulationSettings {
+                                    row: move_menu_row(row, code, 3, self.menu_repeat_dispatch),
                                 },
                                 21 | 22 => self.change_setting(row + 10, code == 22),
                                 97 => self.overlay = ShelfOverlay::Settings { row: 3 },
@@ -4138,8 +4507,8 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::GameplaySettings { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::GameplaySettings {
-                                    row: move_menu_row(row, code, GAMEPLAY_KEYS.len()),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::GameplaySettings {
+                                    row: move_menu_row(row, code, GAMEPLAY_KEYS.len(), self.menu_repeat_dispatch),
                                 },
                                 21 | 22 => self.change_setting(GAMEPLAY_KEYS[row], code == 22),
                                 97 => self.overlay = ShelfOverlay::Settings { row: 2 },
@@ -4147,8 +4516,8 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::About { row } => match code {
-                                19 | 20 => self.overlay = ShelfOverlay::About {
-                                    row: move_menu_row(row, code, 2),
+                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::About {
+                                    row: move_menu_row(row, code, 2, self.menu_repeat_dispatch),
                                 },
                                 96 => {
                                     let action = if row == 0 {
@@ -4677,17 +5046,9 @@ impl Engine {
 
     fn prepare_about(&mut self) {
         if self.about_texture.is_none() {
-            let fields = StickerFields {
+            let sticker = about_sticker(&StickerFields {
                 battery: self.battery_percent, serial: "0000130", dirty_digit: '0',
-            };
-            // The KONKR keeps its own logos; every other handheld gets
-            // slot.'s wordmark and its own name (Siham, 2026-11-04).
-            let sticker = if is_konkr() {
-                sticker_face_konkr(&fields)
-            } else {
-                let (name, model) = DEVICE_NAME.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                slot_ui::sticker_face_handheld(&fields, &name, &model)
-            };
+            });
             self.about_texture = Some(self.gpu.create_face(&sticker));
         }
     }
@@ -5739,16 +6100,10 @@ impl Engine {
             self.rebuild_recents();
         }
     }
-    /// Interface rows. Wallpaper Tint and Delete Wallpaper stay, dimmed
-    /// when they can't act, so the list never jumps (Siham 2026-11-09);
-    /// Shelf, whose wallpaper, only while the Shelf wallpaper is picked.
-    fn general_rows(&self) -> Vec<usize> {
-        let mut rows=vec![83]; // Wallpaper
-        if self.settings.wallpaper == crate::settings::WallpaperPick::Shelf {rows.push(133);}
-        rows.extend_from_slice(&[84,85,86,87,43,45]);
-        rows
-    }
-    /// A row shown but idle: Wallpaper Tint over no personal image, Delete
+    /// Settings > Interface's rows.
+    fn general_rows(&self) -> Vec<usize> { INTERFACE_PAGE_ROWS.to_vec() }
+    /// Interface > Wallpaper's rows shown but idle, so the list never jumps
+    /// (Siham 2026-11-09): Wallpaper Tint with no image anywhere, Delete
     /// Wallpaper with nothing to delete.
     fn general_row_dimmed(&self, item: usize) -> bool {
         match item {
@@ -5757,31 +6112,62 @@ impl Engine {
             _ => false,
         }
     }
-    /// Interface > Shelf: the next shelf with carts (Recents and Favorites
-    /// included), the current one always offered.
+    /// Interface > Wallpaper > Shelf: General, then the shelves with carts
+    /// (Recents while it is on, Favorites once a cart is in it).
     fn cycle_wallpaper_shelf(&mut self, right: bool) {
         let n = crate::wallpaper::SHELF_KEYS.len().min(self.shelves.len());
-        if n == 0 { return; }
-        let mut next = self.wallpaper_shelf.min(n - 1);
-        for _ in 0..n {
-            next = if right { (next + 1) % n } else { (next + n - 1) % n };
-            if next == self.active || !self.shelves[next].carts.is_empty() { break; }
-        }
-        self.wallpaper_shelf = next;
+        let mut choices: Vec<Option<usize>> = vec![None];
+        choices.extend((0..n).filter(|&i| !self.shelves[i].carts.is_empty()
+            && (i != RECENTS_RACK || self.settings.show_recents)).map(Some));
+        let at = choices.iter().position(|c| *c == self.wallpaper_edit).unwrap_or(0);
+        let m = choices.len();
+        self.wallpaper_edit = choices[if right { (at + 1) % m } else { (at + m - 1) % m }];
+        self.refresh_wallpaper_edit_face();
+    }
+    /// Interface > Wallpaper > Wallpaper: General's, or the edited shelf's
+    /// own (GENERAL to show General's again).
+    fn cycle_edited_wallpaper(&mut self, right: bool) {
+        let Some(shelf) = self.wallpaper_edit else {
+            self.cycle_wallpaper(right);
+            return;
+        };
+        let Some(root) = Self::recents_root() else { return };
+        let next = crate::settings::WallpaperPick::shelf_step(
+            self.settings.shelf_wallpaper(shelf), &root, shelf, right);
+        self.settings.set_shelf_wallpaper(shelf, next);
+        self.reload_shelf_wallpapers(Some(&root));
+        self.refresh_wallpaper_edit_face();
+        self.persist_settings();
+    }
+    /// The edited shelf's image name, for Wallpaper's value.
+    fn refresh_wallpaper_edit_face(&mut self) {
+        let Some(pick @ crate::settings::WallpaperPick::File(_)) =
+            self.wallpaper_edit.and_then(|shelf| self.settings.shelf_wallpaper(shelf)).cloned()
+            else { return };
+        let short: String = pick.label().chars().take(18).collect();
+        let face = quick_value_face(&short, true);
+        self.wallpaper_edit_face = Some(
+            if let Some((tex, _, _)) = self.wallpaper_edit_face {
+                self.gpu.update_face(tex, &face);
+                (tex, face.w, face.h)
+            } else {
+                (self.gpu.create_face(&face), face.w, face.h)
+            });
     }
     fn cycle_general_row(&mut self, row: usize, right: bool, confirm: bool) {
         let Some(which)=self.general_rows().get(row).copied() else {return};
         match which {
-            83 => {
-                self.cycle_wallpaper(right);
-                self.wallpaper_shelf = self.active;
+            85 => self.cycle_appearance(right),
+            83 if confirm => {
+                self.wallpaper_edit = None;
+                self.overlay = ShelfOverlay::WallpaperSettings { row: 0 };
             }
-            133 => self.cycle_wallpaper_shelf(right),
-            84 if self.show_general_tint() => self.cycle_wallpaper_tint(right),
-            85 => self.cycle_appearance(),
             86 => {
                 self.settings.show_recents=!self.settings.show_recents;
                 self.rebuild_recents();
+                if !self.settings.show_recents && self.wallpaper_edit == Some(RECENTS_RACK) {
+                    self.wallpaper_edit = None;
+                }
                 self.persist_settings();
             }
             87 => {
@@ -5789,14 +6175,26 @@ impl Engine {
                 self.selected_title_name.clear();
                 self.persist_settings();
             }
+            58 if confirm => self.overlay = ShelfOverlay::InterfaceSettings { row: 0 },
+            _ => {}
+        }
+    }
+    fn cycle_wallpaper_row(&mut self, row: usize, right: bool, confirm: bool) {
+        let Some(which)=WALLPAPER_ROWS.get(row).copied() else {return};
+        match which {
+            133 => self.cycle_wallpaper_shelf(right),
+            83 => self.cycle_edited_wallpaper(right),
+            84 if self.show_general_tint() => self.cycle_wallpaper_tint(right),
             43 if confirm => {
+                self.wallpaper_import = self.wallpaper_edit;
                 self.set_wallpaper_target();
                 UI_ACTION.lock().unwrap_or_else(|e|e.into_inner()).push_back(8);
             }
             45 if confirm && self.removable_wallpaper() => {
+                self.wallpaper_import = None;
                 self.set_wallpaper_target();
                 UI_ACTION.lock().unwrap_or_else(|e|e.into_inner()).push_back(10);
-                if self.settings.wallpaper != crate::settings::WallpaperPick::Shelf {
+                if self.wallpaper_edit.is_none() {
                     self.custom_wallpaper_present=false;
                 }
             }
@@ -5875,7 +6273,12 @@ impl Engine {
     fn push_hold_scene(&self, commands: &mut Vec<Draw>) {
         commands.push(Draw::Rect {
             x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
-            colour: [0.085, 0.085, 0.093, 1.0],
+            // The shelf's own ground: black in OLED, as the shelf after it;
+            // with Wallpaper None the theme's colour, as the shelf (Siham
+            // 2026-11-14: no dark flash on insert/eject in Light/Original).
+            colour: if self.wallpaper_none() {
+                menu_style::shelf_ground()
+            } else { menu_style::page_ground([0.085, 0.085, 0.093, 1.0]) },
         });
         if let Some(shelf) = self.shelves.get(self.active) {
             if let Some(cart) = shelf.carts.get(shelf.index) {
@@ -5895,6 +6298,332 @@ impl Engine {
                 commands.push(Draw::Game);
             }
         }
+    }
+
+    /// The closed Rotate's shelf on a cart at random (its own shelf).
+    fn lid_random_cart(&mut self) {
+        let Some(shelf) = self.shelves.get_mut(self.active) else { return };
+        let n = shelf.carts.len();
+        if n < 2 { return; }
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos() as usize ^ d.as_secs() as usize);
+        let mut next = seed % n;
+        if next == shelf.index { next = (next + 1) % n; }
+        shelf.select(next);
+    }
+
+    /// The closed Rotate's shelf on the last cart played, on its system's
+    /// shelf (Recents keeps the order; the cart is found by its ROM).
+    fn lid_last_played(&mut self) {
+        let Some(root) = Self::recents_root() else { return };
+        let Some(uri) = crate::recents::load(&root).into_iter().next() else { return };
+        for (rack, shelf) in self.shelves.iter_mut().enumerate() {
+            if rack >= RECENTS_RACK { break; }
+            if let Some(i) = shelf.carts.iter().position(|c| c.rom.to_string_lossy() == uri.as_str()) {
+                self.active = rack;
+                shelf.select(i);
+                return;
+            }
+        }
+    }
+
+    /// The clock and percentage faces, finer, in `dark` or white ink.
+    fn refresh_lid_faces(&mut self, dark: bool) {
+        let percent = self.battery.map(|b| format!("{}%", b.percent.min(100))).unwrap_or_default();
+        let texts = [self.clock_text.clone(), percent];
+        for (slot, text) in self.lid_faces.iter_mut().zip(texts) {
+            if slot.0 == text && slot.1 == dark && slot.2.is_some() { continue; }
+            if text.is_empty() { *slot = (text, dark, slot.2, 0); continue; }
+            let face = slot_ui::word_ink_scaled(&text, slot_ui::footer_ink(dark), 3);
+            let tex = match slot.2 {
+                Some(tex) => { self.gpu.update_face(tex, &face); tex }
+                None => self.gpu.create_face(&face),
+            };
+            *slot = (text.clone(), dark, Some(tex), slot_ui::word_width(&text));
+        }
+    }
+
+    /// The closed Rotate's clock and battery, grown from their corners
+    /// on the top line as the lid closes (`t` 0..1).
+    fn push_lid_status(&mut self, dark: bool, alpha: f32, commands: &mut Vec<Draw>) {
+        self.refresh_lid_faces(dark);
+        let printed = |f: &(String, bool, Option<slot_gfx::TexId>, u32)|
+            f.2.filter(|_| f.3 > 0).map_or(Printed::default(), |tex| Printed::new(tex, f.3));
+        let (clock, percent) = (printed(&self.lid_faces[0]), printed(&self.lid_faces[1]));
+        let bolt = Some(if dark { self.bolt_light_texture } else { self.bolt_texture });
+        slot_ui::draw_status_clock_grown(true, 1.0 + self.lid_t, self.battery, percent, bolt,
+            clock, slot_ui::footer_ink(dark), alpha, commands);
+    }
+
+    /// One of `lid_clock_faces`, made again only when `key` changes.
+    fn lid_clock_face(&mut self, i: usize, key: &str, make: impl FnOnce() -> slot_ui::UndoFace)
+        -> Option<(slot_gfx::TexId, f32, f32)> {
+        if key.is_empty() { return None; }
+        let slot = &mut self.lid_clock_faces[i];
+        if slot.0 != key || slot.1.is_none() {
+            let face = make();
+            if face.w == 0 || face.h == 0 { return None; }
+            let tex = match slot.1 {
+                Some(tex) => { self.gpu.update_face(tex, &face); tex }
+                None => self.gpu.create_face(&face),
+            };
+            *slot = (key.to_string(), Some(tex), face.w, face.h);
+        }
+        slot.1.map(|tex| (tex, slot.2 as f32, slot.3 as f32))
+    }
+
+    /// The closed Rotate's big time centred on `cx`, its middle at `y`,
+    /// `scale` times the status bar's, then the date (`date`) and the
+    /// battery under it.
+    fn push_lid_big_clock(&mut self, cx: f32, y: f32, scale: f32, date: bool, alpha: f32,
+        commands: &mut Vec<Draw>) {
+        let mut next = y;
+        let clock = self.clock_text.clone();
+        if let Some((tex, w, h)) = self.lid_clock_face(0, &clock,
+            || slot_ui::word_ink_scaled(&clock, slot_ui::footer_ink(false), LID_CLOCK_FINE)) {
+            let k = scale / LID_CLOCK_FINE as f32;
+            let (w, h) = (w * k, h * k);
+            commands.push(Draw::Tex { x: cx - w / 2.0, y: y - h / 2.0, w, h, tex, alpha });
+            next = y + h / 2.0;
+        }
+        if date {
+            let text = self.date_text.clone();
+            if let Some((tex, w, h)) = self.lid_clock_face(1, &text,
+                || slot_ui::word_ink_scaled(&text, slot_ui::footer_ink(false), 3)) {
+                let k = LID_DATE_SCALE / 3.0;
+                let (w, h) = (w * k, h * k);
+                commands.push(Draw::Tex { x: cx - w / 2.0, y: next, w, h, tex, alpha: alpha * 0.8 });
+                next += h + 4.0;
+            }
+        }
+        self.push_lid_battery(cx, next + 6.0, alpha, commands);
+    }
+
+    /// The battery as the status bar draws it, larger, centred on `cx`
+    /// below `top`.
+    fn push_lid_battery(&mut self, cx: f32, top: f32, alpha: f32, commands: &mut Vec<Draw>) {
+        self.refresh_lid_faces(false);
+        let f = &self.lid_faces[1];
+        let percent = f.2.filter(|_| f.3 > 0).map_or(Printed::default(), |tex| Printed::new(tex, f.3));
+        let width = slot_ui::status_gauge_width(self.battery, percent);
+        let mut parts = Vec::new();
+        slot_ui::draw_status_gauge(cx + width / 2.0, top, self.battery, percent,
+            Some(self.bolt_texture), [1.0, 1.0, 1.0, 1.0], &mut parts);
+        commands.extend(parts.into_iter().map(|d| lid_place(d, cx, top, LID_BATTERY_SCALE, 0.0, alpha)));
+    }
+
+    /// Analog Clock: the dial in the middle, the date and battery below.
+    fn push_lid_dial(&mut self, cx: f32, alpha: f32, commands: &mut Vec<Draw>) {
+        let size = LID_DIAL_SIZE;
+        let top = LID_DIAL_TOP;
+        if let Some((h, m)) = slot_ui::clock_hours_minutes(&self.clock_text) {
+            let px = (size * panel_size().1 as f32 / OUT_H as f32).round().max(16.0) as u32;
+            let key = format!("{h:02}:{m:02}/{px}");
+            if let Some((tex, _, _)) = self.lid_clock_face(2, &key,
+                || slot_ui::analog_clock_face(px, h, m, slot_ui::footer_ink(false))) {
+                commands.push(Draw::Tex { x: cx - size / 2.0, y: top, w: size, h: size, tex, alpha });
+            }
+        }
+        let mut next = top + size + 14.0;
+        let text = self.date_text.clone();
+        if let Some((tex, w, h)) = self.lid_clock_face(1, &text,
+            || slot_ui::word_ink_scaled(&text, slot_ui::footer_ink(false), 3)) {
+            let k = LID_DATE_SCALE / 3.0;
+            let (w, h) = (w * k, h * k);
+            commands.push(Draw::Tex { x: cx - w / 2.0, y: next, w, h, tex, alpha: alpha * 0.8 });
+            next += h;
+        }
+        self.push_lid_battery(cx, next + 6.0, alpha, commands);
+    }
+
+    /// Game Info (Settings > Handheld > Game Info): NOW PLAYING at `top`, then
+    /// the title and the system / time, under it or from `below` (Full
+    /// Cart's, under the cart). Nothing when Off.
+    fn push_game_info(&mut self, cx: f32, top: f32, below: Option<f32>, alpha: f32,
+                      commands: &mut Vec<Draw>) {
+        let info = self.settings.rotate_game_info.min(3);
+        if info == 0 || alpha <= 0.0 { return; }
+        let (title, time) = (info & 1 != 0, info & 2 != 0);
+        let width = out_w() as f32;
+        // At `scale` of the menus' 30 px face, centred, cut with a fade if
+        // too wide for the screen.
+        let line = |engine: &mut Self, slot: usize, text: String, y: f32, scale: f32,
+                        lit: bool, a: f32, commands: &mut Vec<Draw>| -> f32 {
+            let key = format!("{text}/{lit}");
+            let Some((tex, w, h)) = engine.lid_clock_face(slot, &key,
+                || slot_ui::quick_value_face_within(&text, lit, 1400)) else { return 0.0 };
+            let (w, h) = (w * scale, h * scale);
+            let room = width - 48.0;
+            if w <= room {
+                commands.push(Draw::Tex { x: cx - w / 2.0, y, w, h, tex, alpha: a });
+            } else {
+                commands.push(Draw::Span(Some(slot_gfx::Span {
+                    left: 24.0, right: width - 24.0, feather_left: 0.01, feather_right: 24.0 })));
+                commands.push(Draw::Tex { x: 24.0, y, w, h, tex, alpha: a });
+                commands.push(Draw::Span(None));
+            }
+            h
+        };
+        line(self, 3, "NOW PLAYING".into(), top, 0.62, false, alpha * 0.85, commands);
+        let mut y = below.unwrap_or(top + 34.0);
+        let cart_title = self.shelves.get(self.active).and_then(|s| s.carts.get(s.index))
+            .map(slot_ui::label_text).unwrap_or_default();
+        let system = self.current_cart_platform().name().to_string();
+        let played = played_text(self.play_time);
+        if title && !cart_title.is_empty() {
+            y += line(self, 4, cart_title, y, 0.78, true, alpha, commands) + 2.0;
+        }
+        let rest = match (title, time) {
+            (true, true) => format!("{system}  \u{b7}  {played}"),
+            (true, false) => system,
+            _ => played,
+        };
+        let scale = if title { 0.52 } else { 0.7 };
+        line(self, 5, rest, y, scale, !title, alpha * if title { 0.8 } else { 0.9 }, commands);
+    }
+
+    /// The closed Rotate in a game (Settings > Interface > RG Rotate > In
+    /// Game): the screen switches off like a CRT, then the cover comes in.
+    fn draw_lid_game(&mut self) {
+        let t = self.lid_t;
+        let mode = self.settings.rotate_game_cover;
+        let mut commands = Vec::new();
+        if mode == 2 {
+            // The game's last frame, dimmed.
+            self.gpu.set_screen_power(1.0);
+            commands.push(Draw::Game);
+            commands.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+                colour: [0.0, 0.0, 0.0, 0.62 * t] });
+            self.push_lid_status(false, t, &mut commands);
+        } else {
+            let screen = (1.0 - t * 2.0).clamp(0.0, 1.0);
+            let cover = ((t - 0.5) * 2.0).clamp(0.0, 1.0);
+            if screen > 0.0 {
+                self.gpu.set_screen_power(screen);
+                commands.push(Draw::Game);
+            }
+            let mut scene = Vec::new();
+            if mode == 0 {
+                self.push_lid_scene(&mut scene);
+            } else {
+                scene.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+                    colour: menu_style::page_ground([0.085, 0.085, 0.093, 1.0]) });
+                if let Some(shelf) = self.shelves.get(self.active) {
+                    shelf.draw_selected_centred(out_w() as f32 / 2.0, OUT_H as f32 * 0.55,
+                        out_w() as f32 * 0.62, OUT_H as f32 * 0.56, 1.0, 1.0, &mut scene);
+                }
+            }
+            // Full Cart settles in, a touch closer as it comes. Inserted
+            // Cart keeps its size: shrunk, it pulled the part of the seated
+            // cart below the screen's edge into view, label and all
+            // (Siham 2026-11-14).
+            let k = if mode == 0 { 1.0 } else { 0.94 + 0.06 * cover };
+            let (cx, cy) = (out_w() as f32 / 2.0, OUT_H as f32 / 2.0);
+            // Drawn whole, then faded from the switched-off screen's black:
+            // fading each layer let the cart show through the slot's front,
+            // label and all (Siham 2026-11-14).
+            commands.extend(scene.into_iter().map(|d| lid_place(d, cx, cy, k, 0.0, 1.0)));
+            if cover < 1.0 {
+                commands.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+                    colour: [0.0, 0.0, 0.0, 1.0 - cover] });
+            }
+            if mode == 0 {
+                // The cart sits low in its slot: the time and battery take
+                // the free band above it, large, as in the first Rotate
+                // betas (Siham 2026-11-14), and leave the corners empty.
+                self.push_lid_big_clock(cx, LID_INSERTED_CLOCK_Y, LID_INSERTED_CLOCK_SCALE,
+                    false, cover, &mut commands);
+                // Game Info above the slot: NOW PLAYING, the title, then the
+                // system and time on one line.
+                self.push_game_info(cx, OUT_H as f32 - MOUTH_H - 132.0, None, cover, &mut commands);
+            } else {
+                self.push_lid_status(false, cover, &mut commands);
+                // Full Cart: NOW PLAYING over the cart, the title, system
+                // and time under it, like a music player's (Siham 2026-11-15).
+                let cart = self.shelves.get(self.active).and_then(|shelf| shelf.selected_centred_box(
+                    out_w() as f32 / 2.0, OUT_H as f32 * 0.55, out_w() as f32 * 0.62, OUT_H as f32 * 0.56));
+                if let Some((_, y, _, h)) = cart {
+                    // As lid_place puts it: k times as far from the middle.
+                    let (top, bottom) = (cy + (y - cy) * k, cy + (y + h - cy) * k);
+                    self.push_game_info(cx, top - 36.0, Some(bottom + 14.0), cover, &mut commands);
+                }
+            }
+        }
+        self.gpu.fit(self.size);
+        self.gpu.begin_frame();
+        self.gpu.draw_list(&commands);
+        self.gpu.end_frame(self.size);
+    }
+
+    /// The closed Rotate with no game, over the shelf already drawn: the
+    /// shelf steps back from the top line (Drifting Shelf), or the cover
+    /// rises over it (Last Played, Random Cart), or the screen goes dark.
+    /// `row`: the shelf's carts in `commands`, all Drifting Shelf shrinks
+    /// (the slot bar keeps its size, Siham 2026-11-14).
+    fn push_lid_shelf(&mut self, commands: &mut Vec<Draw>, row: std::ops::Range<usize>) {
+        let t = self.lid_t;
+        match self.settings.rotate_shelf_cover {
+            0 => {
+                // Shrunk from its foot, the shelf leaves the top line free.
+                let k = 1.0 - 0.12 * t;
+                let (cx, cy) = (out_w() as f32 / 2.0, OUT_H as f32);
+                // Only the carts: the wallpaper and the slot bar stay put.
+                let end = row.end.min(commands.len());
+                for draw in &mut commands[row.start.min(end)..end] {
+                    *draw = lid_place(*draw, cx, cy, k, 0.0, 1.0);
+                }
+            }
+            mode @ (4 | 5) => {
+                // Digital Clock, Analog Clock: the theme's ground, a big
+                // time or a dial, the date and the battery.
+                let g = menu_style::page_ground([0.085, 0.085, 0.093, 1.0]);
+                commands.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+                    colour: [g[0], g[1], g[2], t] });
+                let cx = out_w() as f32 / 2.0;
+                if mode == 4 {
+                    self.push_lid_big_clock(cx, LID_DIGITAL_CLOCK_Y, LID_DIGITAL_CLOCK_SCALE,
+                        true, t, commands);
+                } else {
+                    self.push_lid_dial(cx, t, commands);
+                }
+            }
+            mode => {
+                commands.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+                    colour: if mode == 3 { [0.0, 0.0, 0.0, t] }
+                        else { let g = menu_style::page_ground([0.085, 0.085, 0.093, 1.0]);
+                               // Opaque once closed: no shelf or slot bar
+                               // ghosting through (Siham 2026-11-15).
+                               [g[0], g[1], g[2], t] } });
+                if mode != 3 {
+                    if let Some(shelf) = self.shelves.get(self.active) {
+                        // The shelf's own cart lifts to the middle.
+                        shelf.draw_selected_centred(out_w() as f32 / 2.0, OUT_H as f32 * 0.55,
+                            out_w() as f32 * 0.62, OUT_H as f32 * 0.56, t,
+                            (t * 4.0).min(1.0), commands);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The closed RG Rotate during a game: the hold scene's cartridge,
+    /// seated, in front of a switched-off screen.
+    fn push_lid_scene(&self, commands: &mut Vec<Draw>) {
+        commands.push(Draw::Rect {
+            x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
+            colour: menu_style::page_ground([0.085, 0.085, 0.093, 1.0]),
+        });
+        let Some(shelf) = self.shelves.get(self.active) else { return };
+        let Some(cart) = shelf.carts.get(shelf.index) else { return };
+        let (rest, scale) = shelf.selected_at();
+        shelf.draw_row(Some(cart.stem.as_str()), 0.0, 1.0, 1.0, commands);
+        SlotChrome {
+            cart, face: shelf.face(shelf.index), rest, scale,
+            seat: 1.0, alert: None, dim: 0.0,
+            screen: 0.0, game: true, over: false,
+            slot_faces: pick_slot_faces(self.slot_faces, self.home_slot_faces, Some(cart)),
+        }.draw_with_closer(commands, self.clear_layers().0, self.clear_layers().1,
+            pick_closer(self.slot_faces, self.home_closers, Some(cart)), false);
     }
 
     fn refresh_selected_title(&mut self) {
@@ -5924,9 +6653,11 @@ impl Engine {
         self.selected_title_face=Printed::new(tex,image.w);
     }
 
+    /// Wallpaper Tint darkens images only: General's, or a shelf's own.
     fn show_general_tint(&self) -> bool {
-        self.wallpaper_personal ||
-            self.settings.wallpaper == crate::settings::WallpaperPick::Shelf
+        (self.wallpaper_personal && self.settings.wallpaper != crate::settings::WallpaperPick::None)
+            || self.settings.wallpaper_shelves.values()
+                .any(|pick| matches!(pick, crate::settings::WallpaperPick::File(_)))
     }
 
     fn cycle_wallpaper_tint(&mut self, right: bool) {
@@ -5934,8 +6665,9 @@ impl Engine {
         self.persist_settings();
     }
 
-    fn cycle_appearance(&mut self) {
-        self.settings.appearance=self.settings.appearance.toggle();
+    fn cycle_appearance(&mut self, right: bool) {
+        self.settings.appearance=self.settings.appearance.step(right);
+        menu_style::set_oled(self.settings.appearance == crate::settings::Appearance::Oled);
         self.home_slot_faces=self.home_slot_themes[self.settings.appearance.bar_theme()];
         let custom_colours = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().is_some_and(|(root,_)|
@@ -6015,25 +6747,23 @@ impl Engine {
         let which = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
         let (tex, width, height) = self.setting_values[which];
         // Its row among the six shown while Library scrolls.
-        let offset = crate::controls::scroll_offset(row, LIBRARY_ROWS.len());
-        let Some(shown) = LIBRARY_SHARE_ROW.checked_sub(offset)
-            .filter(|&r| r < crate::controls::VISIBLE_ROWS) else { return };
-        let y = self.menu_rows_top(LIBRARY_ROWS.len().min(crate::controls::VISIBLE_ROWS))
-            + shown as f32 * QUICK_PITCH + 8.0;
+        let Some((dy, shows)) = self.menu_row_place(LIBRARY_SHARE_ROW, LIBRARY_ROWS.len()) else { return };
+        let y = self.menu_rows_top(LIBRARY_ROWS.len().min(self.visible_rows())) + dy + 8.0;
         let scale = 0.79f32;
         let w = width as f32 * scale;
         let right = out_w() as f32 - 34.0;
         let selected = row == LIBRARY_SHARE_ROW;
         let x = right - w - if selected { 22.0 } else { 0.0 };
         out.push(Draw::Tex { x, y, w, h: height as f32 * scale, tex,
-            alpha: if selected { 1.0 } else { 0.62 } });
+            alpha: shows * if selected { 1.0 } else { menu_look::ROW_REST } });
         if selected {
             let (left, lw, lh) = self.setting_carets[0];
             let (right_tex, rw, rh) = self.setting_carets[1];
+            let y = self.caret_y(y, scale);
             out.push(Draw::Tex { x: x - lw as f32 - 8.0, y,
-                w: lw as f32, h: lh as f32, tex: left, alpha: 1.0 });
+                w: lw as f32, h: lh as f32, tex: left, alpha: shows });
             out.push(Draw::Tex { x: right - rw as f32, y,
-                w: rw as f32, h: rh as f32, tex: right_tex, alpha: 1.0 });
+                w: rw as f32, h: rh as f32, tex: right_tex, alpha: shows });
         }
     }
 
@@ -6051,7 +6781,22 @@ impl Engine {
                         sun => 54 + sun as usize,
                     }]
                 } else if key == SHELF_PICK_KEY {
-                    *self.shelf_name_faces.get(self.wallpaper_shelf)?
+                    match self.wallpaper_edit {
+                        Some(shelf) => *self.shelf_name_faces.get(shelf)?,
+                        None => self.setting_values[GENERAL_VALUE],
+                    }
+                } else if key == WALLPAPER_PICK_KEY {
+                    use crate::settings::WallpaperPick;
+                    let Some(shelf) = self.wallpaper_edit else { return self.value_face(16) };
+                    match self.settings.shelf_wallpaper(shelf) {
+                        None => self.setting_values[GENERAL_VALUE],
+                        Some(WallpaperPick::File(_)) =>
+                            self.wallpaper_edit_face.unwrap_or(self.setting_values[26]),
+                        Some(WallpaperPick::None) => self.setting_values[17],
+                        Some(WallpaperPick::Random) => self.setting_values[18],
+                        Some(WallpaperPick::Blur) => self.setting_values[20],
+                        Some(_) => self.setting_values[19],
+                    }
                 } else if key == 16 && matches!(self.settings.wallpaper,
                     crate::settings::WallpaperPick::File(_)) {
                     self.wallpaper_name_face.unwrap_or(self.setting_values[26])
@@ -6063,22 +6808,25 @@ impl Engine {
                 } else { return None })
     }
 
-    /// Each row's label and value scales, so the two never meet on a narrow
-    /// screen: the label gives way first, down to 0.55, then the value,
-    /// down to 0.5 (as the Controls pages). The room assumes the carets, so
-    /// nothing resizes as the selection moves. 0.79 each where both fit.
-    fn fit_scales(&self, items: &[usize], keys: &[usize]) -> Vec<(f32, f32)> {
+    /// The room a row's value has, from the label's x to the value's right
+    /// edge, less the carets and a 12 px gap: the same selected or not, so
+    /// nothing moves as the selection does.
+    fn value_room(&self) -> f32 {
         let caret = self.setting_carets[0].1 as f32 + 8.0;
-        // From the label's x to the value's right edge, less the carets
-        // and a 12 px gap.
-        let room = out_w() as f32 - 34.0 - 22.0 - caret - 12.0 - 37.0;
+        out_w() as f32 - 34.0 - 22.0 - caret - 12.0 - 37.0
+    }
+
+    /// Each row's label and value scales. Labels stay at 0.79 (they gave
+    /// way first on narrow screens, Siham 2026-11-15): only one too long to
+    /// leave a value 80 px shrinks, down to 0.55. A value too long for what
+    /// is left is cut (draw_values), never shrunk.
+    fn fit_scales(&self, items: &[usize], keys: &[usize]) -> Vec<(f32, f32)> {
+        let room = self.value_room();
         items.iter().enumerate().map(|(i, &label)| {
             let lw = self.menu_textures.get(label).map_or(0, |t| t.1) as f32;
-            let vw = keys.get(i).and_then(|&k| self.value_face(k)).map_or(0, |f| f.1) as f32;
-            if vw == 0.0 || (lw + vw) * 0.79 <= room { return (0.79, 0.79); }
-            let label_scale = ((room - vw * 0.79) / lw.max(1.0)).clamp(0.55, 0.79);
-            let value_scale = ((room - lw * label_scale) / vw).clamp(0.5, 0.79);
-            (label_scale, value_scale)
+            let has_value = keys.get(i).and_then(|&k| self.value_face(k)).is_some();
+            if !has_value || lw * 0.79 <= room - 80.0 { return (0.79, 0.79); }
+            (((room - 80.0) / lw.max(1.0)).clamp(0.55, 0.79), 0.79)
         }).collect()
     }
 
@@ -6087,85 +6835,124 @@ impl Engine {
                           keys: &[usize], out: &mut Vec<Draw>) {
         let scales = self.fit_scales(items, keys);
         self.draw_menu_rows(heading, items, row, &scales, out);
-        self.draw_values(row, keys, &scales, out);
+        self.draw_values(heading, items, row, keys, &scales, out);
+        self.draw_menu_chrome(heading, items.len(), row, true, out);
     }
 
-    fn draw_values(&self, row: usize, keys: &[usize], scales: &[(f32, f32)],
-                   out: &mut Vec<Draw>) {
+    /// How far a long text has scrolled in its window, `travel` px in all:
+    /// still a moment, along at an even pace, still a moment at its end,
+    /// then back to its start. 0 for text that fits.
+    pub(super) fn marquee_offset(&self, what: (usize, usize), travel: f32) -> f32 {
+        if travel <= 0.5 { return 0.0; }
+        let now = Instant::now();
+        // From its start whenever it comes back into view or changes
+        // (another value is another travel): it once picked up where an
+        // earlier pass had left off, at its end (Siham 2026-11-15).
+        let key = (what.0, what.1, travel.to_bits());
+        let since = match self.marquee.get() {
+            Some((seen, at, last)) if seen == key
+                && now.duration_since(last) < Duration::from_millis(200) => at,
+            _ => now,
+        };
+        self.marquee.set(Some((key, since, now)));
+        const HOLD: f32 = 1.2;
+        const PACE: f32 = 40.0;
+        let run = travel / PACE;
+        let t = now.duration_since(since).as_secs_f32() % (HOLD + run + HOLD);
+        ((t - HOLD) / run).clamp(0.0, 1.0) * travel
+    }
+
+    fn draw_values(&self, heading: usize, items: &[usize], row: usize, keys: &[usize],
+                   scales: &[(f32, f32)], out: &mut Vec<Draw>) {
         // Six rows at most on screen; a longer page scrolls (as Controls).
-        let offset = crate::controls::scroll_offset(row, keys.len());
-        let top = self.menu_rows_top(keys.len().min(crate::controls::VISIBLE_ROWS));
-        for (index, key) in keys.iter().copied().enumerate()
-            .skip(offset).take(crate::controls::VISIBLE_ROWS) {
+        let top = self.menu_rows_top(keys.len().min(self.visible_rows()));
+        let caret = self.setting_carets[0].1 as f32 + 8.0;
+        for (index, key) in keys.iter().copied().enumerate() {
+            let Some((dy, shows)) = self.menu_row_place(index, keys.len()) else { continue };
             let Some((tex, width, height)) = self.value_face(key) else { continue };
-            let scale = scales.get(index).map_or(0.79, |s| s.1);
-            // A smaller value stays centred on its row.
-            let y = top + (index - offset) as f32 * QUICK_PITCH + 8.0
-                + height as f32 * (0.79 - scale) / 2.0;
-            let w = width as f32 * scale;
+            let (label_scale, scale) = scales.get(index).copied().unwrap_or((0.79, 0.79));
             let right = out_w() as f32 - 34.0;
+            // Where the value may start: past its label, a gap and the
+            // left caret.
+            let label_w = items.get(index).and_then(|&l| self.menu_textures.get(l))
+                .map_or(0, |t| t.1) as f32 * label_scale;
+            let from = 37.0 + label_w + 12.0 + caret;
+            // A few pixels too long beside the carets: a touch smaller, the
+            // same chosen or not, rather than a scroll of a few pixels
+            // (Last Played, Siham 2026-11-15).
+            let room = right - 22.0 - from;
+            let scale = match width as f32 * scale {
+                w if w > room && w * 0.94 <= room => scale * room / w,
+                _ => scale,
+            };
+            let y = top + dy + 8.0 + height as f32 * (0.79 - scale) / 2.0;
+            let w = width as f32 * scale;
             // Interface's Wallpaper Tint, idle over no personal image.
-            let idle = key == 17 && matches!(self.overlay, ShelfOverlay::GeneralSettings { .. })
+            let idle = key == 17 && matches!(self.overlay, ShelfOverlay::WallpaperSettings { .. })
                 && !self.show_general_tint();
             let chosen = row == index && !idle;
-            let x = right - w - if chosen { 22.0 } else { 0.0 };
-            out.push(Draw::Tex {
-                x, y, w, h: height as f32 * scale,
-                tex, alpha: if chosen { 1.0 } else if idle { 0.3 } else { 0.62 },
-            });
+            let end = right - if chosen { 22.0 } else { 0.0 };
+            let alpha = shows * if chosen { 1.0 } else if idle { 0.3 } else { menu_look::ROW_REST };
+            let x = if end - w >= from {
+                out.push(Draw::Tex { x: end - w, y, w, h: height as f32 * scale, tex, alpha });
+                end - w
+            } else {
+                // Too long: its start at rest, cut with a fade; scrolling
+                // through while chosen (Siham 2026-11-15).
+                let travel = w - (end - from);
+                let shift = if chosen { self.marquee_offset((heading, index), travel) } else { 0.0 };
+                const FEATHER: f32 = 18.0;
+                out.push(Draw::Span(Some(slot_gfx::Span {
+                    left: from, right: end,
+                    feather_left: shift.min(FEATHER), feather_right: (travel - shift).min(FEATHER),
+                })));
+                out.push(Draw::Tex { x: from - shift, y, w, h: height as f32 * scale, tex, alpha });
+                out.push(Draw::Span(None));
+                from
+            };
             if chosen {
-                let y = top + (index - offset) as f32 * QUICK_PITCH + 8.0;
+                // A smaller value stays centred on the 0.79 label's middle.
+                let y = self.caret_y(top + dy + 8.0, 0.79);
                 let (left, lw, lh) = self.setting_carets[0];
                 let (right_tex, rw, rh) = self.setting_carets[1];
                 out.push(Draw::Tex {
                     x: x - lw as f32 - 8.0, y, w: lw as f32,
-                    h: lh as f32, tex: left, alpha: 1.0,
+                    h: lh as f32, tex: left, alpha: shows,
                 });
                 out.push(Draw::Tex {
                     x: right - rw as f32, y, w: rw as f32,
-                    h: rh as f32, tex: right_tex, alpha: 1.0,
+                    h: rh as f32, tex: right_tex, alpha: shows,
                 });
             }
-        }
-        // The original Back / Change physical keycap legend; on the in-game
-        // Screen page, either side of the seated cart.
-        if self.screen_panel() {
-            // B Back | L1 R1 Size; where the screen already has the
-            // system's shape there is no size: arrows Change.
-            let right = if self.screen_page_sizes() { self.screen_size_hint }
-                else { self.settings_hints[1] };
-            self.draw_flanking_hints(&[self.settings_hints[0], right], out);
-            return;
-        }
-        out.push(Draw::Rect {
-            x: 0.0, y: 420.0, w: out_w() as f32, h: 60.0,
-            colour: opening(),
-        });
-        for (tex, w, x) in centred_hints(&self.settings_hints, LEGEND_GAP) {
-            out.push(Draw::Tex {
-                x, y: self.legend_y(), w: w as f32, h: HINT_H as f32,
-                tex, alpha: 1.0,
-            });
         }
     }
 
     /// slot. original's legends with the slot up: the first at the left
     /// edge, the second at the right, clear of the bay.
-    fn draw_flanking_hints(&self, hints: &[(slot_gfx::TexId, u32)], out: &mut Vec<Draw>) {
+    /// The legends either side of the seated cart's slot, each with its
+    /// word or, beside a slot too wide for it, its key alone (the Super
+    /// Nintendo's and Mega Drive's on the RG Rotate, Siham 2026-11-15).
+    fn draw_flanking_hints(&self, hints: [((slot_gfx::TexId, u32), (slot_gfx::TexId, u32)); 2],
+                           out: &mut Vec<Draw>) {
         let seen = |w: u32| w.saturating_sub(slot_ui::HINT_EDGE) as f32;
         let width = out_w() as f32;
         // Closer to the edges on the narrowest screens (1:1), so the right
         // legend still clears the bay.
         let margin = if width < 520.0 { 8.0 } else { 16.0 };
-        let bay_right = (width + slot_ui::MOUTH_W) / 2.0;
+        // A console's own slot (NES, Super Nintendo, Mega Drive, Famicom)
+        // keeps its 320 px middle at every width; the GBA bar its mouth.
+        let home = self.shelves.get(self.active).and_then(|s| s.carts.get(s.index))
+            .and_then(slot_ui::bitmaps::home_slot_family).is_some();
+        let bay = if home && self.slot_faces.is_some() { HOME_SLOT_BAY_W } else { slot_ui::MOUTH_W };
+        let (bay_left, bay_right) = ((width - bay) / 2.0, (width + bay) / 2.0);
         let y = self.legend_y();
-        if let Some(&(tex, w)) = hints.first() {
-            out.push(Draw::Tex { x: margin, y, w: w as f32, h: HINT_H as f32, tex, alpha: 1.0 });
-        }
-        if let Some(&(tex, w)) = hints.get(1) {
-            let x = (width - margin - seen(w)).max(bay_right + 4.0).round();
-            out.push(Draw::Tex { x, y, w: w as f32, h: HINT_H as f32, tex, alpha: 1.0 });
-        }
+        let (full, short) = hints[0];
+        let (tex, w) = if margin + seen(full.1) <= bay_left - 4.0 { full } else { short };
+        out.push(Draw::Tex { x: margin, y, w: w as f32, h: HINT_H as f32, tex, alpha: 1.0 });
+        let (full, short) = hints[1];
+        let (tex, w) = if width - margin - seen(full.1) >= bay_right + 4.0 { full } else { short };
+        let x = (width - margin - seen(w)).max(bay_right + 4.0).round();
+        out.push(Draw::Tex { x, y, w: w as f32, h: HINT_H as f32, tex, alpha: 1.0 });
     }
 
     /// The in-game Screen page: rows above the slot, the game in view above,
@@ -6223,7 +7010,7 @@ impl Engine {
         if !self.screen_panel() {
             out.push(Draw::Rect {
                 x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
-                colour: opening(),
+                colour: menu_ground(),
             });
             return;
         }
@@ -6231,6 +7018,7 @@ impl Engine {
         let bottom = OUT_H as f32 - MOUTH_H + self.footer_dy();
         out.push(Draw::Rect {
             x: 0.0, y, w: out_w() as f32, h: (bottom - y).max(0.0),
+            // The same in OLED: the Screen page tunes the picture behind it.
             colour: [0.0, 0.0, 0.0, GAME_MENU_SCRIM],
         });
         self.draw_game_footer(out);
@@ -6239,74 +7027,108 @@ impl Engine {
     fn draw_original_style_menu(&self, heading: usize, items: &[usize],
                                 selected: usize, out: &mut Vec<Draw>) {
         self.draw_menu_rows(heading, items, selected, &[], out);
+        self.draw_menu_chrome(heading, items.len(), selected, false, out);
     }
 
-    /// `scales`: each row's label scale (fit_scales), or none for 0.79.
-    fn draw_menu_rows(&self, heading: usize, items: &[usize], selected: usize,
-                      scales: &[(f32, f32)], out: &mut Vec<Draw>) {
-        // The original Slot full-screen quick menu uses the housing palette,
-        // full-width selected bar, 52px pitch, and centred physical keycaps.
-        // Reuse those exact primitives for Android's library settings.
-        // Six rows at most on screen; a longer page scrolls (as Controls).
-        let offset = crate::controls::scroll_offset(selected, items.len());
-        let top = self.menu_rows_top(items.len().min(crate::controls::VISIBLE_ROWS));
-        self.draw_menu_ground(top, out);
-        let cursor = if self.menu_cursor_y.is_finite() { self.menu_cursor_y }
-            else { top + (selected - offset) as f32 * QUICK_PITCH };
+    /// The fade a menu page opens with.
+    /// The carets' top beside a value drawn from `text_y` at `scale`: their
+    /// ink centred on its capitals, not hanging from the same top.
+    pub(super) fn caret_y(&self, text_y: f32, scale: f32) -> f32 {
+        text_y - (1.0 - scale) * self.caret_mid
+    }
+
+    fn menu_fade(&self, heading: usize) -> f32 {
         // The game menu fades in over 100 ms, after its 120 ms wait for a
         // second tap; every other menu over the original 160 ms.
         let fade_s = if heading == 19 { 0.10 } else { 0.16 };
-        let intro = (self.menu_opened.elapsed().as_secs_f32() / fade_s).clamp(0.0, 1.0);
-        let fade = slot_ui::ease(intro);
-        out.push(Draw::Rect {
-            x: 0.0, y: cursor + 4.0, w: out_w() as f32,
-            h: QUICK_PITCH - 8.0,
-            colour: { let mut c = edge(); c[3] *= fade; c },
-        });
-        // The in-game Screen page leaves the game in view above its rows.
-        if !self.screen_panel() {
-            self.text_fit(heading, 32.0, 33.0, out_w() as f32 - 70.0, 0.68 * fade, out);
-        }
-        for (i, index) in items.iter().copied().enumerate()
-            .skip(offset).take(crate::controls::VISIBLE_ROWS) {
+        slot_ui::ease((self.menu_opened.elapsed().as_secs_f32() / fade_s).clamp(0.0, 1.0))
+    }
+
+    /// A menu page's ground, the bar under its selected row and its rows.
+    /// `scales`: each row's label scale (fit_scales), or none for 0.79.
+    fn draw_menu_rows(&self, heading: usize, items: &[usize], selected: usize,
+                      scales: &[(f32, f32)], out: &mut Vec<Draw>) {
+        // The original Slot quick menu's 52px pitch and type. Six rows at
+        // most on screen; a longer page slides its list (as Controls).
+        let shown = items.len().min(self.visible_rows());
+        let top = self.menu_rows_top(shown);
+        self.draw_menu_ground(top, out);
+        let fade = self.menu_fade(heading);
+        // The main and game menus leave the right of a wide screen to the
+        // selected cart.
+        let side = self.menu_side_room(heading, items);
+        let x1 = out_w() as f32 - side.unwrap_or(PILL_RIGHT);
+        self.draw_menu_cursor(top, selected, items.len(), x1, fade, out);
+        for (i, index) in items.iter().copied().enumerate() {
+            let Some((dy, shows)) = self.menu_row_place(i, items.len()) else { continue };
             let x = 37.0;
-            let y = top + (i - offset) as f32 * QUICK_PITCH + 8.0
-                + (1.0 - fade) * 8.0;
-            let alpha = if heading == 82 && self.general_row_dimmed(index) { 0.4 * fade } else { fade };
+            let y = top + dy + 8.0 + (1.0 - fade) * 8.0;
+            let chosen = i == selected;
+            let idle = heading == 148 && self.general_row_dimmed(index);
+            let alpha = fade * shows * if idle { 0.4 } else if chosen { 1.0 } else { menu_look::ROW_REST };
+            let opens = self.menu_row_opens(heading, index);
             match scales.get(i) {
                 Some(&(scale, _)) => self.text_scaled(index, x, y, scale, alpha, out),
-                None => self.text_fit(index, x, y, out_w() as f32 - 70.0, alpha, out),
+                None => self.text_fit(index, x, y, x1 - x - if opens { 36.0 } else { 14.0 }, alpha, out),
+            }
+            if opens {
+                let (tex, w, h) = self.menu_opens;
+                let w = w as f32 * 0.79;
+                out.push(Draw::Tex {
+                    x: (x1 - 14.0 - w).round(), y, w, h: h as f32 * 0.79, tex,
+                    alpha: fade * shows * if chosen { 1.0 } else { 0.4 },
+                });
             }
         }
-        // All menus use the original Slot keycap generator. The paused game
-        // screen additionally advertises its active SAVE / LOAD shortcuts.
-        // (The Screen page's values draw its legend, either side of the cart.)
+        if let Some(room) = side {
+            self.draw_menu_side(room, top, shown, fade, out);
+        }
+    }
+
+    /// What frames a menu page's rows: its scroll bar, its path line and
+    /// title, and its keycap legend. Drawn after the rows and their values,
+    /// so a long page's sliding rows pass under it.
+    fn draw_menu_chrome(&self, heading: usize, count: usize, selected: usize,
+                        values: bool, out: &mut Vec<Draw>) {
+        let top = self.menu_rows_top(count.min(self.visible_rows()));
+        let fade = self.menu_fade(heading);
+        // The in-game Screen page leaves the game in view above its rows,
+        // and its legend goes either side of the seated cart.
         if self.screen_panel() {
+            self.draw_menu_scrollbar(top, count, fade, out);
+            if values {
+                // B Back | L1 R1 Size; where the screen already has the
+                // system's shape there is no size: arrows Change.
+                let right = if self.screen_page_sizes() { (self.screen_size_hint, self.screen_key_hints[1]) }
+                    else { (self.settings_hints[1], self.screen_key_hints[2]) };
+                self.draw_flanking_hints([(self.settings_hints[0], self.screen_key_hints[0]), right], out);
+            }
             return;
         }
-        if heading == 19 {
+        self.draw_menu_bands(top, count, out);
+        self.draw_menu_scrollbar(top, count, fade, out);
+        self.draw_menu_header(self.menu_path(heading), self.menu_textures.get(heading).copied(), fade, out);
+        // All menus use the original Slot keycap generator. The paused game
+        // screen additionally advertises its active SAVE / LOAD shortcuts.
+        let hints: &[(slot_gfx::TexId, u32)] = if values {
+            // The original Back / Change physical keycap legend.
+            &self.settings_hints
+        } else if heading == 19 {
             let linked = self.game.as_ref().is_some_and(|session|
                 session.linked() || session.requires_relaunch());
             // A paused Link never offers save/load, even in its keycap hints.
-            let hints: &[(slot_gfx::TexId, u32)] = if linked {
-                &self.game_menu_hints[..1] // B Back only
-            } else { &self.game_menu_hints };
-            for (tex, w, x) in centred_hints(hints, 15.0) {
-                out.push(Draw::Tex {
-                    x, y: self.legend_y(), w: w as f32, h: HINT_H as f32,
-                    tex, alpha: fade,
-                });
-            }
-        } else {
+            if linked { &self.game_menu_hints[..1] } // B Back only
+            else { &self.game_menu_hints }
+        } else if heading == 5 && selected == LIBRARY_SHARE_ROW {
             // Library's Share Saves row is a toggle, not a submenu.
-            let hints = if heading == 5 && selected == 4 { &self.settings_hints }
-                else { &self.menu_hints };
-            for (tex, w, x) in centred_hints(hints, LEGEND_GAP) {
-                out.push(Draw::Tex {
-                    x, y: self.legend_y(), w: w as f32, h: HINT_H as f32,
-                    tex, alpha: fade,
-                });
-            }
+            &self.settings_hints
+        } else { &self.menu_hints };
+        let gap = if !values && heading == 19 { 15.0 } else { LEGEND_GAP };
+        for (tex, w, x) in centred_hints(hints, gap) {
+            out.push(Draw::Tex {
+                x, y: self.legend_y(), w: w as f32, h: HINT_H as f32,
+                tex, alpha: if values { 1.0 } else { fade },
+            });
         }
     }
 
@@ -6353,7 +7175,8 @@ impl Engine {
     fn draw_multiplayer(&self, out: &mut Vec<Draw>) {
         out.push(Draw::Rect {
             x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
-            colour: opening(),
+            // Its cables and plugs are drawn for a dark ground, in every theme.
+            colour: menu_style::dark_ground(),
         });
         let Some(art) = &self.link_art else { return };
         link_screen::draw_link_art_with(self.link_phase, self.link_millis(), art, &self.link_marks,
@@ -6474,34 +7297,54 @@ impl Engine {
     }
 
     fn draw_overlay(&self, out: &mut Vec<Draw>) {
+        // Light and Original: the pages' text turns dark on their light grounds.
+        let ink = self.menu_ink();
+        if ink.is_some() { out.push(Draw::Ink(ink)); }
+        let start = out.len();
+        self.draw_overlay_page(out);
+        if ink.is_some() {
+            self.theme_hints(start, out);
+            out.push(Draw::Ink(None));
+        }
+    }
+
+    fn draw_overlay_page(&self, out: &mut Vec<Draw>) {
         match self.overlay {
             ShelfOverlay::None => {}
             ShelfOverlay::Menu { row } => {
-                self.draw_original_style_menu(0, &[1, 2, 3, 48, 25, 31], row, out);
+                let items = [1, 2, 3, 48, 25, 31];
+                self.draw_original_style_menu(0, &items, row, out);
                 if self.update_status == 1 {
-                    // Scale to the available right-hand width, then center the
-                    // resulting shorter glyph vertically within About's row.
-                    self.draw_update_status_centered(106, 523.0,
+                    // After About's label, as far as its mark: scale to
+                    // that width, then center the resulting shorter glyph
+                    // vertically within About's row.
+                    let x1 = out_w() as f32 - self.menu_side_room(0, &items).unwrap_or(PILL_RIGHT);
+                    let x = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round();
+                    self.draw_update_status_centered(106, x,
                         settings_row_top(6) + 5.5 * QUICK_PITCH,
-                        175.0, 0.70, out);
+                        (x1 - 36.0 - x).clamp(40.0, 175.0), 0.70, out);
                 }
             }
             ShelfOverlay::Library { row } => {
-                self.draw_original_style_menu(5, &LIBRARY_ROWS, row, out);
+                self.draw_menu_rows(5, &LIBRARY_ROWS, row, &[], out);
                 self.draw_library_share_value(row, out);
+                self.draw_menu_chrome(5, LIBRARY_ROWS.len(), row, false, out);
             }
             ShelfOverlay::Settings { row } => {
-                self.draw_original_style_menu(26, &SETTINGS_ROWS, row, out);
+                self.draw_original_style_menu(26, settings_rows(), row, out);
             }
             ShelfOverlay::GeneralSettings { row } => {
-                let rows=self.general_rows();
-                let keys:Vec<usize>=rows.iter().map(|id|match id {
-                    83=>16,84=>17,85=>18,86=>19,87=>20,133=>SHELF_PICK_KEY,_=>usize::MAX
-                }).collect();
-                self.draw_settings_menu(82,&rows,row,&keys,out);
+                self.draw_settings_menu(82, &INTERFACE_PAGE_ROWS, row, &INTERFACE_PAGE_KEYS, out);
+            }
+            ShelfOverlay::WallpaperSettings { row } => {
+                self.draw_settings_menu(148, &WALLPAPER_ROWS, row, &WALLPAPER_KEYS, out);
             }
             ShelfOverlay::InterfaceSettings { row } => {
-                self.draw_settings_menu(59, &INTERFACE_ROWS, row, &INTERFACE_KEYS, out);
+                let (rows, keys) = interface_rows();
+                self.draw_settings_menu(59, rows, row, keys, out);
+            }
+            ShelfOverlay::RotateSettings { row } => {
+                self.draw_settings_menu(147, &ROTATE_ROWS, row, &ROTATE_KEYS, out);
             }
             ShelfOverlay::EmulationSettings { row } => {
                 self.draw_settings_menu(50, &[51, 52, 55], row, &[10, 11, 12], out);
@@ -6526,9 +7369,9 @@ impl Engine {
                 let fade = slot_ui::ease(
                     (self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
                 out.push(Draw::Tex {
-                    x: out_w() as f32 - 32.0 - w as f32 * scale, y: 33.0,
+                    x: out_w() as f32 - 32.0 - w as f32 * scale, y: menu_look::TITLE_Y,
                     w: w as f32 * scale, h: h as f32 * scale,
-                    tex, alpha: 0.68 * fade,
+                    tex, alpha: menu_look::ROW_REST * fade,
                 });
             }
             ShelfOverlay::ScreenSettings { row } => {
@@ -6547,7 +7390,7 @@ impl Engine {
                 // for two transparent menu rows and a non-focusable status line.
                 out.push(Draw::Rect {
                     x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32,
-                    colour: opening(),
+                    colour: menu_ground(),
                 });
                 // Narrower than the 720 of the KONKR's 3:2 (4:3 640, Retroid
                 // Pocket Classic 552, 1:1 480): the sticker shrinks to the
@@ -6556,30 +7399,39 @@ impl Engine {
                 let width = out_w() as f32;
                 let narrower = (width - 720.0).min(0.0);
                 if let Some(tex) = self.about_texture {
-                    let scale = ((width - 24.0) / STICKER_W as f32).min(1.0);
-                    let (w, h) = (STICKER_W as f32 * scale, STICKER_H as f32 * scale);
-                    out.push(Draw::Tex {
-                        x: (width - w) / 2.0,
-                        y: 30.0, w, h,
-                        tex, alpha: 1.0,
-                    });
+                    let (x, y, w, h) = about_sticker_box();
+                    // A soft shadow under it and a light edge round it: the
+                    // dark sticker stands out on every theme's ground
+                    // (Siham 2026-11-15).
+                    // Both follow its shape, socket notch included: the
+                    // sticker itself, inked flat black, then flat white.
+                    let flat = |c: f32| Draw::Ink(Some(slot_gfx::InkMap { paper: [c; 3], ink: [c; 3] }));
+                    let grown = |g: f32, dy: f32, alpha: f32| Draw::Tex {
+                        x: x - g, y: y - g + dy, w: w + 2.0 * g, h: h + 2.0 * g, tex, alpha };
+                    out.push(flat(0.0));
+                    for (grow, alpha) in [(6.0f32, 0.07f32), (4.0, 0.10), (2.0, 0.16)] {
+                        out.push(grown(grow, 4.0, alpha));
+                    }
+                    out.push(flat(1.0));
+                    out.push(grown(1.5, 0.0, 0.26));
+                    out.push(Draw::Ink(None));
+                    // The device's sticker, as printed, in every theme.
+                    out.push(Draw::Tex { x, y, w, h, tex, alpha: 1.0 });
+                    out.push(Draw::Ink(self.menu_ink()));
                 }
                 let fade = slot_ui::ease(
                     (self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
                 let top = about_row_top();
-                let cursor = if self.menu_cursor_y.is_finite() {
-                    self.menu_cursor_y
-                } else { top + row as f32 * QUICK_PITCH };
-                out.push(Draw::Rect {
-                    x: 0.0, y: cursor + 4.0, w: out_w() as f32,
-                    h: QUICK_PITCH - 8.0,
-                    colour: { let mut c = edge(); c[3] *= fade; c },
-                });
+                self.draw_menu_cursor(top, row, 2, out_w() as f32 - PILL_RIGHT, fade, out);
+                let lit = |chosen: bool| if chosen { fade } else { menu_look::ROW_REST * fade };
                 self.text_fit(if about_primary_action(self.update_status) == 21 {110} else {95},
-                    37.0, top + 8.0, 590.0 + narrower, fade, out);
-                self.text_fit(98, 37.0, top + QUICK_PITCH + 8.0, 475.0 + narrower, fade, out);
+                    37.0, top + 8.0, 590.0 + narrower, lit(row == 0), out);
+                // Automatic Checks has all the room up to its On / Off: a
+                // fixed room shrank it on narrow screens (Siham 2026-11-15).
+                let auto_x = 592.0 + narrower;
+                self.text_fit(98, 37.0, top + QUICK_PITCH + 8.0, auto_x - 12.0 - 37.0, lit(row == 1), out);
                 self.text_fit(if self.update_auto {105}else{104},
-                    592.0 + narrower, top + QUICK_PITCH + 8.0, 95.0, fade, out);
+                    auto_x, top + QUICK_PITCH + 8.0, 95.0, lit(row == 1), out);
                 // Equal first-pixel baselines: the third status line begins
                 // exactly one QUICK_PITCH after the second line, rather than
                 // being vertically centered using a different offset.
@@ -6868,12 +7720,21 @@ impl Engine {
     }
     fn draw(&mut self, vsync_frame_ns: i64, mut on_pcm_ready: impl FnMut()) {
         if !self.gpu.graphics_ready() { return; }
+        self.update_menu_palette();
         // Includes Slot-side input/menu/RA/status preparation in "other_us".
         // The enclosing JNI caller's library gate and later EGL swap remain
         // outside the scope; Kotlin times the broader nativeDrawFrame call.
         let phase_native_started = Instant::now();
         LINK_ACTIVE.store(self.game.as_ref().is_some_and(|game| game.linked()), Ordering::Release);
         self.tick_menu_repeat();
+        // A game on screen, no menu or polaroid over it: Android keeps the
+        // screen on (MainActivity.keepScreenOn).
+        GAME_UNPAUSED.store(self.game.is_some() && matches!(self.overlay, ShelfOverlay::None)
+            && self.polaroids.is_none() && !self.exiting_screen, Ordering::Release);
+        let (dim, sleep) = self.settings.rotate_delays();
+        ROTATE_DELAYS.store(u32::from(dim) << 16 | u32::from(sleep)
+            | u32::from(self.settings.rotate_shelf_cover == 3) << 30
+            | 1 << 31, Ordering::Release);
         self.refresh_system_status();
         self.poll_shelf_wallpapers();
         // Poll the already-running achievement evaluator without blocking GL.
@@ -6920,7 +7781,22 @@ impl Engine {
         let mut dt = if elapsed > 0.1 && self.game.is_none() { 1.0 / 60.0 }
             else { elapsed.min(0.05) };
         self.last = now;
+        // Game Info's time: one add a frame, while the game really runs. A
+        // gap (slot. in the background) counts at most a quarter second.
+        if GAME_UNPAUSED.load(Ordering::Relaxed) && !self.lid_covered && self.lid_t == 0.0 {
+            self.play_time += elapsed.min(0.25);
+        }
         let mut cover_with_hold = false;
+        {
+            let goal = if self.lid_covered { 1.0 } else { 0.0 };
+            // From rest (the shelf may have been drawing at 4 Hz) the first
+            // step is one display frame; after that real time, so a slow
+            // frame does not stretch the animation.
+            let at_rest = self.lid_t == 0.0 || self.lid_t == 1.0;
+            let lid_dt = if at_rest { 1.0 / 60.0 } else { elapsed.min(0.1) };
+            let step = lid_dt / LID_ANIMATION_S;
+            self.lid_t = if goal > self.lid_t { (self.lid_t + step).min(goal) } else { (self.lid_t - step).max(goal) };
+        }
 
         // Measure real libretro simulation FPS independently of the optional
         // performance HUD. No display toggles or simulation timing changes.
@@ -7043,6 +7919,7 @@ impl Engine {
             }
         }
         self.prepare_controls();
+        self.prepare_menu_look();
         self.prepare_cart_studio();
         self.prepare_cart_library();
         self.prepare_romm();
@@ -7059,7 +7936,7 @@ impl Engine {
                 (14u8, row, self.pause_screen_page_rows().len()),
             ShelfOverlay::PauseGameplaySettings { row } => (15u8, row, GAMEPLAY_KEYS.len()),
             ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
-            ShelfOverlay::Settings { row } => (4u8, row, SETTINGS_ROWS.len()),
+            ShelfOverlay::Settings { row } => (4u8, row, settings_rows().len()),
             ShelfOverlay::ControlsSettings { .. } | ShelfOverlay::ControlsPort { .. }
             | ShelfOverlay::LayoutPorts { .. } | ShelfOverlay::LayoutPort { .. }
             | ShelfOverlay::Hotkeys { .. } | ShelfOverlay::Cheats { .. } =>
@@ -7067,7 +7944,9 @@ impl Engine {
             ShelfOverlay::GeneralSettings { row } =>
                 (12u8, row, self.general_rows().len()),
             ShelfOverlay::About { row } => (17u8, row, 2usize),
-            ShelfOverlay::InterfaceSettings { row } => (10u8, row, INTERFACE_ROWS.len()),
+            ShelfOverlay::InterfaceSettings { row } => (10u8, row, interface_rows().0.len()),
+            ShelfOverlay::RotateSettings { row } => (18u8, row, ROTATE_ROWS.len()),
+            ShelfOverlay::WallpaperSettings { row } => (19u8, row, WALLPAPER_ROWS.len()),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
             ShelfOverlay::PauseEmulationSettings { row } =>
                 (9u8, row, self.pause_emulation_rows().len()),
@@ -7080,22 +7959,26 @@ impl Engine {
             ShelfOverlay::Romm => (32u8, 0, 0),
             _ => (0, 0, 0),
         };
-        // A page of more than six rows shows six and scrolls: the bar
-        // follows the selected row within them (Controls' are already so).
-        let offset = crate::controls::scroll_offset(selected, count);
-        let (selected, count) = (selected - offset, count.min(crate::controls::VISIBLE_ROWS));
+        // A page of more than six rows shows six and slides its list: the
+        // bar moves freely inside them, and the list follows it only once it
+        // comes within a row of an edge. The bar's place is in the list's
+        // own frame, so both glide together.
+        let row_top = |engine: &Self| if kind == 17 { about_row_top() }
+            else { engine.menu_rows_top(count.min(engine.visible_rows())) };
         if kind != self.menu_seen {
             self.menu_seen = kind;
             self.menu_opened = now;
+            self.menu_scroll_top = crate::controls::scroll_follow_in(0, selected, count, self.visible_rows());
+            self.menu_scroll_y = self.menu_scroll_top as f32 * QUICK_PITCH;
             if count > 0 {
-                self.menu_cursor_y = (if kind == 17 { about_row_top() }
-                    else { self.menu_rows_top(count) }) + selected as f32 * QUICK_PITCH;
+                self.menu_cursor_y = row_top(self) + selected as f32 * QUICK_PITCH;
             }
         } else if count > 0 {
-            let goal = (if kind == 17 { about_row_top() }
-                else { self.menu_rows_top(count) }) + selected as f32 * QUICK_PITCH;
+            self.menu_scroll_top = crate::controls::scroll_follow_in(self.menu_scroll_top, selected, count, self.visible_rows());
+            let goal = row_top(self) + selected as f32 * QUICK_PITCH;
             let response = 1.0 - (-dt * 24.0).exp();
             self.menu_cursor_y += (goal - self.menu_cursor_y) * response;
+            self.menu_scroll_y += (self.menu_scroll_top as f32 * QUICK_PITCH - self.menu_scroll_y) * response;
         }
 
         // Upstream CRT: 160ms extinction, 350ms black hold, 450ms ejection.
@@ -7183,6 +8066,7 @@ impl Engine {
                     session.set_sun(self.current_emulation().sun(light_sensor(), top));
                     apply_motion(Some(&session), self.current_emulation().motion());
                     self.game = Some(session);
+                    self.play_time = 0.0;
                     // Focus and Recents were persisted during core
                     // preparation; avoid synchronous IO/rebuilding the
                     // carousel in the first game-frame callback.
@@ -7206,6 +8090,14 @@ impl Engine {
             }
         }
 
+        if self.game.is_some() && (self.lid_covered || self.lid_t > 0.0) {
+            // RG Rotate closed: the game waits under its cover. No libretro
+            // frame, so no audio either, until the lid is open again.
+            if let Some(game) = self.game.as_mut() { game.set_link_paused(true); }
+            self.game_accum = 0.0;
+            self.draw_lid_game();
+            return;
+        }
         if self.game.is_some() && matches!(self.overlay, ShelfOverlay::States) {
             // Polaroids are a full-screen, paused overlay. Render once per
             // display frame (not from a key event) and never advance libretro
@@ -7709,6 +8601,10 @@ impl Engine {
         let ejecting_stem = self.ejecting_stem().map(str::to_owned);
         let mut trigger_draws = Vec::new();
         self.draw_triggers(&mut trigger_draws);
+        // The shelf's own wallpaper, else General's, read before the shelf
+        // is borrowed for drawing.
+        let wallpaper_none = self.wallpaper_none();
+        let wallpaper = self.active_wallpaper();
         let shelf = &mut self.shelves[self.active];
 
         // Original Slot: 450ms seating + 280ms hold. Start the original
@@ -7728,26 +8624,27 @@ impl Engine {
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_EJECT_SFX);
         }
 
+        // The shelf's carts in `commands` (the closed RG Rotate shrinks them).
+        let mut lid_row = 0..0;
         let mut commands = vec![Draw::Rect {
             x: 0.0,
             y: 0.0,
             w: out_w() as f32,
             h: OUT_H as f32,
-            colour: [0.085, 0.085, 0.093, 1.0],
+            // None: the theme's colour, Dark's grey, OLED's black, Light's
+            // and Original's own (Siham 2026-11-14). An image covers it.
+            colour: if wallpaper_none {
+                menu_style::shelf_ground()
+            } else { menu_style::page_ground(menu_style::DARK_SHELF) },
         }];
         // Slot v1.7 carousel ground: None has no wallpaper; personal images
         // receive only the selected Wallpaper Tint (never a fixed scrim).
-        let shelf_wallpaper = (self.settings.wallpaper == crate::settings::WallpaperPick::Shelf)
-            .then(|| self.shelf_wallpaper_ready.get(self.active).copied().unwrap_or(false)
-                .then(|| self.shelf_wallpaper_texs.get(self.active).copied().flatten()).flatten())
-            .flatten();
-        let active_wallpaper = if self.settings.wallpaper ==
-            crate::settings::WallpaperPick::None { None }
-            else { shelf_wallpaper.or(self.wallpaper_texture) };
-        let tint = if self.wallpaper_personal || shelf_wallpaper.is_some() {
+        // The shelf's own wallpaper, else General's (Interface > Wallpaper).
+        // OLED blackens only the ground: a chosen wallpaper shows as in Dark.
+        let tint = if wallpaper.is_some_and(|(_, personal, _)| personal) {
             self.settings.wallpaper_tint.alpha()
         } else { 0.0 };
-        slot_ui::draw_ground_tinted(active_wallpaper, tint, &mut commands);
+        slot_ui::draw_ground_tinted(wallpaper.map(|(tex, _, _)| tex), tint, &mut commands);
         if self.progress == 0.0 {
             if let Some(picker) = self.picker {
                 let openness = picker.openness(self.born.elapsed().as_millis() as u64);
@@ -7755,7 +8652,9 @@ impl Engine {
                 let dim = 1.0 + (0.614 - 1.0) * t;
                 let span = Some(picker_span(shelf, openness));
                 let selected = shelf.carts.get(shelf.index).map(|c| c.stem.as_str());
+                let row_from = commands.len();
                 shelf.draw_row_clear_of(selected, 0.0, 0.26 * t, dim, span, &mut commands);
+                lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),
                     pick_closer(self.slot_faces, self.home_closers, shelf.carts.get(shelf.index)), &mut commands);
@@ -7763,7 +8662,9 @@ impl Engine {
                 // Match upstream Refusal: only the shelf carts shake.
                 // The physical slot stays fixed; no input delay or layout changes.
                 let shake = self.refusal.map_or(0.0, |r| r.offset(ms));
+                let row_from = commands.len();
                 shelf.draw_row(ejecting_stem.as_deref(), shake, 0.0, 1.0, &mut commands);
+                lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),
                     pick_closer(self.slot_faces, self.home_closers, shelf.carts.get(shelf.index)), &mut commands);
@@ -7796,6 +8697,9 @@ impl Engine {
                         None
                     }
                 } else {None};
+                // The words over a light Theme wallpaper turn dark.
+                let shelf_ink = self.shelf_ink();
+                if shelf_ink.is_some() { commands.push(Draw::Ink(shelf_ink)); }
                 if let Some((face,elapsed,is_platform))=name {
                     let alpha=slot_name_alpha(elapsed);
                     if alpha>0.0 {
@@ -7808,6 +8712,7 @@ impl Engine {
                     let alpha=name.map_or(1.0,|(_,elapsed,_)|slot_title_alpha(elapsed));
                     slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
                 }
+                if shelf_ink.is_some() { commands.push(Draw::Ink(None)); }
             }
         } else {
             let cart = &shelf.carts[shelf.index];
@@ -7906,6 +8811,8 @@ impl Engine {
             self.gpu.end_frame(self.size);
             return;
         }
+        let lid = self.game.is_none() && self.lid_t > 0.0;
+        if lid { self.push_lid_shelf(&mut commands, lid_row); }
         // Keep the upper indicators on the identical visibility lifecycle
         // as Slot's footer: only on an idle, menu-free cartridge carousel.
         // A first run shows its sentence alone: no clock, battery or icons
@@ -7922,8 +8829,9 @@ impl Engine {
             if light { indicator_flags |= 16; } // theme ink for Android Wi-Fi/task glyphs
             // Settings > Status Bar: where the icons and the clock go. On
             // the same line they share it, the icons on the left.
-            let clock_top = self.settings.clock_on_top;
-            let icons_bottom = self.settings.icons_on_bottom;
+            let near_square = near_square_panel();
+            let clock_top = self.settings.clock_on_top || near_square;
+            let icons_bottom = self.settings.icons_on_bottom && !near_square;
             let icons = self.settings.show_wifi || self.settings.show_bluetooth
                 || self.settings.show_integrations;
             let grouped = icons && clock_top != icons_bottom;
@@ -7938,10 +8846,21 @@ impl Engine {
             if line_dark(icons_bottom) { indicator_flags |= 256; }
             let dark_ink = line_dark(!clock_top);
             if dark_ink != self.footer_inked_dark { self.recolour_footer_text_to(dark_ink); }
-            let (clock_w, battery_w) = slot_ui::draw_status_clock(clock_top,
-                self.battery, self.battery_face,
-                Some(if dark_ink {self.bolt_light_texture} else {self.bolt_texture}),
-                self.clock_face, slot_ui::footer_ink(dark_ink), &mut commands);
+            let (clock_w, battery_w) = if lid {
+                // The closed Rotate grows them in their corners; the Black
+                // cover hides them, the clocks show their own, and over a
+                // cover the ink is white.
+                if self.settings.rotate_shelf_cover < 3 {
+                    let ink_dark = dark_ink && self.settings.rotate_shelf_cover == 0;
+                    self.push_lid_status(ink_dark, 1.0, &mut commands);
+                }
+                (0.0, 0.0)
+            } else {
+                slot_ui::draw_status_clock(clock_top,
+                    self.battery, self.battery_face,
+                    Some(if dark_ink {self.bolt_light_texture} else {self.bolt_texture}),
+                    self.clock_face, slot_ui::footer_ink(dark_ink), &mut commands)
+            };
             // Sharing the line, the icons sit after the clock and before the
             // battery: Android places them from these widths (8 bits each).
             if grouped {
@@ -7968,6 +8887,8 @@ impl Engine {
             // The delete hold and the eject animate with no key held down
             // anew: dozing there made them stutter (Siham 2026-11-10).
             && self.triggers.hold.is_none() && self.triggers.ejecting.is_none()
+            // The RG Rotate's cover animation (clock and battery growing).
+            && self.lid_t == if self.lid_covered { 1.0 } else { 0.0 }
             && self.cart_render.is_idle();
         CAROUSEL_QUIET.store(quiet, Ordering::Release);
     }
@@ -7983,7 +8904,7 @@ fn ghost(draw: Draw) -> Option<Draw> {
             Some(Draw::Tex { x, y, w, h, tex, alpha: alpha * GHOST }),
         Draw::Turned { x, y, w, h, tex, alpha, turn } =>
             Some(Draw::Turned { x, y, w, h, tex, alpha: alpha * GHOST, turn }),
-        Draw::Game | Draw::Shot { .. } => None,
+        Draw::Game | Draw::Shot { .. } | Draw::Ink(_) | Draw::Span(_) => None,
     }
 }
 
@@ -8229,6 +9150,13 @@ fn restore_shelf_focus(shelves: &mut [Shelf], active: usize, uris: &[Option<Path
 /// Slot. keeps the label timer alive even when fade-in alpha is initially zero.
 /// Time-based expiry (not alpha-based) is essential for reliable GBA startup
 /// and every L1/R1 GB/GBC/GBA switch on a high-refresh-rate Android panel.
+/// Game Info's time played: 42:13 under an hour, 1:02:13 from one.
+fn played_text(seconds: f32) -> String {
+    let s = seconds.max(0.0) as u64;
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h == 0 { format!("{m}:{s:02}") } else { format!("{h}:{m:02}:{s:02}") }
+}
+
 fn platform_name_running(elapsed_ms: u64) -> bool {
     elapsed_ms < 200 + 1200 + 800
 }
@@ -8252,7 +9180,40 @@ fn slot_name_alpha(elapsed_ms: u64) -> f32 {
 }
 
 /// Native About rows share one cursor. The third status line never receives focus.
-fn about_row_top() -> f32 { 270.0 }
+/// The About sticker on screen (x, y, w, h): the canvas' width at most,
+/// never above its own size (720 on the KONKR's 3:2, 480 on the RG Rotate).
+fn about_sticker_box() -> (f32, f32, f32, f32) {
+    let width = out_w() as f32;
+    let sticker_w = about_sticker_width() as f32;
+    let scale = ((width - 24.0) / sticker_w).min(1.0);
+    let (w, h) = (sticker_w * scale, STICKER_H as f32 * scale);
+    ((width - w) / 2.0, 30.0, w, h)
+}
+
+/// The About sticker's own width: the screen's, less its margins, from
+/// slot_ui::STICKER_MIN_W to STICKER_W. A handheld's label is printed that
+/// wide rather than shrunk (the KONKR's keeps its 660).
+fn about_sticker_width() -> u32 {
+    if is_konkr() { return STICKER_W; }
+    (out_w().saturating_sub(24)).clamp(slot_ui::STICKER_MIN_W, STICKER_W)
+}
+/// The About rows start just under the sticker: where they always were on a
+/// full-size sticker, higher as it shrinks (Siham 2026-11-15).
+fn about_row_top() -> f32 {
+    let (_, y, _, h) = about_sticker_box();
+    (y + h + 14.0).min(270.0)
+}
+
+/// The KONKR keeps its own logos; every other handheld gets slot.'s
+/// wordmark and its own name (Siham, 2026-11-04).
+fn about_sticker(fields: &StickerFields) -> slot_ui::UndoFace {
+    if is_konkr() {
+        sticker_face_konkr(fields)
+    } else {
+        let (name, model) = DEVICE_NAME.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        slot_ui::sticker_face_handheld_w(fields, &name, &model, about_sticker_width())
+    }
+}
 
 /// A verified downloaded release (READY=5) remains eligible for installation.
 fn about_primary_action(status: u8) -> i32 {
@@ -8261,8 +9222,25 @@ fn about_primary_action(status: u8) -> i32 {
 
 /// Physical D-pad UP and DOWN must move the selection in opposite
 /// directions, including wraparound; never leak navigation to libretro.
-fn move_menu_row(row: usize, key: i32, count: usize) -> usize {
+/// Rows that L1 / R1 skip in a list menu: one screen (Siham 2026-11-15).
+const MENU_PAGE_ROWS: usize = 6;
+
+fn move_menu_row(row: usize, key: i32, count: usize, repeating: bool) -> usize {
     if count == 0 { return 0; }
+    // L1 / R1: a screen up / down, stopping at the first and last rows (a
+    // short page goes straight to them).
+    match key {
+        102 => return row.min(count - 1).saturating_sub(MENU_PAGE_ROWS),
+        103 => return (row + MENU_PAGE_ROWS).min(count - 1),
+        _ => {}
+    }
+    if repeating {
+        return match key {
+            19 => row.saturating_sub(1),
+            20 => (row + 1).min(count - 1),
+            _ => row.min(count - 1),
+        };
+    }
     match key {
         19 => (row + count - 1) % count,
         20 => (row + 1) % count,
@@ -8277,7 +9255,7 @@ fn shift_down(draws: &mut [Draw], dy: f32) {
     for draw in draws {
         match draw {
             Draw::Rect { y, .. } | Draw::Tex { y, .. } | Draw::Turned { y, .. } => *y += dy,
-            Draw::Game | Draw::Shot { .. } => {}
+            Draw::Game | Draw::Shot { .. } | Draw::Ink(_) | Draw::Span(_) => {}
         }
     }
 }
@@ -8353,6 +9331,7 @@ mod link_hardware_tests;
 
 mod jni_exports;
 mod controls_ui;
+mod menu_look;
 mod cheats_ui;
 mod cart_studio;
 mod cart_library;
@@ -8432,7 +9411,9 @@ mod settings_value_tests {
             for key in GAMEPLAY_KEYS {
                 keys.push(("Gameplay".into(), key, platform));
             }
-            for key in INTERFACE_KEYS.into_iter().chain([10, 11, 12]).chain(16..=20) {
+            for key in INTERFACE_KEYS.into_iter().chain([10, 11, 12]).chain(16..=20)
+                // 85 is Android's "Lock the screen" right, not a setting.
+                .chain(ROTATE_KEYS.into_iter().filter(|&key| key != 85)) {
                 keys.push(("Interface/Emulation/General".into(), key, platform));
             }
         }

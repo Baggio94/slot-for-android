@@ -249,8 +249,13 @@ pub fn quick_value_face_within(text: &str, lit: bool, max_w: u32) -> UndoFace {
 }
 
 fn quick_text_face(label: &str, colour: [u8; 3]) -> UndoFace {
-    quick_text_face_within(label, colour, out_w())
+    // Wider than the screen: a long name scrolls through its row whole
+    // rather than ending mid-word (a cheat's, Siham 2026-11-15).
+    quick_text_face_within(label, colour, out_w().max(QUICK_FACE_MAX_W))
 }
+
+/// The widest quick face, in pixels: a long cheat name whole.
+const QUICK_FACE_MAX_W: u32 = 1400;
 
 fn quick_text_face_within(label: &str, colour: [u8; 3], max_w: u32) -> UndoFace {
     let Some(font) = text::label_font() else {
@@ -311,6 +316,22 @@ pub fn quick_caret_face(right: bool) -> UndoFace {
         }
     }
     face.into_undo()
+}
+
+/// Where the caret's ink is centred, in logical pixels from its face's top:
+/// the capitals' middle on a label drawn at full size. A label drawn smaller
+/// from the same top has its middle higher, and the caret must follow it.
+pub fn quick_caret_mid() -> f32 {
+    let face = quick_caret_face(true);
+    let th = density::px(face.h).max(1);
+    let tw = (face.rgba.len() as u32 / 4 / th).max(1);
+    let inked: Vec<u32> = (0..th)
+        .filter(|y| (0..tw).any(|x| face.rgba[((y * tw + x) * 4 + 3) as usize] > 32))
+        .collect();
+    match (inked.first(), inked.last()) {
+        (Some(&a), Some(&b)) => (a + b + 1) as f32 / 2.0 * face.h as f32 / th as f32,
+        _ => face.h as f32 / 2.0,
+    }
 }
 
 pub fn quick_legend_faces() -> [UndoFace; 3] {
