@@ -266,6 +266,7 @@ impl Engine {
         match heading {
             0 => "slot.",
             5 => "Menu",
+            151 => "Menu \u{203a} Library",
             19 => "Paused",
             26 if game => "Game Menu",
             26 => "Menu",
@@ -299,8 +300,8 @@ impl Engine {
             26 => item != 57,
             // The game menu's Save States, Multiplayer, Cheats and Settings.
             19 => matches!(item, 22 | 25 | 66 | 134),
-            // Library's RomM Server.
-            5 => item == 135,
+            // Library's Saves & States and RomM Server.
+            5 => matches!(item, 135 | 150),
             // Interface's Wallpaper and Status Bar.
             82 => matches!(item, 83 | 58),
             // A system's Controls.
@@ -323,6 +324,7 @@ impl Engine {
             | ShelfOverlay::Hotkeys { .. } | ShelfOverlay::Cheats { .. } => self.controls_path(),
             ShelfOverlay::Menu { .. } => self.menu_path(0),
             ShelfOverlay::Library { .. } => self.menu_path(5),
+            ShelfOverlay::SavesStates { .. } => self.menu_path(151),
             ShelfOverlay::GameMenu { .. } => self.menu_path(19),
             ShelfOverlay::Settings { .. } | ShelfOverlay::PauseSettings { .. } => self.menu_path(26),
             ShelfOverlay::ScreenSystemSettings { .. } => self.menu_path(91),
@@ -455,7 +457,8 @@ mod render {
     fn apps_and_bios_picker_return_to_their_original_menu_row() {
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
-        for page in [ShelfOverlay::Menu { row: 3 }, ShelfOverlay::Library { row: 2 }] {
+        for page in [ShelfOverlay::Menu { row: 3 }, ShelfOverlay::Library { row: 2 },
+                     ShelfOverlay::SavesStates { row: 1 }] {
             engine.overlay = page;
             engine.handle(Input::Key(96, true));
             assert!(engine.external_pending);
@@ -468,7 +471,7 @@ mod render {
             assert!(engine.menu_held.is_none());
         }
         // Refresh Library opens nothing: back to the shelf, where its scan shows.
-        engine.overlay = ShelfOverlay::Library { row: 6 };
+        engine.overlay = ShelfOverlay::Library { row: 5 };
         engine.handle(Input::Key(96, true));
         assert_eq!(engine.overlay, ShelfOverlay::None);
         assert!(!engine.external_pending);
@@ -724,7 +727,8 @@ mod render {
         let pages: Vec<(&str, ShelfOverlay)> = vec![
             ("01_menu", ShelfOverlay::Menu { row: 1 }),
             ("02_library_top", ShelfOverlay::Library { row: 0 }),
-            ("03_library_end", ShelfOverlay::Library { row: 6 }),
+            ("03_library_end", ShelfOverlay::Library { row: 5 }),
+            ("03_saves_states", ShelfOverlay::SavesStates { row: 3 }),
             ("04_settings", ShelfOverlay::Settings { row: 1 }),
             ("05_systems", ShelfOverlay::ScreenSettings { row: 0 }),
             ("06_gba_top", ShelfOverlay::ScreenSystemSettings { platform: Platform::Gba, row: 1 }),

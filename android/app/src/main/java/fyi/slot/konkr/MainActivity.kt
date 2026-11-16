@@ -133,6 +133,9 @@ class MainActivity : Activity() {
     external fun nativeKey(code: Int, pressed: Boolean)
     external fun nativeTouch(action: Int, x: Float, y: Float, timeMs: Long)
     external fun nativeUpdateProgress(percent: Int)
+    external fun nativeSetSlotFolder(place: Int)
+    external fun nativeReloadAll()
+    external fun nativeSetRommSync(state: Int)
     /** A key of a controller: Settings > Controls picks its port and button. */
     external fun nativePadKey(device: Int, code: Int, pressed: Boolean, stick: Boolean)
     /** Every controller connected now, as [{"id","name","fp"}]. */
@@ -431,6 +434,37 @@ class MainActivity : Activity() {
             onProgress = { percent -> if (!isDestroyed) nativeUpdateProgress(percent) }
         }
     }
+    /** The slot. folder (2.5): the mirror on the card that travels. */
+    internal val slotFolder: SlotFolder by lazy { SlotFolder(this) }
+    /** Copies this handheld's saves to the slot. folder a little after
+     *  the last save, not after each one. */
+    private val slotFolderPush = Runnable { slotFolder.sync(pull = false) }
+
+    /** Folders slot. already uses for something else (scenario A7). */
+    internal fun otherFolders(): Set<String> {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        return listOf(ROM_ROOT, BIOS_ROOT, SAVE_ROOT, STATE_ROOT)
+            .mapNotNull { prefs.getString(it, null) }.toSet()
+    }
+
+    /** The ROM folder's place on its storage (`Roms`), kept in slot.json. */
+    internal fun romFolderPath(): String? = try {
+        getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)?.let {
+            android.provider.DocumentsContract.getTreeDocumentId(Uri.parse(it)).substringAfter(':', "")
+                .takeIf { path -> path.isNotEmpty() }
+        }
+    } catch (_: Exception) { null }
+
+    /** Scenario D1: a slot folder from another handheld names its ROM
+     *  folder; with none chosen here, the picker opens right on it. */
+    internal fun suggestRomFolder(path: String) {
+        if (getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) != null) return
+        val volume = slotFolder.volume() ?: return
+        SlotToast.makeText(this, "Now choose your ROM folder.", Toast.LENGTH_LONG).show()
+        openRomFolderPicker(android.provider.DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents", "$volume:$path"))
+    }
+
     /** Install was pressed before Android let slot. install updates: the
      *  download starts once the player comes back with it allowed. */
     private var updateAfterPermission = false
@@ -475,6 +509,7 @@ class MainActivity : Activity() {
     private val audioRetryNotBeforeMs = java.util.concurrent.atomic.AtomicLong(0L)
     // A single pending wakeup is enough. GLSurfaceView never waits for audio.
     private var lastEmulationReportPollAt = 0L
+    private var lastLibraryStatePoll = 0L
     @Volatile private var diagnosticAudioUnderruns = 0
     // Prevent an empty-read 8ms sleep from missing a freshly produced frame.
     private val audioFrameSignal = java.util.concurrent.Semaphore(0)
@@ -980,6 +1015,14 @@ class MainActivity : Activity() {
                 }
                 16 -> requestLinkWifi()
                 17 -> toggleShareGbaSaves()
+                70 -> slotFolder.choose()
+                71 -> {
+                    if (!RommSaves.toggle(this@MainActivity)) {
+                        SlotToast.makeText(this@MainActivity, "Connect to RomM first, in Library > RomM Server.",
+                            Toast.LENGTH_SHORT).show()
+                    }
+                    nativeSetRommSync(RommSaves.state(this@MainActivity))
+                }
                 18 -> showPeerCartridgeConsent()
                 23 -> shareLinkCode()
                 40 -> saveScreenshot()
@@ -999,6 +1042,12 @@ class MainActivity : Activity() {
             }
             if (resumed) holdLinkLowLatency(nativeLinkActive())
             val nowPerf = android.os.SystemClock.uptimeMillis()
+            if (nowPerf - lastLibraryStatePoll >= 2_000L) {
+                // Library's values: RomM's sync and the slot. folder's place.
+                lastLibraryStatePoll = nowPerf
+                nativeSetRommSync(RommSaves.state(this@MainActivity))
+                nativeSetSlotFolder(slotFolder.place())
+            }
             if (resumed && nowPerf - lastEmulationReportPollAt >= 1_000L) {
                 lastEmulationReportPollAt = nowPerf
                 val playing = nativeIsPlaying()
@@ -1115,7 +1164,20 @@ class MainActivity : Activity() {
                         } else if (deleted.isNotEmpty()) {
                             RetroArchStorage.deleteManualState(this@MainActivity, target, deleted)
                         } else {
-                            RetroArchStorage.exportAfterSave(this@MainActivity, target)
+                            runOnUiThread {
+                                // The slot. folder catches up shortly after.
+                                uiHandler.removeCallbacks(slotFolderPush)
+                                uiHandler.postDelayed(slotFolderPush, 5_000L)
+                            }
+                            RetroArchStorage.exportAfterSave(this@MainActivity, target).also {
+                                // Then to RomM, when Sync Saves with RomM is on.
+                                RommSaves.afterSave(this@MainActivity, target)?.let { note ->
+                                    runOnUiThread {
+                                        if (!isDestroyed) SlotToast.makeText(this@MainActivity, note,
+                                            Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
                         }
                         if (failures.isNotEmpty()) {
                             runOnUiThread {
@@ -1953,6 +2015,34 @@ class MainActivity : Activity() {
             else SharedGbaChoice.CANCEL
     }
 
+    /** Both RomM and this handheld have a newer save for the game: the
+     *  player picks one, the other is kept beside it. Keeping this handheld's
+     *  is the default, so an accidental A never replaces a save. */
+    private fun askRommConflict(): RommSaves.Choice {
+        val ready = CountDownLatch(1)
+        val selected = java.util.concurrent.atomic.AtomicReference(RommSaves.Choice.KEEP_HANDHELD)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "ROMM SAVE",
+                    "RomM and this handheld both have a newer save for this game. " +
+                        "Which one do you want to play? The other one is kept.",
+                    onDismiss = { ready.countDown() })
+                dialog.addButton("KEEP THIS ONE") { dialog.dismiss() }
+                dialog.addButton("USE ROMM'S") {
+                    selected.set(RommSaves.Choice.USE_SERVER)
+                    dialog.dismiss()
+                }
+                dialog.show()
+            } catch (error: Exception) {
+                Log.e(TAG, "Cannot open the RomM save choice", error)
+                ready.countDown()
+            }
+        }
+        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
+            else RommSaves.Choice.KEEP_HANDHELD
+    }
+
     private enum class CoreStateChoice { EXISTING, SHARED, CANCEL }
 
     /** This dialog is deliberately rare: only Share Saves ON, actual core
@@ -2107,6 +2197,13 @@ class MainActivity : Activity() {
                             "Couldn't read your save folder, so this game uses slot.'s own save. " +
                                 "Choose the folder again in START > Library.",
                             Toast.LENGTH_LONG).show()
+                    }
+                }
+                // Sync Saves with RomM (2.5): the server's newer save comes
+                // in first. Never stops the game.
+                RommSaves.beforeLaunch(this@MainActivity, shared) { askRommConflict() }.message?.let { note ->
+                    runOnUiThread {
+                        if (!isDestroyed) SlotToast.makeText(this@MainActivity, note, Toast.LENGTH_SHORT).show()
                     }
                 }
                 step = "core"
@@ -3138,7 +3235,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun openRomFolderPicker() {
+    private fun openRomFolderPicker(initial: Uri? = null) {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             // Writable since 2.3: RomM saves the games it downloads there.
             addFlags(
@@ -3146,8 +3243,9 @@ class MainActivity : Activity() {
                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
             )
+            if (initial != null) putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initial)
             // Opens on the folder chosen before, to choose it again.
-            getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)?.let { saved ->
+            else getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)?.let { saved ->
                 try {
                     val tree = Uri.parse(saved)
                     putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,
@@ -3488,6 +3586,11 @@ class MainActivity : Activity() {
     @Deprecated("Android 12 SAF activity result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SlotFolder.REQUEST) {
+            wakeCarouselRender()
+            slotFolder.picked(resultCode, data)
+            return
+        }
         if (requestCode in setOf(FOLDER_REQUEST, BIOS_REQUEST, SAVE_REQUEST, STATE_REQUEST,
                 THEME_REQUEST, WALLPAPER_REQUEST, LABEL_REQUEST, STUDIO_PICTURE_REQUEST)) {
             nativeExternalReturn()
@@ -3861,6 +3964,8 @@ class MainActivity : Activity() {
             return
         }
         suspendForPause()
+        uiHandler.removeCallbacks(slotFolderPush)
+        slotFolder.sync(pull = false)
         super.onPause()
     }
 
@@ -3927,6 +4032,10 @@ class MainActivity : Activity() {
             nativeExternalReturn()
         }
         resumed = true
+        // The slot. folder: what another handheld changed comes in (B2),
+        // out of a game only.
+        uiHandler.removeCallbacks(slotFolderPush)
+        slotFolder.sync(pull = nativeCanRefreshLibrary())
         // Controllers may have come or gone while slot. was away.
         pushControllers()
         publishSensors()

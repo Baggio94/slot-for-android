@@ -228,9 +228,12 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
             may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game));
         LIBRARY_UPDATE_SAFE.store(safe, Ordering::Release);
         let current = holder.borrow().as_ref().map(|engine| engine.library_version);
+        // The slot. folder brought settings, favourites or labels in: the
+        // shelf is built again from them (SlotFolder.kt, 2.5).
+        let reload = safe && current.is_some() && RELOAD_ALL.swap(false, Ordering::AcqRel);
         let updated = {
             let state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
-            if safe && current.is_some_and(|version| version != state.version) {
+            if safe && current.is_some_and(|version| version != state.version || reload) {
                 Some((state.version, state.entries.clone()))
             } else {
                 None
@@ -258,10 +261,11 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 ));
             // Other ROMs: the shelves take them in place, their faces kept.
             let library_page = holder.borrow().as_ref().and_then(|engine| {
-                matches!(engine.overlay, ShelfOverlay::Library { .. } | ShelfOverlay::Menu { .. })
+                matches!(engine.overlay, ShelfOverlay::Library { .. } | ShelfOverlay::SavesStates { .. }
+                    | ShelfOverlay::Menu { .. })
                     .then_some((engine.overlay, engine.external_pending))
             });
-            let in_place = holder.borrow_mut().as_mut()
+            let in_place = !reload && holder.borrow_mut().as_mut()
                 .is_some_and(|engine| engine.shelves.iter().any(|s| !s.carts.is_empty())
                     && engine.update_library(version, snapshot.as_deref()));
             if !in_place {
@@ -1186,4 +1190,32 @@ pub extern "system" fn Java_fyi_slot_konkr_GameKeys_nativeGameKey(
     let Ok(uri) = env.get_string(&uri) else { return std::ptr::null_mut() };
     let name = crate::library::game_key(&uri.to_string_lossy());
     env.new_string(name).map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+/// Where the slot. folder is (Library's first row): 0 none, 1 internal
+/// storage, 2 SD card.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetSlotFolder(
+    _env: *mut c_void, _this: *mut c_void, place: i32,
+) {
+    SLOT_FOLDER.store(place.clamp(0, 2) as u8, Ordering::Release);
+}
+
+/// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetRommSync(
+    _env: *mut c_void, _this: *mut c_void, state: i32,
+) {
+    ROMM_SYNC.store(state.clamp(0, 2) as u8, Ordering::Release);
+}
+
+/// Everything slot. read at start (settings, favourites, labels, controls)
+/// changed on disk: build the shelf again from it when no game is on.
+static RELOAD_ALL: AtomicBool = AtomicBool::new(false);
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReloadAll(
+    _env: *mut c_void, _this: *mut c_void,
+) {
+    RELOAD_ALL.store(true, Ordering::Release);
 }

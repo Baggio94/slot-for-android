@@ -417,7 +417,7 @@ impl Engine {
     pub(super) fn romm_status(&mut self, kind: i32, text: String) {
         if kind == 3 {
             if matches!(self.overlay, ShelfOverlay::Romm) {
-                self.leave_romm(ShelfOverlay::Library { row: 1 });
+                self.leave_romm(ShelfOverlay::Library { row: LIBRARY_ROMM_ROW });
             }
             return;
         }
@@ -644,7 +644,7 @@ impl Engine {
                 page.info = Some(info_lines(&title, entry, on_shelf, room,
                     |t| slot_ui::quick_value_width_within(t, wide)));
             }
-            97 => self.leave_romm(ShelfOverlay::Library { row: 1 }),
+            97 => self.leave_romm(ShelfOverlay::Library { row: LIBRARY_ROMM_ROW }),
             _ => {}
         }
         self.keep_romm_cursor_visible();

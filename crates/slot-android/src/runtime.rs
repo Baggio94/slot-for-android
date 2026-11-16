@@ -503,6 +503,8 @@ enum ShelfOverlay {
     None,
     Menu { row: usize },
     Library { row: usize },
+    /// Library > Saves & States.
+    SavesStates { row: usize },
     Settings { row: usize },
     ScreenSettings { row: usize },
     ScreenSystemSettings { platform: Platform, row: usize },
@@ -544,7 +546,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 149] = [
+const MENU_TEXT: [&str; 153] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -696,6 +698,11 @@ const MENU_TEXT: [&str; 149] = [
     "Handheld",                           // 146, Settings: this console's own page (Siham 2026-11-14)
     "HANDHELD \u{b7} RG ROTATE",            // 147
     "WALLPAPER",                          // 148, Interface > Wallpaper
+    // 149-152: Library in 2.5 (Siham 2026-11-16)
+    "Choose slot. Folder",                // 149
+    "Saves & States",                     // 150, Library's page
+    "SAVES & STATES",                     // 151
+    "Sync Saves with RomM",               // 152
 ];
 
 /// Settings > Systems, top to bottom.
@@ -751,6 +758,13 @@ const SETTING_VALUE_NAMES: [&str; 143] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "TITLE", "TIME", "ALL"];
 /// The first RG Rotate value in SETTING_VALUE_NAMES.
 const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
+/// Library's values (2.5): where the slot. folder is, and RomM's sync
+/// before RomM is connected.
+const LIBRARY_VALUE_NAMES: [&str; 3] = ["INTERNAL", "SD CARD", "NEEDS ROMM"];
+/// The slot. folder's place: 0 none, 1 internal storage, 2 SD card.
+static SLOT_FOLDER: AtomicU8 = AtomicU8::new(0);
+/// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
+static ROMM_SYNC: AtomicU8 = AtomicU8::new(0);
 /// Settings > Interface > RG Rotate: its rows and their keys (85, Sleep
 /// When Closed, is Android's "Lock the screen" right, not a setting).
 /// Game Info (84) right under Playing, which it shows on; Animations are
@@ -1109,8 +1123,17 @@ const WALLPAPER_KEYS: [usize; 5] = [SHELF_PICK_KEY, WALLPAPER_PICK_KEY, 17, usiz
 
 /// Library: ROM folder, RomM, BIOS, Save and State folders, Share Saves,
 /// Refresh. Seven rows: the page scrolls, six shown (Siham 2026-11-09).
-const LIBRARY_ROWS: [usize; 7] = [6, 135, 24, 7, 8, 79, 9];
-const LIBRARY_SHARE_ROW: usize = 5;
+/// Library, six rows (Siham 2026-11-16, slot. 2.5): slot. Folder, ROM,
+/// BIOS, Saves & States, RomM Server, Refresh Library.
+const LIBRARY_ROWS: [usize; 6] = [149, 6, 24, 150, 135, 9];
+const LIBRARY_SLOT_ROW: usize = 0;
+const LIBRARY_SAVES_ROW: usize = 3;
+const LIBRARY_ROMM_ROW: usize = 4;
+/// Library > Saves & States: Save Folder, Save State Folder, Share Core
+/// Saves, Sync Saves with RomM.
+const SAVES_ROWS: [usize; 4] = [7, 8, 79, 152];
+const SAVES_SHARE_ROW: usize = 2;
+const SAVES_ROMM_ROW: usize = 3;
 
 /// X/Y Buttons (38, key 7) moved to Systems > Controls (X / Y), where its
 /// old value is the default until a system or game chooses.
@@ -1387,6 +1410,8 @@ struct Engine {
     menu_pill: [(slot_gfx::TexId, u32, u32); 3],
     /// The mark on a row that opens a page.
     menu_opens: (slot_gfx::TexId, u32, u32),
+    /// LIBRARY_VALUE_NAMES' faces.
+    library_values: [(slot_gfx::TexId, u32, u32); 3],
     /// Each page's path line, made when first shown.
     menu_paths: std::collections::HashMap<&'static str, (slot_gfx::TexId, u32, u32)>,
     /// The cart beside the main and game menus: its name, then its title
@@ -1818,6 +1843,11 @@ impl Engine {
                 let tex = gpu.create_face(&face);
                 (tex, face.w, face.h)
             }).collect();
+        // Library's own values (2.5): the slot. folder's place, RomM's sync.
+        let library_values = LIBRARY_VALUE_NAMES.map(|value| {
+            let face = quick_value_face(value, true);
+            (gpu.create_face(&face), face.w, face.h)
+        });
         let palette_values = slot_store::GbPalette::all().map(|palette| {
             let face = quick_value_face(palette.label(), true);
             (gpu.create_face(&face), face.w, face.h)
@@ -2096,6 +2126,7 @@ impl Engine {
             menu_scroll_y: 0.0,
             menu_pill,
             menu_opens,
+            library_values,
             menu_paths: Default::default(),
             menu_side: None,
             menu_textures,
@@ -4402,21 +4433,17 @@ impl Engine {
                                     let next = move_menu_row(row, code, n, self.menu_repeat_dispatch);
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
-                                // Identical left/right + A toggle to Settings.
-                                // Keep the selected row and refresh value in place.
-                                21 | 22 | 96 if row == LIBRARY_SHARE_ROW => {
-                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
-                                        .push_back(17);
-                                }
-                                // RomM, right after the ROM folder (Siham 2026-11-09).
-                                96 if row == 1 && !self.external_pending => self.open_romm(),
+                                96 if row == LIBRARY_SAVES_ROW =>
+                                    self.overlay = ShelfOverlay::SavesStates { row: 0 },
+                                // RomM, after Saves & States (Siham 2026-11-16).
+                                96 if row == LIBRARY_ROMM_ROW && !self.external_pending => self.open_romm(),
                                 96 if !self.external_pending => if let Some(action) = match row {
-                                    // ROM, BIOS, SRAM root, State root, Refresh.
-                                    0 => Some(1),
+                                    // slot. Folder (its window, then Android's
+                                    // picker), ROM, BIOS, Refresh.
+                                    LIBRARY_SLOT_ROW => Some(70),
+                                    1 => Some(1),
                                     2 => Some(4),
-                                    3 => Some(5),
-                                    4 => Some(6),
-                                    6 => Some(2),
+                                    5 => Some(2),
                                     _ => None,
                                 } {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
@@ -4428,6 +4455,29 @@ impl Engine {
                                     else { self.external_pending = true; }
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 0 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::SavesStates { row } => match code {
+                                19 | 20 | 102 | 103 => {
+                                    let next = move_menu_row(row, code, SAVES_ROWS.len(), self.menu_repeat_dispatch);
+                                    self.overlay = ShelfOverlay::SavesStates { row: next };
+                                }
+                                // Identical left/right + A toggle to Settings.
+                                // Keep the selected row and refresh value in place.
+                                21 | 22 | 96 if row == SAVES_SHARE_ROW => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(17);
+                                }
+                                21 | 22 | 96 if row == SAVES_ROMM_ROW => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(71);
+                                }
+                                96 if row < SAVES_SHARE_ROW && !self.external_pending => {
+                                    // SRAM root, State root.
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                        .push_back(if row == 0 { 5 } else { 6 });
+                                    self.external_pending = true;
+                                }
+                                97 => self.overlay = ShelfOverlay::Library { row: LIBRARY_SAVES_ROW },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -6782,21 +6832,45 @@ impl Engine {
             self.current_cart_platform(), video, &self.default_cores)
     }
 
-    /// Exact Settings ON/OFF texture and carets on Library row 4.
-    fn draw_library_share_value(&self, row: usize, out: &mut Vec<Draw>) {
-        let which = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
-        let (tex, width, height) = self.setting_values[which];
-        // Its row among the six shown while Library scrolls.
-        let Some((dy, shows)) = self.menu_row_place(LIBRARY_SHARE_ROW, LIBRARY_ROWS.len()) else { return };
-        let y = self.menu_rows_top(LIBRARY_ROWS.len().min(self.visible_rows())) + dy + 8.0;
+    /// Library's values: the slot. folder's place (nothing without one).
+    fn draw_library_values(&self, row: usize, out: &mut Vec<Draw>) {
+        let place = SLOT_FOLDER.load(Ordering::Acquire);
+        if (1..=2).contains(&place) {
+            let face = self.library_values[usize::from(place) - 1];
+            self.draw_row_value(LIBRARY_SLOT_ROW, LIBRARY_ROWS.len(), row, face, false, out);
+        }
+    }
+
+    /// Saves & States' values: Share Core Saves and Sync Saves with RomM,
+    /// with the exact Settings ON/OFF textures and carets.
+    fn draw_saves_values(&self, row: usize, out: &mut Vec<Draw>) {
+        let share = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
+        self.draw_row_value(SAVES_SHARE_ROW, SAVES_ROWS.len(), row, self.setting_values[share], true, out);
+        let romm = match ROMM_SYNC.load(Ordering::Acquire) {
+            0 => self.library_values[2],
+            2 => self.setting_values[4],
+            _ => self.setting_values[5],
+        };
+        self.draw_row_value(SAVES_ROMM_ROW, SAVES_ROWS.len(), row, romm, true, out);
+    }
+
+    /// A value at the right of a menu row; a toggle shows its carets when
+    /// selected.
+    fn draw_row_value(&self, at: usize, rows: usize, row: usize,
+                      (tex, width, height): (slot_gfx::TexId, u32, u32), toggle: bool,
+                      out: &mut Vec<Draw>) {
+        // Its row among the six shown while the page scrolls.
+        let Some((dy, shows)) = self.menu_row_place(at, rows) else { return };
+        let y = self.menu_rows_top(rows.min(self.visible_rows())) + dy + 8.0;
         let scale = 0.79f32;
         let w = width as f32 * scale;
         let right = out_w() as f32 - 34.0;
-        let selected = row == LIBRARY_SHARE_ROW;
-        let x = right - w - if selected { 22.0 } else { 0.0 };
+        let selected = row == at;
+        let carets = toggle && selected;
+        let x = right - w - if carets { 22.0 } else { 0.0 };
         out.push(Draw::Tex { x, y, w, h: height as f32 * scale, tex,
             alpha: shows * if selected { 1.0 } else { menu_look::ROW_REST } });
-        if selected {
+        if carets {
             let (left, lw, lh) = self.setting_carets[0];
             let (right_tex, rw, rh) = self.setting_carets[1];
             let y = self.caret_y(y, scale);
@@ -7159,8 +7233,8 @@ impl Engine {
             // A paused Link never offers save/load, even in its keycap hints.
             if linked { &self.game_menu_hints[..1] } // B Back only
             else { &self.game_menu_hints }
-        } else if heading == 5 && selected == LIBRARY_SHARE_ROW {
-            // Library's Share Saves row is a toggle, not a submenu.
+        } else if heading == 151 && selected >= SAVES_SHARE_ROW {
+            // Share Core Saves and Sync Saves with RomM are toggles.
             &self.settings_hints
         } else { &self.menu_hints };
         let gap = if !values && heading == 19 { 15.0 } else { LEGEND_GAP };
@@ -7375,8 +7449,13 @@ impl Engine {
             }
             ShelfOverlay::Library { row } => {
                 self.draw_menu_rows(5, &LIBRARY_ROWS, row, &[], out);
-                self.draw_library_share_value(row, out);
+                self.draw_library_values(row, out);
                 self.draw_menu_chrome(5, LIBRARY_ROWS.len(), row, false, out);
+            }
+            ShelfOverlay::SavesStates { row } => {
+                self.draw_menu_rows(151, &SAVES_ROWS, row, &[], out);
+                self.draw_saves_values(row, out);
+                self.draw_menu_chrome(151, SAVES_ROWS.len(), row, false, out);
             }
             ShelfOverlay::Settings { row } => {
                 self.draw_original_style_menu(26, settings_rows(), row, out);
@@ -7976,6 +8055,7 @@ impl Engine {
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, LIBRARY_ROWS.len()),
+            ShelfOverlay::SavesStates { row } => (33u8, row, SAVES_ROWS.len()),
             ShelfOverlay::GameMenu { row } => (3u8, row, pause_rows(
                 self.game.as_ref().is_some_and(GameSession::linked),
                 self.game.as_ref().is_some_and(GameSession::requires_relaunch)).len()),

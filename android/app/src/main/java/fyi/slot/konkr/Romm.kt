@@ -35,6 +35,8 @@ import java.util.Locale
 internal object Romm {
     private const val TAG = "SlotRomm"
     private const val MAX_JSON = 32 * 1024 * 1024
+    /** An in-game save: a few hundred KB at most (GBA 128 KB, N64 none). */
+    private const val MAX_SAVE = 4 * 1024 * 1024
     private const val PAGE = 500
     /** Asked first; a viewer account only holds the read ones. */
     // collections.read: the account's favourites, for the page's filter.
@@ -438,6 +440,131 @@ internal object Romm {
             if (text.startsWith("[") || items.length() < PAGE || (total in 0..offset)) break
         }
         return games
+    }
+
+    // ---------------------------------------------------------------------
+    // Saves (slot. 2.5, Sync Saves with RomM): a game's in-game save kept on
+    // the server under its RomM game, with the core's name as "emulator",
+    // as other RetroArch-core clients do. Plain /api/saves calls, which RomM
+    // has had since 3.x: no device registration needed.
+
+    /** One save the server holds for a game. */
+    class ServerSave(val id: Long, val fileName: String, val updatedAt: String,
+                     val emulator: String, val downloadPath: String)
+
+    /** The account can be asked about saves: signed in. */
+    fun signedIn(context: Context): Boolean = account(context) != null
+
+    /** The RomM game a cart is: same system, same file name without its
+     *  extension, from the library kept, else by asking the server. */
+    fun romIdFor(context: Context, platform: String, stem: String): Long? {
+        val wanted = stem.lowercase(Locale.ROOT)
+        cachedLibrary(context)?.first?.firstOrNull {
+            it.platform == platform && it.file.substringBeforeLast('.').lowercase(Locale.ROOT) == wanted
+        }?.let { return it.id }
+        val console = consoles(context).firstOrNull { it.platform == platform } ?: return null
+        val reply = authorized(context, "/api/roms?platform_ids=${console.id}&platform_id=${console.id}" +
+            "&search_term=" + URLEncoder.encode(stem, "UTF-8") + "&limit=50" +
+            "&with_char_index=false&with_filter_values=false&with_rom_id_index=false" +
+            "&with_provider_metadata=false")
+        if (reply.code != 200) throw IOException("RomM search HTTP ${reply.code}")
+        val text = String(reply.body, Charsets.UTF_8).trim()
+        val items = if (text.startsWith("[")) JSONArray(text) else JSONObject(text).optJSONArray("items")
+            ?: return null
+        for (i in 0 until items.length()) {
+            val rom = items.optJSONObject(i) ?: continue
+            val name = rom.optString("fs_name_no_ext").ifBlank { rom.optString("fs_name").substringBeforeLast('.') }
+            if (name.lowercase(Locale.ROOT) == wanted) return rom.optLong("id")
+        }
+        return null
+    }
+
+    /** The saves the server holds for a game. */
+    fun saves(context: Context, romId: Long): List<ServerSave> {
+        val reply = authorized(context, "/api/saves?rom_id=$romId")
+        if (reply.code != 200) throw IOException("RomM saves HTTP ${reply.code}")
+        val list = JSONArray(String(reply.body, Charsets.UTF_8))
+        return (0 until list.length()).mapNotNull { i ->
+            val save = list.optJSONObject(i) ?: return@mapNotNull null
+            if (save.optLong("rom_id", romId) != romId) return@mapNotNull null
+            ServerSave(save.optLong("id"), save.optString("file_name"), save.optString("updated_at"),
+                save.optString("emulator").takeIf { it != "null" }.orEmpty(),
+                save.optString("download_path").takeIf { it != "null" }.orEmpty())
+        }
+    }
+
+    /** A save's bytes: /api/saves/{id}/content, or its download path on
+     *  an older RomM. */
+    fun downloadSave(context: Context, save: ServerSave): ByteArray {
+        val reply = authorizedRaw(context, "/api/saves/${save.id}/content")
+        if (reply.code == 200) return reply.body
+        if (reply.code == 404 && save.downloadPath.isNotBlank()) {
+            val path = if (save.downloadPath.startsWith("/")) save.downloadPath else "/" + save.downloadPath
+            val old = authorizedRaw(context, path)
+            if (old.code == 200) return old.body
+            throw IOException("RomM save download HTTP ${old.code}")
+        }
+        throw IOException("RomM save download HTTP ${reply.code}")
+    }
+
+    /** Sends a game's save, replacing the one of the same name and emulator. */
+    fun uploadSave(context: Context, romId: Long, emulator: String, fileName: String,
+                   bytes: ByteArray): ServerSave {
+        val account = account(context) ?: throw SignedOut()
+        val url = account.server + "/api/saves?rom_id=$romId&emulator=" + URLEncoder.encode(emulator, "UTF-8")
+        fun send(auth: String): Reply {
+            val boundary = "slot" + System.nanoTime()
+            val head = ("--$boundary\r\nContent-Disposition: form-data; name=\"saveFile\"; filename=\"" +
+                fileName.replace("\"", "") + "\"\r\nContent-Type: application/octet-stream\r\n\r\n")
+                .toByteArray(Charsets.UTF_8)
+            val tail = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+            val connection = open(url, "POST", auth)
+            try {
+                connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                connection.doOutput = true
+                connection.setFixedLengthStreamingMode(head.size + bytes.size + tail.size)
+                connection.outputStream.use { it.write(head); it.write(bytes); it.write(tail) }
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                return Reply(code, read(stream, MAX_JSON))
+            } finally {
+                connection.disconnect()
+            }
+        }
+        var reply = send(authorization(context, account))
+        if (reply.code == 401 && account.kind != "client") {
+            synchronized(this) { access = null }
+            reply = send(authorization(context, account))
+        }
+        if (reply.code == 401) { signOut(context); throw SignedOut() }
+        if (reply.code == 403) throw IOException("This RomM account can't keep saves")
+        if (reply.code !in 200..299) throw IOException("RomM save upload HTTP ${reply.code}")
+        val save = reply.json() ?: throw IOException("RomM save upload unreadable")
+        return ServerSave(save.optLong("id"), save.optString("file_name"), save.optString("updated_at"),
+            save.optString("emulator"), save.optString("download_path"))
+    }
+
+    /** As `authorized`, for a file rather than JSON. */
+    private fun authorizedRaw(context: Context, path: String): Reply {
+        val account = account(context) ?: throw SignedOut()
+        fun get(auth: String): Reply {
+            val connection = open(account.server + path, "GET", auth)
+            connection.setRequestProperty("Accept", "*/*")
+            try {
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                return Reply(code, read(stream, MAX_SAVE))
+            } finally {
+                connection.disconnect()
+            }
+        }
+        var reply = get(authorization(context, account))
+        if (reply.code == 401 && account.kind != "client") {
+            synchronized(this) { access = null }
+            reply = get(authorization(context, account))
+        }
+        if (reply.code == 401) { signOut(context); throw SignedOut() }
+        return reply
     }
 
     // The library as last loaded, shown at once when the page opens again
