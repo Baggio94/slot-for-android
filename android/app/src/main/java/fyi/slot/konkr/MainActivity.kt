@@ -938,8 +938,26 @@ class MainActivity : Activity() {
             if (::taskIndicators.isInitialized) {
                 // RomM's downloads go on with its page left: top right.
                 val downloads = if (labelsPlaying) null else romm.downloadProgress()
-                if (downloads == null) taskIndicators.downloads.hide()
+                // An empty shelf shows the downloads in its middle, as the
+                // first scan, not NO GAMES FOUND (Siham 2026-11-16).
+                val onEmpty = downloads != null && shelfCarts == 0 && scansRunning.get() == 0
+                if (downloads == null || onEmpty) taskIndicators.downloads.hide()
                 else taskIndicators.downloads.showDownload(downloads[0], downloads[1])
+                if (onEmpty && downloads != null) {
+                    if (!downloadStatusShown) {
+                        downloadStatusShown = true
+                        downloadCountShown = -1
+                        nativeSetShelfStatus(shelfDownloading)
+                    }
+                    if (downloads[0] != downloadCountShown) {
+                        downloadCountShown = downloads[0]
+                        nativeSetScanProgress(downloads[0], downloads[1])
+                    }
+                } else if (downloadStatusShown) {
+                    downloadStatusShown = false
+                    // Unless a scan or a published shelf has said otherwise.
+                    if (scansRunning.get() == 0) nativeSetShelfStatus(if (shelfCarts == 0) shelfEmpty else shelfNone)
+                }
             }
             if (::autoLabelIndicator.isInitialized) {
                 if (nativeIsPlaying()) {
@@ -1188,6 +1206,10 @@ class MainActivity : Activity() {
     private val shelfScanning = 1
     /** Carts on the shelf, from the last library handed to the renderer. */
     private var shelfCarts = 0
+    /** RomM's games downloading onto an empty shelf: its centred bar. */
+    private val shelfDownloading = 8
+    private var downloadStatusShown = false
+    private var downloadCountShown = -1
     private val shelfEmpty = 2
     private val shelfImportError = 3
     private val shelfPermissionExpired = 4
