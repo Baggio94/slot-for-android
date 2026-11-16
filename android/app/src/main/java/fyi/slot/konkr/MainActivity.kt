@@ -250,7 +250,11 @@ class MainActivity : Activity() {
     private var addAfterScan: List<RomLibrary.SavedFile>? = null
     private data class PendingLibraryIndex(
         val root: Uri, val json: String, val prepared: String,
-        val serial: Int, val quiet: Boolean
+        val serial: Int, val quiet: Boolean,
+        /** RomM's games, one by one: DOWNLOADING n/m says it already, so no
+         *  UPDATING LIBRARY each time, and the label search waits for the
+         *  batch's end (it flashed 29 times: Siham 2026-11-16). */
+        val silent: Boolean = false
     )
     private var pendingLibraryIndex: PendingLibraryIndex? = null
     private lateinit var taskIndicators: SlotShelfTaskIndicators
@@ -353,7 +357,7 @@ class MainActivity : Activity() {
             Log.i(TAG, "RomM: ${files.size} game(s) added without a folder scan")
             runOnUiThread {
                 if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
-                pendingLibraryIndex = PendingLibraryIndex(root, json, prepared, serial, quiet = true)
+                pendingLibraryIndex = PendingLibraryIndex(root, json, prepared, serial, quiet = true, silent = true)
                 publishPendingLibraryIfIdle()
             }
         }
@@ -3894,7 +3898,7 @@ class MainActivity : Activity() {
             return
         }
         pendingLibraryIndex = null
-        libraryRefreshIndicator.show()
+        if (!next.silent) libraryRefreshIndicator.show()
         val count = try { nativeSetLibrary(next.prepared) } catch (error: Exception) {
             Log.e(TAG, "Changed ROM library could not be applied", error)
             -1
@@ -3911,8 +3915,11 @@ class MainActivity : Activity() {
             if (scanSerial.get() != next.serial) return@execute
             try {
                 storeCachedLibrary(next.root, next.json)
-                startRaSmartCache()
-                startAutoCartLabels()
+                // RomM's games still coming: one search once they're all in.
+                if (!(next.silent && romm.downloading())) {
+                    startRaSmartCache()
+                    startAutoCartLabels()
+                }
             } catch (error: Exception) {
                 Log.w(TAG, "ROM cache write failed; displayed shelf is intact", error)
             }
