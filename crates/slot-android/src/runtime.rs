@@ -1385,9 +1385,9 @@ struct Engine {
     menu_scroll_y: f32,
     /// The selected row's bar: left end, strip, right end.
     menu_pill: [(slot_gfx::TexId, u32, u32); 3],
-    /// Dark's bar, whatever the theme: the in-game Screen page keeps the
-    /// game behind it and white text (Light's bar hid it: Siham 2026-11-16).
-    dark_pill: [(slot_gfx::TexId, u32, u32); 3],
+    /// Where the selection bar was last drawn (x0, x1, y, h): the in-game
+    /// Screen page writes what sits on it in the theme's ink.
+    pill_band: std::cell::Cell<Option<[f32; 4]>>,
     /// The mark on a row that opens a page.
     menu_opens: (slot_gfx::TexId, u32, u32),
     /// Each page's path line, made when first shown.
@@ -1843,13 +1843,6 @@ impl Engine {
             (gpu.create_face(&face), face.w, face.h)
         });
         let menu_pill = menu_style::pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
-        let dark_pill = {
-            let theme = menu_style::palette();
-            menu_style::set_palette(None);
-            let faces = menu_style::pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
-            menu_style::set_palette(theme);
-            faces
-        };
         let menu_opens = {
             let face = menu_style::menu_opens_face();
             (gpu.create_face(&face), face.w, face.h)
@@ -2106,7 +2099,7 @@ impl Engine {
             menu_scroll_top: 0,
             menu_scroll_y: 0.0,
             menu_pill,
-            dark_pill,
+            pill_band: std::cell::Cell::new(None),
             menu_opens,
             menu_paths: Default::default(),
             menu_side: None,
@@ -7386,10 +7379,33 @@ impl Engine {
         let ink = self.menu_ink();
         if ink.is_some() { out.push(Draw::Ink(ink)); }
         let start = out.len();
+        self.pill_band.set(None);
         self.draw_overlay_page(out);
         if ink.is_some() {
             self.theme_hints(start, out);
             out.push(Draw::Ink(None));
+        }
+        // The in-game Screen page stays white over the game; on Light's or
+        // Original's bar its chosen row takes the theme's ink (Siham
+        // 2026-11-16: white on the light bar couldn't be read).
+        if self.screen_panel() {
+            if let (Some(theme), Some([x0, x1, y, h])) = (menu_style::ink_map(), self.pill_band.get()) {
+                let pill: Vec<slot_gfx::TexId> = self.menu_pill.iter().map(|p| p.0).collect();
+                let tail = out.split_off(start);
+                for draw in tail {
+                    match draw {
+                        Draw::Tex { x, y: ty, w, h: th, tex, .. }
+                            if !pill.contains(&tex)
+                                && (ty + th / 2.0) > y && (ty + th / 2.0) < y + h
+                                && x + w / 2.0 > x0 && x + w / 2.0 < x1 => {
+                            out.push(Draw::Ink(Some(theme)));
+                            out.push(draw);
+                            out.push(Draw::Ink(None));
+                        }
+                        _ => out.push(draw),
+                    }
+                }
+            }
         }
     }
 

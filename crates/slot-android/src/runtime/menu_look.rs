@@ -83,8 +83,8 @@ impl Engine {
 
     /// The selected row's bar from `x0` to `x1`, its top at `y`.
     pub(super) fn draw_menu_pill(&self, x0: f32, x1: f32, y: f32, alpha: f32, out: &mut Vec<Draw>) {
-        let [(left, lw, h), (middle, _, _), (right, rw, _)] =
-            if self.screen_panel() { self.dark_pill } else { self.menu_pill };
+        let [(left, lw, h), (middle, _, _), (right, rw, _)] = self.menu_pill;
+        self.pill_band.set(Some([x0, x1, y, h as f32]));
         let (x0, x1) = (x0.round(), x1.round());
         let (lw, rw, h) = (lw as f32, rw as f32, h as f32);
         if x1 - x0 < lw + rw { return; }
