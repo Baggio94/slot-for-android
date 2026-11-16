@@ -125,6 +125,9 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
      *  [done, total, percent], or null. */
     fun downloadProgress(): IntArray? = if (showing) null else batch?.copyOf()
 
+    /** A batch is downloading (any thread). */
+    fun downloading(): Boolean = batch != null
+
     // -----------------------------------------------------------------
     // Connecting
 

@@ -515,6 +515,11 @@ mod render {
     #[test]
     fn setting_arrows_are_centred_on_their_value() {
         let _surface = slot_gfx::TestEgl::new();
+        // Dark's bar and white text on this thread, whatever theme another
+        // test left behind: a Light bar from the theme test running beside
+        // it lit the whole row as one glyph (the CI's occasional failure).
+        menu_style::set_palette(None);
+        menu_style::set_oled(false);
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
         engine.overlay = ShelfOverlay::GeneralSettings { row: 0 };
         let (_, h) = panel_size();
