@@ -452,6 +452,10 @@ impl Device {
     pub const KONKR: Device = Device { konkr: true, retroid_pocket_classic: false, three_two: true };
     pub const RPC: Device = Device { konkr: false, retroid_pocket_classic: true, three_two: false };
     /// Whether a panel is 3:2, within 1%.
+    /// What the screen-dependent defaults depend on, as Settings keeps it.
+    pub fn tag(self) -> String {
+        format!("k{}r{}t{}", u8::from(self.konkr), u8::from(self.retroid_pocket_classic), u8::from(self.three_two))
+    }
     pub fn is_three_two(panel: (u32, u32)) -> bool {
         let a = panel.0.max(1) as f32 / panel.1.max(1) as f32;
         (a / 1.5 - 1.0).abs() < 0.01
@@ -546,6 +550,10 @@ pub struct Settings {
     pub show_titles: bool,
     /// Touch on the shelf (runtime/touch.rs): off by default (Siham 2026-11-16).
     pub touchscreen: bool,
+    /// The kind of handheld these settings were last used on (Device::tag).
+    /// Settings from another one (the slot. folder, 2.5) take this one's
+    /// values for what depends on its screen or chip (Siham 2026-11-16).
+    pub device: String,
     /// Set once the home consoles' 3:2 default (no overlay) was applied.
     #[serde(default)]
     pub home_bezel_three_two: bool,
@@ -625,7 +633,7 @@ impl Default for Settings {
             status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
             wallpaper_shelves: Default::default(),
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
-            show_recents: false, show_titles: false, touchscreen: false, home_bezel_three_two: false,
+            show_recents: false, show_titles: false, touchscreen: false, device: String::new(), home_bezel_three_two: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             simpletex_gba_colour: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
@@ -791,8 +799,28 @@ impl Settings {
                     }
                     s.simpletex_gba_colour = true;
                 }
+                s.adopt_device(device);
                 s
-            }).unwrap_or_else(|| Self::first_install_defaults_for_device(device))
+            }).unwrap_or_else(|| {
+                let mut s = Self::first_install_defaults_for_device(device);
+                s.device = device.tag();
+                s
+            })
+    }
+    /// Settings brought from another kind of handheld (the slot. folder)
+    /// take this one's Frame Pacing and NES / SNES / Mega Drive overlays:
+    /// they depend on its chip and screen shape. Settings from 2.4 (no
+    /// device yet) are this handheld's own.
+    fn adopt_device(&mut self, device: Device) {
+        let tag = device.tag();
+        if !self.device.is_empty() && self.device != tag {
+            let defaults = Self::first_install_defaults_for_device(device);
+            self.responsive_loop = defaults.responsive_loop;
+            self.bezel_nes = defaults.bezel_nes;
+            self.bezel_snes = defaults.bezel_snes;
+            self.bezel_md = defaults.bezel_md;
+        }
+        self.device = tag;
     }
     /// The old Shelf wallpaper becomes each shelf's own: a shelf with its
     /// Wallpapers/<shelf>.png keeps it, the others show Default, as they did.
@@ -1138,6 +1166,32 @@ pub fn frame_debt(prev: f64, elapsed: f64, speed: f64, fast: bool) -> f64 {
 /// still requires confirmed local AND peer inputs: never predict link traffic.
 pub fn frame_debt_mgba_cable(prev: f64, elapsed: f64, period: f64) -> f64 {
     (prev + elapsed.max(0.0)).min(period * 2.5)
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+
+    #[test]
+    fn settings_from_another_handheld_take_this_ones_screen_and_chip_values() {
+        let root = std::env::temp_dir().join(format!("slot-settings-device-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // Written on a KONKR: Native pacing, no home overlays, a theme.
+        let mut konkr = Settings::load_for_device(&root, Device::KONKR);
+        konkr.touchscreen = true;
+        konkr.save(&root).unwrap();
+        let rpc = Settings::load_for_device(&root, Device::RPC);
+        assert!(rpc.responsive_loop, "the Retroid's own pacing");
+        assert_eq!(rpc.bezel_snes, Settings::first_install_defaults_for_device(Device::RPC).bezel_snes);
+        assert!(rpc.touchscreen, "a choice of the player's follows");
+        assert_eq!(rpc.device, Device::RPC.tag());
+        // Back on the same kind of handheld: nothing changes.
+        konkr.save(&root).unwrap();
+        let again = Settings::load_for_device(&root, Device::KONKR);
+        assert_eq!(again.responsive_loop, konkr.responsive_loop);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]

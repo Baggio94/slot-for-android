@@ -204,8 +204,9 @@ internal object FolderSync {
     /** Single files that travel. */
     private val TRAVELLING_FILES = setOf("slot-konkr-settings.json", "slot-konkr-controls.json",
         "konkr-favorites.json", "konkr-recents.json", "Config/cart_shell.ini",
-        "Config/default_core.ini", "Config/selected_core.ini", "Config/theme.txt",
-        "Config/video_mode.ini")
+        "Config/default_core.ini", "Config/selected_core.ini", "Config/theme.txt")
+    // Not Config/video_mode.ini: Screen Size depends on each screen's shape,
+    // so every handheld keeps its own (Siham 2026-11-16).
 
     /** Whether a private file travels: never secrets (RomM, RetroAchievements),
      *  device links, caches, nor slot.'s own one-shot markers and copies. */
