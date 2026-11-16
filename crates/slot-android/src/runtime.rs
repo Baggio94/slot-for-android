@@ -127,6 +127,8 @@ enum Input {
     ExternalReturn,
     /// A folder was chosen from Library: back to the shelf, to see it fill.
     ExternalClose,
+    /// Android's picker opens over Library > RomM: the page stays behind it.
+    ExternalBegin,
     /// Library > RomM (runtime/romm.rs): the server's games, a status (0
     /// loading, 1 a message, 3 close), a label fetched, a download's
     /// progress and each download's end; a Game Boy family game's header,
@@ -3633,6 +3635,7 @@ impl Engine {
             Input::RommDownloaded(id, ok) => self.romm_downloaded(id, ok),
             Input::GameDeleted(uri, ok) => self.game_deleted(uri, ok),
             Input::RommFilter(filter) => self.romm_filter(filter),
+            Input::ExternalBegin => self.external_pending = true,
             Input::ExternalClose => {
                 // A ROM, BIOS or slot. folder chosen from Library: the shelf,
                 // as before 2.4, so its scan shows (Siham 2026-11-16). A
