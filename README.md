@@ -1,4 +1,4 @@
-<p align="center"><img src=".github/resources/slot-for-android-hero.png" alt="slot. for Android on a KONKR Pocket Block, a KONKR Pocket Advance and a Retroid Pocket Classic" width="100%"></p>
+<p align="center"><img src=".github/resources/slot-for-android-hero.png" alt="slot. for Android on an Anbernic RG Rotate, a KONKR Pocket Advance, a Retroid Pocket Classic and a KONKR Pocket Block" width="100%"></p>
 
 # slot. for Android
 
@@ -12,7 +12,7 @@ When I watched [Russ from Retro Game Corps showcase slot.](https://www.youtube.c
 
 The round button on top of the KONKR fits slot. naturally: press it to insert a cartridge, hold it while playing to eject it. It feels close to handling a real cartridge.
 
-The port has since grown to other Android handhelds and home consoles. The goal stays the same as the original: less time in menus, more time playing.
+The port has since grown to other Android handhelds and more systems. The goal stays the same as the original: less time in menus, more time playing.
 
 ## Highlights
 
