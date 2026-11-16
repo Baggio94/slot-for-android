@@ -8,7 +8,6 @@ import android.provider.OpenableColumns
 import android.util.Log
 import java.io.File
 import java.io.FileNotFoundException
-import java.security.MessageDigest
 import java.util.Locale
 
 /**
@@ -65,9 +64,7 @@ internal object RetroArchStorage {
             .trim().take(200)
         require(stem.isNotEmpty() && stem !in setOf(".", "..") &&
             stem.none { it == '/' || it == '\\' || it.code < 32 })
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest(rawUri.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 255) }
+        val digest = GameKeys.digest(rawUri)
         val prefix = File(context.filesDir, "Saves").apply { mkdirs() }
         val coreFolder = File(prefix, core).apply { mkdirs() }
         val defaultStates = File(File(context.filesDir, "States"), core).apply { mkdirs() }

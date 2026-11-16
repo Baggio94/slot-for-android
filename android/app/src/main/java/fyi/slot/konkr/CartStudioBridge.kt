@@ -8,16 +8,10 @@ import java.io.File
  * ROM's URI. The native Cart Studio writes it; the shelf reads it back here.
  */
 internal object CartStudioBridge {
-    fun key(uri: String): String {
-        var hash = -3750763034362895579L
-        for (byte in uri.toByteArray(Charsets.UTF_8)) {
-            hash = (hash xor (byte.toInt() and 0xff).toLong()) * 0x100000001b3L
-        }
-        return java.lang.Long.toUnsignedString(hash, 16).padStart(16, '0')
-    }
+    fun key(uri: String): String = GameKeys.key(uri)
 
     private fun profile(context: Context, uri: String): File =
-        File(File(context.filesDir, "Studio"), key(uri) + ".shell")
+        GameKeys.file(File(context.filesDir, "Studio"), uri, ".shell")
 
     fun savedShell(context: Context, uri: String): String? {
         val file = profile(context, uri)

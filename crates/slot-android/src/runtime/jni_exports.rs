@@ -1177,3 +1177,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeUpdateProgress(
 ) {
     push(Input::UpdateProgress(percent.clamp(0, 100) as u8));
 }
+
+/// A game's portable name (library::game_key), for GameKeys.kt.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_GameKeys_nativeGameKey(
+    mut env: JNIEnv<'_>, _class: JObject<'_>, uri: JString<'_>,
+) -> jni::sys::jstring {
+    let Ok(uri) = env.get_string(&uri) else { return std::ptr::null_mut() };
+    let name = crate::library::game_key(&uri.to_string_lossy());
+    env.new_string(name).map_or(std::ptr::null_mut(), |s| s.into_raw())
+}

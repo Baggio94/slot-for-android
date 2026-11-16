@@ -975,11 +975,24 @@ fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
     let mut systems: Vec<Vec<slot_store::Cart>> = grouped.into_iter().collect();
     systems.push(video);
     if let Some(root) = root {
+        // Labels by each game's portable name (2.5); a 2.4 label, named by
+        // the Android address, is carried over. One listing of the folder
+        // rather than a check per cart (thousands at startup).
+        let keys = crate::library::game_keys(library.unwrap_or_default());
+        let labels = root.join("Labels");
+        let present: std::collections::HashSet<std::ffi::OsString> = std::fs::read_dir(&labels)
+            .map(|dir| dir.flatten().map(|f| f.file_name()).collect()).unwrap_or_default();
         for cart in systems.iter_mut().flatten() {
-            let uri = cart.rom.to_string_lossy();
-            let filename = format!("{}.png", core_selection::key(&uri));
+            let uri = cart.rom.to_string_lossy().into_owned();
+            let name = keys.get(&uri).map(String::as_str).unwrap_or(&uri);
+            let filename = format!("{}.png", core_selection::key_of_name(name));
+            let legacy = format!("{}.png", core_selection::legacy_key(&uri));
+            if !present.contains(std::ffi::OsStr::new(&filename))
+                && present.contains(std::ffi::OsStr::new(&legacy)) {
+                core_selection::carry(&labels.join(&legacy), &labels.join(&filename));
+            }
             // Only app-private labels are used; never rewrite ROMs.
-            cart.label = Some(root.join("Labels").join(filename));
+            cart.label = Some(labels.join(filename));
         }
     }
     let video = systems.pop().unwrap_or_default();
@@ -1702,8 +1715,8 @@ impl Engine {
             shelf.set_gb_shadow(GbShell::Rounded, gbc);
             for (m, tex) in home_shadows { shelf.set_home_shadow(m, tex); }
             shelf.set_star(star_tex,star.w,star.h);
-            shelf.mark_starred(|cart|favorite_ids.iter()
-                .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
+            shelf.mark_starred(|cart|crate::favorites::holds(&favorite_ids,
+                cart.rom.to_string_lossy().as_ref()));
         }
 
         let art = slot_ui::link_marks();
@@ -6055,9 +6068,8 @@ impl Engine {
             let last=self.shelves[FAVORITES_RACK].carts.len()-1;
             self.shelves[FAVORITES_RACK].select(previous_index.min(last));
         }
-        let starred: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
         for shelf in &mut self.shelves {
-            shelf.mark_starred(|cart|starred.contains(cart.rom.to_string_lossy().as_ref()));
+            shelf.mark_starred(|cart|crate::favorites::holds(&ids, cart.rom.to_string_lossy().as_ref()));
         }
         if was_favorite && self.shelves[FAVORITES_RACK].carts.is_empty() {
             self.active=self.next_shelf(0,1);
@@ -6102,8 +6114,8 @@ impl Engine {
         // Restocking Recents must not erase Favorite stars: its Shelf rebuild
         // necessarily reconstructs the per-cart starred flags from scratch.
         let favorites=crate::favorites::load(&root);
-        self.shelves[RECENTS_RACK].mark_starred(|cart|favorites.iter()
-            .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
+        self.shelves[RECENTS_RACK].mark_starred(|cart|crate::favorites::holds(&favorites,
+            cart.rom.to_string_lossy().as_ref()));
         if was_recent && self.shelves[RECENTS_RACK].carts.is_empty() {
             self.active=self.next_shelf(0,1);
         }
@@ -6120,7 +6132,7 @@ impl Engine {
             self.focus_seen=Some((focus.rack,focus.uri));
             self.focus_dirty_since=None;
         }
-        let next=crate::recents::append_previous(&crate::recents::load(&root),&uri);
+        let next=crate::recents::append(&crate::recents::load(&root),&uri);
         if let Err(err)=crate::recents::store(&root,&next) {
             eprintln!("slot-konkr: unable to update recents rack: {err}");
         } else {
@@ -6346,7 +6358,8 @@ impl Engine {
         let Some(uri) = crate::recents::load(&root).into_iter().next() else { return };
         for (rack, shelf) in self.shelves.iter_mut().enumerate() {
             if rack >= RECENTS_RACK { break; }
-            if let Some(i) = shelf.carts.iter().position(|c| c.rom.to_string_lossy() == uri.as_str()) {
+            if let Some(i) = shelf.carts.iter().position(|c|
+                crate::favorites::holds(std::slice::from_ref(&uri), c.rom.to_string_lossy().as_ref())) {
                 self.active = rack;
                 shelf.select(i);
                 return;

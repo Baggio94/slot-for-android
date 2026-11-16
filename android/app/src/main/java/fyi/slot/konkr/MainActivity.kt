@@ -23,7 +23,6 @@ import android.hardware.SensorManager
 import android.content.IntentFilter
 import android.provider.MediaStore
 import android.util.AtomicFile
-import java.security.MessageDigest
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -2019,9 +2018,10 @@ class MainActivity : Activity() {
                     } ?: error("Cannot inspect cartridge ZIP")
                 } else name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
                 require(ext in Systems.ROM_EXTENSIONS) { "Unsupported ROM type" }
-                val digest = MessageDigest.getInstance("SHA-256")
-                    .digest(rawUri.toByteArray(Charsets.UTF_8))
-                    .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+                // Saves, states and the cache by the game's portable name
+                // (slot. 2.5), its files from 2.4 carried over first.
+                val digest = GameKeys.digest(rawUri)
+                GameKeys.carryGameFiles(File(filesDir, "Saves"), GameKeys.legacyDigest(rawUri), digest)
                 val dir = File(cacheDir, "rom-cache").apply { mkdirs() }
                 val target = File(dir, "$digest.$ext")
                 // Always open via Android SAF; no assumptions about physical filesystem paths.
@@ -2114,7 +2114,8 @@ class MainActivity : Activity() {
                 // over freshly imported cross-core SRAM. A direct same-core
                 // launch has no dialogue and behaves exactly as before.
                 val previous = if (ext == "gba")
-                    prefs.getString("last_gba_core_$digest", null) else null
+                    (prefs.getString("last_gba_core_$digest", null)
+                        ?: prefs.getString("last_gba_core_${GameKeys.legacyDigest(rawUri)}", null)) else null
                 val switched = !folderFailed && ext == "gba" && shared.shareGbaSaves &&
                     previous != null && previous != core
                 var resumeChoice = -1 // Existing default Slot behavior.

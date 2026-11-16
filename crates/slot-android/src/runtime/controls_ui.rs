@@ -86,9 +86,10 @@ impl Engine {
         }
     }
 
-    /// The game being played, as its Controls are filed: its library URI.
+    /// The game being played, as its Controls are filed: its portable name
+    /// (`library::game_key`) since 2.5, its library URI before.
     fn game_key(&self) -> Option<String> {
-        self.game.as_ref().and(self.requested_uri.clone())
+        self.game.as_ref().and(self.requested_uri.as_deref()).map(crate::library::game_key)
     }
 
     fn layout_scope(&self, platform: Platform, game: bool) -> Scope {
@@ -113,6 +114,10 @@ impl Engine {
         if game.has_layouts() && self.layouts_for == Some(wanted) { return; }
         let system = Self::system_key(self.current_cart_platform());
         let key = self.game_key();
+        // A game's Controls filed by its URI in 2.4 move to its name.
+        if let (Some(key), Some(uri)) = (key.as_deref(), self.requested_uri.clone()) {
+            if self.controls.carry_game(&uri, key) { self.persist_controls(); }
+        }
         let default_xy = if turbo { XyRole::TurboAB } else { XyRole::BA };
         let layouts = [0, 1].map(|port| self.controls.resolve(system, key.as_deref(), port, default_xy));
         if let Some(game) = self.game.as_mut() { game.set_layouts(layouts); }

@@ -285,11 +285,10 @@ impl EmulationProfile {
         });
     }
     fn legacy_path(root: &Path, uri: &str) -> PathBuf {
-        root.join("GameEmulation").join(format!("{}.json", core_selection::key(uri)))
+        core_selection::game_file(&root.join("GameEmulation"), uri, ".json")
     }
     fn path(root: &Path, uri: &str, core: Core) -> PathBuf {
-        root.join("GameEmulation").join(
-            format!("{}.{}.json", core_selection::key(uri), core.as_str()))
+        core_selection::game_file(&root.join("GameEmulation"), uri, &format!(".{}.json", core.as_str()))
     }
     /// Core-specific profiles supersede old ROM-only JSON files. Reading an
     /// old profile never migrates or deletes it: the other core can still
