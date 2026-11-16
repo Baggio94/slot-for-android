@@ -437,6 +437,62 @@ impl Shader {
     }
 }
 
+/// The settings that belong to one handheld: its screen (overlays), its
+/// chip (Frame Pacing, Run-Ahead), its buttons and lid (Touchscreen, the RG
+/// Rotate's page). Kept apart in a file the slot. folder never copies, so
+/// another handheld's never replace them (Siham 2026-11-16, slot. 2.5).
+/// Screen Size has its own file, Config/video_mode.ini, kept likewise.
+const DEVICE_NAME: &str = "slot-konkr-device.json";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DeviceSettings {
+    bezel_gba: Bezel, bezel_gbc: Bezel, bezel_gb: Bezel,
+    bezel_nes: Bezel, bezel_snes: Bezel, bezel_md: Bezel,
+    home_bezel_three_two: bool,
+    responsive_loop: bool, run_ahead_frames: u8,
+    rotate_game_cover: u8, rotate_shelf_cover: u8, rotate_dim: u8, rotate_sleep: u8,
+    rotate_animations: bool, rotate_game_info: u8,
+    touchscreen: bool,
+}
+
+impl DeviceSettings {
+    fn of(s: &Settings) -> Self {
+        DeviceSettings {
+            bezel_gba: s.bezel_gba, bezel_gbc: s.bezel_gbc, bezel_gb: s.bezel_gb,
+            bezel_nes: s.bezel_nes, bezel_snes: s.bezel_snes, bezel_md: s.bezel_md,
+            home_bezel_three_two: s.home_bezel_three_two,
+            responsive_loop: s.responsive_loop, run_ahead_frames: s.run_ahead_frames,
+            rotate_game_cover: s.rotate_game_cover, rotate_shelf_cover: s.rotate_shelf_cover,
+            rotate_dim: s.rotate_dim, rotate_sleep: s.rotate_sleep,
+            rotate_animations: s.rotate_animations, rotate_game_info: s.rotate_game_info,
+            touchscreen: s.touchscreen,
+        }
+    }
+    fn apply(self, s: &mut Settings) {
+        s.bezel_gba = self.bezel_gba; s.bezel_gbc = self.bezel_gbc; s.bezel_gb = self.bezel_gb;
+        s.bezel_nes = self.bezel_nes; s.bezel_snes = self.bezel_snes; s.bezel_md = self.bezel_md;
+        s.home_bezel_three_two = self.home_bezel_three_two;
+        s.responsive_loop = self.responsive_loop; s.run_ahead_frames = self.run_ahead_frames;
+        s.rotate_game_cover = self.rotate_game_cover; s.rotate_shelf_cover = self.rotate_shelf_cover;
+        s.rotate_dim = self.rotate_dim; s.rotate_sleep = self.rotate_sleep;
+        s.rotate_animations = self.rotate_animations; s.rotate_game_info = self.rotate_game_info;
+        s.touchscreen = self.touchscreen;
+    }
+    fn load(dir: &Path) -> Option<Self> {
+        serde_json::from_slice(&fs::read(dir.join(DEVICE_NAME)).ok()?).ok()
+    }
+    fn save(&self, dir: &Path) -> io::Result<()> {
+        let data = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        slot_store::atomic_write(&dir.join(DEVICE_NAME), &data)
+    }
+}
+
+/// This handheld's Frame Pacing and Run-Ahead (for a game whose own were
+/// set on another handheld).
+pub fn device_pacing(dir: &Path) -> Option<(bool, u8)> {
+    DeviceSettings::load(dir).map(|d| (d.responsive_loop, d.run_ahead_frames))
+}
+
 /// What a fresh install's defaults depend on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Device {
@@ -452,10 +508,6 @@ impl Device {
     pub const KONKR: Device = Device { konkr: true, retroid_pocket_classic: false, three_two: true };
     pub const RPC: Device = Device { konkr: false, retroid_pocket_classic: true, three_two: false };
     /// Whether a panel is 3:2, within 1%.
-    /// What the screen-dependent defaults depend on, as Settings keeps it.
-    pub fn tag(self) -> String {
-        format!("k{}r{}t{}", u8::from(self.konkr), u8::from(self.retroid_pocket_classic), u8::from(self.three_two))
-    }
     pub fn is_three_two(panel: (u32, u32)) -> bool {
         let a = panel.0.max(1) as f32 / panel.1.max(1) as f32;
         (a / 1.5 - 1.0).abs() < 0.01
@@ -550,10 +602,6 @@ pub struct Settings {
     pub show_titles: bool,
     /// Touch on the shelf (runtime/touch.rs): off by default (Siham 2026-11-16).
     pub touchscreen: bool,
-    /// The kind of handheld these settings were last used on (Device::tag).
-    /// Settings from another one (the slot. folder, 2.5) take this one's
-    /// values for what depends on its screen or chip (Siham 2026-11-16).
-    pub device: String,
     /// Set once the home consoles' 3:2 default (no overlay) was applied.
     #[serde(default)]
     pub home_bezel_three_two: bool,
@@ -633,7 +681,7 @@ impl Default for Settings {
             status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
             wallpaper_shelves: Default::default(),
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
-            show_recents: false, show_titles: false, touchscreen: false, device: String::new(), home_bezel_three_two: false,
+            show_recents: false, show_titles: false, touchscreen: false, home_bezel_three_two: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             simpletex_gba_colour: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
@@ -700,7 +748,7 @@ impl Settings {
     /// Only a missing or unreadable first-install configuration gets a
     /// model-specific default; never rewrite the file just to apply a default.
     pub fn load_for_device(dir: &Path, device: Device) -> Self {
-        fs::read(dir.join(NAME)).ok()
+        let mut s = fs::read(dir.join(NAME)).ok()
             .and_then(|b| {
                 let old_json=serde_json::from_slice::<serde_json::Value>(&b).ok();
                 let had_wallpaper_choice=old_json.as_ref()
@@ -799,28 +847,19 @@ impl Settings {
                     }
                     s.simpletex_gba_colour = true;
                 }
-                s.adopt_device(device);
                 s
-            }).unwrap_or_else(|| {
-                let mut s = Self::first_install_defaults_for_device(device);
-                s.device = device.tag();
-                s
-            })
-    }
-    /// Settings brought from another kind of handheld (the slot. folder)
-    /// take this one's Frame Pacing and NES / SNES / Mega Drive overlays:
-    /// they depend on its chip and screen shape. Settings from 2.4 (no
-    /// device yet) are this handheld's own.
-    fn adopt_device(&mut self, device: Device) {
-        let tag = device.tag();
-        if !self.device.is_empty() && self.device != tag {
-            let defaults = Self::first_install_defaults_for_device(device);
-            self.responsive_loop = defaults.responsive_loop;
-            self.bezel_nes = defaults.bezel_nes;
-            self.bezel_snes = defaults.bezel_snes;
-            self.bezel_md = defaults.bezel_md;
+            }).unwrap_or_else(|| Self::first_install_defaults_for_device(device));
+        // What belongs to this handheld (its screen, chip and buttons) is
+        // its own, whatever the slot. folder brought (Siham 2026-11-16).
+        match DeviceSettings::load(dir) {
+            Some(own) => own.apply(&mut s),
+            None => {
+                // First 2.5 start on this handheld: its values so far are its own.
+                let _ = DeviceSettings::of(&s).save(dir);
+                crate::emulation::EmulationProfile::keep_device_fields_once(dir);
+            }
         }
-        self.device = tag;
+        s
     }
     /// The old Shelf wallpaper becomes each shelf's own: a shelf with its
     /// Wallpapers/<shelf>.png keeps it, the others show Default, as they did.
@@ -854,6 +893,7 @@ impl Settings {
     }
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
+        DeviceSettings::of(self).save(dir)?;
         // A version from before OLED reads the whole file or none of it: an
         // appearance it doesn't know would reset every setting. Written as
         // Dark plus a key it ignores, it keeps them and shows Dark.
@@ -1173,23 +1213,26 @@ mod device_tests {
     use super::*;
 
     #[test]
-    fn settings_from_another_handheld_take_this_ones_screen_and_chip_values() {
+    fn a_handhelds_screen_chip_and_button_settings_stay_its_own() {
         let root = std::env::temp_dir().join(format!("slot-settings-device-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        // Written on a KONKR: Native pacing, no home overlays, a theme.
-        let mut konkr = Settings::load_for_device(&root, Device::KONKR);
-        konkr.touchscreen = true;
-        konkr.save(&root).unwrap();
-        let rpc = Settings::load_for_device(&root, Device::RPC);
-        assert!(rpc.responsive_loop, "the Retroid's own pacing");
-        assert_eq!(rpc.bezel_snes, Settings::first_install_defaults_for_device(Device::RPC).bezel_snes);
-        assert!(rpc.touchscreen, "a choice of the player's follows");
-        assert_eq!(rpc.device, Device::RPC.tag());
-        // Back on the same kind of handheld: nothing changes.
-        konkr.save(&root).unwrap();
-        let again = Settings::load_for_device(&root, Device::KONKR);
-        assert_eq!(again.responsive_loop, konkr.responsive_loop);
+        // This handheld: Responsive, touch on.
+        let mut here = Settings::load_for_device(&root, Device::RPC);
+        here.touchscreen = true;
+        here.responsive_loop = true;
+        here.save(&root).unwrap();
+        // Another handheld's settings arrive through the slot. folder.
+        let mut other = here.clone();
+        other.touchscreen = false;
+        other.responsive_loop = false;
+        other.bezel_snes = Bezel::None;
+        other.show_titles = true;
+        std::fs::write(root.join(NAME), serde_json::to_vec(&other).unwrap()).unwrap();
+        let mixed = Settings::load_for_device(&root, Device::RPC);
+        assert!(mixed.touchscreen && mixed.responsive_loop, "this handheld's own");
+        assert_eq!(mixed.bezel_snes, here.bezel_snes);
+        assert!(mixed.show_titles, "a taste follows");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

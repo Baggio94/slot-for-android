@@ -310,8 +310,70 @@ impl EmulationProfile {
         let native = settings::legacy_pacing_is_native(&value);
         serde_json::from_value::<Self>(value).ok().map(|mut profile| {
             if native { profile.responsive_loop = false; }
+            profile.take_device_fields(root, uri, core);
             profile.sanitize()
         })
+    }
+
+    /// A game's Frame Pacing, Run-Ahead and overlay belong to the handheld
+    /// (its chip and screen): kept in GameEmulationLocal, which the slot.
+    /// folder never copies. A profile from another handheld takes this
+    /// one's own, its global ones when it has none for the game (Siham
+    /// 2026-11-16, slot. 2.5).
+    fn local_path(root: &Path, uri: &str, core: Core) -> PathBuf {
+        root.join("GameEmulationLocal").join(format!("{}.{}.json", core_selection::key(uri), core.as_str()))
+    }
+    fn take_device_fields(&mut self, root: &Path, uri: &str, core: Core) {
+        let local = fs::read(Self::local_path(root, uri, core)).ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        match local {
+            Some(local) => {
+                if let Some(v) = local.get("responsive_loop").and_then(|v| v.as_bool()) { self.responsive_loop = v; }
+                if let Some(v) = local.get("run_ahead_frames").and_then(|v| v.as_u64()) { self.run_ahead_frames = v.min(2) as u8; }
+                self.screen_bezel = local.get("screen_bezel").cloned()
+                    .and_then(|v| serde_json::from_value::<Option<Bezel>>(v).ok()).flatten();
+            }
+            // Before this handheld kept any (2.4's files, tests): as saved.
+            None if !root.join("GameEmulationLocal").is_dir() => {}
+            None => {
+                if let Some((responsive, ahead)) = settings::device_pacing(root) {
+                    self.responsive_loop = responsive;
+                    self.run_ahead_frames = ahead;
+                }
+                self.screen_bezel = None;
+            }
+        }
+    }
+    fn save_device_fields(&self, root: &Path, uri: &str, core: Core) -> io::Result<()> {
+        let data = serde_json::to_vec(&serde_json::json!({
+            "responsive_loop": self.responsive_loop,
+            "run_ahead_frames": self.run_ahead_frames,
+            "screen_bezel": self.screen_bezel,
+        })).map_err(io::Error::other)?;
+        Self::atomic_write(&Self::local_path(root, uri, core), &data)
+    }
+    /// The first 2.5 start on a handheld: its games' own pacing and overlays
+    /// so far are this handheld's.
+    pub fn keep_device_fields_once(root: &Path) {
+        let local = root.join("GameEmulationLocal");
+        if local.exists() { return; }
+        let _ = fs::create_dir_all(&local);
+        let Ok(dir) = fs::read_dir(root.join("GameEmulation")) else { return };
+        for file in dir.flatten() {
+            let name = file.file_name();
+            let Some(name) = name.to_str() else { continue };
+            // `<key>.<core>.json`: the per-core profiles.
+            if name.matches('.').count() != 2 || !name.ends_with(".json") { continue; }
+            let Ok(bytes) = fs::read(file.path()) else { continue };
+            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
+            if value.get("inherit_global").is_some() { continue; }
+            let keep = serde_json::json!({
+                "responsive_loop": value.get("responsive_loop").cloned().unwrap_or(serde_json::json!(false)),
+                "run_ahead_frames": value.get("run_ahead_frames").cloned().unwrap_or(serde_json::json!(0)),
+                "screen_bezel": value.get("screen_bezel").cloned().unwrap_or(serde_json::Value::Null),
+            });
+            let _ = slot_store::atomic_write(&local.join(name), keep.to_string().as_bytes());
+        }
     }
     fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
         fs::create_dir_all(path.parent().expect("app-owned profile path"))?;
@@ -320,7 +382,9 @@ impl EmulationProfile {
         slot_store::atomic_write(path, data)
     }
     pub fn save(self, root: &Path, uri: &str, core: Core) -> io::Result<()> {
-        let data = serde_json::to_vec_pretty(&self.sanitize()).map_err(io::Error::other)?;
+        let profile = self.sanitize();
+        profile.save_device_fields(root, uri, core)?;
+        let data = serde_json::to_vec_pretty(&profile).map_err(io::Error::other)?;
         Self::atomic_write(&Self::path(root, uri, core), &data)
     }
     /// Reset only the selected core. A tiny marker masks an earlier per-ROM
@@ -328,6 +392,7 @@ impl EmulationProfile {
     /// core's profile). With no legacy profile, removal restores inheritance.
     pub fn clear(root: &Path, uri: &str, core: Core) -> io::Result<()> {
         let path = Self::path(root, uri, core);
+        let _ = fs::remove_file(Self::local_path(root, uri, core));
         if Self::legacy_path(root, uri).exists() {
             Self::atomic_write(&path, br#"{"inherit_global":true}"#)
         } else {
@@ -342,6 +407,31 @@ impl EmulationProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_games_pacing_and_overlay_from_another_handheld_are_this_ones() {
+        let root = std::env::temp_dir().join(format!("slot-profile-device-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        EmulationProfile::keep_device_fields_once(&root);
+        let uri = "content://roms/a";
+        let mine = EmulationProfile { responsive_loop: true, run_ahead_frames: 1,
+            screen_bezel: Some(Bezel::None), ..EmulationProfile::default() };
+        mine.clone().save(&root, uri, Core::Mgba).unwrap();
+        // Another handheld's profile for the game comes through the folder.
+        let theirs = EmulationProfile { responsive_loop: false, run_ahead_frames: 0,
+            screen_bezel: Some(Bezel::Default), turbo_override: Some(true), ..EmulationProfile::default() };
+        fs::write(EmulationProfile::path(&root, uri, Core::Mgba), serde_json::to_vec(&theirs).unwrap()).unwrap();
+        let loaded = EmulationProfile::load(&root, uri, Core::Mgba).unwrap();
+        assert!(loaded.responsive_loop);
+        assert_eq!(loaded.run_ahead_frames, 1);
+        assert_eq!(loaded.screen_bezel, Some(Bezel::None));
+        assert_eq!(loaded.turbo_override, Some(true), "a taste follows");
+        // A game this handheld never set: its global pacing, no overlay of its own.
+        fs::remove_file(EmulationProfile::local_path(&root, uri, Core::Mgba)).unwrap();
+        let fresh = EmulationProfile::load(&root, uri, Core::Mgba).unwrap();
+        assert_eq!(fresh.screen_bezel, None);
+        let _ = fs::remove_dir_all(&root);
+    }
     #[test]
     fn motion_sensitivity_steps_between_its_ends() {
         let mut profile = EmulationProfile::default();
