@@ -656,6 +656,11 @@ impl Resolved {
         for &(from, to) in &self.pairs {
             if slot & from != 0 { out |= to; }
         }
+        // GBA's X / Y as L / R: Y is L, X is R.
+        if self.xy == Some(XyRole::LR) {
+            if slot & bit::Y != 0 { out |= bit::L; }
+            if slot & bit::X != 0 { out |= bit::R; }
+        }
         // Original slot. turbo: on for three frames, off for three.
         let turbo_on = (frame / 3) % 2 == 0;
         let mut second = |held: u16, a: u16, b: u16, turbo: bool| {
@@ -666,10 +671,6 @@ impl Resolved {
         match self.xy {
             Some(XyRole::TurboAB) => second(bit::X | bit::Y, bit::X, bit::Y, true),
             Some(XyRole::BA) => second(bit::X | bit::Y, bit::Y, bit::X, false),
-            Some(XyRole::LR) => {
-                if slot & bit::Y != 0 { out |= bit::L; }
-                if slot & bit::X != 0 { out |= bit::R; }
-            }
             _ => {}
         }
         match self.shoulders {
