@@ -1,4 +1,4 @@
-<p align="center"><img src=".github/resources/slot-for-android-hero.png" alt="slot. for Android on a KONKR Pocket Block, a KONKR Pocket Advance and a Retroid Pocket Classic" width="100%"></p>
+<p align="center"><img src=".github/resources/slot-for-android-hero.png" alt="slot. for Android on an Anbernic RG Rotate, a KONKR Pocket Advance, a Retroid Pocket Classic and a KONKR Pocket Block" width="100%"></p>
 
 # slot. for Android
 
