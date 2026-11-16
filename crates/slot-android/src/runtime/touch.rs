@@ -75,7 +75,8 @@ pub(super) fn speed_of(samples: &VecDeque<(i64, f32)>, now: i64) -> f32 {
 impl Engine {
     /// The carousel alone is on screen, waiting for a cart.
     fn touch_ready(&self) -> bool {
-        self.game.is_none()
+        self.settings.touchscreen
+            && self.game.is_none()
             && !self.inserted
             && self.progress <= 0.0
             && matches!(self.overlay, ShelfOverlay::None)

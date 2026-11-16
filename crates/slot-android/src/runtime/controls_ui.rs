@@ -468,10 +468,16 @@ impl Engine {
         match self.overlay {
             ShelfOverlay::ControlsSettings { row } => match code {
                 19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::ControlsSettings {
-                    row: move_menu_row(row, code, 4, self.menu_repeat_dispatch),
+                    row: move_menu_row(row, code, 5, self.menu_repeat_dispatch),
                 },
                 96 if row < PORTS => self.overlay = ShelfOverlay::ControlsPort { port: row, row: 0 },
                 96 if row == PORTS => self.overlay = ShelfOverlay::Hotkeys { row: 0 },
+                // Touchscreen: swipe the shelf, tap or pull down the middle
+                // cart (Siham 2026-11-16, off by default).
+                21 | 22 | 96 if row == PORTS + 1 => {
+                    self.settings.touchscreen = !self.settings.touchscreen;
+                    self.persist_settings();
+                }
                 96 => {
                     self.controls.reset_all();
                     self.persist_controls();
@@ -650,6 +656,7 @@ impl Engine {
                 line("Port 1", self.pad_name(self.controls.on_port(0)), false),
                 line("Port 2", self.pad_name(self.controls.on_port(1)), false),
                 line("Hotkeys", String::new(), false),
+                line("Touchscreen", if self.settings.touchscreen { "On" } else { "Off" }.into(), true),
                 line("Reset to Default", String::new(), false),
             ], row, vec![("A", "Select"), ("B", "Back")])),
             ShelfOverlay::ControlsPort { port, row } => {
