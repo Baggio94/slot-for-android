@@ -134,6 +134,7 @@ class MainActivity : Activity() {
     external fun nativeKey(code: Int, pressed: Boolean)
     external fun nativeTouch(action: Int, x: Float, y: Float, timeMs: Long)
     external fun nativeUpdateProgress(percent: Int)
+    external fun nativeExternalClose()
     /** A key of a controller: Settings > Controls picks its port and button. */
     external fun nativePadKey(device: Int, code: Int, pressed: Boolean, stick: Boolean)
     /** Every controller connected now, as [{"id","name","fp"}]. */
@@ -3489,7 +3490,11 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode in setOf(FOLDER_REQUEST, BIOS_REQUEST, SAVE_REQUEST, STATE_REQUEST,
                 THEME_REQUEST, WALLPAPER_REQUEST, LABEL_REQUEST, STUDIO_PICTURE_REQUEST)) {
-            nativeExternalReturn()
+            // A ROM or BIOS folder chosen: back to the shelf, to see it fill.
+            // Cancelled, or any other picker: back to its menu row.
+            val chosen = resultCode == RESULT_OK && data?.data != null
+            if (chosen && (requestCode == FOLDER_REQUEST || requestCode == BIOS_REQUEST)) nativeExternalClose()
+            else nativeExternalReturn()
             wakeCarouselRender()
         }
         if (requestCode == STUDIO_PICTURE_REQUEST) {
