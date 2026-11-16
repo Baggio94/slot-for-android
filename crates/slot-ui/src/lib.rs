@@ -11,6 +11,7 @@ mod barcode;
 mod battery;
 mod board;
 mod cart;
+pub mod hand;
 mod clock;
 mod lid_clock;
 pub use lid_clock::{analog_clock_face, clock_hours_minutes};

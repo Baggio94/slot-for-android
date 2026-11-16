@@ -301,7 +301,7 @@ class MainActivity : Activity() {
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) ?: return
         val uri = Uri.parse(saved)
         if (contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) {
-            scanFolder(uri, quiet = true)
+            scanFolder(uri, quiet = true, shown = true)
         }
     }
 
@@ -341,7 +341,7 @@ class MainActivity : Activity() {
             }
             if (previous == null || json == null) {
                 runOnUiThread {
-                    if (!isDestroyed && scanSerial.get() == serial) scanFolder(root, quiet = true)
+                    if (!isDestroyed && scanSerial.get() == serial) scanFolder(root, quiet = true, shown = true)
                 }
                 return@execute
             }
@@ -1284,6 +1284,7 @@ class MainActivity : Activity() {
     private var shelfCarts = 0
     /** RomM's games downloading onto an empty shelf: its centred bar. */
     private val shelfDownloading = 8
+    private val shelfFolderGone = 9
     private var downloadStatusShown = false
     private var downloadCountShown = -1
     private val shelfEmpty = 2
@@ -3923,17 +3924,20 @@ class MainActivity : Activity() {
         }, 700L)
     }
 
-    private fun scanFolder(uri: Uri, quiet: Boolean = false) {
+    /** `quiet`: no toast at the end. `shown`: its progress shows (top right
+     *  over carts, centred on an empty shelf); only the scan behind the
+     *  boot's cached shelf is hidden (RomM's show: Siham 2026-11-16). */
+    private fun scanFolder(uri: Uri, quiet: Boolean = false, shown: Boolean = !quiet) {
         val serial = scanSerial.incrementAndGet()
         pendingLibraryIndex = null
         if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
-        if (!quiet) nativeSetShelfStatus(shelfScanning)
+        if (shown) nativeSetShelfStatus(shelfScanning)
         // Refresh Library over a shelf of carts: the scan shows top right in
         // the task rail; on an empty shelf the renderer draws it centred.
-        val inRail = !quiet && shelfCarts > 0
+        val inRail = shown && shelfCarts > 0
         if (inRail && ::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.showScan(0, 0)
         var lastReport = 0L
-        val progress: ((Int, Int) -> Unit)? = if (quiet) null else { done, total ->
+        val progress: ((Int, Int) -> Unit)? = if (!shown) null else { done, total ->
             val now = SystemClock.uptimeMillis()
             if (now - lastReport >= 100L || (total > 0 && done >= total)) {
                 lastReport = now
@@ -3955,14 +3959,17 @@ class MainActivity : Activity() {
                 // was removed. Fail closed, retaining the previous shelf.
                 if (result.truncated) {
                     Log.w(TAG, "Incomplete SAF ROM listing: retaining existing index")
+                    val gone = romFolderGone(uri)
                     runOnUiThread {
-                        if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                        if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
+                        if (gone) { showRomFolderGone(uri); return@runOnUiThread }
+                        if (shown) {
                             libraryRefreshIndicator.hide()
                             nativeSetShelfStatus(shelfNone)
-                            SlotToast.makeText(this,
-                                "ROM folder partly read. Carts kept.",
-                                Toast.LENGTH_LONG).show()
                         }
+                        if (!quiet) SlotToast.makeText(this,
+                            "ROM folder partly read. Carts kept.",
+                            Toast.LENGTH_LONG).show()
                     }
                     return@execute
                 }
@@ -3973,10 +3980,10 @@ class MainActivity : Activity() {
                     Log.i(TAG, "ROM library unchanged: " + result.count +
                         " carts; no renderer rebuild")
                     runOnUiThread {
-                        if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                        if (!isDestroyed && scanSerial.get() == serial && shown) {
                             libraryRefreshIndicator.hide()
                             nativeSetShelfStatus(if (result.count == 0) shelfEmpty else shelfNone)
-                            SlotToast.makeText(this, "Library is up to date.",
+                            if (!quiet) SlotToast.makeText(this, "Library is up to date.",
                                 Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -3993,8 +4000,11 @@ class MainActivity : Activity() {
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "SAF ROM scan failed; previous cache retained", error)
+                val gone = romFolderGone(uri)
                 runOnUiThread {
-                    if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                    if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
+                    if (gone) showRomFolderGone(uri)
+                    else if (shown) {
                         libraryRefreshIndicator.hide()
                         nativeSetShelfStatus(shelfReadError)
                     }
@@ -4008,6 +4018,50 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    /** The ROM folder was deleted: its storage is here (not a card taken
+     *  out, nor Android's access taken back) but the folder isn't. Off the
+     *  UI thread. Unsure answers are false: the carts stay. */
+    private fun romFolderGone(tree: Uri): Boolean = try {
+        if (tree.authority != "com.android.externalstorage.documents") false
+        else {
+            val doc = android.provider.DocumentsContract.getTreeDocumentId(tree)
+            val volume = doc.substringBefore(':', "")
+            val mounted = volume == "primary" ||
+                getSystemService(android.os.storage.StorageManager::class.java).storageVolumes.any {
+                    it.uuid.equals(volume, ignoreCase = true) && it.state == android.os.Environment.MEDIA_MOUNTED
+                }
+            mounted && try {
+                contentResolver.query(android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, doc),
+                    arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID), null, null, null)
+                    ?.use { !it.moveToFirst() } ?: false
+            } catch (_: java.io.FileNotFoundException) { true
+            } catch (error: IllegalArgumentException) {
+                // ExternalStorageProvider: "Missing file for primary:Roms".
+                (error.message ?: "").contains("Missing", ignoreCase = true) ||
+                    error.cause is java.io.FileNotFoundException
+            }
+        }
+    } catch (_: SecurityException) { false } catch (_: Exception) { false }
+
+    /** The deleted ROM folder's carts go; saves, states, labels, favourites
+     *  and settings stay for when the games come back (Siham 2026-11-16). */
+    private fun showRomFolderGone(tree: Uri) {
+        Log.w(TAG, "ROM folder no longer exists: the shelf empties")
+        libraryRefreshIndicator.hide()
+        if (!resumed || !nativeCanRefreshLibrary()) {
+            // At boot or with a game on: once the shelf is free, while the
+            // same folder is still the chosen one.
+            uiHandler.postDelayed({
+                val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
+                if (!isDestroyed && saved == tree.toString()) showRomFolderGone(tree)
+            }, 1_000L)
+            return
+        }
+        if (nativeSetLibrary("[]") >= 0) shelfCarts = 0
+        nativeSetShelfStatus(shelfFolderGone)
+        scanner.execute { try { storeCachedLibrary(tree, "[]") } catch (_: Exception) {} }
     }
 
     override fun onDestroy() {

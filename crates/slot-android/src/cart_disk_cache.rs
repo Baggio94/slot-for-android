@@ -27,6 +27,11 @@ impl DiskCache {
         // The revision invalidates old faces when rendering algorithms change.
         let mut input = format!("KONKR-cart-r102-v8-hd3:{cart:?}").into_bytes();
         input.extend_from_slice(&self.theme);
+        // A cart with no label is written by hand since 2.4.1: its old face
+        // (a printed text label) is drawn again, the others are kept.
+        if cart.label.as_deref().is_none_or(|label| fs::metadata(label).is_err()) {
+            input.extend_from_slice(b"hand-1");
+        }
         for path in [Some(cart.rom.as_path()), cart.label.as_deref()].into_iter().flatten() {
             if let Ok(metadata)=fs::metadata(path) {
                 input.extend_from_slice(&metadata.len().to_le_bytes());

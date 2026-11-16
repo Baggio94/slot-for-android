@@ -427,6 +427,11 @@ fn blend_over(dst: &mut [u8], src: &[u8]) {
 
 pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
     let s = spec(shape_of(cart));
+    if art.is_none() {
+        if let Some(face) = handwritten(&s, cart) {
+            return face;
+        }
+    }
     let mut face = shell_face(&s, &shell_for(cart));
     let label = match art {
         Some(rgba) => rgba,
@@ -438,6 +443,43 @@ pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
     }
     clip_to_silhouette(&s, &mut face);
     face
+}
+
+/// No label art: the title by hand on the bare plastic (slot. original
+/// 1.16), in black or white marker by the plastic's colour.
+fn handwritten(s: &Spec, cart: &Cart) -> Option<CartFace> {
+    let font = crate::hand::hand_font()?;
+    let mut face = shell_face_of(s, &shell_for(cart), true);
+    let (lx, ly, lw, lh) = s.label;
+    let (tx, ty, tw, th) = (px(lx), px(ly), px(lw), px(lh));
+    let fw = px(s.w);
+    let c = (((ty + th / 2) * fw + tx + tw / 2) * 4) as usize;
+    let recess = [face.rgba[c], face.rgba[c + 1], face.rgba[c + 2]];
+    let written = font.write(&label_text(cart), &cart.stem, tw, th, recess);
+    paste_ink(s, &mut face, written.colour, &written.ink);
+    if let Body::Home(_) = s.body {
+        shade_label_well(s, &mut face);
+    }
+    clip_to_silhouette(s, &mut face);
+    Some(face)
+}
+
+/// Writing (one coverage byte per well texel) onto the face; clear plastic
+/// under the ink becomes as opaque as the ink.
+fn paste_ink(s: &Spec, face: &mut CartFace, colour: [u8; 3], coverage: &[u8]) {
+    let ink: Vec<u8> = coverage.iter().flat_map(|a| [colour[0], colour[1], colour[2], *a]).collect();
+    paste_label(s, face, &ink);
+    let (lx, ly, lw, lh) = s.label;
+    let (lx, ly, lw, lh) = (px(lx), px(ly), px(lw), px(lh));
+    let (fw, fh) = (px(s.w), px(s.h));
+    for y in 0..lh.min(fh.saturating_sub(ly)) {
+        for x in 0..lw.min(fw.saturating_sub(lx)) {
+            let a = coverage[(y * lw + x) as usize] as u32;
+            let d = (((y + ly) * fw + x + lx) * 4 + 3) as usize;
+            let under = face.rgba[d] as u32;
+            face.rgba[d] = (a + under * (255 - a) / 255).min(255) as u8;
+        }
+    }
 }
 
 /// A home cart's label sits in a well: the well's top and left edges shade
@@ -563,6 +605,11 @@ fn overlay(base: u8, colour: u8) -> u8 {
 /// (`bitmaps::dense_shell`) before the colour goes on, so a 3x master stays
 /// sharp on every screen.
 fn shell_face(s: &Spec, shell: &Shell) -> CartFace {
+    shell_face_of(s, shell, false)
+}
+
+/// `bare`: no label goes on, so the label box takes the plastic too.
+fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
     let clear = see_through(shell.finish, matches!(s.mould, Mould::Home(_)));
     let src = bitmaps::dense_shell(s.mould, clear);
     let (tw, th) = (px(s.w), px(s.h));
@@ -576,7 +623,7 @@ fn shell_face(s: &Spec, shell: &Shell) -> CartFace {
     let (lx0, ly0, lx1, ly1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
     for y in 0..th {
         for x in 0..tw {
-            let on_label = (lx0..lx1).contains(&x) && (ly0..ly1).contains(&y);
+            let on_label = !bare && (lx0..lx1).contains(&x) && (ly0..ly1).contains(&y);
             let i = ((y * tw + x) * 4) as usize;
             if !on_label {
                 for c in 0..3 {

@@ -538,12 +538,22 @@ pub enum XyRole {
     /// Y is a second A, X a second B.
     BA,
     Off,
+    /// GBA only: Y is L, X is R (Siham 2026-11-16).
+    LR,
 }
 
 impl XyRole {
     pub const ALL: [XyRole; 3] = [XyRole::TurboAB, XyRole::BA, XyRole::Off];
     pub fn label(self) -> &'static str {
-        match self { XyRole::TurboAB => "Turbo A / B", XyRole::BA => "B / A", XyRole::Off => "None" }
+        match self {
+            XyRole::TurboAB => "Turbo A / B", XyRole::BA => "B / A", XyRole::Off => "None",
+            XyRole::LR => "L / R",
+        }
+    }
+    /// The X / Y row's values on a system: L / R where the console has them.
+    pub fn choices(system: &str) -> &'static [XyRole] {
+        use XyRole::*;
+        if system == "gba" { &[TurboAB, BA, LR, Off] } else { &XyRole::ALL }
     }
 }
 
@@ -645,6 +655,11 @@ impl Resolved {
         let mut out = 0;
         for &(from, to) in &self.pairs {
             if slot & from != 0 { out |= to; }
+        }
+        // GBA's X / Y as L / R: Y is L, X is R.
+        if self.xy == Some(XyRole::LR) {
+            if slot & bit::Y != 0 { out |= bit::L; }
+            if slot & bit::X != 0 { out |= bit::R; }
         }
         // Original slot. turbo: on for three frames, off for three.
         let turbo_on = (frame / 3) % 2 == 0;
@@ -772,7 +787,7 @@ impl Controls {
 
     pub fn cycle_xy(&mut self, scope: &Scope, port: usize, right: bool, default_xy: XyRole) {
         let (now, _) = self.xy(scope, port, default_xy);
-        let all = XyRole::ALL;
+        let all = XyRole::choices(scope.system());
         let at = all.iter().position(|r| *r == now).unwrap_or(0);
         let next = all[if right { (at + 1) % all.len() } else { (at + all.len() - 1) % all.len() }];
         self.layout_mut(scope).ports[port].xy = Some(next);
@@ -1501,6 +1516,9 @@ mod tests {
     fn x_y_roles_cycle_and_follow_the_old_setting_until_changed() {
         let mut controls = Controls::default();
         assert_eq!(controls.xy(&NES, 0, XyRole::BA), (XyRole::BA, false));
+        // L / R is the GBA's alone.
+        assert!(!XyRole::choices("nes").contains(&XyRole::LR));
+        assert!(XyRole::choices("gba").contains(&XyRole::LR));
         controls.cycle_xy(&NES, 0, true, XyRole::BA);
         assert_eq!(controls.xy(&NES, 0, XyRole::BA), (XyRole::Off, true));
         let layout = controls.resolve("nes", None, 0, XyRole::BA);
@@ -1693,5 +1711,17 @@ mod tests {
         controls.hotkeys.clear(Action::ShaderNext);
         controls.reset_all();
         assert!(controls.hotkeys.is_default(), "Reset to Default resets the hotkeys too");
+    }
+
+    #[test]
+    fn gba_x_and_y_can_be_l_and_r() {
+        let mut controls = Controls::default();
+        let gba = Scope::System("gba");
+        controls.cycle_xy(&gba, 0, true, XyRole::BA);
+        assert_eq!(controls.xy(&gba, 0, XyRole::BA), (XyRole::LR, true));
+        let layout = controls.resolve("gba", None, 0, XyRole::BA);
+        assert_eq!(layout.apply(bit::Y, 0) & bit::L, bit::L);
+        assert_eq!(layout.apply(bit::X, 0) & bit::R, bit::R);
+        assert_eq!(layout.apply(bit::X, 0) & (bit::A | bit::B), 0);
     }
 }
