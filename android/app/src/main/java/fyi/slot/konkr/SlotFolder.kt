@@ -240,7 +240,9 @@ internal class SlotFolder(private val activity: MainActivity) {
         prefs.edit().putString(TREE, tree.toString()).putString(ROOT, doc).putString(ENV, env).apply()
         ui {
             activity.nativeSetSlotFolder(place())
-            activity.nativeExternalClose()
+            // Files came in (labels, favourites, settings): the shelf shows
+            // them. Nothing new: Library stays on its row (Siham 2026-11-16).
+            if (report.changedPrivate) activity.nativeExternalClose() else activity.nativeExternalReturn()
             toast(if (report.changedPrivate) "slot. folder ready: your saves and settings are back."
                 else "slot. folder ready.")
             if (report.changedPrivate) activity.nativeReloadAll()

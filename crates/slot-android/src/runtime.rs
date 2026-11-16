@@ -3621,13 +3621,13 @@ impl Engine {
                 // A ROM, BIOS or slot. folder chosen from Library: the shelf,
                 // as before 2.4, so its scan shows (Siham 2026-11-16). A
                 // cancelled picker keeps Library and its row (ExternalReturn).
-                if self.external_pending {
-                    self.external_pending = false;
-                    self.menu_held = None;
-                    self.menu_seen = 0;
-                    if matches!(self.overlay, ShelfOverlay::Library { .. }) {
-                        self.overlay = ShelfOverlay::None;
-                    }
+                // Also after a picker slot. opened by itself (the ROM folder
+                // a slot folder names), with nothing pending.
+                self.external_pending = false;
+                self.menu_held = None;
+                self.menu_seen = 0;
+                if matches!(self.overlay, ShelfOverlay::Library { .. }) {
+                    self.overlay = ShelfOverlay::None;
                 }
             }
             Input::ExternalReturn => {
