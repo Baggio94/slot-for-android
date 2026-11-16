@@ -88,5 +88,15 @@ internal class SlotLibraryRefreshIndicator(context: Context, rail: LinearLayout)
         root.visibility = View.VISIBLE
         spinner.invalidate()
     }
+    /** Library > RomM's downloads once its page is left: "DOWNLOADING 3/15"
+     *  (Siham 2026-11-16), the game being downloaded counted. */
+    fun showDownload(done: Int, total: Int) {
+        val text = "DOWNLOADING ${(done + 1).coerceAtMost(total)}/$total"
+        if (caption.text != text) caption.text = text
+        if (root.visibility != View.VISIBLE) {
+            root.visibility = View.VISIBLE
+            spinner.invalidate()
+        }
+    }
     fun hide() { root.visibility = View.GONE }
 }

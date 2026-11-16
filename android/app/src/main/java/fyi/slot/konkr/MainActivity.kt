@@ -303,14 +303,17 @@ class MainActivity : Activity() {
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) ?: return
         val root = Uri.parse(saved)
         if (contentResolver.persistedUriPermissions.none { it.uri == root && it.isReadPermission }) return
-        if (scansRunning.get() > 0 || pendingLibraryIndex != null) {
+        if (scansRunning.get() > 0) {
             scanFolder(root, quiet = true)
             return
         }
+        // Games arrive one by one (RommPage): the shelf not shown yet is the
+        // base of the next, rather than a scan of the whole folder each time.
+        val waiting = pendingLibraryIndex?.takeIf { it.root == root }?.json
         val serial = scanSerial.incrementAndGet()
         scanner.execute {
             if (scanSerial.get() != serial) return@execute
-            val previous = cachedLibraryGames(root)
+            val previous = waiting ?: cachedLibraryGames(root)
             val json = try {
                 previous?.let { RomLibrary.withSavedFiles(this, root, it, files) }
             } catch (error: Exception) {
@@ -323,7 +326,8 @@ class MainActivity : Activity() {
                 }
                 return@execute
             }
-            if (RomLibrary.sameIndex(previous, json)) return@execute
+            // The shelf waiting to be shown is replaced by this one: shown even unchanged.
+            if (waiting == null && RomLibrary.sameIndex(previous, json)) return@execute
             giveRommLabels(root, json, files)
             val prepared = CartStudioCatalog.withOverrides(this, json)
             Log.i(TAG, "RomM: ${files.size} game(s) added without a folder scan")
@@ -950,6 +954,12 @@ class MainActivity : Activity() {
                 startAutoCartLabels()
             }
             autoLabelsWasPlaying = labelsPlaying
+            if (::taskIndicators.isInitialized) {
+                // RomM's downloads go on with its page left: top right.
+                val downloads = if (labelsPlaying) null else romm.downloadProgress()
+                if (downloads == null) taskIndicators.downloads.hide()
+                else taskIndicators.downloads.showDownload(downloads[0], downloads[1])
+            }
             if (::autoLabelIndicator.isInitialized) {
                 if (nativeIsPlaying()) {
                     autoLabelIndicator.hide()

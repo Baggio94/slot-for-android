@@ -53,8 +53,13 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
     private val headersRead = HashSet<Long>()
     /** Games waiting for the ROM folder to be chosen again, writable. */
     private var waitingForFolder: List<Long>? = null
-    /** Files saved this visit, for the shelf once the page is left. */
+    /** Files saved this visit, for the shelf once the page is left. Kept
+     *  until the batch ends: each add hands the shelf all of them, so a
+     *  later add never drops an earlier one. */
     private val downloaded = ArrayList<RomLibrary.SavedFile>()
+    /** The batch downloading now: games done, games in it, the current
+     *  game's percent. Null when none is. */
+    @Volatile private var batch: IntArray? = null
     /** The page is up: the shelf is refreshed once it is left. */
     @Volatile private var showing = false
     private var form: SlotModalDialog? = null
@@ -91,16 +96,21 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
     private fun leave() {
         showing = false
         synchronized(wanted) { wanted.clear() }
-        refreshIfLeft()
+        refreshIfLeft(done = batch == null)
     }
 
-    /** Downloads reach their shelves once the page is left: only those
-     *  carts are added, no folder rescan. */
-    private fun refreshIfLeft() {
+    /** Downloads reach their shelves once the page is left, each game as it
+     *  arrives (Siham 2026-11-16): only those carts are added, no folder
+     *  rescan. `done`: the batch is over, the list starts again. */
+    private fun refreshIfLeft(done: Boolean) {
         if (showing) return
-        val files = synchronized(downloaded) { downloaded.toList().also { downloaded.clear() } }
+        val files = synchronized(downloaded) { downloaded.toList().also { if (done) downloaded.clear() } }
         if (files.isNotEmpty()) activity.addDownloadedGames(files)
     }
+
+    /** The carousel's rail while games download with the page left:
+     *  [done, total, percent], or null. */
+    fun downloadProgress(): IntArray? = if (showing) null else batch?.copyOf()
 
     // -----------------------------------------------------------------
     // Connecting
@@ -509,10 +519,13 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
             var saved = 0
             var failed = 0
             var out = false
+            batch = intArrayOf(0, chosen.size, 0)
             for ((i, game) in chosen.withIndex()) {
+                batch = intArrayOf(i, chosen.size, 0)
                 val ok = try {
                     val file = Romm.download(activity, tree, game) { done, total ->
                         val percent = if (total > 0) (done * 100 / total).toInt().coerceIn(0, 100) else -1
+                        batch = intArrayOf(i, chosen.size, percent)
                         activity.runOnUiThread {
                             if (!activity.isDestroyed) activity.nativeRommProgress(i, chosen.size, percent)
                         }
@@ -533,9 +546,13 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                 }
                 if (ok) saved++ else failed++
                 activity.runOnUiThread {
-                    if (!activity.isDestroyed) activity.nativeRommDownloaded(game.id, ok)
+                    if (activity.isDestroyed) return@runOnUiThread
+                    activity.nativeRommDownloaded(game.id, ok)
+                    // Page left: this game on its shelf now, not at the end.
+                    if (ok) refreshIfLeft(done = false)
                 }
             }
+            batch = null
             activity.runOnUiThread {
                 if (activity.isDestroyed) return@runOnUiThread
                 activity.nativeRommProgress(chosen.size, chosen.size, -1)
@@ -547,7 +564,7 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                     else -> "$saved downloaded, $failed failed."
                 }
                 SlotToast.makeText(activity, text, Toast.LENGTH_SHORT).show()
-                refreshIfLeft()
+                refreshIfLeft(done = true)
             }
         }
     }

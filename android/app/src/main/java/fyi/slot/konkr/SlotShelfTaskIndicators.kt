@@ -31,6 +31,8 @@ internal class SlotShelfTaskIndicators(context: Context, frame: FrameLayout) {
 
     val library = SlotLibraryRefreshIndicator(context, rail)
     val labels = SlotAutoLabelIndicator(context, rail)
+    /** Library > RomM's downloads, once its page is left. */
+    val downloads = SlotLibraryRefreshIndicator(context, rail)
 
     init {
         frame.addView(rail, FrameLayout.LayoutParams(-2, -2,
@@ -44,5 +46,6 @@ internal class SlotShelfTaskIndicators(context: Context, frame: FrameLayout) {
     fun setLightTheme(light: Boolean) {
         library.setLightTheme(light)
         labels.setLightTheme(light)
+        downloads.setLightTheme(light)
     }
 }
