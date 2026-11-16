@@ -6132,8 +6132,9 @@ impl Engine {
     /// A new library with other ROMs (a scan after RomM downloads, Refresh
     /// Library): the shelves take it in place, every unchanged cart keeping
     /// its face, so no shelf has to be drawn again (Siham 2026-11-10: L1/R1
-    /// froze after RomM downloads). False when the ROMs are the same ones
-    /// (Cart Studio's art): the caller then builds everything again.
+    /// froze after RomM downloads). The very same carts sent again: nothing
+    /// to do (true). False when the same ROMs come with other titles or
+    /// shells: the caller then builds everything again.
     pub(super) fn update_library(&mut self, version: u64, library: Option<&[RomEntry]>) -> bool {
         let (systems, video) = library_carts(library, Self::recents_root().as_deref());
         let roms = |carts: &mut dyn Iterator<Item = &slot_store::Cart>| {
@@ -9716,6 +9717,12 @@ mod library_update_tests {
 
     #[test]
     fn new_roms_join_the_shelves_in_place_and_the_same_roms_rebuild() {
+        // The same ROMs with another title: everything is built again.
+        let renamed = |names: &[&str], title: &str| {
+            let mut list = entries(names);
+            list[0].title = title.into();
+            list
+        };
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries(&["AA", "CC"]))).unwrap();
         let gba = Platform::Gba as usize;
@@ -9727,7 +9734,10 @@ mod library_update_tests {
         assert_eq!(stems.len(), 3);
         assert_eq!(engine.shelves[gba].carts[engine.shelves[gba].index].rom,
                    PathBuf::from("content://roms/CC.gba"), "the selected cart stays selected");
-        assert!(!engine.update_library(3, Some(&entries(&["CC", "BB", "AA"]))),
-                "the same ROMs (Cart Studio's art) build everything again");
+        assert!(engine.update_library(3, Some(&entries(&["CC", "BB", "AA"]))),
+                "the very same carts sent again: nothing to rebuild");
+        assert_eq!(engine.library_version, 3);
+        assert!(!engine.update_library(4, Some(&renamed(&["CC", "BB", "AA"], "Other"))),
+                "the same ROMs with another title build everything again");
     }
 }
