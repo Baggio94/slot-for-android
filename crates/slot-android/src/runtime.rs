@@ -765,6 +765,10 @@ const LIBRARY_VALUE_NAMES: [&str; 3] = ["INTERNAL", "SD CARD", "NEEDS ROMM"];
 static SLOT_FOLDER: AtomicU8 = AtomicU8::new(0);
 /// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
 static ROMM_SYNC: AtomicU8 = AtomicU8::new(0);
+/// The ROM folder's SD card isn't in this handheld.
+static ROMS_MISSING: AtomicBool = AtomicBool::new(false);
+/// How bright the carts are while their card is out.
+const MISSING_DIM: f32 = 0.45;
 /// Settings > Interface > RG Rotate: its rows and their keys (85, Sleep
 /// When Closed, is Android's "Lock the screen" right, not a setting).
 /// Game Info (84) right under Playing, which it shows on; Animations are
@@ -4740,6 +4744,12 @@ impl Engine {
                         96 if !self.inserted && self.shelves[self.active].carts.is_empty() => {
                             self.refusal = Some(slot_ui::Refusal::started(
                                 self.born.elapsed().as_millis() as u64));
+                            return;
+                        }
+                        96 if !self.inserted && ROMS_MISSING.load(Ordering::Acquire) => {
+                            self.refusal = Some(slot_ui::Refusal::started(
+                                self.born.elapsed().as_millis() as u64));
+                            set_message("The SD card with your games isn't in.".into());
                             return;
                         }
                         96 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
@@ -8791,7 +8801,8 @@ impl Engine {
                 // The physical slot stays fixed; no input delay or layout changes.
                 let shake = self.refusal.map_or(0.0, |r| r.offset(ms));
                 let row_from = commands.len();
-                shelf.draw_row(ejecting_stem.as_deref(), shake, 0.0, 1.0, &mut commands);
+                let dim = if ROMS_MISSING.load(Ordering::Acquire) { MISSING_DIM } else { 1.0 };
+                shelf.draw_row(ejecting_stem.as_deref(), shake, 0.0, dim, &mut commands);
                 lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),

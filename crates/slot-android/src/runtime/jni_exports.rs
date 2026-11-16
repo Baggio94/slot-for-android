@@ -1209,6 +1209,15 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetRommSync(
     ROMM_SYNC.store(state.clamp(0, 2) as u8, Ordering::Release);
 }
 
+/// The ROM folder's SD card isn't in: the shelf greys its carts and
+/// won't insert one (Siham 2026-11-16).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetRomsMissing(
+    _env: *mut c_void, _this: *mut c_void, missing: jboolean,
+) {
+    ROMS_MISSING.store(missing != 0, Ordering::Release);
+}
+
 /// Everything slot. read at start (settings, favourites, labels, controls)
 /// changed on disk: build the shelf again from it when no game is on.
 static RELOAD_ALL: AtomicBool = AtomicBool::new(false);

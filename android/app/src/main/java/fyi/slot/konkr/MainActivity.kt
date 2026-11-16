@@ -136,6 +136,7 @@ class MainActivity : Activity() {
     external fun nativeSetSlotFolder(place: Int)
     external fun nativeReloadAll()
     external fun nativeSetRommSync(state: Int)
+    external fun nativeSetRomsMissing(missing: Boolean)
     /** A key of a controller: Settings > Controls picks its port and button. */
     external fun nativePadKey(device: Int, code: Int, pressed: Boolean, stick: Boolean)
     /** Every controller connected now, as [{"id","name","fp"}]. */
@@ -446,6 +447,19 @@ class MainActivity : Activity() {
         return listOf(ROM_ROOT, BIOS_ROOT, SAVE_ROOT, STATE_ROOT)
             .mapNotNull { prefs.getString(it, null) }.toSet()
     }
+
+    /** The ROM folder is on an SD card that isn't in this handheld now
+     *  (taken out, or in another one): the shelf greys its carts. Only the
+     *  mounted volumes are looked at, so this is cheap enough to poll. */
+    internal fun romCardMissing(): Boolean = try {
+        val root = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)?.let(Uri::parse)
+        val volume = root?.takeIf { it.authority == "com.android.externalstorage.documents" }
+            ?.let { android.provider.DocumentsContract.getTreeDocumentId(it).substringBefore(':', "") }
+        if (volume == null || volume.isEmpty() || volume == "primary") false
+        else getSystemService(android.os.storage.StorageManager::class.java).storageVolumes.none {
+            it.uuid.equals(volume, ignoreCase = true) && it.state == android.os.Environment.MEDIA_MOUNTED
+        }
+    } catch (_: Exception) { false }
 
     /** The ROM folder's place on its storage (`Roms`), kept in slot.json. */
     internal fun romFolderPath(): String? = try {
@@ -1047,6 +1061,7 @@ class MainActivity : Activity() {
                 lastLibraryStatePoll = nowPerf
                 nativeSetRommSync(RommSaves.state(this@MainActivity))
                 nativeSetSlotFolder(slotFolder.place())
+                nativeSetRomsMissing(romCardMissing())
             }
             if (resumed && nowPerf - lastEmulationReportPollAt >= 1_000L) {
                 lastEmulationReportPollAt = nowPerf
