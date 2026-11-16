@@ -125,6 +125,8 @@ enum Input {
     LinkPeerRomConsent(i32),
     RaPrefetchHash(String, u32),
     ExternalReturn,
+    /// A folder was chosen from Library: back to the shelf, to see it fill.
+    ExternalClose,
     /// Library > RomM (runtime/romm.rs): the server's games, a status (0
     /// loading, 1 a message, 3 close), a label fetched, a download's
     /// progress and each download's end; a Game Boy family game's header,
@@ -3615,6 +3617,19 @@ impl Engine {
             Input::RommDownloaded(id, ok) => self.romm_downloaded(id, ok),
             Input::GameDeleted(uri, ok) => self.game_deleted(uri, ok),
             Input::RommFilter(filter) => self.romm_filter(filter),
+            Input::ExternalClose => {
+                // A ROM, BIOS or slot. folder chosen from Library: the shelf,
+                // as before 2.4, so its scan shows (Siham 2026-11-16). A
+                // cancelled picker keeps Library and its row (ExternalReturn).
+                if self.external_pending {
+                    self.external_pending = false;
+                    self.menu_held = None;
+                    self.menu_seen = 0;
+                    if matches!(self.overlay, ShelfOverlay::Library { .. }) {
+                        self.overlay = ShelfOverlay::None;
+                    }
+                }
+            }
             Input::ExternalReturn => {
                 if self.external_pending {
                     self.external_pending = false;

@@ -501,6 +501,14 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalReturn(
     push(Input::ExternalReturn);
 }
 
+/// A ROM, BIOS or slot. folder was chosen from Library.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalClose(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    push(Input::ExternalClose);
+}
+
 /// Choreographer pacing experiment: this is only a render-request policy.
 /// The underlying libretro emulation budget remains RESPONSIVE (one frame).
 #[unsafe(no_mangle)]

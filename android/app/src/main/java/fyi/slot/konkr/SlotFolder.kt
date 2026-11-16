@@ -240,7 +240,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         prefs.edit().putString(TREE, tree.toString()).putString(ROOT, doc).putString(ENV, env).apply()
         ui {
             activity.nativeSetSlotFolder(place())
-            activity.nativeExternalReturn()
+            activity.nativeExternalClose()
             toast(if (report.changedPrivate) "slot. folder ready: your saves and settings are back."
                 else "slot. folder ready.")
             if (report.changedPrivate) activity.nativeReloadAll()
