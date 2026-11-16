@@ -96,6 +96,8 @@ class MainActivity : Activity() {
         private const val PREFS = "slot_konkr_library"
         internal const val PREFS_NAME = PREFS
         private const val ROM_ROOT = "rom_root_uri"
+        /** RomM's games reach the shelf in groups this far apart. */
+        private const val SILENT_PUBLISH_MS = 2_500L
         /** Labels handed to the shelf per UI pulse (it draws one a frame). */
         private const val AUTO_LABELS_PER_PULSE = 32
         private const val BIOS_ROOT = "bios_root_uri"
@@ -257,6 +259,11 @@ class MainActivity : Activity() {
         val silent: Boolean = false
     )
     private var pendingLibraryIndex: PendingLibraryIndex? = null
+    /** The index last handed to the shelf, and when RomM's last one went:
+     *  an identical one is never sent again, and RomM's games go in groups
+     *  every few seconds so their faces get drawn (2.4.1-beta15 log). */
+    private var lastPublishedIndex: Pair<Int, Int>? = null
+    private var lastSilentPublishAt = 0L
     private lateinit var taskIndicators: SlotShelfTaskIndicators
     private lateinit var libraryRefreshIndicator: SlotLibraryRefreshIndicator
     private lateinit var autoLabelIndicator: SlotAutoLabelIndicator
@@ -281,6 +288,10 @@ class MainActivity : Activity() {
     private val autoLabelsRestartRequested = AtomicBoolean(false)
     /** Labels saved before this run of passes, for its "N LABELS ADDED". */
     @Volatile private var autoLabelsChainBase = -1
+    /** Only retries left (a server that timed out): the visible pass ends,
+     *  they go on unseen (it stayed on LABELS 12/13: Siham 2026-11-17). */
+    @Volatile private var autoLabelsQuiet = false
+    @Volatile private var autoLabelsLastProgress = -1L
     /** Last pulse's game state: leaving a game resumes the label passes. */
     private var autoLabelsWasPlaying = false
     // Paint fresh labels only when all moving carts and pending GPU uploads
@@ -1020,7 +1031,7 @@ class MainActivity : Activity() {
             if (::autoLabelIndicator.isInitialized) {
                 if (nativeIsPlaying()) {
                     autoLabelIndicator.hide()
-                } else if (autoLabelsRunning.get()) {
+                } else if (autoLabelsRunning.get() && !autoLabelsQuiet) {
                     // The scanner only writes one immutable, lock-free
                     // snapshot. No Handler post or UI work per cartridge.
                     val progress = AutoCartLabelDiagnostics.snapshot()
@@ -2862,6 +2873,24 @@ class MainActivity : Activity() {
                     val report = AutoCartLabelDiagnostics.snapshot()
                     val added = (report.saved - autoLabelsChainBase.coerceAtLeast(0)).coerceAtLeast(0)
                     if (!anotherBatch && !recheck) autoLabelsChainBase = -1
+                    val progressKey = (report.checked.toLong() shl 32) or report.saved.toLong()
+                    if (anotherBatch && !recheck) {
+                        // A batch that moved nothing on: only retries wait.
+                        if (progressKey == autoLabelsLastProgress && !autoLabelsQuiet) {
+                            autoLabelsQuiet = true
+                            uiHandler.post {
+                                if (::autoLabelIndicator.isInitialized) {
+                                    if (resumed && !isDestroyed && !nativeIsPlaying())
+                                        autoLabelIndicator.finished(added)
+                                    else autoLabelIndicator.hide()
+                                }
+                            }
+                        } else if (progressKey != autoLabelsLastProgress) autoLabelsQuiet = false
+                        autoLabelsLastProgress = progressKey
+                    } else {
+                        autoLabelsLastProgress = -1L
+                        autoLabelsQuiet = false
+                    }
                     if (!anotherBatch && !recheck && report.total > 0) {
                         Log.i("SlotAutoLabels",
                             "ART_SUMMARY examined=${report.checked}/${report.total} " +
@@ -3891,6 +3920,13 @@ class MainActivity : Activity() {
             return
         }
         if (!resumed || !nativeCanRefreshLibrary()) return
+        if (next.silent && (next.json.length to next.json.hashCode()) == lastPublishedIndex) {
+            pendingLibraryIndex = null
+            return
+        }
+        // RomM's games while more are coming: a group every 2.5 s at most.
+        if (next.silent && romm.downloading() &&
+            SystemClock.uptimeMillis() - lastSilentPublishAt < SILENT_PUBLISH_MS) return
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
         if (saved != next.root.toString()) {
             pendingLibraryIndex = null
@@ -3899,6 +3935,8 @@ class MainActivity : Activity() {
         }
         pendingLibraryIndex = null
         if (!next.silent) libraryRefreshIndicator.show()
+        else lastSilentPublishAt = SystemClock.uptimeMillis()
+        lastPublishedIndex = next.json.length to next.json.hashCode()
         val count = try { nativeSetLibrary(next.prepared) } catch (error: Exception) {
             Log.e(TAG, "Changed ROM library could not be applied", error)
             -1
