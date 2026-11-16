@@ -64,7 +64,7 @@ internal object GameKeys {
             if (!temp.renameTo(new)) { temp.delete(); return }
             old.renameTo(File(old.parentFile, old.name + ".carried"))
         } catch (error: Exception) {
-            Log.w(TAG, "Couldn't carry ${old.name} over", error)
+            warn("Couldn't carry ${old.name} over", error)
         }
     }
 
@@ -95,10 +95,17 @@ internal object GameKeys {
                     }
                     if (file.renameTo(target)) moved++
                 } catch (error: Exception) {
-                    Log.w(TAG, "Couldn't carry ${file.name} over", error)
+                    warn("Couldn't carry ${file.name} over", error)
                 }
             }
         }
-        if (moved > 0) Log.i(TAG, "Carried $moved save files to the game's portable name")
+        if (moved > 0) {
+            try { Log.i(TAG, "Carried $moved save files to the game's portable name") }
+            catch (_: RuntimeException) {} // JVM unit tests have no Android log
+        }
+    }
+
+    private fun warn(message: String, error: Exception) {
+        try { Log.w(TAG, message, error) } catch (_: RuntimeException) {}
     }
 }
