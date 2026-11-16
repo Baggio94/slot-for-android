@@ -127,8 +127,6 @@ enum Input {
     ExternalReturn,
     /// A folder was chosen from Library: back to the shelf, to see it fill.
     ExternalClose,
-    /// Android's picker opens over Library > RomM: the page stays behind it.
-    ExternalBegin,
     /// Library > RomM (runtime/romm.rs): the server's games, a status (0
     /// loading, 1 a message, 3 close), a label fetched, a download's
     /// progress and each download's end; a Game Boy family game's header,
@@ -3587,7 +3585,6 @@ impl Engine {
             Input::RommDownloaded(id, ok) => self.romm_downloaded(id, ok),
             Input::GameDeleted(uri, ok) => self.game_deleted(uri, ok),
             Input::RommFilter(filter) => self.romm_filter(filter),
-            Input::ExternalBegin => self.external_pending = true,
             Input::ExternalClose => {
                 // A ROM, BIOS or slot. folder chosen from Library: the shelf,
                 // as before 2.4, so its scan shows (Siham 2026-11-16). A
@@ -3634,6 +3631,12 @@ impl Engine {
                 // Internet host away sharing its code keeps its room screen.
                 let sharing_room = matches!(self.overlay, ShelfOverlay::Multiplayer)
                     && self.link_inet.keeps_room_in_background(self.link_phase);
+                // Library > RomM closed by Android (Home, another app): its
+                // page is left as with B, so the games downloading go to
+                // the shelf one by one (they waited for a page shut long ago).
+                if !self.external_pending && matches!(self.overlay, ShelfOverlay::Romm) {
+                    self.leave_romm(ShelfOverlay::None);
+                }
                 if !self.external_pending && !sharing_room {
                     self.overlay = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
                         ShelfOverlay::GameMenu { row: 0 }
@@ -7982,6 +7985,8 @@ impl Engine {
             .unwrap_or_else(|poison| poison.into_inner())
             .drain(..)
             .collect();
+        // Before onPause's Reset among them (jni_exports::EXTERNAL_BEGIN).
+        if jni_exports::EXTERNAL_BEGIN.swap(false, Ordering::AcqRel) { self.external_pending = true; }
         for event in events {
             self.handle(event);
         }

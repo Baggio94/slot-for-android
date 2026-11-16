@@ -504,12 +504,15 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalReturn(
 }
 
 /// An Android page opens over a slot. page that must stay behind it (the
-/// ROM folder picker over Library > RomM).
+/// ROM folder picker over Library > RomM). A flag, not an Input: onPause's
+/// nativeResetInput empties the queue before the renderer could read it.
+pub(super) static EXTERNAL_BEGIN: AtomicBool = AtomicBool::new(false);
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalBegin(
     _env: *mut c_void, _activity: *mut c_void,
 ) {
-    push(Input::ExternalBegin);
+    EXTERNAL_BEGIN.store(true, Ordering::Release);
 }
 
 /// A ROM, BIOS or slot. folder was chosen from Library.
