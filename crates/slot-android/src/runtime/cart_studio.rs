@@ -874,6 +874,8 @@ impl Engine {
                 // The clear plastic's layers follow on the next quiet frame.
                 if let Some(material) = self.clear_material.as_mut() { material.key = (usize::MAX, usize::MAX); }
             }
+            // A face rendered with the old shell or label is never shown.
+            self.cart_render.invalidate((sid, index));
             let shelf = &self.shelves[sid];
             if let Some(tex) = shelf.face(index) {
                 let face = cart_face_with_material(&shelf.carts[index], None);

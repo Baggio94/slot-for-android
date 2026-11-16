@@ -96,6 +96,8 @@ class MainActivity : Activity() {
         private const val PREFS = "slot_konkr_library"
         internal const val PREFS_NAME = PREFS
         private const val ROM_ROOT = "rom_root_uri"
+        /** Labels handed to the shelf per UI pulse (it draws one a frame). */
+        private const val AUTO_LABELS_PER_PULSE = 32
         private const val BIOS_ROOT = "bios_root_uri"
         private const val SAVE_ROOT = "saves_root_uri"
         private const val SHARE_GBA_SAVES = "share_gba_saves"
@@ -275,6 +277,10 @@ class MainActivity : Activity() {
     // Paint fresh labels only when all moving carts and pending GPU uploads
     // have settled. The renderer's manual reload path is synchronous.
     private val autoLabelUpdates = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    /** RomM's page labels for the games just downloaded, by the URI a scan
+     *  gives them, kept until each is on its cart, whether the games reach
+     *  the shelf by an add or by a folder scan (Siham 2026-11-16). */
+    private val rommLabels = java.util.concurrent.ConcurrentHashMap<String, Pair<File, String>>()
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
     private val romm: RommPage by lazy {
@@ -303,6 +309,11 @@ class MainActivity : Activity() {
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) ?: return
         val root = Uri.parse(saved)
         if (contentResolver.persistedUriPermissions.none { it.uri == root && it.isReadPermission }) return
+        for (file in files) {
+            val label = file.label ?: continue
+            try { rommLabels[RomLibrary.indexUri(root, file.uri).toString()] = label to file.labelPlatform }
+            catch (_: Exception) { /* The label search finds it instead. */ }
+        }
         if (scansRunning.get() > 0) {
             scanFolder(root, quiet = true)
             return
@@ -328,7 +339,7 @@ class MainActivity : Activity() {
             }
             // The shelf waiting to be shown is replaced by this one: shown even unchanged.
             if (waiting == null && RomLibrary.sameIndex(previous, json)) return@execute
-            giveRommLabels(root, json, files)
+            giveRommLabels(json)
             val prepared = CartStudioCatalog.withOverrides(this, json)
             Log.i(TAG, "RomM: ${files.size} game(s) added without a folder scan")
             runOnUiThread {
@@ -342,16 +353,20 @@ class MainActivity : Activity() {
     /** A downloaded cart wears the label RomM's page showed for it at once,
      *  rather than waiting for the label search: the same art set, cut as
      *  the shelf's. Only when it has no label yet and its system is the one
-     *  the label was cut for. On the scanner thread, before the shelf. */
-    private fun giveRommLabels(root: Uri, json: String, files: List<RomLibrary.SavedFile>) {
+     *  the label was cut for. On the scanner thread, before the shelf; a
+     *  cart already drawn gets its new face too. */
+    private fun giveRommLabels(json: String) {
+        if (rommLabels.isEmpty()) return
         val platforms = try {
             RomLibrary.indexEntries(json).associate { it.uri to it.platform }
         } catch (_: Exception) { return }
-        for (file in files) {
-            val label = file.label ?: continue
+        for ((uri, given) in rommLabels.entries.toList()) {
+            // Not in this index yet: kept for the next one.
+            val platform = platforms[uri] ?: continue
+            rommLabels.remove(uri)
+            val (label, labelPlatform) = given
             try {
-                val uri = RomLibrary.indexUri(root, file.uri).toString()
-                if (platforms[uri] != file.labelPlatform) continue
+                if (platform != labelPlatform) continue
                 val target = CartLabelPaths.file(filesDir, uri)
                 if (target.exists() || !label.isFile) continue
                 target.parentFile?.mkdirs()
@@ -364,6 +379,7 @@ class MainActivity : Activity() {
                     atomic.failWrite(out)
                     throw error
                 }
+                autoLabelUpdates.add(uri)
             } catch (error: Exception) {
                 Log.w(TAG, "RomM label not given to its cart; the label search will", error)
             }
@@ -702,10 +718,15 @@ class MainActivity : Activity() {
     }
 
     private fun publishAutoLabelsWhenIdle() {
-        if (nativeIsPlaying() || !nativeCarouselQuiet()) return
-        // One face per UI pulse, never a burst on the GL owner.
-        val uri = autoLabelUpdates.poll() ?: return
-        nativeReloadCartLabel(uri)
+        // Straight to the shelf, which draws them one per frame once it's
+        // still: waiting here for a quiet carousel left labels off the shelf
+        // until slot. restarted, for players who keep browsing or editing
+        // carts (RetroPup's video, 2026-11-16).
+        if (autoLabelUpdates.isEmpty()) return
+        repeat(AUTO_LABELS_PER_PULSE) {
+            val uri = autoLabelUpdates.poll() ?: return@repeat
+            nativeReloadCartLabel(uri)
+        }
         wakeCarouselRender()
     }
 
@@ -3915,6 +3936,9 @@ class MainActivity : Activity() {
                     }
                     return@execute
                 }
+                // RomM's labels for games this scan found (bug: lost when the
+                // games came by a scan rather than an add).
+                giveRommLabels(result.json)
                 if (previous != null && RomLibrary.sameIndex(previous, result.json)) {
                     Log.i(TAG, "ROM library unchanged: " + result.count +
                         " carts; no renderer rebuild")
