@@ -503,6 +503,15 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalReturn(
     push(Input::ExternalReturn);
 }
 
+/// An Android page opens over a slot. page that must stay behind it (the
+/// ROM folder picker over Library > RomM).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalBegin(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    push(Input::ExternalBegin);
+}
+
 /// A ROM, BIOS or slot. folder was chosen from Library.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalClose(

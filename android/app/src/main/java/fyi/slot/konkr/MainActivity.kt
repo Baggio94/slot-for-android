@@ -137,6 +137,7 @@ class MainActivity : Activity() {
     external fun nativeTouch(action: Int, x: Float, y: Float, timeMs: Long)
     external fun nativeUpdateProgress(percent: Int)
     external fun nativeExternalClose()
+    external fun nativeExternalBegin()
     /** A key of a controller: Settings > Controls picks its port and button. */
     external fun nativePadKey(device: Int, code: Int, pressed: Boolean, stick: Boolean)
     /** Every controller connected now, as [{"id","name","fp"}]. */
@@ -446,7 +447,12 @@ class MainActivity : Activity() {
 
     /** RomM needs the ROM folder writable: the picker, on the folder chosen
      *  before when Android allows it. */
-    internal fun chooseRomFolderForRomm() = openRomFolderPicker()
+    internal fun chooseRomFolderForRomm() {
+        // The page stays behind Android's picker, as Library's rows do
+        // (it closed, and the games came with no page to follow them).
+        nativeExternalBegin()
+        openRomFolderPicker()
+    }
 
     private val slotUpdater: SlotUpdater by lazy {
         SlotUpdater(this) { status, version ->
