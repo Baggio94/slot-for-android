@@ -477,7 +477,8 @@ impl Studio {
             },
             2 if self.waiting => (None, Some("Looking for the logo…".into())),
             2 => (None, Some("No logo for this cart yet.".into())),
-            3 => (Some(slot_ui::generated_label_art(cart)), None),
+            // slot. label: the title by hand, as on a cart with no label (2.4.1).
+            3 => (Some(slot_ui::handwritten_label_art(cart)), None),
             SEARCH_LABEL => match &self.alt {
                 Some(Alt { real: Some(real), name, .. }) => (Self::fitted(cart, real), Some(name.clone())),
                 Some(Alt { name, .. }) if self.waiting => (None, Some(format!("Getting {name}…"))),

@@ -333,7 +333,7 @@ impl Engine {
         self.overlay = ShelfOverlay::Romm;
     }
 
-    fn leave_romm(&mut self, to: ShelfOverlay) {
+    pub(super) fn leave_romm(&mut self, to: ShelfOverlay) {
         if let Some(page) = self.romm.as_mut() {
             // The faces go back to the pool; the list stays for next time.
             let faces: Vec<slot_gfx::TexId> = page.faces.drain().map(|(_, (tex, _))| tex)
