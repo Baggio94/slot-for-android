@@ -468,18 +468,17 @@ impl DeviceSettings {
             touchscreen: s.touchscreen,
         }
     }
-    fn apply(self, s: &mut Settings) {
-        s.bezel_gba = self.bezel_gba; s.bezel_gbc = self.bezel_gbc; s.bezel_gb = self.bezel_gb;
-        s.bezel_nes = self.bezel_nes; s.bezel_snes = self.bezel_snes; s.bezel_md = self.bezel_md;
-        s.home_bezel_three_two = self.home_bezel_three_two;
-        s.responsive_loop = self.responsive_loop; s.run_ahead_frames = self.run_ahead_frames;
-        s.rotate_game_cover = self.rotate_game_cover; s.rotate_shelf_cover = self.rotate_shelf_cover;
-        s.rotate_dim = self.rotate_dim; s.rotate_sleep = self.rotate_sleep;
-        s.rotate_animations = self.rotate_animations; s.rotate_game_info = self.rotate_game_info;
-        s.touchscreen = self.touchscreen;
-    }
     fn load(dir: &Path) -> Option<Self> {
         serde_json::from_slice(&fs::read(dir.join(DEVICE_NAME)).ok()?).ok()
+    }
+    /// The settings file with this handheld's own values in place.
+    fn merged(dir: &Path, main: Vec<u8>) -> Vec<u8> {
+        let Some(own) = fs::read(dir.join(DEVICE_NAME)).ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) else { return main };
+        let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&main) else { return main };
+        let (Some(json_map), Some(own_map)) = (json.as_object_mut(), own.as_object()) else { return main };
+        for (key, value) in own_map { json_map.insert(key.clone(), value.clone()); }
+        serde_json::to_vec(&json).unwrap_or(main)
     }
     fn save(&self, dir: &Path) -> io::Result<()> {
         let data = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
@@ -748,7 +747,10 @@ impl Settings {
     /// Only a missing or unreadable first-install configuration gets a
     /// model-specific default; never rewrite the file just to apply a default.
     pub fn load_for_device(dir: &Path, device: Device) -> Self {
-        let mut s = fs::read(dir.join(NAME)).ok()
+        let main = fs::read(dir.join(NAME)).ok();
+        // This handheld's own values go in first, so the migrations below
+        // see them as they would have before 2.5.
+        let mut s = main.map(|b| DeviceSettings::merged(dir, b))
             .and_then(|b| {
                 let old_json=serde_json::from_slice::<serde_json::Value>(&b).ok();
                 let had_wallpaper_choice=old_json.as_ref()
@@ -852,7 +854,7 @@ impl Settings {
         // What belongs to this handheld (its screen, chip and buttons) is
         // its own, whatever the slot. folder brought (Siham 2026-11-16).
         match DeviceSettings::load(dir) {
-            Some(own) => own.apply(&mut s),
+            Some(_) => {}
             None => {
                 // First 2.5 start on this handheld: its values so far are its own.
                 let _ = DeviceSettings::of(&s).save(dir);
@@ -1609,15 +1611,18 @@ mod tests {
         assert!(s.change(11, false) && s.responsive_loop);
         let dir = std::env::temp_dir().join(format!("slot-konkr-pacing-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
+        let _ = fs::remove_file(dir.join(DEVICE_NAME));
         for old in [r#"{"responsive_pacing":false}"#, r#"{"responsive_pacing":true}"#,
             r#"{"responsive_pacing":true,"display_sync_pacing":true}"#,
             r#"{"hybrid_pacing":true}"#, r#"{"retroarch_clock_pacing":true}"#,
             r#"{"retroarch_sync_pacing":false,"responsive_loop":true}"#] {
             fs::write(dir.join(NAME), old).unwrap();
+            let _ = fs::remove_file(dir.join(DEVICE_NAME));
             assert!(!Settings::load(&dir).responsive_loop, "{old}");
         }
         fs::write(dir.join(NAME), r#"{"retroarch_sync_pacing":true,"responsive_loop":true}"#)
             .unwrap();
+        let _ = fs::remove_file(dir.join(DEVICE_NAME));
         assert!(Settings::load(&dir).responsive_loop);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1746,6 +1751,7 @@ mod tests {
         // An older *partial* JSON must use old missing-field values, not
         // freshly introduced LCD3x/Display Sync/Run-Ahead preferences.
         std::fs::write(root.join(NAME),r#"{"ff_speed":4,"show_titles":true}"#).unwrap();
+        let _ = std::fs::remove_file(root.join(DEVICE_NAME));
         let previous=Settings::load(&root);
         assert_eq!(previous.ff_speed,4);
         assert!(previous.show_titles);
@@ -2108,6 +2114,8 @@ mod tests {
         fs::write(root.join(NAME), r#"{"bezel_nes":"nes","bezel_md":"genesis"}"#).unwrap();
         let mut s=Settings::load_for_device(&root, Device::KONKR);
         assert_eq!((s.bezel_nes,s.bezel_md),(Bezel::None,Bezel::None));
+        // Another handheld reading the same file (no own values yet).
+        let _ = fs::remove_file(root.join(DEVICE_NAME));
         assert_eq!(Settings::load_for_device(&root, Device::RPC).bezel_md,Bezel::Genesis);
         s.bezel_md=Bezel::MegaDrive;
         s.save(&root).unwrap();
