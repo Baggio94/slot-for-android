@@ -200,7 +200,7 @@ internal object FolderSync {
 
     /** Folders that travel whole. */
     private val TRAVELLING_DIRS = listOf("Saves", "States", "Labels", "Studio", "GameEmulation",
-        "Cheats", "Wallpapers", "ArtNames")
+        "Cheats", "CustomCheats", "Wallpapers", "ArtNames")
     /** Single files that travel. */
     private val TRAVELLING_FILES = setOf("slot-konkr-settings.json", "slot-konkr-controls.json",
         "konkr-favorites.json", "konkr-recents.json", "Config/cart_shell.ini",
