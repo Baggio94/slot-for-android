@@ -279,11 +279,12 @@ fn fake08_z8lua_is_the_one_built() {
     assert!(script.contains(&format!("libs/z8lua={FAKE08_Z8LUA}")));
 }
 
-const FAKE08_PATCHES: [&[u8]; 9] = [
+const FAKE08_PATCHES: [&[u8]; 10] = [
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/cartdata-files.patch")),
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/input.patch")),
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/netplay-seed.patch")),
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/pause-menu.patch")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/reset-cart.patch")),
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/savestates.patch")),
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/sine-table.patch")),
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../cores/fake08/text-cart-rom.patch")),

@@ -1,0 +1,126 @@
+diff --git a/platform/libretro/libretro.cpp b/platform/libretro/libretro.cpp
+index ff27a59..ff0553e 100644
+--- a/platform/libretro/libretro.cpp
++++ b/platform/libretro/libretro.cpp
+@@ -286,7 +286,7 @@ EXPORT void retro_set_controller_port_device(unsigned port, unsigned device)
+ 
+ EXPORT void retro_reset()
+ {
+-    _vm->QueueCartChange(_vm->CurrentCartFilename());
++    _vm->ResetCart();
+ }
+ 
+ static std::array<int, 7> buttons
+diff --git a/source/picoluaapi.cpp b/source/picoluaapi.cpp
+index 7f95083..ab91c49 100644
+--- a/source/picoluaapi.cpp
++++ b/source/picoluaapi.cpp
+@@ -1460,7 +1460,7 @@ int ispaused(lua_State *L) {
+ }
+ 
+ int resetcart(lua_State *L) {
+-    _vmForLuaApi->QueueCartChange(_vmForLuaApi->CurrentCartFilename());
++    _vmForLuaApi->ResetCart();
+ 
+     return 0;
+ }
+diff --git a/source/vm.cpp b/source/vm.cpp
+index 32cb4f4..834fdcd 100644
+--- a/source/vm.cpp
++++ b/source/vm.cpp
+@@ -349,12 +349,21 @@ bool Vm::loadCart(Cart* cart) {
+     _cartdataKeyCount = 0;
+     _currentCartdataKey = "";
+ 
++    uint32_t carriedSeed = _memory->hwState.rngState[0] ^ _memory->hwState.rngState[1];
++
+     //reset memory (may have to be more selective about zeroing out to be accurate?)
+     _memory->Reset();
+ 
+-    //seed rng
+-    auto now = std::chrono::high_resolution_clock::now();
+-    api_srand(fix32::frombits((int32_t)now.time_since_epoch().count()));
++    //seed rng: from the clock for the first cart. A cart started after it
++    //(Reset Cart, load()) goes on from rnd()'s own state, which a save state
++    //holds, so two consoles playing together stay in step.
++    if (_cartsStarted++ == 0) {
++        auto now = std::chrono::high_resolution_clock::now();
++        api_srand(fix32::frombits((int32_t)now.time_since_epoch().count()));
++    }
++    else {
++        api_srand(fix32::frombits((int32_t)carriedSeed));
++    }
+ 
+     //set graphics state
+     _graphics->color();
+@@ -780,9 +789,12 @@ void Vm::QueueCartChange(std::string filename){
+ }
+ 
+ void Vm::QueueCartChange(const unsigned char* cartData, size_t size){
++    if (cartData != _cartBytes.data()) {
++        _cartBytes.assign(cartData, cartData + size);
++    }
+     _nextCartKey = "";
+-    _nextCartData = cartData;
+-    _nextCartSize = size;
++    _nextCartData = _cartBytes.data();
++    _nextCartSize = _cartBytes.size();
+     _cartChangeQueued = true;
+     _pauseMenu = false;
+     _clearInputOnResume = true;
+@@ -793,6 +805,20 @@ int Vm::GetTargetFps() {
+     return _targetFps;
+ }
+ 
++// Start the frontend's cart again. It came as bytes, so it has no file name
++// to load again. Starting it from its bytes also covers a cart whose load()
++// of another cart failed (fake-08 then holds its default cart as the loaded
++// one while the cart runs on), and does not hang on which cart object is
++// loaded, which a save state does not hold.
++void Vm::ResetCart() {
++    if (!_cartBytes.empty()) {
++        QueueCartChange(_cartBytes.data(), _cartBytes.size());
++    }
++    else {
++        QueueCartChange(CurrentCartFilename());
++    }
++}
++
+ std::string Vm::CurrentCartFilename(){
+     if (_loadedCart){
+         return _loadedCart->FullCartPath;
+@@ -1325,7 +1351,7 @@ void Vm::vm_run() {
+ void Vm::vm_extcmd(std::string cmd){
+     //screenshots, recording, and breadcrumb not supported
+     if (cmd == "reset"){
+-        QueueCartChange(CurrentCartFilename());
++        ResetCart();
+     }
+     else if (cmd == "pause") {
+         togglePauseMenu();
+diff --git a/source/vm.h b/source/vm.h
+index 0152e05..4595287 100644
+--- a/source/vm.h
++++ b/source/vm.h
+@@ -45,6 +45,13 @@ class Vm {
+     string _nextCartKey;
+     const unsigned char* _nextCartData;
+     size_t _nextCartSize;
++    // A cart handed over as bytes (libretro): kept, because the frontend's
++    // buffer need not outlive retro_load_game and the cart has no file name
++    // to load again on reset.
++    vector<unsigned char> _cartBytes;
++    // carts started since the core started: only the first takes its rnd()
++    // seed from the clock
++    unsigned _cartsStarted = 0;
+ 
+     string _cartLoadError;
+ 
+@@ -108,6 +115,7 @@ class Vm {
+     PicoRam* getPicoRam();
+ 
+     string CurrentCartFilename();
++    void ResetCart();
+ 
+     void togglePauseMenu();
+     bool IsPaused();
