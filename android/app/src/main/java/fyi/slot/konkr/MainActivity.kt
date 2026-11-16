@@ -240,6 +240,10 @@ class MainActivity : Activity() {
     private val scanner = Executors.newSingleThreadExecutor()
     /** Folder scans asked and not finished. */
     private val scansRunning = AtomicInteger()
+    /** RomM's downloads that came during a folder scan: added once it ends,
+     *  rather than a new scan for each game (each cancelled the last, and
+     *  none reached the shelf before the end: ROM folder chosen from RomM). */
+    private var addAfterScan: List<RomLibrary.SavedFile>? = null
     private data class PendingLibraryIndex(
         val root: Uri, val json: String, val prepared: String,
         val serial: Int, val quiet: Boolean
@@ -312,7 +316,8 @@ class MainActivity : Activity() {
             catch (_: Exception) { /* The label search finds it instead. */ }
         }
         if (scansRunning.get() > 0) {
-            scanFolder(root, quiet = true)
+            // The list names every game of the batch: the latest is enough.
+            addAfterScan = files
             return
         }
         // Games arrive one by one (RommPage): the shelf not shown yet is the
@@ -3855,7 +3860,11 @@ class MainActivity : Activity() {
                 }
             } finally {
                 // After the result above reached the UI thread.
-                runOnUiThread { scansRunning.decrementAndGet() }
+                runOnUiThread {
+                    if (scansRunning.decrementAndGet() == 0 && !isDestroyed) {
+                        addAfterScan?.let { addAfterScan = null; addDownloadedGames(it) }
+                    }
+                }
             }
         }
     }
