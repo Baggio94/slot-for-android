@@ -12,7 +12,7 @@ When I watched [Russ from Retro Game Corps showcase slot.](https://www.youtube.c
 
 The round button on top of the KONKR fits slot. naturally: press it to insert a cartridge, hold it while playing to eject it. It feels close to handling a real cartridge.
 
-The port has since grown to other Android handhelds and home consoles. The goal stays the same as the original: less time in menus, more time playing.
+The port has since grown to other Android handhelds and more systems. The goal stays the same as the original: less time in menus, more time playing.
 
 ## Highlights
 
