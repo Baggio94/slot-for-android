@@ -229,12 +229,17 @@ const GAME_MENU_SCRIM: f32 = 0.65;
 const MENU_REVEAL_MS: u64 = 120;
 /// A second slot. press this soon after a tap opens Save States.
 const DOUBLE_TAP_MS: u128 = 360;
-const SHELF_STATUS_TEXT: [&str; 8] = [
+const SHELF_STATUS_TEXT: [&str; 9] = [
     "", "SCANNING CARTRIDGES...", "NO GAMES FOUND",
     "LIBRARY IMPORT FAILED", "FOLDER ACCESS EXPIRED",
     "CANNOT READ ROM FOLDER", "FOLDER PICKER UNAVAILABLE",
     "FOLDER PERMISSION FAILED",
+    // 8: RomM's games downloading onto an empty shelf, drawn as the first
+    // scan, never "NO GAMES FOUND" (Siham 2026-11-16).
+    "DOWNLOADING GAMES...",
 ];
+/// The statuses drawn as the first scan (a bar and a count).
+fn status_has_bar(status: u8) -> bool { matches!(status, 1 | 8) }
 // Original Slot records ~30 rewind states/sec and replays ~60/sec (~2x).
 // Android v1.2.2 recorded/replayed ~10/sec (~1x). Playback rate is computed
 // by settings::rewind_step_seconds, never confused with capture frequency.
@@ -1438,7 +1443,7 @@ struct Engine {
     /// Its count under the bar, and the text it was drawn from.
     scan_count: Option<(slot_gfx::TexId, u32, u32)>,
     scan_count_text: String,
-    shelf_status_faces: [(slot_gfx::TexId, u32, u32); 8],
+    shelf_status_faces: [(slot_gfx::TexId, u32, u32); 9],
     shelf_status_start: (slot_gfx::TexId, u32),
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
     // Same centered role, progress and failure faces as original slot.
@@ -3890,7 +3895,7 @@ impl Engine {
                 self.shelf_status = if usize::from(code) < SHELF_STATUS_TEXT.len() {
                     code
                 } else { 0 };
-                if self.shelf_status == 1 { self.set_scan_progress(0, 0); }
+                if status_has_bar(self.shelf_status) { self.set_scan_progress(0, 0); }
             }
             Input::ScanProgress(done, total) => self.set_scan_progress(done, total),
             Input::GameError { uri, message } => {
@@ -6376,7 +6381,7 @@ impl Engine {
     /// and fills as the carts are read (Siham 2026-11-09).
     fn draw_first_scan(&self, out: &mut Vec<Draw>) {
         let width = out_w() as f32;
-        let (tex, w, h) = self.shelf_status_faces[1];
+        let (tex, w, h) = self.shelf_status_faces[usize::from(self.shelf_status)];
         let s = 0.75;
         let (tw, th) = (w as f32 * s, h as f32 * s);
         out.push(Draw::Tex { x: (width - tw) / 2.0, y: 74.0, w: tw, h: th, tex, alpha: 1.0 });
@@ -8913,10 +8918,10 @@ impl Engine {
         // never the Android overlay. No hint is drawn behind an open menu.
         if self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None) {
             let library_shown = self.shelves.iter().any(|s| !s.carts.is_empty());
-            if self.shelf_status == 1 && library_shown {
+            if status_has_bar(self.shelf_status) && library_shown {
                 // Refresh Library: the scan shows top right, by the labels'
                 // (Android's task rail), never over the carts.
-            } else if self.shelf_status == 1 {
+            } else if status_has_bar(self.shelf_status) {
                 self.draw_first_scan(&mut commands);
             } else if self.shelf_status > 0 {
                 let (tex, w, h) = self.shelf_status_faces[usize::from(self.shelf_status)];
@@ -9052,7 +9057,7 @@ impl Engine {
             && !self.awaiting_game && !self.external_pending
             && self.progress <= 0.0
             && matches!(self.overlay, ShelfOverlay::None)
-            && self.shelf_status != 1 // library scanner progress remains animated
+            && !status_has_bar(self.shelf_status) // scan and download progress stay animated
             && self.last_cart_navigation.elapsed() >= Duration::from_millis(3200)
             && self.menu_opened.elapsed() >= Duration::from_millis(1200)
             && !self.shelves[self.active].is_scrolling()

@@ -243,6 +243,10 @@ class MainActivity : Activity() {
     private val scanner = Executors.newSingleThreadExecutor()
     /** Folder scans asked and not finished. */
     private val scansRunning = AtomicInteger()
+    /** RomM's downloads that came during a folder scan: added once it ends,
+     *  rather than a new scan for each game (each cancelled the last, and
+     *  none reached the shelf before the end: ROM folder chosen from RomM). */
+    private var addAfterScan: List<RomLibrary.SavedFile>? = null
     private data class PendingLibraryIndex(
         val root: Uri, val json: String, val prepared: String,
         val serial: Int, val quiet: Boolean
@@ -315,7 +319,8 @@ class MainActivity : Activity() {
             catch (_: Exception) { /* The label search finds it instead. */ }
         }
         if (scansRunning.get() > 0) {
-            scanFolder(root, quiet = true)
+            // The list names every game of the batch: the latest is enough.
+            addAfterScan = files
             return
         }
         // Games arrive one by one (RommPage): the shelf not shown yet is the
@@ -981,8 +986,26 @@ class MainActivity : Activity() {
             if (::taskIndicators.isInitialized) {
                 // RomM's downloads go on with its page left: top right.
                 val downloads = if (labelsPlaying) null else romm.downloadProgress()
-                if (downloads == null) taskIndicators.downloads.hide()
+                // An empty shelf shows the downloads in its middle, as the
+                // first scan, not NO GAMES FOUND (Siham 2026-11-16).
+                val onEmpty = downloads != null && shelfCarts == 0 && scansRunning.get() == 0
+                if (downloads == null || onEmpty) taskIndicators.downloads.hide()
                 else taskIndicators.downloads.showDownload(downloads[0], downloads[1])
+                if (onEmpty && downloads != null) {
+                    if (!downloadStatusShown) {
+                        downloadStatusShown = true
+                        downloadCountShown = -1
+                        nativeSetShelfStatus(shelfDownloading)
+                    }
+                    if (downloads[0] != downloadCountShown) {
+                        downloadCountShown = downloads[0]
+                        nativeSetScanProgress(downloads[0], downloads[1])
+                    }
+                } else if (downloadStatusShown) {
+                    downloadStatusShown = false
+                    // Unless a scan or a published shelf has said otherwise.
+                    if (scansRunning.get() == 0) nativeSetShelfStatus(if (shelfCarts == 0) shelfEmpty else shelfNone)
+                }
             }
             if (::autoLabelIndicator.isInitialized) {
                 if (nativeIsPlaying()) {
@@ -1259,6 +1282,10 @@ class MainActivity : Activity() {
     private val shelfScanning = 1
     /** Carts on the shelf, from the last library handed to the renderer. */
     private var shelfCarts = 0
+    /** RomM's games downloading onto an empty shelf: its centred bar. */
+    private val shelfDownloading = 8
+    private var downloadStatusShown = false
+    private var downloadCountShown = -1
     private val shelfEmpty = 2
     private val shelfImportError = 3
     private val shelfPermissionExpired = 4
@@ -3974,7 +4001,11 @@ class MainActivity : Activity() {
                 }
             } finally {
                 // After the result above reached the UI thread.
-                runOnUiThread { scansRunning.decrementAndGet() }
+                runOnUiThread {
+                    if (scansRunning.decrementAndGet() == 0 && !isDestroyed) {
+                        addAfterScan?.let { addAfterScan = null; addDownloadedGames(it) }
+                    }
+                }
             }
         }
     }
