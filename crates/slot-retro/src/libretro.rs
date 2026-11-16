@@ -92,7 +92,41 @@ unsafe fn with_host<R>(f: impl FnOnce(&mut Host) -> R) -> Option<R> {
     Some(f(&mut *p))
 }
 
-unsafe extern "C" fn log_noop(_level: c_uint, _fmt: *const c_char) {}
+/// A core's warnings and errors, to Android's log as "SlotCore": what a
+/// black screen on one handheld says (TdZink's Pocket Block, Siham
+/// 2026-11-16). The log call is variadic and stable Rust can't read its
+/// arguments, so the message is its format string (`Unsupported mapper %d`),
+/// which says enough. Never more than a few lines a second: some cores warn
+/// on every frame. Debug and info messages stay quiet, as before.
+unsafe extern "C" fn log_core(level: c_uint, fmt: *const c_char) {
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+    const WARN: c_uint = 2;
+    const PER_SECOND: u32 = 8;
+    static SECOND: AtomicU64 = AtomicU64::new(0);
+    static LINES: AtomicU32 = AtomicU32::new(0);
+    if level < WARN || fmt.is_null() { return; }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|t| t.as_secs()).unwrap_or(0);
+    if SECOND.swap(now, Ordering::Relaxed) != now { LINES.store(0, Ordering::Relaxed); }
+    if LINES.fetch_add(1, Ordering::Relaxed) >= PER_SECOND { return; }
+    let text = std::ffi::CStr::from_ptr(fmt).to_string_lossy();
+    let text: String = text.trim().chars().take(300).collect();
+    if text.is_empty() { return; }
+    let line = format!("{} {text}", if level > WARN { "error:" } else { "warning:" });
+    #[cfg(target_os = "android")]
+    {
+        #[link(name = "log")]
+        unsafe extern "C" {
+            fn __android_log_write(priority: c_int, tag: *const c_char, text: *const c_char) -> c_int;
+        }
+        if let Ok(line) = CString::new(line) {
+            // 5 = ANDROID_LOG_WARN, 6 = ANDROID_LOG_ERROR.
+            __android_log_write(if level > WARN { 6 } else { 5 }, c"SlotCore".as_ptr(), line.as_ptr());
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("SlotCore: {line}");
+}
 
 unsafe extern "C" fn set_rumble_state(port: c_uint, effect: c_uint, strength: u16) -> bool {
     with_host(|h| {
@@ -266,7 +300,7 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             if data.is_null() {
                 return false;
             }
-            (*(data as *mut LogCallback)).log = log_noop as *const c_void;
+            (*(data as *mut LogCallback)).log = log_core as *const c_void;
             true
         }
         SET_AUDIO_BUFFER_STATUS_CALLBACK => {

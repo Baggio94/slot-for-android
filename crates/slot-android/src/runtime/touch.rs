@@ -2,14 +2,17 @@
 //!
 //! A finger drags the carts exactly under it; let go quickly and they coast
 //! on, slow down and settle on a cart with the D-pad's own spring. A tap on
-//! the cart in the middle inserts it, as A does; a tap on a cart beside it
-//! brings that one to the middle. Touch only works on the carousel itself:
+//! the cart in the middle inserts it, as A does, and so does pulling it
+//! down; a tap on a cart beside it brings that one to the middle. Touch only works on the carousel itself:
 //! never in a game, a menu, or with the RG Rotate closed.
 use super::*;
 
 /// How far, in canvas pixels (the canvas is 480 high), a finger may move
 /// and still tap.
 const TAP_SLOP: f32 = 10.0;
+/// A finger pulled down this far (canvas pixels) from the middle cart
+/// pushes it into the console (ljn35XX's idea, Siham 2026-11-16).
+const PUSH_DOWN: f32 = 40.0;
 /// A touch held longer than this is not a tap (kept for a long press).
 const TAP_MS: i64 = 600;
 /// The finger's speed is measured over its last this many milliseconds.
@@ -30,6 +33,8 @@ pub(super) struct Touch {
     start_ms: i64,
     last_x: f32,
     dragging: bool,
+    /// The finger went mostly down, not sideways: no shelf drag.
+    pulling: bool,
     /// The finger stopped a moving shelf: letting go does not insert.
     caught: bool,
     /// The last positions: (time in ms, x), oldest first.
@@ -40,7 +45,7 @@ impl Touch {
     fn new(x: f32, y: f32, ms: i64, caught: bool) -> Self {
         let mut samples = VecDeque::with_capacity(SAMPLES);
         samples.push_back((ms, x));
-        Touch { start: (x, y), start_ms: ms, last_x: x, dragging: false, caught, samples }
+        Touch { start: (x, y), start_ms: ms, last_x: x, dragging: false, pulling: false, caught, samples }
     }
 
     fn sample(&mut self, ms: i64, x: f32) {
@@ -105,11 +110,17 @@ impl Engine {
         match action {
             MOVE => {
                 touch.sample(ms, x);
-                if !touch.dragging && (x - touch.start.0).hypot(y - touch.start.1) > TAP_SLOP {
-                    touch.dragging = true;
-                    // The carts catch up with the finger from where it set
-                    // down, so they stay exactly under it.
-                    touch.last_x = touch.start.0;
+                let (dx, dy) = (x - touch.start.0, y - touch.start.1);
+                if !touch.dragging && !touch.pulling && dx.hypot(dy) > TAP_SLOP {
+                    if dy > dx.abs() {
+                        // Down, not sideways: maybe a push into the console.
+                        touch.pulling = true;
+                    } else {
+                        touch.dragging = true;
+                        // The carts catch up with the finger from where it
+                        // set down, so they stay exactly under it.
+                        touch.last_x = touch.start.0;
+                    }
                 }
                 if touch.dragging {
                     let dx = x - touch.last_x;
@@ -124,6 +135,13 @@ impl Engine {
                     let speed = touch.speed(ms);
                     self.shelves[self.active].let_go(speed);
                     self.last_cart_navigation = Instant::now();
+                } else if touch.pulling {
+                    self.shelves[self.active].let_go(0.0);
+                    let (dx, dy) = (x - touch.start.0, y - touch.start.1);
+                    if !touch.caught && dy >= PUSH_DOWN && dx.abs() < dy
+                        && self.shelves[self.active].cart_under(touch.start.0, touch.start.1) == Some(0) {
+                        self.insert_by_touch();
+                    }
                 } else {
                     self.shelves[self.active].let_go(0.0);
                     if !touch.caught && ms - touch.start_ms <= TAP_MS {
@@ -135,6 +153,12 @@ impl Engine {
         }
     }
 
+    /// Exactly A: pressed and let go at once (no fresh start).
+    fn insert_by_touch(&mut self) {
+        self.handle(Input::Key(96, true));
+        self.handle(Input::Key(96, false));
+    }
+
     fn drag_shelf(&mut self, dx: f32) {
         self.shelves[self.active].drag_by(dx);
         // Keeps the carousel drawing every frame (not dozing) meanwhile.
@@ -143,11 +167,7 @@ impl Engine {
 
     fn tap_shelf(&mut self, x: f32, y: f32) {
         match self.shelves[self.active].cart_under(x, y) {
-            Some(0) => {
-                // Exactly A: pressed and let go at once (no fresh start).
-                self.handle(Input::Key(96, true));
-                self.handle(Input::Key(96, false));
-            }
+            Some(0) => self.insert_by_touch(),
             Some(by) => {
                 self.shelves[self.active].go_by(by);
                 self.last_cart_navigation = Instant::now();
