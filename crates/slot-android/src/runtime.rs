@@ -1171,6 +1171,10 @@ struct Engine {
     born: Instant,
     last: Instant,
     library_version: u64,
+    /// Built from a real library (an empty one too), not the placeholder
+    /// of a cold start before the cached library came: its shelves can take
+    /// new games in place, with no 5 s rebuild (RomM's first games).
+    has_library: bool,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
     /// Labels that arrived (the label search, RomM), each redrawn on its
     /// cart one per frame when the shelf isn't moving: no wait for a still
@@ -1955,6 +1959,7 @@ impl Engine {
             born: now,
             last: now,
             library_version,
+            has_library: library.is_some(),
             texture_cache: VecDeque::new(),
             relabel: VecDeque::new(),
             last_cart_navigation: now,
@@ -6065,7 +6070,18 @@ impl Engine {
         };
         let before = roms(&mut self.system_carts().into_iter().flatten());
         let after = roms(&mut systems.iter().flatten().chain(video.iter()));
-        if before == after || self.shelves.len() <= VIDEO_RACK { return false; }
+        if self.shelves.len() <= VIDEO_RACK { return false; }
+        if before == after {
+            // The very same carts (a library sent again): nothing to do. A
+            // rebuild threw every face away for nothing, 5 s on an empty
+            // shelf (2.4.1-beta15 log). Other changes (titles, shells) still
+            // rebuild, as before.
+            let racks = (0..Platform::ALL.len()).chain(std::iter::once(VIDEO_RACK));
+            let same = racks.zip(systems.iter().chain(std::iter::once(&video)))
+                .all(|(rack, carts)| self.shelves[rack].carts == *carts);
+            if same { self.library_version = version; }
+            return same;
+        }
         let racks = (0..Platform::ALL.len()).chain(std::iter::once(VIDEO_RACK));
         for (rack, carts) in racks.zip(systems.into_iter().chain(std::iter::once(video))) {
             // A shelf the download left alone keeps its faces being drawn.

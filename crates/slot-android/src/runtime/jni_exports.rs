@@ -265,7 +265,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                     .then_some((engine.overlay, engine.external_pending))
             });
             let in_place = holder.borrow_mut().as_mut()
-                .is_some_and(|engine| engine.shelves.iter().any(|s| !s.carts.is_empty())
+                .is_some_and(|engine| (engine.has_library || engine.shelves.iter().any(|s| !s.carts.is_empty()))
                     && engine.update_library(version, snapshot.as_deref()));
             if !in_place {
                 // Destruct old GL resources on the GL thread before recreating them.
