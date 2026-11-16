@@ -164,8 +164,26 @@ pub fn auto_shell_of(uri: &str) -> Option<ShellChoice> {
     auto_shell(entry, Platform::parse(&entry.platform)?)
 }
 
+/// Shells Cart Studio saved since slot. started, by URI: a library the
+/// scanner prepared before the save (published later) keeps them.
+static SAVED_SHELLS: std::sync::Mutex<Option<std::collections::HashMap<String, Option<String>>>> =
+    std::sync::Mutex::new(None);
+
+/// Over a library coming from Android: the shells saved since it was
+/// prepared (bug: a Cart Studio colour went back to the old one).
+pub fn keep_saved_shells(entries: &mut [RomEntry]) {
+    let saved = SAVED_SHELLS.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(saved) = saved.as_ref() else { return };
+    for entry in entries.iter_mut() {
+        if let Some(shell) = saved.get(&entry.uri) { entry.shell_override = shell.clone(); }
+    }
+}
+
 /// Cart Studio saved a shell: the library keeps it for the next rebuild.
 pub fn remember_shell(uri: &str, chosen: Option<ShellChoice>) {
+    SAVED_SHELLS.lock().unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .insert(uri.to_owned(), chosen.map(|c| c.to_value()));
     let mut state = LIBRARY.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = state.entries.as_mut().and_then(|e| e.iter_mut().find(|e| e.uri == uri)) {
         entry.shell_override = chosen.map(|c| c.to_value());
@@ -212,8 +230,9 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetLibrary(
 ) -> jni::sys::jint {
     let started = std::time::Instant::now();
     let Ok(input) = env.get_string(&json) else { return -1 };
-    let Ok(entries) = serde_json::from_str::<Vec<RomEntry>>(&input.to_string_lossy()) else { return -1 };
+    let Ok(mut entries) = serde_json::from_str::<Vec<RomEntry>>(&input.to_string_lossy()) else { return -1 };
     if entries.len() > MAX_ROMS { return -1; }
+    keep_saved_shells(&mut entries);
     let count = entries.len() as i32;
     let mut state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
     state.entries = Some(entries);
@@ -235,6 +254,23 @@ mod tests {
         assert_eq!(next_populated(0, -1, &[2, 0, 3]), 2);
         assert_eq!(next_populated(2, 1, &[2, 0, 3]), 0);
         assert_eq!(next_populated(0, 1, &[0, 0, 0]), 0);
+    }
+
+    #[test]
+    fn a_shell_saved_in_cart_studio_outlives_an_older_library() {
+        SAVED_SHELLS.lock().unwrap().get_or_insert_with(Default::default)
+            .insert("content://roms/studio-test".into(), Some("chosen".into()));
+        let entry = |uri: &str| RomEntry {
+            platform: "GBA".into(), title: "Game".into(), uri: uri.into(),
+            code: String::new(), color_only: false, shell_override: Some("old".into()),
+            gb_title: String::new(), gb_code: String::new(),
+            gb_japan: false, gb_cgb_flag: None,
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(),
+        };
+        let mut entries = vec![entry("content://roms/studio-test"), entry("content://roms/other")];
+        keep_saved_shells(&mut entries);
+        assert_eq!(entries[0].shell_override.as_deref(), Some("chosen"));
+        assert_eq!(entries[1].shell_override.as_deref(), Some("old"));
     }
 
     #[test]

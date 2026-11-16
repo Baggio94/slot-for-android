@@ -156,6 +156,16 @@ impl CartRender {
         }
     }
 
+    /// One cart's art changed (its label arrived, Cart Studio saved it): a
+    /// face drawn or being drawn from the old art is never shown, and the
+    /// next request draws it again.
+    pub(crate) fn invalidate(&mut self, key: Key) {
+        self.pending.retain(|(k, _)| *k != key);
+        let (lock, _) = &*self.work;
+        let mut q=lock.lock().unwrap_or_else(|e|e.into_inner());
+        q.jobs.retain(|((k,_),_,_)| *k != key);
+    }
+
     /// Called every GL frame with the new navigation priorities.
     /// Only queued (not already decoding) artwork may be cancelled. This
     /// keeps the CPU/memory cap fixed while ensuring a freshly selected cart

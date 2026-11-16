@@ -1165,6 +1165,10 @@ struct Engine {
     last: Instant,
     library_version: u64,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
+    /// Labels that arrived (the label search, RomM), each redrawn on its
+    /// cart one per frame when the shelf isn't moving: no wait for a still
+    /// carousel or a closed menu (RetroPup's video, 2026-11-16).
+    relabel: VecDeque<String>,
     last_cart_navigation: Instant,
     cart_render: CartRender,
     clear_material: Option<ClearMaterial>,
@@ -1942,6 +1946,7 @@ impl Engine {
             last: now,
             library_version,
             texture_cache: VecDeque::new(),
+            relabel: VecDeque::new(),
             last_cart_navigation: now,
             cart_render: CartRender::start(visuals_root.as_deref())?,
             clear_material: None,
@@ -3560,7 +3565,7 @@ impl Engine {
                 }
             }
             Input::StudioArt { uri, real, logo, kind, name } => self.studio_art(uri, real, logo, kind, name),
-            Input::ReloadCartLabel { uri } => self.reload_cart_label(&uri),
+            Input::ReloadCartLabel { uri } => if !self.relabel.contains(&uri) { self.relabel.push_back(uri) },
             Input::RommCatalog(entries) => self.romm_catalog(entries),
             Input::RommStatus(kind, text) => self.romm_status(kind, text),
             Input::RommLabel(id) => self.romm_label(id),
@@ -4807,10 +4812,22 @@ impl Engine {
     // separation on Android: no slow PNG decode/embossing on the GLES thread.
     // GPU texture uploads stay on their GL owner and are bounded per frame.
     /// A cart's label file changed: redraw its face on every shelf.
+    /// One arrived label onto its cart, when no game is on or starting and
+    /// the shelf has been still a moment (its face is drawn on this thread).
+    fn relabel_one(&mut self) {
+        if self.relabel.is_empty() || self.game.is_some() || self.inserted || self.awaiting_game
+            || self.pending_game.is_some()
+            || self.shelves.get(self.active).is_some_and(|s| s.is_scrolling())
+            || self.last_cart_navigation.elapsed() < Duration::from_millis(250) { return; }
+        if let Some(uri) = self.relabel.pop_front() { self.reload_cart_label(&uri); }
+    }
+
     fn reload_cart_label(&mut self, uri: &str) {
-        for shelf in &self.shelves {
+        for (sid, shelf) in self.shelves.iter().enumerate() {
             for (index, cart) in shelf.carts.iter().enumerate() {
                 if cart.rom.to_string_lossy() == uri {
+                    // A face rendered before the label came is never shown.
+                    self.cart_render.invalidate((sid, index));
                     if let Some(tex) = shelf.face(index) {
                         let face = cart_face_with_material(cart, None);
                         self.gpu.update_face(tex, &face);
@@ -8624,6 +8641,7 @@ impl Engine {
         if repeated_letter { self.show_selected_letter(); }
         self.shelves[self.active].update(dt);
         self.tick_triggers();
+        self.relabel_one();
         self.prepare_visible();
         self.start_waiting_picker();
         // Only warm a settled carousel selection. Actual ROM I/O takes place
