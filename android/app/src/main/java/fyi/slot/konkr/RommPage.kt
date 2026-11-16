@@ -96,16 +96,29 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
     private fun leave() {
         showing = false
         synchronized(wanted) { wanted.clear() }
-        refreshIfLeft(done = batch == null)
+        // Games downloaded on the page reach the shelf now: say so.
+        val done = batch == null
+        val added = refreshIfLeft(done)
+        if (done && added > 0) shelfToast(added, 0)
+    }
+
+    /** Once the page is left: the games are on the shelf (Siham 2026-11-16:
+     *  the player must never wonder whether they were added). */
+    private fun shelfToast(added: Int, failed: Int) {
+        val games = if (added == 1) "1 game" else "$added games"
+        SlotToast.makeText(activity,
+            if (failed == 0) "$games added to your shelf." else "$games added to your shelf, $failed failed.",
+            Toast.LENGTH_SHORT).show()
     }
 
     /** Downloads reach their shelves once the page is left, each game as it
      *  arrives (Siham 2026-11-16): only those carts are added, no folder
      *  rescan. `done`: the batch is over, the list starts again. */
-    private fun refreshIfLeft(done: Boolean) {
-        if (showing) return
+    private fun refreshIfLeft(done: Boolean): Int {
+        if (showing) return 0
         val files = synchronized(downloaded) { downloaded.toList().also { if (done) downloaded.clear() } }
         if (files.isNotEmpty()) activity.addDownloadedGames(files)
+        return files.size
     }
 
     /** The carousel's rail while games download with the page left:
@@ -557,6 +570,8 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                 if (activity.isDestroyed) return@runOnUiThread
                 activity.nativeRommProgress(chosen.size, chosen.size, -1)
                 if (out && saved == 0) return@runOnUiThread
+                val added = refreshIfLeft(done = true)
+                if (added > 0) { shelfToast(added, failed); return@runOnUiThread }
                 val text = when {
                     failed == 0 && saved == 1 -> "1 game downloaded."
                     failed == 0 -> "$saved games downloaded."
@@ -564,7 +579,6 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                     else -> "$saved downloaded, $failed failed."
                 }
                 SlotToast.makeText(activity, text, Toast.LENGTH_SHORT).show()
-                refreshIfLeft(done = true)
             }
         }
     }

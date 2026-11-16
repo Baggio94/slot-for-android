@@ -229,7 +229,7 @@ const GAME_MENU_SCRIM: f32 = 0.65;
 const MENU_REVEAL_MS: u64 = 120;
 /// A second slot. press this soon after a tap opens Save States.
 const DOUBLE_TAP_MS: u128 = 360;
-const SHELF_STATUS_TEXT: [&str; 9] = [
+const SHELF_STATUS_TEXT: [&str; 10] = [
     "", "SCANNING CARTRIDGES...", "NO GAMES FOUND",
     "LIBRARY IMPORT FAILED", "FOLDER ACCESS EXPIRED",
     "CANNOT READ ROM FOLDER", "FOLDER PICKER UNAVAILABLE",
@@ -237,6 +237,8 @@ const SHELF_STATUS_TEXT: [&str; 9] = [
     // 8: RomM's games downloading onto an empty shelf, drawn as the first
     // scan, never "NO GAMES FOUND" (Siham 2026-11-16).
     "DOWNLOADING GAMES...",
+    // 9: the ROM folder was deleted (its storage is here).
+    "ROM FOLDER NOT FOUND",
 ];
 /// The statuses drawn as the first scan (a bar and a count).
 fn status_has_bar(status: u8) -> bool { matches!(status, 1 | 8) }
@@ -1383,6 +1385,9 @@ struct Engine {
     menu_scroll_y: f32,
     /// The selected row's bar: left end, strip, right end.
     menu_pill: [(slot_gfx::TexId, u32, u32); 3],
+    /// Dark's bar, whatever the theme: the in-game Screen page keeps the
+    /// game behind it and white text (Light's bar hid it: Siham 2026-11-16).
+    dark_pill: [(slot_gfx::TexId, u32, u32); 3],
     /// The mark on a row that opens a page.
     menu_opens: (slot_gfx::TexId, u32, u32),
     /// Each page's path line, made when first shown.
@@ -1401,7 +1406,7 @@ struct Engine {
     /// Its count under the bar, and the text it was drawn from.
     scan_count: Option<(slot_gfx::TexId, u32, u32)>,
     scan_count_text: String,
-    shelf_status_faces: [(slot_gfx::TexId, u32, u32); 9],
+    shelf_status_faces: [(slot_gfx::TexId, u32, u32); 10],
     shelf_status_start: (slot_gfx::TexId, u32),
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
     // Same centered role, progress and failure faces as original slot.
@@ -1838,6 +1843,13 @@ impl Engine {
             (gpu.create_face(&face), face.w, face.h)
         });
         let menu_pill = menu_style::pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
+        let dark_pill = {
+            let theme = menu_style::palette();
+            menu_style::set_palette(None);
+            let faces = menu_style::pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
+            menu_style::set_palette(theme);
+            faces
+        };
         let menu_opens = {
             let face = menu_style::menu_opens_face();
             (gpu.create_face(&face), face.w, face.h)
@@ -2094,6 +2106,7 @@ impl Engine {
             menu_scroll_top: 0,
             menu_scroll_y: 0.0,
             menu_pill,
+            dark_pill,
             menu_opens,
             menu_paths: Default::default(),
             menu_side: None,
@@ -7387,14 +7400,19 @@ impl Engine {
                 let items = [1, 2, 3, 48, 25, 31];
                 self.draw_original_style_menu(0, &items, row, out);
                 if self.update_status == 1 {
-                    // After About's label, as far as its mark: scale to
-                    // that width, then center the resulting shorter glyph
-                    // vertically within About's row.
+                    // At the right of About's row, as in 2.3 (2.4 put it
+                    // against the label), and drawn as the rows are: the
+                    // theme's ink and their contrast on any wallpaper
+                    // (Siham 2026-11-16).
                     let x1 = out_w() as f32 - self.menu_side_room(0, &items).unwrap_or(PILL_RIGHT);
-                    let x = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round();
-                    self.draw_update_status_centered(106, x,
-                        settings_row_top(6) + 5.5 * QUICK_PITCH,
-                        (x1 - 36.0 - x).clamp(40.0, 175.0), 0.70, out);
+                    let label_end = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round() + 24.0;
+                    let (_, w, _) = self.menu_textures[106];
+                    let room = (x1 - 18.0 - label_end).clamp(40.0, 175.0);
+                    let width = w as f32 * (room / w.max(1) as f32).min(0.79);
+                    let fade = self.menu_fade(0);
+                    let alpha = fade * if row == 5 { 1.0 } else { menu_look::ROW_REST };
+                    self.draw_update_status_centered(106, (x1 - 18.0 - width).round().max(label_end),
+                        settings_row_top(6) + 5.5 * QUICK_PITCH, room, alpha, out);
                 }
             }
             ShelfOverlay::Library { row } => {

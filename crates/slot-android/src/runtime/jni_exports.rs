@@ -225,7 +225,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
         // Even a direct JNI draw must not advance or save while recovery failed.
         if holder.borrow().as_ref().is_some_and(|e| !e.gpu.graphics_ready()) { return; }
         let safe = holder.borrow().as_ref().is_some_and(|e|
-            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game));
+            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game)
+                // Library > RomM's page waits: a rebuild of an empty shelf
+                // would close it under the player (ROM folder chosen there).
+                && !matches!(e.overlay, ShelfOverlay::Romm));
         LIBRARY_UPDATE_SAFE.store(safe, Ordering::Release);
         let current = holder.borrow().as_ref().map(|engine| engine.library_version);
         let updated = {
@@ -296,7 +299,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
             engine.observe_frame_delay(vsync_frame_ns);
         }
         let now_safe = holder.borrow().as_ref().is_some_and(|e|
-            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game));
+            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game)
+                // Library > RomM's page waits: a rebuild of an empty shelf
+                // would close it under the player (ROM folder chosen there).
+                && !matches!(e.overlay, ShelfOverlay::Romm));
         LIBRARY_UPDATE_SAFE.store(now_safe, Ordering::Release);
     });
 }
