@@ -599,7 +599,7 @@ pub struct Settings {
     /// Slot v1.7 GENERAL: Recents is off by default; persist its list regardless.
     pub show_recents: bool,
     pub show_titles: bool,
-    /// Touch on the shelf (runtime/touch.rs): off by default (Siham 2026-11-16).
+    /// Touch on the shelf (runtime/touch.rs): on by default (Siham 2026-11-17).
     pub touchscreen: bool,
     /// Set once the home consoles' 3:2 default (no overlay) was applied.
     #[serde(default)]
@@ -680,7 +680,7 @@ impl Default for Settings {
             status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
             wallpaper_shelves: Default::default(),
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
-            show_recents: false, show_titles: false, touchscreen: false, home_bezel_three_two: false,
+            show_recents: false, show_titles: false, touchscreen: true, home_bezel_three_two: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             simpletex_gba_colour: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
