@@ -318,7 +318,10 @@ class MainActivity : Activity() {
         // Games arrive one by one (RommPage): the shelf not shown yet is the
         // base of the next, rather than a scan of the whole folder each time.
         val waiting = pendingLibraryIndex?.takeIf { it.root == root }?.json
-        val serial = scanSerial.incrementAndGet()
+        // An add never cancels the one before it (only a folder scan does):
+        // with games arriving faster than an add took, each cancelled the
+        // last and none reached the shelf before the end (2.4.1-beta8 log).
+        val serial = scanSerial.get()
         scanner.execute {
             if (scanSerial.get() != serial) return@execute
             val previous = waiting ?: cachedLibraryGames(root)

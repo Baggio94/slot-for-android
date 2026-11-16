@@ -346,8 +346,15 @@ internal object RomLibrary {
             DocumentsContract.Document.COLUMN_LAST_MODIFIED
         )
         val added = ArrayList<JSONObject>()
+        // RomM's games arrive one by one, each add naming them all: those
+        // already in the index aren't read again (each read was the whole
+        // file, RetroPup's 18 games took seconds per add).
+        val known = JSONArray(gamesJson).let { games ->
+            (0 until games.length()).mapNotNullTo(HashSet()) { games.optJSONObject(it)?.optString("uri") }
+        }
         for (file in files) {
             val fileUri = indexUri(treeUri, file.uri)
+            if (fileUri.toString() in known) continue
             val (name, size, modified) = resolver.query(fileUri, columns, null, null, null)?.use { c ->
                 if (!c.moveToFirst()) return null
                 val name = c.getString(c.getColumnIndexOrThrow(columns[0])) ?: return null
