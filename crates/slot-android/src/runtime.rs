@@ -6080,7 +6080,10 @@ impl Engine {
             let racks = (0..Platform::ALL.len()).chain(std::iter::once(VIDEO_RACK));
             let same = racks.zip(systems.iter().chain(std::iter::once(&video)))
                 .all(|(rack, carts)| self.shelves[rack].carts == *carts);
-            if same { self.library_version = version; }
+            if same {
+                self.library_version = version;
+                self.has_library |= library.is_some();
+            }
             return same;
         }
         let racks = (0..Platform::ALL.len()).chain(std::iter::once(VIDEO_RACK));
@@ -6094,6 +6097,7 @@ impl Engine {
         self.rebuild_recents();
         self.rebuild_favorites();
         self.library_version = version;
+        self.has_library |= library.is_some();
         if self.shelves.get(self.active).is_none_or(|s| s.carts.is_empty()) {
             self.active = self.next_shelf(self.active.min(Platform::ALL.len()), 1);
             self.platform_shown_at = Some(Instant::now());
