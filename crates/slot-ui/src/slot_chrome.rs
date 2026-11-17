@@ -229,6 +229,9 @@ impl SlotChrome<'_> {
         let slot_alpha = if held { 1.0 } else { chrome };
         if self.game && opening && self.over { out.push(Draw::Game); }
 
+        if self.slot_faces.is_some() {
+            draw_bar_shadow(chrome, out);
+        }
         draw_slot_back_with(self.slot_faces.map(|faces| faces.0), slot_alpha, out);
 
         let (cw, ch) = crate::cart::shelf_box_for(self.cart);
@@ -306,6 +309,38 @@ impl SlotChrome<'_> {
             if self.over { chrome } else { slot_alpha }, out);
         if self.game && opening && !self.over { out.push(Draw::Game); }
     }
+}
+
+/// Light and Original: the console bar's top edge melts into a light
+/// shelf, where Dark's light rim stands out on its dark one. A short soft
+/// shadow, a darker shade of the shelf's own colour, sets it off; a little
+/// less over the GBA's and Mega Drive's dark plastic (Siham 2026-11-17).
+/// Drawn before the bar and the cart, so neither is shaded.
+fn draw_bar_shadow(alpha: f32, out: &mut Vec<Draw>) {
+    for (y, a) in bar_shadow_bands() {
+        out.push(Draw::Rect { x: 0.0, y, w: out_w() as f32, h: BAR_SHADOW_STEP, colour: [a[0], a[1], a[2], a[3] * alpha] });
+    }
+}
+
+const BAR_SHADOW_STEP: f32 = 0.5;
+
+/// The shadow's half-pixel bands above the bar: (top, colour). Empty in
+/// Dark and OLED.
+pub fn bar_shadow_bands() -> Vec<(f32, [f32; 4])> {
+    bar_shadow_bands_for(crate::menu_style::palette())
+}
+
+fn bar_shadow_bands_for(palette: Option<crate::menu_style::MenuPalette>) -> Vec<(f32, [f32; 4])> {
+    let Some(palette) = palette else { return Vec::new() };
+    let strength = if palette.ink.is_some() { 1.0 } else { 0.55 };
+    let tint = palette.shelf.map(|c| c as f32 / 255.0 * 0.45);
+    (0..14).map(|i| {
+        let d = (i as f32 + 0.5) * BAR_SHADOW_STEP;
+        let mut a = 0.17 * strength * (-((d - 0.25) / 2.2).powi(2)).exp();
+        // The edge itself, a fine line as Dark's rim.
+        if i == 0 { a += 0.13 * strength; }
+        (BAND_Y - (i as f32 + 1.0) * BAR_SHADOW_STEP, [tint[0], tint[1], tint[2], a.min(1.0)])
+    }).collect()
 }
 
 fn band(x: f32, y: f32, w: f32, h: f32, c: [f32; 4], alpha: f32) -> Draw {
@@ -480,5 +515,37 @@ mod upstream_slot_name_geometry_tests {
     fn title_and_platform_share_official_v17_name_baseline() {
         assert_eq!(SLOT_NAME_Y, 392.0);
         assert_eq!(SLOT_NAME_Y + HINT_H as f32 - crate::plate::TITLE_LINE_H as f32, 384.0);
+    }
+}
+
+#[cfg(test)]
+mod bar_shadow_tests {
+    use super::*;
+    use crate::menu_style::MenuPalette;
+
+    #[test]
+    fn dark_and_oled_bars_keep_their_own_rim() {
+        assert!(bar_shadow_bands_for(None).is_empty());
+    }
+
+    #[test]
+    fn a_light_bar_gets_a_soft_shadow_fading_upwards() {
+        let bands = bar_shadow_bands_for(Some(MenuPalette::LIGHT));
+        assert!(!bands.is_empty());
+        // Right above the bar, then upwards, lighter each time.
+        assert_eq!(bands[0].0 + BAR_SHADOW_STEP, BAND_Y);
+        for pair in bands.windows(2) {
+            assert!(pair[1].0 < pair[0].0 && pair[1].1[3] <= pair[0].1[3]);
+        }
+        assert!(bands[0].1[3] < 0.35 && bands.last().unwrap().1[3] < 0.02);
+        // A darker shade of the shelf, not black.
+        assert!(bands[0].1[0] > 0.3);
+    }
+
+    #[test]
+    fn dark_plastic_bars_get_less() {
+        let gba = bar_shadow_bands_for(Some(MenuPalette::original(6)));
+        let nes = bar_shadow_bands_for(Some(MenuPalette::original(1)));
+        assert!(gba[0].1[3] < nes[0].1[3]);
     }
 }
