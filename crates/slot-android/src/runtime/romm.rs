@@ -794,10 +794,11 @@ impl Engine {
                 let (w, h) = (w as f32, h as f32);
                 let side = w.max(h) + 24.0;
                 let (mx, my) = ((width - side) / 2.0, (GRID_TOP + GRID_BOTTOM - side) / 2.0);
-                let mut ground = menu_ground();
-                ground[3] *= 0.65 * alpha;
-                out.push(Draw::Rect { x: mx, y: my, w: side, h: side, colour: ground });
-                out.push(Draw::Tex { x: (width - w) / 2.0, y: my + (side - h) / 2.0, w, h, tex, alpha });
+                // White on a see-through black square, whatever the theme
+                // (Siham 2026-11-17).
+                out.push(Draw::Rect { x: mx, y: my, w: side, h: side, colour: [0.0, 0.0, 0.0, 0.62 * alpha] });
+                self.without_ink(out, |out| out.push(Draw::Tex {
+                    x: (width - w) / 2.0, y: my + (side - h) / 2.0, w, h, tex, alpha }));
             }
         }
         // The legend.
@@ -840,7 +841,11 @@ const INFO_LINE: f32 = 23.0;
 impl Engine {
     fn draw_romm_info(&self, out: &mut Vec<Draw>, lines: &[(String, bool)], fade: f32) {
         let width = out_w() as f32;
-        out.push(Draw::Rect { x: 0.0, y: 64.0, w: width, h: 352.0, colour: menu_style::scrim(0.82 * fade) });
+        // The theme's colour over the whole page, title and legend too: no
+        // bands above and below the card (Siham 2026-11-17).
+        let mut veil = menu_ground();
+        veil[3] = 0.90 * fade;
+        out.push(Draw::Rect { x: 0.0, y: 0.0, w: width, h: OUT_H as f32, colour: veil });
         let mut y = 78.0;
         for (i, (text, lit)) in lines.iter().enumerate() {
             let Some(&(tex, w, h)) = self.controls_faces.get(&Self::wide_face_key(text, *lit)) else { continue };

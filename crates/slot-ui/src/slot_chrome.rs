@@ -332,7 +332,9 @@ pub fn bar_shadow_bands() -> Vec<(f32, [f32; 4])> {
 
 fn bar_shadow_bands_for(palette: Option<crate::menu_style::MenuPalette>) -> Vec<(f32, [f32; 4])> {
     let Some(palette) = palette else { return Vec::new() };
-    let strength = if palette.ink.is_some() { 1.0 } else { 0.55 };
+    // A little less over the GBA's and Mega Drive's dark plastic, still
+    // seen there (Siham 2026-11-17: more on the GBA's).
+    let strength = if palette.ink.is_some() { 1.0 } else { 0.8 };
     let tint = palette.shelf.map(|c| c as f32 / 255.0 * 0.45);
     (0..14).map(|i| {
         let d = (i as f32 + 0.5) * BAR_SHADOW_STEP;
