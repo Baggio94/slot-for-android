@@ -638,6 +638,19 @@ mod render {
         assert!(engine.top_line_dark_ink());
         // Every shelf gets its own mosaic, the one on screen first.
         assert!(engine.shelf_wallpaper_rx.is_some());
+        // Light's cream: the shelf's name, letter and title in dark ink.
+        assert!(engine.shelf_ink().is_some());
+        // Original: light on the GBA, white words over the Mega Drive's grey.
+        engine.cycle_appearance(true);
+        assert_eq!(engine.settings.appearance, crate::settings::Appearance::Original);
+        assert_eq!(engine.active, 0);
+        assert!(engine.shelf_ink().is_some());
+        engine.active = 5;
+        assert!(engine.shelf_ink().is_none());
+        engine.active = 0;
+        // Dark: white words.
+        engine.cycle_appearance(true);
+        assert!(engine.shelf_ink().is_none());
     }
 
     #[test]
@@ -709,9 +722,14 @@ mod render {
             engine.cycle_appearance(true);
             assert_eq!(ground(&mut engine), menu_style::shelf_ground());
         }
-        // An image keeps the dark hold.
-        engine.settings.wallpaper = crate::settings::WallpaperPick::Blur;
-        assert_eq!(ground(&mut engine), [0.085, 0.085, 0.093, 1.0]);
+        // An image is drawn under the cart, as on the shelf: no dark screen.
+        engine.settings.wallpaper = crate::settings::WallpaperPick::SlotBlur;
+        engine.reload_wallpaper(None);
+        let tex = engine.active_wallpaper().unwrap().0;
+        let mut scene = Vec::new();
+        engine.push_hold_scene(&mut scene);
+        assert!(matches!(scene.get(1), Some(Draw::Tex { tex: t, x, y, .. }) if *t == tex && *x == 0.0 && *y == 0.0),
+            "{:?}", scene.get(1));
     }
 
     fn entries() -> Vec<RomEntry> {

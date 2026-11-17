@@ -53,7 +53,8 @@ const COLOURS: [[[[u8; 3]; 2]; 4]; 9] = [
 ];
 
 /// How soft Default Blur is: the blur's spread as a share of the width.
-const BLUR_SPREAD: f32 = 0.0055;
+/// Softer than the wood's, so the drawings still read (Siham 2026-11-18).
+const BLUR_SPREAD: f32 = 0.0025;
 
 /// Masks already cut to a size: a theme change only recolours them.
 static CUT: Mutex<Vec<(usize, u32, u32, Vec<u8>)>> = Mutex::new(Vec::new());
@@ -71,6 +72,12 @@ fn mask(shelf: usize, w: u32, h: u32) -> Option<Vec<u8>> {
     cache.retain(|(_, cw, ch, _)| *cw == w && *ch == h);
     cache.push((shelf, w, h, cut.clone()));
     Some(cut)
+}
+
+/// Shelf `shelf`'s ground colour in `theme`: the words over it turn dark
+/// when it is light.
+pub fn mosaic_ground(shelf: usize, theme: MosaicTheme) -> Option<[u8; 3]> {
+    COLOURS.get(shelf).map(|c| c[theme as usize][0])
 }
 
 /// Shelf `shelf`'s mosaic in `theme` at w x h, RGBA, softened for Default Blur.
@@ -158,7 +165,7 @@ mod tests {
         let soft = mosaic(3, MosaicTheme::Light, true, 480, 320).unwrap();
         let edges = |img: &[u8]| img.chunks_exact(4).collect::<Vec<_>>().windows(2)
             .map(|p| p[0][1].abs_diff(p[1][1]) as u64).sum::<u64>();
-        assert!(edges(&soft) * 2 < edges(&sharp));
+        assert!(edges(&soft) * 3 < edges(&sharp) * 2);
         let mean = |img: &[u8]| img.chunks_exact(4).map(|p| p[1] as u64).sum::<u64>() / (480 * 320);
         assert!(mean(&soft).abs_diff(mean(&sharp)) <= 2);
     }

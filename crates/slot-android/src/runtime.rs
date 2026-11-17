@@ -2386,13 +2386,22 @@ impl Engine {
         luma.unwrap_or(0.0) * (1.0 - tint) > slot_ui::LIGHT_WALLPAPER
     }
 
-    /// The shelf's name and game title in dark ink over the light colour
-    /// Wallpaper None shows in Light, and Original's GBA and Game Boy Color.
+    /// The shelf's name, letter and game title in dark ink over the light
+    /// colour Wallpaper None shows in Light, and Original's GBA and Game Boy
+    /// Color; and over a light mosaic (Default, Default Blur: every one in
+    /// Light, all but the Mega Drive's in Original. Siham 2026-11-18).
     fn shelf_ink(&self) -> Option<slot_gfx::InkMap> {
-        if !self.wallpaper_none() || !menu_style::shelf_takes_dark_ink() { return None; }
-        let [r, g, b, _] = menu_style::shelf_ground();
         let ink = menu_style::MenuPalette::LIGHT.ink.unwrap_or([0; 3]).map(|v| v as f32 / 255.0);
-        Some(slot_gfx::InkMap { paper: [r, g, b], ink })
+        if self.wallpaper_none() {
+            if !menu_style::shelf_takes_dark_ink() { return None; }
+            let [r, g, b, _] = menu_style::shelf_ground();
+            return Some(slot_gfx::InkMap { paper: [r, g, b], ink });
+        }
+        if !self.settings.wallpaper_on(self.active).is_mosaic() { return None; }
+        let ground = slot_ui::mosaic_ground(self.active, self.settings.appearance.mosaic_theme())?
+            .map(|v| v as f32 / 255.0);
+        let light = 0.299 * ground[0] + 0.587 * ground[1] + 0.114 * ground[2] > 0.5;
+        light.then_some(slot_gfx::InkMap { paper: ground, ink })
     }
 
     /// Whether Delete Wallpaper has a file to remove: the edited shelf's own
@@ -6498,6 +6507,12 @@ impl Engine {
                 menu_style::shelf_ground()
             } else { menu_style::page_ground([0.085, 0.085, 0.093, 1.0]) },
         });
+        // A wallpaper stays under the cart as on the shelf, tinted the same:
+        // no dark screen before it on insert or eject (Siham 2026-11-18).
+        if let Some((tex, personal, _)) = self.active_wallpaper() {
+            let tint = if personal { self.settings.wallpaper_tint.alpha() } else { 0.0 };
+            slot_ui::draw_ground_tinted(Some(tex), tint, commands);
+        }
         if let Some(shelf) = self.shelves.get(self.active) {
             if let Some(cart) = shelf.carts.get(shelf.index) {
                 let (rest, scale) = shelf.selected_at();
