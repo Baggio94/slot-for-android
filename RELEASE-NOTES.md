@@ -1,6 +1,12 @@
-# slot. for Android — v2.4.1
+# slot. for Android — v2.4.2
 
 The Anbernic RG Rotate is the star of this update: slot. for Android now fits its square screen, its buttons and its rotating screen, with now playing and stand by screens when you close it.
+
+### Fixed in 2.4.2
+
+- **Saves you copy into your save folder now load.** If you already played that game in slot., it asks whether to play the copied save or continue where you left off ([#116](https://github.com/Baggio94/slot-for-android/issues/116)).
+- **Save states you copy into your states folder load too**, even when the file has an old date.
+- **Your newest save is kept after a Link trade**, even if it couldn't be copied to your save folder right away.
 
 ### New in 2.4.1
 

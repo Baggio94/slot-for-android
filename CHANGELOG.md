@@ -2,6 +2,14 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v2.4.2 — 17 November 2026
+
+- Save and states folders (#116): a print of what slot. last read from or wrote to the folder (`FolderSync/<core>/<file>.seen`, SHA-256, per folder) tells a file changed outside slot.
+- A save changed outside slot. while slot. would resume its own state, with the folder's state unchanged, asks SAVE FOLDER: Use the folder's save (slot.'s save copied to `Saves/FolderBackups/`, its states kept by a new state generation) or Resume where you left off (the folder's save kept as `<game>.srm.folder-<date>`); B doesn't start the game. Without a print yet, the folder is compared with slot.'s copy (and the Share Core Saves journal).
+- A protected auto-state (after a core switch) gives way to a folder state that differs from the one slot. last saw, whatever its date; dates only before the first print.
+- A folder that still holds what slot. last synced no longer replaces slot.'s newer save (an export that failed after a Link trade or an eject); slot. sends its save back.
+- The folder's save is read once with Share Core Saves, its state only when needed.
+
 ## v2.4.1 — 17 November 2026
 
 - RetroArch states: RZIP v2 (zstd) read with zstd-jni 1.5.7-9 (arm64); written as RZIP v1 (zlib) as before.
