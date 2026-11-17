@@ -1434,6 +1434,8 @@ struct Engine {
     pill_band: std::cell::Cell<Option<[f32; 4]>>,
     /// The mark on a row that opens a page.
     menu_opens: (slot_gfx::TexId, u32, u32),
+    /// About's yellow "Update available" capsule.
+    update_badge: (slot_gfx::TexId, u32, u32),
     /// LIBRARY_VALUE_NAMES' faces.
     library_values: [(slot_gfx::TexId, u32, u32); 3],
     /// Each page's path line, made when first shown.
@@ -1898,6 +1900,10 @@ impl Engine {
             let face = menu_style::menu_opens_face();
             (gpu.create_face(&face), face.w, face.h)
         };
+        let update_badge = {
+            let face = menu_style::update_badge_face();
+            (gpu.create_face(&face), face.w, face.h)
+        };
         let setting_carets = [false, true].map(|right| {
             let face = quick_caret_face(right);
             let tex = gpu.create_face(&face);
@@ -2153,6 +2159,7 @@ impl Engine {
             menu_pill,
             pill_band: std::cell::Cell::new(None),
             menu_opens,
+            update_badge,
             library_values,
             menu_paths: Default::default(),
             menu_side: None,
@@ -7540,19 +7547,26 @@ impl Engine {
                 let items = [1, 2, 3, 48, 25, 31];
                 self.draw_original_style_menu(0, &items, row, out);
                 if self.update_status == 1 {
-                    // At the right of About's row, as in 2.3 (2.4 put it
-                    // against the label), and drawn as the rows are: the
-                    // theme's ink and their contrast on any wallpaper
-                    // (Siham 2026-11-16).
+                    // A butter-yellow capsule at the right of About's row,
+                    // a little before its › so they never touch, in its own
+                    // colours on every theme and wallpaper (Siham 2026-11-17).
                     let x1 = out_w() as f32 - self.menu_side_room(0, &items).unwrap_or(PILL_RIGHT);
-                    let label_end = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round() + 24.0;
-                    let (_, w, _) = self.menu_textures[106];
-                    let room = (x1 - 18.0 - label_end).clamp(40.0, 175.0);
-                    let width = w as f32 * (room / w.max(1) as f32).min(0.79);
-                    let fade = self.menu_fade(0);
-                    let alpha = fade * if row == 5 { 1.0 } else { menu_look::ROW_REST };
-                    self.draw_update_status_centered(106, (x1 - 18.0 - width).round().max(label_end),
-                        settings_row_top(6) + 5.5 * QUICK_PITCH, room, alpha, out);
+                    let chevron = (x1 - 14.0 - self.menu_opens.1 as f32 * 0.79).round();
+                    let label_end = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round() + 16.0;
+                    let (tex, w, h) = self.update_badge;
+                    let right = chevron - 12.0;
+                    let scale = ((right - label_end) / w.max(1) as f32).min(1.0);
+                    if w > 0 && scale >= 0.6 {
+                        let (w, h) = (w as f32 * scale, h as f32 * scale);
+                        let centre = settings_row_top(6) + 5.5 * QUICK_PITCH;
+                        let ink = self.menu_ink();
+                        if ink.is_some() { out.push(Draw::Ink(None)); }
+                        out.push(Draw::Tex {
+                            x: (right - w).round(), y: (centre - h / 2.0).round(), w, h, tex,
+                            alpha: self.menu_fade(0),
+                        });
+                        if ink.is_some() { out.push(Draw::Ink(ink)); }
+                    }
                 }
             }
             ShelfOverlay::Library { row } => {

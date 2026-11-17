@@ -218,6 +218,38 @@ pub fn menu_path_face(label: &str) -> UndoFace {
     face.into_undo()
 }
 
+/// "Update available" on About's row: dark text on a butter-yellow capsule,
+/// the same on every theme (Siham 2026-11-17, C1).
+pub const UPDATE_BADGE_RGB: [u8; 3] = [0xF2, 0xDE, 0x8C];
+pub const UPDATE_BADGE_H: u32 = 26;
+
+pub fn update_badge_face() -> UndoFace {
+    let Some(font) = text::label_font() else {
+        return UndoFace { rgba: Vec::new(), w: 0, h: 0 };
+    };
+    let label = "Update available";
+    let px = 14.0;
+    let w = (text::line_width(font, label, px, 0.0) + 22.0).ceil() as u32;
+    let mut face = Canvas::new(w, UPDATE_BADGE_H);
+    let (tw, th) = (face.tw as f32, face.th as f32);
+    let r = th / 2.0;
+    for y in 0..face.th {
+        for x in 0..face.tw {
+            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+            let dx = if cx < r { r - cx } else if cx > tw - r { cx - (tw - r) } else { 0.0 };
+            let cover = if dx > 0.0 {
+                (r - (dx * dx + (cy - r) * (cy - r)).sqrt() + 0.5).clamp(0.0, 1.0)
+            } else { 1.0 };
+            let at = ((y * face.tw + x) * 4) as usize;
+            face.rgba[at..at + 3].copy_from_slice(&UPDATE_BADGE_RGB);
+            face.rgba[at + 3] = (cover * 255.0).round() as u8;
+        }
+    }
+    let layout = text::Layout { lines: vec![label.to_owned()], px, tracking: 0.0 };
+    face.text(&layout, DARK_INK);
+    face.into_undo()
+}
+
 /// The mark on a row that opens a page.
 pub fn menu_opens_face() -> UndoFace {
     let Some(font) = text::label_font() else {
@@ -282,5 +314,19 @@ mod tests {
         for face in [menu_path_face("Settings \u{203a} Systems"), menu_opens_face()] {
             assert!(face.w > 0 && face.rgba.chunks_exact(4).any(|p| p[3] > 0));
         }
+    }
+
+    #[test]
+    fn update_badge_is_a_yellow_capsule_with_dark_text() {
+        let face = update_badge_face();
+        let (w, h) = face.texels();
+        assert!(w > h && h > 0);
+        let at = |x: u32, y: u32| &face.rgba[((y * w + x) * 4) as usize..][..4];
+        // Rounded ends: the corners are clear, the left edge's middle is not.
+        assert_eq!(at(0, 0)[3], 0);
+        assert_eq!(at(w - 1, h - 1)[3], 0);
+        assert_eq!(at(1, h / 2)[..3], UPDATE_BADGE_RGB);
+        // The text darkens part of it.
+        assert!(face.rgba.chunks_exact(4).any(|p| p[0] < 120 && p[3] == 255));
     }
 }

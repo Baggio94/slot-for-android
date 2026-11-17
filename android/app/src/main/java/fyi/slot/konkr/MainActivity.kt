@@ -544,6 +544,9 @@ class MainActivity : Activity() {
                 updateAfterPermission = true
                 SlotToast.makeText(this, "Allow slot. to install updates, then come back.",
                     Toast.LENGTH_LONG).show()
+                // About stays behind Android's page (it closed on the way
+                // there and the player came back to the shelf, 2.4.1).
+                nativeExternalBegin()
                 returnFromSlotChild = true
                 startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                     Uri.parse("package:$packageName")))
@@ -551,6 +554,7 @@ class MainActivity : Activity() {
             } catch (error: Exception) {
                 updateAfterPermission = false
                 returnFromSlotChild = false
+                nativeExternalReturn()
                 Log.w(TAG, "Cannot open the install permission; downloading first", error)
             }
         }
