@@ -619,6 +619,28 @@ mod render {
     }
 
     #[test]
+    fn the_default_wallpaper_is_the_shelf_s_mosaic_in_the_theme_s_colours() {
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Default;
+        engine.reload_wallpaper(None);
+        let mosaic = |engine: &Engine, theme| slot_ui::mosaic_native(engine.active, theme, false).unwrap();
+        // Dark: the dark mosaic, the status line white over it.
+        assert_eq!(engine.settings.appearance, crate::settings::Appearance::Dark);
+        assert_eq!(engine.wallpaper_top_luma, Some(slot_ui::top_line_luma(
+            &mosaic(&engine, slot_ui::MosaicTheme::Dark), slot_ui::native_w())));
+        assert!(!engine.top_line_dark_ink());
+        // Dark > OLED > Light: the cream mosaic, the line black.
+        engine.cycle_appearance(true);
+        engine.cycle_appearance(true);
+        assert_eq!(engine.wallpaper_top_luma, Some(slot_ui::top_line_luma(
+            &mosaic(&engine, slot_ui::MosaicTheme::Light), slot_ui::native_w())));
+        assert!(engine.top_line_dark_ink());
+        // Every shelf gets its own mosaic, the one on screen first.
+        assert!(engine.shelf_wallpaper_rx.is_some());
+    }
+
+    #[test]
     fn no_wallpaper_shows_each_theme_s_colour() {
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
@@ -635,7 +657,7 @@ mod render {
         let f = |c: [f32; 4]| [0, 1, 2].map(|i| (c[i] * 255.0).round() as u8);
         // From the wood wallpaper, as on a handheld (the 2.4.0-menus6 Theme
         // choice kept drawing the image it left), to None.
-        engine.settings.wallpaper = crate::settings::WallpaperPick::Default;
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Slot;
         engine.reload_wallpaper(None);
         assert!(engine.wallpaper_texture.is_some());
         let wood = corner(&mut engine);
@@ -656,7 +678,7 @@ mod render {
         assert_eq!(corner(&mut engine), menu_style::MenuPalette::original(6).shelf);
         assert!(engine.shelf_ink().is_some());
         // Any image chosen covers the colour again.
-        engine.settings.wallpaper = crate::settings::WallpaperPick::Blur;
+        engine.settings.wallpaper = crate::settings::WallpaperPick::SlotBlur;
         engine.reload_wallpaper(None);
         assert_ne!(corner(&mut engine), menu_style::MenuPalette::original(6).shelf);
         assert!(engine.shelf_ink().is_none());

@@ -14,14 +14,20 @@ pub enum WallpaperPick {
     /// Recents.png or Favorites.png follow the shelf on screen. Read only:
     /// load turns it into each shelf's own wallpaper (wallpaper_shelves).
     Shelf,
+    /// 2.5: Siham's mosaic for the shelf on screen, in the theme's colours
+    /// (slot_ui::mosaic); Blur is the same softened.
     #[default]
     Default,
     Blur,
+    /// The wood with stickers that was Default until 2.5, and its blur.
+    Slot,
+    SlotBlur,
     File(String),
 }
 impl WallpaperPick {
     pub fn choices(root: &Path) -> Vec<Self> {
-        let mut choices=vec![Self::None, Self::Random, Self::Default, Self::Blur];
+        let mut choices=vec![Self::None, Self::Random, Self::Default, Self::Blur,
+            Self::Slot, Self::SlotBlur];
         choices.extend(crate::wallpaper::list(root).into_iter().map(Self::File));
         choices
     }
@@ -31,7 +37,8 @@ impl WallpaperPick {
     /// Wallpapers/<shelf>.png (upstream's name) when there is one. No Random:
     /// General deals it.
     pub fn shelf_choices(root: &Path, shelf: usize) -> Vec<Option<Self>> {
-        let mut choices=vec![None, Some(Self::None), Some(Self::Default), Some(Self::Blur)];
+        let mut choices=vec![None, Some(Self::None), Some(Self::Default), Some(Self::Blur),
+            Some(Self::Slot), Some(Self::SlotBlur)];
         choices.extend(crate::wallpaper::list(root).into_iter().map(|f| Some(Self::File(f))));
         if let Some(own)=crate::wallpaper::for_shelf(root, shelf) {
             choices.push(Some(Self::File(own)));
@@ -51,6 +58,10 @@ impl WallpaperPick {
         let n=choices.len();
         choices[if right {(at+1)%n}else{(at+n-1)%n}].clone()
     }
+    /// Default and Default Blur: each shelf shows its own mosaic.
+    pub fn is_mosaic(&self) -> bool {
+        matches!(self, Self::Default | Self::Blur)
+    }
     pub fn label(&self) -> String {
         match self {
             Self::None=>"None".into(),
@@ -58,6 +69,8 @@ impl WallpaperPick {
             Self::Shelf=>"Shelf".into(),
             Self::Default=>"Default".into(),
             Self::Blur=>"Default Blur".into(),
+            Self::Slot=>"slot.".into(),
+            Self::SlotBlur=>"slot. Blur".into(),
             // The imported image reads "User", like the other values.
             Self::File(name)=>match name.rsplit_once('.').map(|(a,_)|a).unwrap_or(name) {
                 stem if stem.eq_ignore_ascii_case("user") => "User".into(),
@@ -102,6 +115,13 @@ impl Appearance {
             Appearance::Light, Appearance::Original];
         let at = ALL.iter().position(|a| *a == self).unwrap_or(0);
         ALL[if right { (at + 1) % 4 } else { (at + 3) % 4 }]
+    }
+    /// Which colours the Default wallpaper's mosaics take.
+    pub fn mosaic_theme(self)->slot_ui::MosaicTheme {
+        match self {
+            Self::Original=>slot_ui::MosaicTheme::Original, Self::Light=>slot_ui::MosaicTheme::Light,
+            Self::Dark=>slot_ui::MosaicTheme::Dark, Self::Oled=>slot_ui::MosaicTheme::Oled,
+        }
     }
     /// Which set of console bars `slot_ui::bitmaps::home_slot` draws.
     pub fn bar_theme(self)->usize {
@@ -1346,14 +1366,20 @@ mod tests {
         std::fs::write(dir.join("GBA.png"), b"placeholder").unwrap();
         let choices=WallpaperPick::choices(&root);
         // Shelf is gone from General: each shelf picks its own (2.4).
-        assert_eq!(choices, vec![None,Random,Default,Blur,
+        assert_eq!(choices, vec![None,Random,Default,Blur,Slot,SlotBlur,
             File("another.png".into()),File("user.png".into())]);
         assert_eq!(None.step(&root,true), Random);
         assert_eq!(Random.step(&root,true), Default);
         assert_eq!(Shelf.step(&root,true), Blur);
         assert_eq!(None.step(&root,false), File("user.png".into()));
         assert_eq!(Default.step(&root,true), Blur);
-        assert_eq!(Blur.step(&root,true), File("another.png".into()));
+        assert_eq!(Blur.step(&root,true), Slot);
+        assert_eq!(SlotBlur.step(&root,true), File("another.png".into()));
+        // The wood that was Default until 2.5 keeps its own pick.
+        assert_eq!(serde_json::to_string(&Slot).unwrap(), r#""slot""#);
+        assert_eq!(serde_json::to_string(&SlotBlur).unwrap(), r#""slot_blur""#);
+        assert_eq!(Slot.label(), "slot.");
+        assert_eq!(SlotBlur.label(), "slot. Blur");
         assert_eq!(File("missing.png".into()).step(&root,true), Blur);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1369,10 +1395,10 @@ mod tests {
         std::fs::write(dir.join("NES.png"), b"placeholder").unwrap();
         // NES (3): General first, no Random, its own NES.png last.
         assert_eq!(WallpaperPick::shelf_choices(&root, 3), vec![
-            Option::None, Some(None), Some(Default), Some(Blur),
+            Option::None, Some(None), Some(Default), Some(Blur), Some(Slot), Some(SlotBlur),
             Some(File("user.png".into())), Some(File("NES.png".into()))]);
         // GB (1) has no file of its own.
-        assert_eq!(WallpaperPick::shelf_choices(&root, 1).len(), 5);
+        assert_eq!(WallpaperPick::shelf_choices(&root, 1).len(), 7);
         assert_eq!(WallpaperPick::shelf_step(Option::None, &root, 3, true), Some(None));
         assert_eq!(WallpaperPick::shelf_step(Option::None, &root, 3, false),
             Some(File("NES.png".into())));

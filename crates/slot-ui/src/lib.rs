@@ -7,6 +7,8 @@ pub use native_assets::{native_png, native_rgba, native_w, native_h, refit_band,
 pub use art::cover;
 pub use art::decode_png_bytes as decode_png;
 mod backdrop;
+pub mod mosaic;
+pub use mosaic::{mosaic_native, MosaicTheme};
 mod barcode;
 mod battery;
 mod board;
