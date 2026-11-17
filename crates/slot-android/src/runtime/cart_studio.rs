@@ -31,7 +31,7 @@ const ROWS_TOP: f32 = 84.0;
 
 /// The cart's flight between the shelf and Cart Studio, X or a long press
 /// (Siham 2026-11-17).
-const FLIGHT_S: f32 = 0.30;
+const FLIGHT_S: f32 = 0.25;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct StudioFlight {
@@ -47,7 +47,7 @@ pub(super) struct StudioFlight {
 }
 
 /// X's short lift before the cart takes off.
-const LEAD_S: f32 = 0.10;
+const LEAD_S: f32 = 0.07;
 
 impl StudioFlight {
     fn elapsed(&self) -> f32 { self.started.elapsed().as_secs_f32() }
@@ -1071,6 +1071,10 @@ impl Engine {
                              ("A", "TYPE"), ("A", "USE")] {
             self.controls_hint(key, label);
         }
+        // The heavy drawing (the page's own cart, the colour tiles) waits for
+        // the cart to land: drawn mid-flight, it cost the flight frames
+        // (Siham 2026-11-17). The flying cart stands in meanwhile.
+        if self.studio_flight.is_some_and(|f| f.opening && f.flying()) { return; }
         self.prepare_minis(wanted);
         if !stale { return; }
         let face = slot_ui::cart_face_with_material(&cart, art.map(|(rgba, _, _)| rgba));

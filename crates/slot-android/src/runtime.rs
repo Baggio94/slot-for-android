@@ -4932,7 +4932,9 @@ impl Engine {
         if self.relabel.is_empty() || self.game.is_some() || self.inserted || self.awaiting_game
             || self.pending_game.is_some()
             || self.shelves.get(self.active).is_some_and(|s| s.is_scrolling())
-            || self.last_cart_navigation.elapsed() < Duration::from_millis(250) { return; }
+            || self.last_cart_navigation.elapsed() < Duration::from_millis(250)
+            // Nor while a cart flies to or from Cart Studio.
+            || self.studio_flight.is_some_and(|f| f.flying()) { return; }
         if let Some(uri) = self.relabel.pop_front() { self.reload_cart_label(&uri); }
     }
 
