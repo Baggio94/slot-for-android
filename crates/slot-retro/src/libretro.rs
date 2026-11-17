@@ -63,6 +63,8 @@ struct Host {
     options: std::collections::HashMap<String, std::ffi::CString>,
     options_dirty: bool,
     declared: std::collections::HashMap<String, Vec<String>>,
+    /// The core ended the game (SHUTDOWN).
+    shut_down: bool,
 }
 
 thread_local! {
@@ -159,6 +161,7 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
                         map.num_descriptors as usize).to_vec() };
             }).is_some()
         }
+        SHUTDOWN => with_host(|h| h.shut_down = true).is_some(),
         GET_CAN_DUPE => {
             if data.is_null() {
                 return false;
@@ -837,6 +840,7 @@ impl LibretroCore {
             audio: Vec::new(),
             inputs: [0; 2],
             port2: 0,
+            shut_down: false,
             memory: Vec::new(),
             system_dir: cdir(system_dir)?,
             save_dir: cdir(save_dir)?,
@@ -1157,7 +1161,13 @@ impl RetroCore for LibretroCore {
         self.mgba_runahead_size_age = 0;
         self.try_init_mgba_audio();
         let mut av = SystemAvInfo::default();
-        unsafe { (self.api.get_system_av_info)(&mut av) };
+        {
+            // Bound like load_game: fake-08 asks for RGB565 from
+            // get_system_av_info, and an unbound host dropped that, so its
+            // colours were read as 0RGB1555.
+            let _a = Active::bind(&mut self.host);
+            unsafe { (self.api.get_system_av_info)(&mut av) };
+        }
         self.av = AvInfo {
             fps: av.timing.fps,
             sample_rate: av.timing.sample_rate,
@@ -1184,6 +1194,8 @@ impl RetroCore for LibretroCore {
     fn set_port2(&mut self, input: ButtonMask) {
         self.host.port2 = input.0;
     }
+
+    fn shut_down(&self) -> bool { self.host.shut_down }
 
     fn link_step_fault(&self) -> bool {
         self.mgba_gb_link_fault.is_some_and(|probe| unsafe { probe() != 0 })
@@ -1510,6 +1522,7 @@ mod tests {
             audio: Vec::new(),
             inputs: [0; 2],
             port2: 0,
+            shut_down: false,
             memory: Vec::new(),
             system_dir: CString::new(".").unwrap(),
             save_dir: CString::new(".").unwrap(),

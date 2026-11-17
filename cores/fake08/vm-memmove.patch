@@ -1,0 +1,14 @@
+diff --git a/source/vm.cpp b/source/vm.cpp
+index ee0eee1..f178e09 100644
+--- a/source/vm.cpp
++++ b/source/vm.cpp
+@@ -1170,7 +1170,8 @@ void Vm::vm_memcpy(int destaddr, int sourceaddr, int len){
+         return;
+     }
+ 
+-    memcpy(&_memory->data[destaddr], &_memory->data[sourceaddr], len);
++    // PICO-8's memcpy allows overlapping ranges (scrolling the screen)
++    memmove(&_memory->data[destaddr], &_memory->data[sourceaddr], len);
+ }
+ 
+ void Vm::update_prng()

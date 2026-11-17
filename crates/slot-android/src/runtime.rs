@@ -553,7 +553,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 149] = [
+const MENU_TEXT: [&str; 150] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -705,14 +705,15 @@ const MENU_TEXT: [&str; 149] = [
     "Handheld",                           // 146, Settings: this console's own page (Siham 2026-11-14)
     "HANDHELD \u{b7} RG ROTATE",            // 147
     "WALLPAPER",                          // 148, Interface > Wallpaper
+    "PICO-8",                             // 149, Settings > Systems
 ];
 
 /// Settings > Systems, top to bottom.
-const SYSTEM_ORDER: [Platform; 6] = [
+const SYSTEM_ORDER: [Platform; 7] = [
     Platform::Gba, Platform::Gbc, Platform::Gb,
-    Platform::Nes, Platform::Snes, Platform::Md,
+    Platform::Nes, Platform::Snes, Platform::Md, Platform::Pico8,
 ];
-const SYSTEM_TITLES: [usize; 6] = [91, 92, 93, 121, 122, 123];
+const SYSTEM_TITLES: [usize; 7] = [91, 92, 93, 121, 122, 123, 149];
 // Special racks follow the supported platforms, not hard-coded GB-era indices.
 const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
@@ -911,6 +912,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         47 => shader(scoped.shader_nes),
         48 => shader(scoped.shader_snes),
         49 => shader(scoped.shader_md),
+        72 => shader(scoped.shader_p8),
         22 => if scoped.shader_gba.includes_gba_color() { 42 }
             else if scoped.colour_correction_gba {4}else{5},
         23 => if scoped.colour_correction_gbc {4}else{5},
@@ -1437,7 +1439,7 @@ struct Engine {
     pak_chip_textures: [slot_gfx::TexId; Core::ALL.len()],
     pak_chip_blank: slot_gfx::TexId,
     /// The NES, Super Nintendo and Mega Drive chips with no core name.
-    home_chip_blanks: [slot_gfx::TexId; 3],
+    home_chip_blanks: [slot_gfx::TexId; 4],
     chip_shadow: slot_gfx::TexId,
     core_legend_faces: [(slot_gfx::TexId, u32); 3],
     a_down_at: Option<Instant>,
@@ -1887,7 +1889,7 @@ impl Engine {
         // GB/GBC boards hop their own big pak chip between two footprints.
         let pak_chip_textures = Core::ALL.map(|core| gpu.create_face(&pak_chip_face(Some(core))));
         let pak_chip_blank = gpu.create_face(&pak_chip_face(None));
-        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md]
+        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md, Platform::Pico8]
             .map(|p| gpu.create_face(&slot_ui::home_chip_face(p, None)));
         let shadow = chip_shadow_face();
         let chip_shadow = gpu.create_face(&shadow);
@@ -4676,7 +4678,10 @@ impl Engine {
                             self.overlay = ShelfOverlay::Menu { row: 0 };
                             return;
                         }
-                        109 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
+                        // PICO-8 has one core: its board has nothing to choose.
+                        109 if !self.inserted && !self.shelves[self.active].carts.is_empty()
+                            && self.shelves[self.active].carts[self.shelves[self.active].index].platform
+                                != Platform::Pico8 => {
                             let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
                             let face = board_face(selected);
                             if let Some(texture) = self.board_texture {
@@ -5423,6 +5428,8 @@ impl Engine {
             (Platform::Nes,true)=>&[124,90],
             (Platform::Snes|Platform::Md,false)=>&[120,124],
             (Platform::Snes|Platform::Md,true)=>&[120,124,90],
+            // PICO-8: Screen Size and Shader.
+            (Platform::Pico8,_)=>&[120,124],
         }
     }
     fn screen_keys(platform: Platform)-> &'static [usize] {
@@ -5443,6 +5450,7 @@ impl Engine {
             (Platform::Nes,true)=>&[47,44],
             (Platform::Snes,true)=>&[SCREEN_SIZE_KEY,48,45],
             (Platform::Md,true)=>&[SCREEN_SIZE_KEY,49,46],
+            (Platform::Pico8,_)=>&[SCREEN_SIZE_KEY,72],
         }
     }
     // Settings > Systems opens with the system's default core, then its
@@ -5455,6 +5463,7 @@ impl Engine {
     fn look_rows(platform: Platform) -> (Vec<usize>, Vec<usize>) {
         let mut rows = Vec::new();
         let mut keys = Vec::new();
+        if platform == Platform::Pico8 { return (rows, keys); }
         if let Some(key) = Settings::look_key(platform) {
             rows.push(if platform == Platform::Md { 132 } else { 131 });
             keys.push(key);
@@ -5512,6 +5521,9 @@ impl Engine {
             (Platform::Nes|Platform::Snes|Platform::Md,true,_)=>&[118,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,false)=>&[118,120,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,true)=>&[118,120,124,90],
+            // One core, nothing to choose; Screen Size where the panel isn't square.
+            (Platform::Pico8,true,_)=>&[124],
+            (Platform::Pico8,false,_)=>&[120,124],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -5539,6 +5551,8 @@ impl Engine {
             (Platform::Md,true,_)=>&[43,49],
             (Platform::Md,false,false)=>&[43,SCREEN_SIZE_KEY,49],
             (Platform::Md,false,true)=>&[43,SCREEN_SIZE_KEY,49,46],
+            (Platform::Pico8,true,_)=>&[72],
+            (Platform::Pico8,false,_)=>&[SCREEN_SIZE_KEY,72],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
@@ -5756,7 +5770,7 @@ impl Engine {
         let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
-        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70)) {
+        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70|72)) {
             set_message("Not available during Multiplayer.".into());
             return;
         }
@@ -5786,7 +5800,7 @@ impl Engine {
         self.game_emulation=Some(profile);
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
-        if matches!(key,0|1|3|21|47|48|49|66..=68|70) {
+        if matches!(key,0|1|3|21|47|48|49|66..=68|70|72) {
             self.apply_game_look();
         }
         // A shader change can switch to/from a preset with its own GBA Color.
@@ -7687,6 +7701,7 @@ impl Engine {
                 Platform::Nes => self.home_chip_blanks[0],
                 Platform::Snes => self.home_chip_blanks[1],
                 Platform::Md => self.home_chip_blanks[2],
+                Platform::Pico8 => self.home_chip_blanks[3],
                 _ => self.pak_chip_blank,
             };
             (&self.pak_chip_textures, blank)
@@ -8689,7 +8704,12 @@ impl Engine {
             a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
                 stepped, a12_native_started.elapsed().as_micros() as u64,
                 MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
+            let shut_down = session.shut_down();
             if let Some(fault) = peer_fault { self.peer_link_stopped(fault); }
+            if shut_down {
+                crate::game::log_launch_timing("The game shut itself down: ejecting");
+                self.handle(Input::Exit);
+            }
             return;
         }
 

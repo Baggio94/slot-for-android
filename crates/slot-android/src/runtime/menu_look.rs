@@ -273,7 +273,7 @@ impl Engine {
             33 | 50 if game => "Game Menu \u{203a} Settings",
             59 | 148 => "Settings \u{203a} Interface",
             33 | 50 | 82 | 117 | 147 => "Menu \u{203a} Settings",
-            91..=93 | 121..=123 => "Settings \u{203a} Systems",
+            h if super::SYSTEM_TITLES.contains(&h) => "Settings \u{203a} Systems",
             _ => "",
         }
     }
@@ -305,7 +305,7 @@ impl Engine {
             // Interface's Wallpaper and Status Bar.
             82 => matches!(item, 83 | 58),
             // A system's Controls.
-            91..=93 | 121..=123 => item == 125,
+            h if super::SYSTEM_TITLES.contains(&h) => item == 125,
             _ => false,
         }
     }

@@ -161,6 +161,7 @@ fn outlines(platform: Platform) -> Vec<(&'static str, Outline)> {
             ("Mega Drive EA", Outline::MegaDriveEa), ("Mega Drive Accolade", Outline::MegaDriveAccolade),
             ("Mega Drive Codemasters", Outline::MegaDriveCodemasters), ("Virtua Racing", Outline::MegaDriveVr),
             ("Sonic & Knuckles", Outline::MegaDriveSk)][..],
+        Platform::Pico8 => &[("PICO-8", Outline::Pico8)][..],
         Platform::Gba => &[][..],
     });
     out
@@ -180,7 +181,7 @@ fn finish_of(finish: slot_store::ShellFinish) -> Finish {
 
 /// The Finish row's place for a finish ("glitter" on its system's plastic).
 fn finish_index(finish: Finish, platform: Platform) -> usize {
-    let home = matches!(platform, Platform::Nes | Platform::Snes | Platform::Md);
+    let home = matches!(platform, Platform::Nes | Platform::Snes | Platform::Md | Platform::Pico8);
     match finish {
         Finish::Solid => 1,
         Finish::Translucent => 2,
@@ -245,6 +246,7 @@ pub(super) fn platform_key(platform: Platform) -> &'static str {
     match platform {
         Platform::Gba => "GBA", Platform::Gb => "GB", Platform::Gbc => "GBC",
         Platform::Nes => "NES", Platform::Snes => "SNES", Platform::Md => "MD",
+        Platform::Pico8 => "P8",
     }
 }
 
@@ -257,6 +259,7 @@ pub(super) fn search_platforms(platform: Platform) -> &'static [&'static str] {
         Platform::Nes => &["NES"],
         Platform::Snes => &["SNES"],
         Platform::Md => &["MD"],
+        Platform::Pico8 => &["P8"],
     }
 }
 
@@ -352,7 +355,7 @@ impl Studio {
         let platform = cart.platform;
         let auto = crate::library::auto_shell_of(&uri).or_else(|| {
             // Not in the library's index (a test cart): the shelf's own.
-            matches!(platform, Platform::Nes | Platform::Snes | Platform::Md)
+            matches!(platform, Platform::Nes | Platform::Snes | Platform::Md | Platform::Pico8)
                 .then(|| slot_ui::home_shell(platform, &cart.stem, "", "")).flatten()
         });
         let stored = cart.shell.filter(|s| Some(*s) != auto);
@@ -969,7 +972,7 @@ impl Engine {
         let first = if studio.chart.is_some() { studio.colour } else { studio.finish };
         let order: Vec<usize> = (0..n).map(|k| (first + k) % n.max(1)).collect();
         let todo: Vec<usize> = order.into_iter().filter(|&i| studio.minis.tex[i].is_none()).collect();
-        let home = matches!(studio.original.platform, Platform::Nes | Platform::Snes | Platform::Md);
+        let home = matches!(studio.original.platform, Platform::Nes | Platform::Snes | Platform::Md | Platform::Pico8);
         for i in todo {
             let Some(studio) = self.studio.as_ref() else { return };
             let (colour, finish) = match studio.minis.wanted[i] {

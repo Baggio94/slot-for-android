@@ -18,13 +18,15 @@ pub enum Core {
     Bsnes,
     GenesisPlusGx,
     Picodrive,
+    /// PICO-8's only core: both sockets of its board.
+    Fake08,
 }
 
 impl Core {
-    pub const ALL: [Core; 9] = [
+    pub const ALL: [Core; 10] = [
         Core::Mgba, Core::Gpsp, Core::Gambatte,
         Core::Fceumm, Core::Nestopia, Core::Snes9x, Core::Bsnes,
-        Core::GenesisPlusGx, Core::Picodrive,
+        Core::GenesisPlusGx, Core::Picodrive, Core::Fake08,
     ];
 
     /// libretro's own core name: lib{as_str}_libretro.so, and the key
@@ -40,6 +42,7 @@ impl Core {
             Core::Bsnes => "bsnes",
             Core::GenesisPlusGx => "genesis_plus_gx",
             Core::Picodrive => "picodrive",
+            Core::Fake08 => "fake08",
         }
     }
 
@@ -48,11 +51,12 @@ impl Core {
     }
 
     /// A home console core that plays Multiplayer like RetroArch netplay:
-    /// one console on both devices, the second player on port 2. bsnes keeps
-    /// its own save file and cannot hand a session to another device.
+    /// one console on both devices, the second player on port 2 (PICO-8's
+    /// player 2). bsnes keeps its own save file and cannot hand a session to
+    /// another device.
     pub fn netplay(self) -> bool {
         matches!(self, Core::Fceumm | Core::Nestopia | Core::Snes9x
-            | Core::GenesisPlusGx | Core::Picodrive)
+            | Core::GenesisPlusGx | Core::Picodrive | Core::Fake08)
     }
 
     /// The name RetroArch gives the core, also its save folder name.
@@ -67,6 +71,7 @@ impl Core {
             Core::Bsnes => "bsnes",
             Core::GenesisPlusGx => "Genesis Plus GX",
             Core::Picodrive => "PicoDrive",
+            Core::Fake08 => "fake-08",
         }
     }
 
@@ -86,11 +91,13 @@ impl Core {
             Platform::Nes => Core::Fceumm,
             Platform::Snes => Core::Snes9x,
             Platform::Md => Core::GenesisPlusGx,
+            Platform::Pico8 => Core::Fake08,
         }
     }
 
     /// The second socket on the board: gpSP for GBA, Gambatte for GB/GBC,
-    /// Nestopia for NES, bsnes for SNES, PicoDrive for Mega Drive.
+    /// Nestopia for NES, bsnes for SNES, PicoDrive for Mega Drive. PICO-8
+    /// has fake-08 alone.
     pub fn alternate_for(platform: Platform) -> Core {
         match platform {
             Platform::Gba => Core::Gpsp,
@@ -98,13 +105,14 @@ impl Core {
             Platform::Nes => Core::Nestopia,
             Platform::Snes => Core::Bsnes,
             Platform::Md => Core::Picodrive,
+            Platform::Pico8 => Core::Fake08,
         }
     }
 
     /// Which of the board's two sockets this core sits in.
     pub fn socket(self) -> usize {
         match self {
-            Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx => 0,
+            Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx | Core::Fake08 => 0,
             Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive => 1,
         }
     }
@@ -144,6 +152,7 @@ fn default_key(platform: Platform) -> &'static str {
         Platform::Nes => "nes",
         Platform::Snes => "snes",
         Platform::Md => "md",
+        Platform::Pico8 => "p8",
     }
 }
 
