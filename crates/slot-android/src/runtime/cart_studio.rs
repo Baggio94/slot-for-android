@@ -477,7 +477,8 @@ impl Studio {
             },
             2 if self.waiting => (None, Some("Looking for the logo…".into())),
             2 => (None, Some("No logo for this cart yet.".into())),
-            3 => (Some(slot_ui::generated_label_art(cart)), None),
+            // slot. label: the title by hand, as on a cart with no label (2.4.1).
+            3 => (Some(slot_ui::handwritten_label_art(cart)), None),
             SEARCH_LABEL => match &self.alt {
                 Some(Alt { real: Some(real), name, .. }) => (Self::fitted(cart, real), Some(name.clone())),
                 Some(Alt { name, .. }) if self.waiting => (None, Some(format!("Getting {name}…"))),
@@ -874,6 +875,8 @@ impl Engine {
                 // The clear plastic's layers follow on the next quiet frame.
                 if let Some(material) = self.clear_material.as_mut() { material.key = (usize::MAX, usize::MAX); }
             }
+            // A face rendered with the old shell or label is never shown.
+            self.cart_render.invalidate((sid, index));
             let shelf = &self.shelves[sid];
             if let Some(tex) = shelf.face(index) {
                 let face = cart_face_with_material(&shelf.carts[index], None);

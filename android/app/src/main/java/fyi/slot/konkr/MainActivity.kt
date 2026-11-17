@@ -97,6 +97,10 @@ class MainActivity : Activity() {
         private const val PREFS = "slot_konkr_library"
         internal const val PREFS_NAME = PREFS
         private const val ROM_ROOT = "rom_root_uri"
+        /** RomM's games reach the shelf in groups this far apart. */
+        private const val SILENT_PUBLISH_MS = 2_500L
+        /** Labels handed to the shelf per UI pulse (it draws one a frame). */
+        private const val AUTO_LABELS_PER_PULSE = 32
         private const val BIOS_ROOT = "bios_root_uri"
         private const val SAVE_ROOT = "saves_root_uri"
         private const val SHARE_GBA_SAVES = "share_gba_saves"
@@ -132,6 +136,10 @@ class MainActivity : Activity() {
     external fun nativeEglPresentationTick(pressedNs: Long)
     external fun nativeEglPresentationReport(): String
     external fun nativeKey(code: Int, pressed: Boolean)
+    external fun nativeTouch(action: Int, x: Float, y: Float, timeMs: Long)
+    external fun nativeUpdateProgress(percent: Int)
+    external fun nativeExternalClose()
+    external fun nativeExternalBegin()
     /** A key of a controller: Settings > Controls picks its port and button. */
     external fun nativePadKey(device: Int, code: Int, pressed: Boolean, stick: Boolean)
     /** Every controller connected now, as [{"id","name","fp"}]. */
@@ -235,11 +243,25 @@ class MainActivity : Activity() {
     private val scanner = Executors.newSingleThreadExecutor()
     /** Folder scans asked and not finished. */
     private val scansRunning = AtomicInteger()
+    /** RomM's downloads that came during a folder scan: added once it ends,
+     *  rather than a new scan for each game (each cancelled the last, and
+     *  none reached the shelf before the end: ROM folder chosen from RomM). */
+    private var addAfterScan: List<RomLibrary.SavedFile>? = null
     private data class PendingLibraryIndex(
         val root: Uri, val json: String, val prepared: String,
-        val serial: Int, val quiet: Boolean
+        val serial: Int, val quiet: Boolean,
+        /** RomM's games, one by one: DOWNLOADING n/m says it already, so no
+         *  UPDATING LIBRARY each time, and the label search waits for the
+         *  batch's end (it flashed 29 times: Siham 2026-11-16). */
+        val silent: Boolean = false
     )
     private var pendingLibraryIndex: PendingLibraryIndex? = null
+    /** The index last handed to the shelf, and when RomM's last one went:
+     *  an identical one is never sent again, and RomM's games go in groups
+     *  every few seconds so their faces get drawn (2.4.1-beta15 log). */
+    private var lastPublishedIndex: Pair<Int, Int>? = null
+    private var lastSilentPublishAt = 0L
+    private var silentHeldLogged = false
     private lateinit var taskIndicators: SlotShelfTaskIndicators
     private lateinit var libraryRefreshIndicator: SlotLibraryRefreshIndicator
     private lateinit var autoLabelIndicator: SlotAutoLabelIndicator
@@ -264,11 +286,19 @@ class MainActivity : Activity() {
     private val autoLabelsRestartRequested = AtomicBoolean(false)
     /** Labels saved before this run of passes, for its "N LABELS ADDED". */
     @Volatile private var autoLabelsChainBase = -1
+    /** Only retries left (a server that timed out): the visible pass ends,
+     *  they go on unseen (it stayed on LABELS 12/13: Siham 2026-11-17). */
+    @Volatile private var autoLabelsQuiet = false
+    @Volatile private var autoLabelsLastProgress = -1L
     /** Last pulse's game state: leaving a game resumes the label passes. */
     private var autoLabelsWasPlaying = false
     // Paint fresh labels only when all moving carts and pending GPU uploads
     // have settled. The renderer's manual reload path is synchronous.
     private val autoLabelUpdates = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    /** RomM's page labels for the games just downloaded, by the URI a scan
+     *  gives them, kept until each is on its cart, whether the games reach
+     *  the shelf by an add or by a folder scan (Siham 2026-11-16). */
+    private val rommLabels = java.util.concurrent.ConcurrentHashMap<String, Pair<File, String>>()
     private val activeTargets = ConcurrentHashMap<String, RetroArchStorage.Target>()
     private val uiHandler = Handler(Looper.getMainLooper())
     private val romm: RommPage by lazy {
@@ -285,7 +315,7 @@ class MainActivity : Activity() {
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) ?: return
         val uri = Uri.parse(saved)
         if (contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) {
-            scanFolder(uri, quiet = true)
+            scanFolder(uri, quiet = true, shown = true)
         }
     }
 
@@ -297,14 +327,26 @@ class MainActivity : Activity() {
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) ?: return
         val root = Uri.parse(saved)
         if (contentResolver.persistedUriPermissions.none { it.uri == root && it.isReadPermission }) return
-        if (scansRunning.get() > 0 || pendingLibraryIndex != null) {
-            scanFolder(root, quiet = true)
+        for (file in files) {
+            val label = file.label ?: continue
+            try { rommLabels[RomLibrary.indexUri(root, file.uri).toString()] = label to file.labelPlatform }
+            catch (_: Exception) { /* The label search finds it instead. */ }
+        }
+        if (scansRunning.get() > 0) {
+            // The list names every game of the batch: the latest is enough.
+            addAfterScan = files
             return
         }
-        val serial = scanSerial.incrementAndGet()
+        // Games arrive one by one (RommPage): the shelf not shown yet is the
+        // base of the next, rather than a scan of the whole folder each time.
+        val waiting = pendingLibraryIndex?.takeIf { it.root == root }?.json
+        // An add never cancels the one before it (only a folder scan does):
+        // with games arriving faster than an add took, each cancelled the
+        // last and none reached the shelf before the end (2.4.1-beta8 log).
+        val serial = scanSerial.get()
         scanner.execute {
             if (scanSerial.get() != serial) return@execute
-            val previous = cachedLibraryGames(root)
+            val previous = waiting ?: cachedLibraryGames(root)
             val json = try {
                 previous?.let { RomLibrary.withSavedFiles(this, root, it, files) }
             } catch (error: Exception) {
@@ -313,17 +355,18 @@ class MainActivity : Activity() {
             }
             if (previous == null || json == null) {
                 runOnUiThread {
-                    if (!isDestroyed && scanSerial.get() == serial) scanFolder(root, quiet = true)
+                    if (!isDestroyed && scanSerial.get() == serial) scanFolder(root, quiet = true, shown = true)
                 }
                 return@execute
             }
-            if (RomLibrary.sameIndex(previous, json)) return@execute
-            giveRommLabels(root, json, files)
+            // The shelf waiting to be shown is replaced by this one: shown even unchanged.
+            if (waiting == null && RomLibrary.sameIndex(previous, json)) return@execute
+            giveRommLabels(json)
             val prepared = CartStudioCatalog.withOverrides(this, json)
             Log.i(TAG, "RomM: ${files.size} game(s) added without a folder scan")
             runOnUiThread {
                 if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
-                pendingLibraryIndex = PendingLibraryIndex(root, json, prepared, serial, quiet = true)
+                pendingLibraryIndex = PendingLibraryIndex(root, json, prepared, serial, quiet = true, silent = true)
                 publishPendingLibraryIfIdle()
             }
         }
@@ -332,16 +375,20 @@ class MainActivity : Activity() {
     /** A downloaded cart wears the label RomM's page showed for it at once,
      *  rather than waiting for the label search: the same art set, cut as
      *  the shelf's. Only when it has no label yet and its system is the one
-     *  the label was cut for. On the scanner thread, before the shelf. */
-    private fun giveRommLabels(root: Uri, json: String, files: List<RomLibrary.SavedFile>) {
+     *  the label was cut for. On the scanner thread, before the shelf; a
+     *  cart already drawn gets its new face too. */
+    private fun giveRommLabels(json: String) {
+        if (rommLabels.isEmpty()) return
         val platforms = try {
             RomLibrary.indexEntries(json).associate { it.uri to it.platform }
         } catch (_: Exception) { return }
-        for (file in files) {
-            val label = file.label ?: continue
+        for ((uri, given) in rommLabels.entries.toList()) {
+            // Not in this index yet: kept for the next one.
+            val platform = platforms[uri] ?: continue
+            rommLabels.remove(uri)
+            val (label, labelPlatform) = given
             try {
-                val uri = RomLibrary.indexUri(root, file.uri).toString()
-                if (platforms[uri] != file.labelPlatform) continue
+                if (platform != labelPlatform) continue
                 val target = CartLabelPaths.file(filesDir, uri)
                 if (target.exists() || !label.isFile) continue
                 target.parentFile?.mkdirs()
@@ -354,6 +401,7 @@ class MainActivity : Activity() {
                     atomic.failWrite(out)
                     throw error
                 }
+                autoLabelUpdates.add(uri)
             } catch (error: Exception) {
                 Log.w(TAG, "RomM label not given to its cart; the label search will", error)
             }
@@ -415,7 +463,12 @@ class MainActivity : Activity() {
 
     /** RomM needs the ROM folder writable: the picker, on the folder chosen
      *  before when Android allows it. */
-    internal fun chooseRomFolderForRomm() = openRomFolderPicker()
+    internal fun chooseRomFolderForRomm() {
+        // The page stays behind Android's picker, as Library's rows do
+        // (it closed, and the games came with no page to follow them).
+        nativeExternalBegin()
+        openRomFolderPicker()
+    }
 
     private val slotUpdater: SlotUpdater by lazy {
         SlotUpdater(this) { status, version ->
@@ -425,6 +478,45 @@ class MainActivity : Activity() {
                 nativeUpdateStatus(status,
                     packageManager.getPackageInfo(packageName, 0).versionName.orEmpty(),
                     version, automatic)
+            }
+        }.apply {
+            onProgress = { percent -> if (!isDestroyed) nativeUpdateProgress(percent) }
+        }
+    }
+    /** Install was pressed before Android let slot. install updates: the
+     *  download starts once the player comes back with it allowed. */
+    private var updateAfterPermission = false
+
+    /** Asks Android's "install unknown apps" for slot. first, so the
+     *  installer follows the download at once (Siham 2026-11-15). */
+    private fun installUpdate() {
+        if (nativeIsPlaying()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()) {
+            try {
+                updateAfterPermission = true
+                SlotToast.makeText(this, "Allow slot. to install updates, then come back.",
+                    Toast.LENGTH_LONG).show()
+                returnFromSlotChild = true
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")))
+                return
+            } catch (error: Exception) {
+                updateAfterPermission = false
+                returnFromSlotChild = false
+                Log.w(TAG, "Cannot open the install permission; downloading first", error)
+            }
+        }
+        slotUpdater.downloadAndInstall { apk ->
+            if (!isDestroyed && resumed && !nativeIsPlaying()) {
+                try {
+                    slotUpdater.startInstaller(apk)
+                } catch (error: Exception) {
+                    Log.w(TAG, "User-confirmed installer not available", error)
+                    SlotToast.makeText(this@MainActivity,
+                        "Allow updates from slot. in Android settings.",
+                        Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -608,10 +700,15 @@ class MainActivity : Activity() {
     }
 
     private fun publishAutoLabelsWhenIdle() {
-        if (nativeIsPlaying() || !nativeCarouselQuiet()) return
-        // One face per UI pulse, never a burst on the GL owner.
-        val uri = autoLabelUpdates.poll() ?: return
-        nativeReloadCartLabel(uri)
+        // Straight to the shelf, which draws them one per frame once it's
+        // still: waiting here for a quiet carousel left labels off the shelf
+        // until slot. restarted, for players who keep browsing or editing
+        // carts (RetroPup's video, 2026-11-16).
+        if (autoLabelUpdates.isEmpty()) return
+        repeat(AUTO_LABELS_PER_PULSE) {
+            val uri = autoLabelUpdates.poll() ?: return@repeat
+            nativeReloadCartLabel(uri)
+        }
         wakeCarouselRender()
     }
 
@@ -860,10 +957,34 @@ class MainActivity : Activity() {
                 startAutoCartLabels()
             }
             autoLabelsWasPlaying = labelsPlaying
+            if (::taskIndicators.isInitialized) {
+                // RomM's downloads go on with its page left: top right.
+                val downloads = if (labelsPlaying) null else romm.downloadProgress()
+                // An empty shelf shows the downloads in its middle, as the
+                // first scan, not NO GAMES FOUND (Siham 2026-11-16).
+                val onEmpty = downloads != null && shelfCarts == 0 && scansRunning.get() == 0
+                if (downloads == null || onEmpty) taskIndicators.downloads.hide()
+                else taskIndicators.downloads.showDownload(downloads[0], downloads[1])
+                if (onEmpty && downloads != null) {
+                    if (!downloadStatusShown) {
+                        downloadStatusShown = true
+                        downloadCountShown = -1
+                        nativeSetShelfStatus(shelfDownloading)
+                    }
+                    if (downloads[0] != downloadCountShown) {
+                        downloadCountShown = downloads[0]
+                        nativeSetScanProgress(downloads[0], downloads[1])
+                    }
+                } else if (downloadStatusShown) {
+                    downloadStatusShown = false
+                    // Unless a scan or a published shelf has said otherwise.
+                    if (scansRunning.get() == 0) nativeSetShelfStatus(if (shelfCarts == 0) shelfEmpty else shelfNone)
+                }
+            }
             if (::autoLabelIndicator.isInitialized) {
                 if (nativeIsPlaying()) {
                     autoLabelIndicator.hide()
-                } else if (autoLabelsRunning.get()) {
+                } else if (autoLabelsRunning.get() && !autoLabelsQuiet) {
                     // The scanner only writes one immutable, lock-free
                     // snapshot. No Handler post or UI work per cartridge.
                     val progress = AutoCartLabelDiagnostics.snapshot()
@@ -945,22 +1066,7 @@ class MainActivity : Activity() {
                 40 -> saveScreenshot()
                 19 -> slotUpdater.check(true)
                 20 -> slotUpdater.openNotes()
-                21 -> {
-                    if (!nativeIsPlaying()) {
-                        slotUpdater.downloadAndInstall { apk ->
-                            if (!isDestroyed && resumed && !nativeIsPlaying()) {
-                                try {
-                                    slotUpdater.startInstaller(apk)
-                                } catch (error: Exception) {
-                                    Log.w(TAG, "User-confirmed installer not available", error)
-                                    SlotToast.makeText(this@MainActivity,
-                                        "Allow updates from slot. in Android settings.",
-                                        Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }
-                }
+                21 -> installUpdate()
                 22 -> {
                     val enabled = slotUpdater.toggle()
                     slotUpdater.refreshVisibleStatus()
@@ -1101,7 +1207,7 @@ class MainActivity : Activity() {
                                     }
                                     val notice = if (onlyMirrors)
                                         "Game saved. The copy for the other core will be made later."
-                                    else "Game saved, but some copies to your save folders failed."
+                                    else exportNotice(failures)
                                     SlotToast.makeText(this@MainActivity, notice, Toast.LENGTH_LONG).show()
                                 }
                             }
@@ -1122,6 +1228,11 @@ class MainActivity : Activity() {
     private val shelfScanning = 1
     /** Carts on the shelf, from the last library handed to the renderer. */
     private var shelfCarts = 0
+    /** RomM's games downloading onto an empty shelf: its centred bar. */
+    private val shelfDownloading = 8
+    private val shelfFolderGone = 9
+    private var downloadStatusShown = false
+    private var downloadCountShown = -1
     private val shelfEmpty = 2
     private val shelfImportError = 3
     private val shelfPermissionExpired = 4
@@ -1706,12 +1817,54 @@ class MainActivity : Activity() {
         }
     }
 
+    /** What a failed copy to the save folders says: which copy (Daniel
+     *  Byon, 2026-11-15). The full reasons go to logcat. */
+    private fun exportNotice(failures: List<String>): String {
+        val kinds = failures.filterNot { it.startsWith("Shared GBA save sync deferred") }
+        val saves = kinds.any { it.startsWith("Save sync") || it.startsWith("RTC sync") }
+        val states = kinds.any { it.startsWith("State sync") || it.startsWith("Manual state") }
+        return when {
+            saves && states -> "Game saved in slot., but it couldn't be copied to your save folders."
+            saves -> "Game saved in slot., but the save couldn't be copied to your save folder."
+            states -> "Game saved in slot., but the save state couldn't be copied to your state folder."
+            else -> "Game saved, but some copies to your save folders failed."
+        }
+    }
+
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (::lidCover.isInitialized && lidCover.closed) {
             lidCover.awake()
             return true
         }
+        sendTouch(event)
         return super.dispatchTouchEvent(event)
+    }
+
+    /** Touch on the carousel (runtime/touch.rs): one finger, its position
+     *  from 0 to 1 across the view. The native side ignores it anywhere but
+     *  on the carousel. A second finger cancels. */
+    private fun sendTouch(event: MotionEvent) {
+        if (!::view.isInitialized || nativeIsPlaying()) return
+        val w = view.surfaceView.width.toFloat()
+        val h = view.surfaceView.height.toFloat()
+        if (w <= 0f || h <= 0f) return
+        val action = when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> 0
+            MotionEvent.ACTION_MOVE -> 1
+            MotionEvent.ACTION_UP -> 2
+            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> 3
+            else -> return
+        }
+        if (action == 1) {
+            // Android batches moves to the frame: its samples in between
+            // keep a fling's speed exact.
+            for (i in 0 until event.historySize) {
+                nativeTouch(1, event.getHistoricalX(0, i) / w,
+                    event.getHistoricalY(0, i) / h, event.getHistoricalEventTime(i))
+            }
+        }
+        nativeTouch(action, event.getX(0) / w, event.getY(0) / h, event.eventTime)
+        wakeCarouselRender()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -1935,6 +2088,8 @@ class MainActivity : Activity() {
             if (queueWait > 20) {
                 Log.i(TAG, "Slot launch queue delay: ${queueWait}ms (waiting for preceding save exports)")
             }
+            // Which step failed, for the message on screen (runtime.rs).
+            var step = "rom"
             try {
                 // Document-provider IDs may contain the complete tree path:
                 // keep only the terminal basename before using it for a
@@ -1984,6 +2139,7 @@ class MainActivity : Activity() {
                 }
                 RomWarmCache.launching.compareAndSet(rawUri, null)
                 RomWarmCache.played(target)
+                step = "saves"
                 val romReadyAt = SystemClock.elapsedRealtime()
                 val savedCore = nativeCoreForUri(rawUri)
                 // The native pick when it runs this system, else its default core.
@@ -2001,30 +2157,50 @@ class MainActivity : Activity() {
                     scannedFileName = if (RomSource.isContainer(name))
                         RomSource.archiveSaveFilename(name, ext) else null,
                     shareGbaSaves = storage.shareGbaSaves)
-                try {
-                    RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
-                } catch (error: RetroArchStorage.SaveConflict) {
-                    Log.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
-                    when (val choice = askSharedGbaConflict()) {
-                        SharedGbaChoice.CANCEL -> {
-                            nativeGameError(rawUri, "Shared save selection cancelled")
-                            return@execute
-                        }
-                        SharedGbaChoice.MGBA, SharedGbaChoice.GPSP -> {
-                            val source = if (choice == SharedGbaChoice.MGBA)
-                                "mGBA" else "gpSP"
-                            RetroArchStorage.resolveSharedGbaConflict(
-                                this@MainActivity, shared, source)
-                            RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                // A save folder that can't be read no longer stops the game
+                // (amadeus12, 2026-11-15): it starts with slot.'s own saves,
+                // and nothing is copied to the folder this time, so a save
+                // there that slot. couldn't read is never overwritten.
+                val folderFailed = try {
+                    try {
+                        RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                    } catch (error: RetroArchStorage.SaveConflict) {
+                        Log.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
+                        when (val choice = askSharedGbaConflict()) {
+                            SharedGbaChoice.CANCEL -> {
+                                nativeGameError(rawUri, "Shared save selection cancelled")
+                                return@execute
+                            }
+                            SharedGbaChoice.MGBA, SharedGbaChoice.GPSP -> {
+                                val source = if (choice == SharedGbaChoice.MGBA)
+                                    "mGBA" else "gpSP"
+                                RetroArchStorage.resolveSharedGbaConflict(
+                                    this@MainActivity, shared, source)
+                                RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                            }
                         }
                     }
+                    false
+                } catch (error: Exception) {
+                    if (shared.savesTree == null && shared.statesTree == null) throw error
+                    Log.e(TAG, "Save folder unreadable; starting with slot.'s own saves", error)
+                    true
                 }
+                if (folderFailed) {
+                    runOnUiThread {
+                        if (!isDestroyed) SlotToast.makeText(this@MainActivity,
+                            "Couldn't read your save folder, so this game uses slot.'s own save. " +
+                                "Choose the folder again in START > Library.",
+                            Toast.LENGTH_LONG).show()
+                    }
+                }
+                step = "core"
                 // Share Saves never silently chooses an old same-core state
                 // over freshly imported cross-core SRAM. A direct same-core
                 // launch has no dialogue and behaves exactly as before.
                 val previous = if (ext == "gba")
                     prefs.getString("last_gba_core_$digest", null) else null
-                val switched = ext == "gba" && shared.shareGbaSaves &&
+                val switched = !folderFailed && ext == "gba" && shared.shareGbaSaves &&
                     previous != null && previous != core
                 var resumeChoice = -1 // Existing default Slot behavior.
                 if (switched) {
@@ -2090,7 +2266,7 @@ class MainActivity : Activity() {
                         resumeChoice = 0
                     }
                 }
-                activeTargets[rawUri] = shared
+                if (folderFailed) activeTargets.remove(rawUri) else activeTargets[rawUri] = shared
                 val readyAt = SystemClock.elapsedRealtime()
                 Log.i(TAG, "Slot launch preparation: ROM cache=${romReadyAt - launchStart}ms, " +
                     "RetroArch import=${readyAt - romReadyAt}ms, total=${readyAt - launchStart}ms")
@@ -2098,8 +2274,8 @@ class MainActivity : Activity() {
                 nativeGameReady(rawUri, target.absolutePath)
                 if (ext == "gba") prefs.edit().putString("last_gba_core_$digest", core).apply()
             } catch (error: Exception) {
-                Log.e(TAG, "Could not prepare ROM", error)
-                nativeGameError(rawUri, error.message ?: "Cannot open ROM")
+                Log.e(TAG, "Could not prepare ROM ($step)", error)
+                nativeGameError(rawUri, "$step: " + (error.message ?: "Cannot open ROM"))
             } finally {
                 RomWarmCache.launching.compareAndSet(rawUri, null)
             }
@@ -2585,6 +2761,24 @@ class MainActivity : Activity() {
                     val report = AutoCartLabelDiagnostics.snapshot()
                     val added = (report.saved - autoLabelsChainBase.coerceAtLeast(0)).coerceAtLeast(0)
                     if (!anotherBatch && !recheck) autoLabelsChainBase = -1
+                    val progressKey = (report.checked.toLong() shl 32) or report.saved.toLong()
+                    if (anotherBatch && !recheck) {
+                        // A batch that moved nothing on: only retries wait.
+                        if (progressKey == autoLabelsLastProgress && !autoLabelsQuiet) {
+                            autoLabelsQuiet = true
+                            uiHandler.post {
+                                if (::autoLabelIndicator.isInitialized) {
+                                    if (resumed && !isDestroyed && !nativeIsPlaying())
+                                        autoLabelIndicator.finished(added)
+                                    else autoLabelIndicator.hide()
+                                }
+                            }
+                        } else if (progressKey != autoLabelsLastProgress) autoLabelsQuiet = false
+                        autoLabelsLastProgress = progressKey
+                    } else {
+                        autoLabelsLastProgress = -1L
+                        autoLabelsQuiet = false
+                    }
                     if (!anotherBatch && !recheck && report.total > 0) {
                         Log.i("SlotAutoLabels",
                             "ART_SUMMARY examined=${report.checked}/${report.total} " +
@@ -3398,7 +3592,11 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode in setOf(FOLDER_REQUEST, BIOS_REQUEST, SAVE_REQUEST, STATE_REQUEST,
                 THEME_REQUEST, WALLPAPER_REQUEST, LABEL_REQUEST, STUDIO_PICTURE_REQUEST)) {
-            nativeExternalReturn()
+            // A ROM or BIOS folder chosen: back to the shelf, to see it fill.
+            // Cancelled, or any other picker: back to its menu row.
+            val chosen = resultCode == RESULT_OK && data?.data != null
+            if (chosen && (requestCode == FOLDER_REQUEST || requestCode == BIOS_REQUEST)) nativeExternalClose()
+            else nativeExternalReturn()
             wakeCarouselRender()
         }
         if (requestCode == STUDIO_PICTURE_REQUEST) {
@@ -3452,7 +3650,9 @@ class MainActivity : Activity() {
                     // The same folder chosen again for RomM: only the right
                     // to write changed, the shelf stays as it is.
                     val forRomm = romm.folderChosen()
-                    if (!(same && forRomm)) scanFolder(uri)
+                    // From RomM the folder is often still empty: its own
+                    // "games added" message speaks once the downloads land.
+                    if (!(same && forRomm)) scanFolder(uri, quiet = forRomm, shown = true)
                 }
                 BIOS_REQUEST -> importBiosFolder(uri, persistSelection = true)
                 SAVE_REQUEST, STATE_REQUEST -> {
@@ -3604,6 +3804,21 @@ class MainActivity : Activity() {
             return
         }
         if (!resumed || !nativeCanRefreshLibrary()) return
+        if (next.silent && (next.json.length to next.json.hashCode()) == lastPublishedIndex) {
+            pendingLibraryIndex = null
+            Log.i(TAG, "RomM: shelf already shows these games")
+            return
+        }
+        // RomM's games while more are coming: a group every 2.5 s at most.
+        if (next.silent && romm.downloading() &&
+            SystemClock.uptimeMillis() - lastSilentPublishAt < SILENT_PUBLISH_MS) {
+            if (!silentHeldLogged) { silentHeldLogged = true; Log.i(TAG, "RomM: games held for the next group") }
+            return
+        }
+        if (next.silent) {
+            silentHeldLogged = false
+            Log.i(TAG, "RomM: group to the shelf (more coming: ${romm.downloading()})")
+        }
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
         if (saved != next.root.toString()) {
             pendingLibraryIndex = null
@@ -3611,7 +3826,9 @@ class MainActivity : Activity() {
             return
         }
         pendingLibraryIndex = null
-        libraryRefreshIndicator.show()
+        if (!next.silent) libraryRefreshIndicator.show()
+        else lastSilentPublishAt = SystemClock.uptimeMillis()
+        lastPublishedIndex = next.json.length to next.json.hashCode()
         val count = try { nativeSetLibrary(next.prepared) } catch (error: Exception) {
             Log.e(TAG, "Changed ROM library could not be applied", error)
             -1
@@ -3628,13 +3845,17 @@ class MainActivity : Activity() {
             if (scanSerial.get() != next.serial) return@execute
             try {
                 storeCachedLibrary(next.root, next.json)
-                startRaSmartCache()
-                startAutoCartLabels()
+                // RomM's games still coming: one search once they're all in.
+                if (!(next.silent && romm.downloading())) {
+                    startRaSmartCache()
+                    startAutoCartLabels()
+                }
             } catch (error: Exception) {
                 Log.w(TAG, "ROM cache write failed; displayed shelf is intact", error)
             }
         }
-        if (!next.quiet) {
+        // No "0 cartridges ready.": an empty shelf already says so.
+        if (!next.quiet && count > 0) {
             SlotToast.makeText(this,
                 if (count == 1) "1 cartridge ready." else "$count cartridges ready.",
                 Toast.LENGTH_SHORT).show()
@@ -3647,17 +3868,20 @@ class MainActivity : Activity() {
         }, 700L)
     }
 
-    private fun scanFolder(uri: Uri, quiet: Boolean = false) {
+    /** `quiet`: no toast at the end. `shown`: its progress shows (top right
+     *  over carts, centred on an empty shelf); only the scan behind the
+     *  boot's cached shelf is hidden (RomM's show: Siham 2026-11-16). */
+    private fun scanFolder(uri: Uri, quiet: Boolean = false, shown: Boolean = !quiet) {
         val serial = scanSerial.incrementAndGet()
         pendingLibraryIndex = null
         if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
-        if (!quiet) nativeSetShelfStatus(shelfScanning)
+        if (shown) nativeSetShelfStatus(shelfScanning)
         // Refresh Library over a shelf of carts: the scan shows top right in
         // the task rail; on an empty shelf the renderer draws it centred.
-        val inRail = !quiet && shelfCarts > 0
+        val inRail = shown && shelfCarts > 0
         if (inRail && ::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.showScan(0, 0)
         var lastReport = 0L
-        val progress: ((Int, Int) -> Unit)? = if (quiet) null else { done, total ->
+        val progress: ((Int, Int) -> Unit)? = if (!shown) null else { done, total ->
             val now = SystemClock.uptimeMillis()
             if (now - lastReport >= 100L || (total > 0 && done >= total)) {
                 lastReport = now
@@ -3679,25 +3903,31 @@ class MainActivity : Activity() {
                 // was removed. Fail closed, retaining the previous shelf.
                 if (result.truncated) {
                     Log.w(TAG, "Incomplete SAF ROM listing: retaining existing index")
+                    val gone = romFolderGone(uri)
                     runOnUiThread {
-                        if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                        if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
+                        if (gone) { showRomFolderGone(uri); return@runOnUiThread }
+                        if (shown) {
                             libraryRefreshIndicator.hide()
                             nativeSetShelfStatus(shelfNone)
-                            SlotToast.makeText(this,
-                                "ROM folder partly read. Carts kept.",
-                                Toast.LENGTH_LONG).show()
                         }
+                        if (!quiet) SlotToast.makeText(this,
+                            "ROM folder partly read. Carts kept.",
+                            Toast.LENGTH_LONG).show()
                     }
                     return@execute
                 }
+                // RomM's labels for games this scan found (bug: lost when the
+                // games came by a scan rather than an add).
+                giveRommLabels(result.json)
                 if (previous != null && RomLibrary.sameIndex(previous, result.json)) {
                     Log.i(TAG, "ROM library unchanged: " + result.count +
                         " carts; no renderer rebuild")
                     runOnUiThread {
-                        if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                        if (!isDestroyed && scanSerial.get() == serial && shown) {
                             libraryRefreshIndicator.hide()
                             nativeSetShelfStatus(if (result.count == 0) shelfEmpty else shelfNone)
-                            SlotToast.makeText(this, "Library is up to date.",
+                            if (!quiet) SlotToast.makeText(this, "Library is up to date.",
                                 Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -3714,17 +3944,68 @@ class MainActivity : Activity() {
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "SAF ROM scan failed; previous cache retained", error)
+                val gone = romFolderGone(uri)
                 runOnUiThread {
-                    if (!isDestroyed && scanSerial.get() == serial && !quiet) {
+                    if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
+                    if (gone) showRomFolderGone(uri)
+                    else if (shown) {
                         libraryRefreshIndicator.hide()
                         nativeSetShelfStatus(shelfReadError)
                     }
                 }
             } finally {
                 // After the result above reached the UI thread.
-                runOnUiThread { scansRunning.decrementAndGet() }
+                runOnUiThread {
+                    if (scansRunning.decrementAndGet() == 0 && !isDestroyed) {
+                        addAfterScan?.let { addAfterScan = null; addDownloadedGames(it) }
+                    }
+                }
             }
         }
+    }
+
+    /** The ROM folder was deleted: its storage is here (not a card taken
+     *  out, nor Android's access taken back) but the folder isn't. Off the
+     *  UI thread. Unsure answers are false: the carts stay. */
+    private fun romFolderGone(tree: Uri): Boolean = try {
+        if (tree.authority != "com.android.externalstorage.documents") false
+        else {
+            val doc = android.provider.DocumentsContract.getTreeDocumentId(tree)
+            val volume = doc.substringBefore(':', "")
+            val mounted = volume == "primary" ||
+                getSystemService(android.os.storage.StorageManager::class.java).storageVolumes.any {
+                    it.uuid.equals(volume, ignoreCase = true) && it.state == android.os.Environment.MEDIA_MOUNTED
+                }
+            mounted && try {
+                contentResolver.query(android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, doc),
+                    arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID), null, null, null)
+                    ?.use { !it.moveToFirst() } ?: false
+            } catch (_: java.io.FileNotFoundException) { true
+            } catch (error: IllegalArgumentException) {
+                // ExternalStorageProvider: "Missing file for primary:Roms".
+                (error.message ?: "").contains("Missing", ignoreCase = true) ||
+                    error.cause is java.io.FileNotFoundException
+            }
+        }
+    } catch (_: SecurityException) { false } catch (_: Exception) { false }
+
+    /** The deleted ROM folder's carts go; saves, states, labels, favourites
+     *  and settings stay for when the games come back (Siham 2026-11-16). */
+    private fun showRomFolderGone(tree: Uri) {
+        Log.w(TAG, "ROM folder no longer exists: the shelf empties")
+        libraryRefreshIndicator.hide()
+        if (!resumed || !nativeCanRefreshLibrary()) {
+            // At boot or with a game on: once the shelf is free, while the
+            // same folder is still the chosen one.
+            uiHandler.postDelayed({
+                val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
+                if (!isDestroyed && saved == tree.toString()) showRomFolderGone(tree)
+            }, 1_000L)
+            return
+        }
+        if (nativeSetLibrary("[]") >= 0) shelfCarts = 0
+        nativeSetShelfStatus(shelfFolderGone)
+        scanner.execute { try { storeCachedLibrary(tree, "[]") } catch (_: Exception) {} }
     }
 
     override fun onDestroy() {
@@ -3816,6 +4097,12 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (updateAfterPermission) {
+            updateAfterPermission = false
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+                uiHandler.post { installUpdate() }
+            }
+        }
         if (homeHoldPause) {
             homeHoldPause = false
             if (::lidCover.isInitialized) lidCover.onResume()

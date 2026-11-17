@@ -53,8 +53,13 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
     private val headersRead = HashSet<Long>()
     /** Games waiting for the ROM folder to be chosen again, writable. */
     private var waitingForFolder: List<Long>? = null
-    /** Files saved this visit, for the shelf once the page is left. */
+    /** Files saved this visit, for the shelf once the page is left. Kept
+     *  until the batch ends: each add hands the shelf all of them, so a
+     *  later add never drops an earlier one. */
     private val downloaded = ArrayList<RomLibrary.SavedFile>()
+    /** The batch downloading now: games done, games in it, the current
+     *  game's percent. Null when none is. */
+    @Volatile private var batch: IntArray? = null
     /** The page is up: the shelf is refreshed once it is left. */
     @Volatile private var showing = false
     private var form: SlotModalDialog? = null
@@ -91,16 +96,37 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
     private fun leave() {
         showing = false
         synchronized(wanted) { wanted.clear() }
-        refreshIfLeft()
+        // Games downloaded on the page reach the shelf now: say so.
+        val done = batch == null
+        val added = refreshIfLeft(done)
+        if (done && added > 0) shelfToast(added, 0)
     }
 
-    /** Downloads reach their shelves once the page is left: only those
-     *  carts are added, no folder rescan. */
-    private fun refreshIfLeft() {
-        if (showing) return
-        val files = synchronized(downloaded) { downloaded.toList().also { downloaded.clear() } }
-        if (files.isNotEmpty()) activity.addDownloadedGames(files)
+    /** Once the page is left: the games are on the shelf (Siham 2026-11-16:
+     *  the player must never wonder whether they were added). */
+    private fun shelfToast(added: Int, failed: Int) {
+        val games = if (added == 1) "1 game" else "$added games"
+        SlotToast.makeText(activity,
+            if (failed == 0) "$games added to your shelf." else "$games added to your shelf, $failed failed.",
+            Toast.LENGTH_SHORT).show()
     }
+
+    /** Downloads reach their shelves once the page is left, each game as it
+     *  arrives (Siham 2026-11-16): only those carts are added, no folder
+     *  rescan. `done`: the batch is over, the list starts again. */
+    private fun refreshIfLeft(done: Boolean): Int {
+        if (showing) return 0
+        val files = synchronized(downloaded) { downloaded.toList().also { if (done) downloaded.clear() } }
+        if (files.isNotEmpty()) activity.addDownloadedGames(files)
+        return files.size
+    }
+
+    /** The carousel's rail while games download with the page left:
+     *  [done, total, percent], or null. */
+    fun downloadProgress(): IntArray? = if (showing) null else batch?.copyOf()
+
+    /** A batch is downloading (any thread). */
+    fun downloading(): Boolean = batch != null
 
     // -----------------------------------------------------------------
     // Connecting
@@ -509,10 +535,14 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
             var saved = 0
             var failed = 0
             var out = false
+            batch = intArrayOf(0, chosen.size, 0)
+            Log.i(TAG, "Download batch: ${chosen.size} game(s), page ${if (showing) "open" else "left"}")
             for ((i, game) in chosen.withIndex()) {
+                batch = intArrayOf(i, chosen.size, 0)
                 val ok = try {
                     val file = Romm.download(activity, tree, game) { done, total ->
                         val percent = if (total > 0) (done * 100 / total).toInt().coerceIn(0, 100) else -1
+                        batch = intArrayOf(i, chosen.size, percent)
                         activity.runOnUiThread {
                             if (!activity.isDestroyed) activity.nativeRommProgress(i, chosen.size, percent)
                         }
@@ -533,13 +563,20 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                 }
                 if (ok) saved++ else failed++
                 activity.runOnUiThread {
-                    if (!activity.isDestroyed) activity.nativeRommDownloaded(game.id, ok)
+                    if (activity.isDestroyed) return@runOnUiThread
+                    activity.nativeRommDownloaded(game.id, ok)
+                    // Page left: this game on its shelf now, not at the end.
+                    if (ok) refreshIfLeft(done = false)
                 }
             }
+            batch = null
+            Log.i(TAG, "Download batch done: $saved saved, $failed failed")
             activity.runOnUiThread {
                 if (activity.isDestroyed) return@runOnUiThread
                 activity.nativeRommProgress(chosen.size, chosen.size, -1)
                 if (out && saved == 0) return@runOnUiThread
+                val added = refreshIfLeft(done = true)
+                if (added > 0) { shelfToast(added, failed); return@runOnUiThread }
                 val text = when {
                     failed == 0 && saved == 1 -> "1 game downloaded."
                     failed == 0 -> "$saved games downloaded."
@@ -547,7 +584,6 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                     else -> "$saved downloaded, $failed failed."
                 }
                 SlotToast.makeText(activity, text, Toast.LENGTH_SHORT).show()
-                refreshIfLeft()
             }
         }
     }

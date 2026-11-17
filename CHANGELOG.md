@@ -2,6 +2,19 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v2.4.1 — 17 November 2026
+
+- RetroArch states: RZIP v2 (zstd) read with zstd-jni 1.5.7-9 (arm64); written as RZIP v1 (zlib) as before.
+- Saves: an unreadable save folder falls back to slot.'s own save with a toast and no copy to the folder for that session; Keep Folder Saves marks a folder save (`FolderSaves/<core>/<stem>.once`) so the next launch skips slot.'s older state.
+- Touch on the shelf (runtime/touch.rs, shelf.rs Finger/Coast motion): drag, fling with friction, tap a side cart to centre it, tap or pull down the middle cart to insert; Settings → Controls → Touchscreen, on by default.
+- Handwritten carts: hand.rs ported from slot. original 1.16 (No Smear, OFL 1.1, rustybuzz 0.20 for its `rand` alternates), on the bare plastic in black or white by contrast, every mould; Cart Studio's slot. label writes it as a see-through label; the cart face disk cache redraws label-less carts once.
+- Shelf: no rebuild for an identical library or for the first games on an empty shelf (in place); labels redrawn one per frame once the shelf is still, menus open included; CartRender::invalidate drops faces drawn before a label or a Cart Studio change; Cart Studio shells kept over a library prepared before the save; a label pass with only retries left ends on screen.
+- Folders: ROM or BIOS chosen → back to the shelf, cancelled or saves/states → back to the menu row; a deleted ROM folder (storage present) empties the shelf with ROM FOLDER NOT FOUND; no "0 cartridges ready." toast.
+- Controls: GBA X / Y → L / R; the Controls page cursor counts its five rows.
+- Menus: Update available right-aligned on About in the rows' ink; in-game Screen page, Light and Original: the selected row in the theme's ink on the theme's bar.
+- Updates: download percentage in About, install permission asked before downloading.
+- Cores' warnings and errors in the Android log (SlotCore, 8 lines per second at most).
+
 ## v2.4.0 — 15 November 2026
 
 - Interface redesign: anthracite ground, rounded selection bar with margins, dimmed unselected rows, path line and page title, thin scroll bar, long pages that slide only near the edge; the same style on Cart Studio, Library, RomM and the Android pages (Apps, RetroAchievements, dialogs).

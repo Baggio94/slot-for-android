@@ -16,8 +16,8 @@ android {
         // Dedicated KONKR ARM64 build; retain the stable package and signing
         // identity so adb install -r preserves existing data and SAF grants.
         // 1.2.3: Frame Pacing NATIVE / RESPONSIVE.
-        versionCode = 460
-        versionName = "2.4.0"
+        versionCode = 497
+        versionName = "2.4.1"
         ndk { abiFilters += listOf("arm64-v8a") }
         // slot.'s ScreenScraper developer credentials for the NES, Super
         // Nintendo and Mega Drive labels, from GitHub secrets at build time
@@ -94,6 +94,11 @@ android {
 
 dependencies {
     implementation("androidx.core:core:1.13.1")
+    // RetroArch RZIP v2 states. The AAR supplies Android's native decoder;
+    // the matching JAR supplies the host decoder for local JVM tests.
+    // This release supports compileSdk 35 and 16 KiB native page alignment.
+    implementation("com.github.luben:zstd-jni:1.5.7-9@aar")
+    testImplementation("com.github.luben:zstd-jni:1.5.7-9")
     testImplementation("junit:junit:4.13.2")
     // Android's org.json methods are stubbed in local JVM tests.
     testImplementation("org.json:json:20240303")

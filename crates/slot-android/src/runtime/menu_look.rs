@@ -84,6 +84,7 @@ impl Engine {
     /// The selected row's bar from `x0` to `x1`, its top at `y`.
     pub(super) fn draw_menu_pill(&self, x0: f32, x1: f32, y: f32, alpha: f32, out: &mut Vec<Draw>) {
         let [(left, lw, h), (middle, _, _), (right, rw, _)] = self.menu_pill;
+        self.pill_band.set(Some([x0, x1, y, h as f32]));
         let (x0, x1) = (x0.round(), x1.round());
         let (lw, rw, h) = (lw as f32, rw as f32, h as f32);
         if x1 - x0 < lw + rw { return; }
@@ -514,6 +515,11 @@ mod render {
     #[test]
     fn setting_arrows_are_centred_on_their_value() {
         let _surface = slot_gfx::TestEgl::new();
+        // Dark's bar and white text on this thread, whatever theme another
+        // test left behind: a Light bar from the theme test running beside
+        // it lit the whole row as one glyph (the CI's occasional failure).
+        menu_style::set_palette(None);
+        menu_style::set_oled(false);
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
         engine.overlay = ShelfOverlay::GeneralSettings { row: 0 };
         let (_, h) = panel_size();

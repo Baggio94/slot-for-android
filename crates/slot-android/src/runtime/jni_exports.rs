@@ -225,7 +225,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
         // Even a direct JNI draw must not advance or save while recovery failed.
         if holder.borrow().as_ref().is_some_and(|e| !e.gpu.graphics_ready()) { return; }
         let safe = holder.borrow().as_ref().is_some_and(|e|
-            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game));
+            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game)
+                // Library > RomM's page waits: a rebuild of an empty shelf
+                // would close it under the player (ROM folder chosen there).
+                && !matches!(e.overlay, ShelfOverlay::Romm));
         LIBRARY_UPDATE_SAFE.store(safe, Ordering::Release);
         let current = holder.borrow().as_ref().map(|engine| engine.library_version);
         let updated = {
@@ -262,7 +265,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                     .then_some((engine.overlay, engine.external_pending))
             });
             let in_place = holder.borrow_mut().as_mut()
-                .is_some_and(|engine| engine.shelves.iter().any(|s| !s.carts.is_empty())
+                // An empty list on the cold start's placeholder: nothing to
+                // show, so nothing to rebuild (5 s: 2.4.1-beta16 log).
+                .is_some_and(|engine| (engine.has_library || engine.shelves.iter().any(|s| !s.carts.is_empty())
+                        || snapshot.as_deref().is_some_and(|games| games.is_empty()))
                     && engine.update_library(version, snapshot.as_deref()));
             if !in_place {
                 // Destruct old GL resources on the GL thread before recreating them.
@@ -296,7 +302,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
             engine.observe_frame_delay(vsync_frame_ns);
         }
         let now_safe = holder.borrow().as_ref().is_some_and(|e|
-            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game));
+            may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game)
+                // Library > RomM's page waits: a rebuild of an empty shelf
+                // would close it under the player (ROM folder chosen there).
+                && !matches!(e.overlay, ShelfOverlay::Romm));
         LIBRARY_UPDATE_SAFE.store(now_safe, Ordering::Release);
     });
 }
@@ -495,6 +504,26 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalReturn(
     _env: *mut c_void, _activity: *mut c_void,
 ) {
     push(Input::ExternalReturn);
+}
+
+/// An Android page opens over a slot. page that must stay behind it (the
+/// ROM folder picker over Library > RomM). A flag, not an Input: onPause's
+/// nativeResetInput empties the queue before the renderer could read it.
+pub(super) static EXTERNAL_BEGIN: AtomicBool = AtomicBool::new(false);
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalBegin(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    EXTERNAL_BEGIN.store(true, Ordering::Release);
+}
+
+/// A ROM, BIOS or slot. folder was chosen from Library.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeExternalClose(
+    _env: *mut c_void, _activity: *mut c_void,
+) {
+    push(Input::ExternalClose);
 }
 
 /// Choreographer pacing experiment: this is only a render-request policy.
@@ -1157,4 +1186,23 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeRommFilter(
     if let Ok(filter) = serde_json::from_str::<romm::RommFilter>(&text) {
         push(Input::RommFilter(filter));
     }
+}
+
+/// A finger on the screen (runtime/touch.rs): `action` 0 down, 1 move,
+/// 2 up, 3 cancel; `x` and `y` from 0 to 1 across the view; Android's event
+/// time in milliseconds.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeTouch(
+    _env: *mut c_void, _this: *mut c_void, action: i32, x: f32, y: f32, ms: i64,
+) {
+    if !(0..=3).contains(&action) || !x.is_finite() || !y.is_finite() { return; }
+    push(Input::Touch(action as u8, x.clamp(0.0, 1.0), y.clamp(0.0, 1.0), ms));
+}
+
+/// The update's download, 0 to 100 % (About shows DOWNLOADING 42%).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeUpdateProgress(
+    _env: *mut c_void, _this: *mut c_void, percent: i32,
+) {
+    push(Input::UpdateProgress(percent.clamp(0, 100) as u8));
 }

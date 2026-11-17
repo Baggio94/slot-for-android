@@ -92,6 +92,9 @@ impl Surface for AndroidSurface {
 #[derive(Clone)]
 enum Input {
     Key(i32, bool),
+    /// A finger on the screen (runtime/touch.rs): action, x and y from 0
+    /// to 1 across the screen, Android's event time in ms.
+    Touch(u8, f32, f32, i64),
     /// A key of one of Android's input devices (Settings > Controls).
     PadKey { device: i32, code: i32, pressed: bool, stick: bool },
     /// Every controller connected now.
@@ -101,6 +104,8 @@ enum Input {
     /// A scan's progress: carts read and how many, 0 while listing folders.
     ScanProgress(u32, u32),
     UpdateStatus(u8, String, String, bool),
+    /// The update's download, 0 to 100 %.
+    UpdateProgress(u8),
     Reset,
     GameReady { uri: String, path: String },
     GameError { uri: String, message: String },
@@ -120,6 +125,8 @@ enum Input {
     LinkPeerRomConsent(i32),
     RaPrefetchHash(String, u32),
     ExternalReturn,
+    /// A folder was chosen from Library: back to the shelf, to see it fill.
+    ExternalClose,
     /// Library > RomM (runtime/romm.rs): the server's games, a status (0
     /// loading, 1 a message, 3 close), a label fetched, a download's
     /// progress and each download's end; a Game Boy family game's header,
@@ -222,12 +229,19 @@ const GAME_MENU_SCRIM: f32 = 0.65;
 const MENU_REVEAL_MS: u64 = 120;
 /// A second slot. press this soon after a tap opens Save States.
 const DOUBLE_TAP_MS: u128 = 360;
-const SHELF_STATUS_TEXT: [&str; 8] = [
+const SHELF_STATUS_TEXT: [&str; 10] = [
     "", "SCANNING CARTRIDGES...", "NO GAMES FOUND",
     "LIBRARY IMPORT FAILED", "FOLDER ACCESS EXPIRED",
     "CANNOT READ ROM FOLDER", "FOLDER PICKER UNAVAILABLE",
     "FOLDER PERMISSION FAILED",
+    // 8: RomM's games downloading onto an empty shelf, drawn as the first
+    // scan, never "NO GAMES FOUND" (Siham 2026-11-16).
+    "DOWNLOADING GAMES...",
+    // 9: the ROM folder was deleted (its storage is here).
+    "ROM FOLDER NOT FOUND",
 ];
+/// The statuses drawn as the first scan (a bar and a count).
+fn status_has_bar(status: u8) -> bool { matches!(status, 1 | 8) }
 // Original Slot records ~30 rewind states/sec and replays ~60/sec (~2x).
 // Android v1.2.2 recorded/replayed ~10/sec (~1x). Playback rate is computed
 // by settings::rewind_step_seconds, never confused with capture frequency.
@@ -394,6 +408,18 @@ fn select_home_action(
 
 fn set_message(message: String) {
     *MESSAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(message);
+}
+
+/// What the player reads when Android couldn't prepare a game: Kotlin
+/// puts the step that failed before the reason (Siham 2026-11-16).
+fn game_error_text(message: &str) -> &'static str {
+    if message.starts_with("rom:") {
+        "Couldn't read this game file. Refresh the library, or choose your ROM folder again."
+    } else if message.starts_with("saves:") {
+        "Couldn't read your save folder. Choose it again in Library."
+    } else {
+        "Couldn't open this game. Check the ROM and core."
+    }
 }
 
 /// Short user-facing sentence on screen; the technical cause goes to logcat.
@@ -1145,7 +1171,15 @@ struct Engine {
     born: Instant,
     last: Instant,
     library_version: u64,
+    /// Built from a real library (an empty one too), not the placeholder
+    /// of a cold start before the cached library came: its shelves can take
+    /// new games in place, with no 5 s rebuild (RomM's first games).
+    has_library: bool,
     texture_cache: VecDeque<(usize, usize, slot_gfx::TexId)>,
+    /// Labels that arrived (the label search, RomM), each redrawn on its
+    /// cart one per frame when the shelf isn't moving: no wait for a still
+    /// carousel or a closed menu (RetroPup's video, 2026-11-16).
+    relabel: VecDeque<String>,
     last_cart_navigation: Instant,
     cart_render: CartRender,
     clear_material: Option<ClearMaterial>,
@@ -1267,6 +1301,7 @@ struct Engine {
     romm: Option<romm::RommPage>,
     /// L2 / R2 on the carousel: delete held, GBA Video tapped.
     triggers: carousel_delete::Triggers,
+    touch: Option<touch::Touch>,
     /// The GBA Video shelf was the one of the two used last.
     gba_video: bool,
     /// Textures Cart Studio drew its small carts in, free to draw again.
@@ -1354,6 +1389,9 @@ struct Engine {
     menu_scroll_y: f32,
     /// The selected row's bar: left end, strip, right end.
     menu_pill: [(slot_gfx::TexId, u32, u32); 3],
+    /// Where the selection bar was last drawn (x0, x1, y, h): the in-game
+    /// Screen page writes what sits on it in the theme's ink.
+    pill_band: std::cell::Cell<Option<[f32; 4]>>,
     /// The mark on a row that opens a page.
     menu_opens: (slot_gfx::TexId, u32, u32),
     /// Each page's path line, made when first shown.
@@ -1372,7 +1410,7 @@ struct Engine {
     /// Its count under the bar, and the text it was drawn from.
     scan_count: Option<(slot_gfx::TexId, u32, u32)>,
     scan_count_text: String,
-    shelf_status_faces: [(slot_gfx::TexId, u32, u32); 8],
+    shelf_status_faces: [(slot_gfx::TexId, u32, u32); 10],
     shelf_status_start: (slot_gfx::TexId, u32),
     game_menu_hints: [(slot_gfx::TexId, u32); 3],
     // Same centered role, progress and failure faces as original slot.
@@ -1921,7 +1959,9 @@ impl Engine {
             born: now,
             last: now,
             library_version,
+            has_library: library.is_some(),
             texture_cache: VecDeque::new(),
+            relabel: VecDeque::new(),
             last_cart_navigation: now,
             cart_render: CartRender::start(visuals_root.as_deref())?,
             clear_material: None,
@@ -2009,6 +2049,7 @@ impl Engine {
             cart_library: None,
             romm: None,
             triggers: Default::default(),
+            touch: None,
             gba_video: false,
             studio_pool: Vec::new(),
             settings,
@@ -2063,6 +2104,7 @@ impl Engine {
             menu_scroll_top: 0,
             menu_scroll_y: 0.0,
             menu_pill,
+            pill_band: std::cell::Cell::new(None),
             menu_opens,
             menu_paths: Default::default(),
             menu_side: None,
@@ -3539,7 +3581,7 @@ impl Engine {
                 }
             }
             Input::StudioArt { uri, real, logo, kind, name } => self.studio_art(uri, real, logo, kind, name),
-            Input::ReloadCartLabel { uri } => self.reload_cart_label(&uri),
+            Input::ReloadCartLabel { uri } => if !self.relabel.contains(&uri) { self.relabel.push_back(uri) },
             Input::RommCatalog(entries) => self.romm_catalog(entries),
             Input::RommStatus(kind, text) => self.romm_status(kind, text),
             Input::RommLabel(id) => self.romm_label(id),
@@ -3548,6 +3590,19 @@ impl Engine {
             Input::RommDownloaded(id, ok) => self.romm_downloaded(id, ok),
             Input::GameDeleted(uri, ok) => self.game_deleted(uri, ok),
             Input::RommFilter(filter) => self.romm_filter(filter),
+            Input::ExternalClose => {
+                // A ROM, BIOS or slot. folder chosen from Library: the shelf,
+                // as before 2.4, so its scan shows (Siham 2026-11-16). A
+                // cancelled picker keeps Library and its row (ExternalReturn).
+                if self.external_pending {
+                    self.external_pending = false;
+                    self.menu_held = None;
+                    self.menu_seen = 0;
+                    if matches!(self.overlay, ShelfOverlay::Library { .. }) {
+                        self.overlay = ShelfOverlay::None;
+                    }
+                }
+            }
             Input::ExternalReturn => {
                 if self.external_pending {
                     self.external_pending = false;
@@ -3581,6 +3636,12 @@ impl Engine {
                 // Internet host away sharing its code keeps its room screen.
                 let sharing_room = matches!(self.overlay, ShelfOverlay::Multiplayer)
                     && self.link_inet.keeps_room_in_background(self.link_phase);
+                // Library > RomM closed by Android (Home, another app): its
+                // page is left as with B, so the games downloading go to
+                // the shelf one by one (they waited for a page shut long ago).
+                if !self.external_pending && matches!(self.overlay, ShelfOverlay::Romm) {
+                    self.leave_romm(ShelfOverlay::None);
+                }
                 if !self.external_pending && !sharing_room {
                     self.overlay = if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
                         ShelfOverlay::GameMenu { row: 0 }
@@ -3767,7 +3828,14 @@ impl Engine {
                 self.game_emulation = None;
                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
+            Input::UpdateProgress(percent) => {
+                if self.update_status == 3 {
+                    self.set_download_text(&format!("DOWNLOADING {}%", percent.min(100)));
+                }
+            }
             Input::UpdateStatus(status, installed, available, automatic) => {
+                // A new download starts without a percentage until the first.
+                if status == 3 && self.update_status != 3 { self.set_download_text(MENU_TEXT[114]); }
                 self.update_status = status.min(5);
                 self.update_auto = automatic;
                 // Two selection rows regardless of update status.
@@ -3796,7 +3864,7 @@ impl Engine {
                 self.shelf_status = if usize::from(code) < SHELF_STATUS_TEXT.len() {
                     code
                 } else { 0 };
-                if self.shelf_status == 1 { self.set_scan_progress(0, 0); }
+                if status_has_bar(self.shelf_status) { self.set_scan_progress(0, 0); }
             }
             Input::ScanProgress(done, total) => self.set_scan_progress(done, total),
             Input::GameError { uri, message } => {
@@ -3805,7 +3873,7 @@ impl Engine {
                 {
                     return;
                 }
-                set_error_message("Couldn't open this game. Check the ROM and core.", &message);
+                set_error_message(game_error_text(&message), &message);
                 self.awaiting_game = false;
                 self.inserted = false;
                 self.requested_uri = None;
@@ -3824,6 +3892,7 @@ impl Engine {
             Input::PadKey { device, code, pressed, stick } =>
                 self.pad_key(device, code, pressed, stick),
             Input::Controllers(devices) => self.controllers_changed(devices),
+            Input::Touch(action, x, y, ms) => self.touch(action, x, y, ms),
             Input::Key(code, pressed) => {
                 // A Map or Detect waits for a controller's button (pad_key);
                 // the slot. button cancels it.
@@ -4765,10 +4834,22 @@ impl Engine {
     // separation on Android: no slow PNG decode/embossing on the GLES thread.
     // GPU texture uploads stay on their GL owner and are bounded per frame.
     /// A cart's label file changed: redraw its face on every shelf.
+    /// One arrived label onto its cart, when no game is on or starting and
+    /// the shelf has been still a moment (its face is drawn on this thread).
+    fn relabel_one(&mut self) {
+        if self.relabel.is_empty() || self.game.is_some() || self.inserted || self.awaiting_game
+            || self.pending_game.is_some()
+            || self.shelves.get(self.active).is_some_and(|s| s.is_scrolling())
+            || self.last_cart_navigation.elapsed() < Duration::from_millis(250) { return; }
+        if let Some(uri) = self.relabel.pop_front() { self.reload_cart_label(&uri); }
+    }
+
     fn reload_cart_label(&mut self, uri: &str) {
-        for shelf in &self.shelves {
+        for (sid, shelf) in self.shelves.iter().enumerate() {
             for (index, cart) in shelf.carts.iter().enumerate() {
                 if cart.rom.to_string_lossy() == uri {
+                    // A face rendered before the label came is never shown.
+                    self.cart_render.invalidate((sid, index));
                     if let Some(tex) = shelf.face(index) {
                         let face = cart_face_with_material(cart, None);
                         self.gpu.update_face(tex, &face);
@@ -5978,8 +6059,9 @@ impl Engine {
     /// A new library with other ROMs (a scan after RomM downloads, Refresh
     /// Library): the shelves take it in place, every unchanged cart keeping
     /// its face, so no shelf has to be drawn again (Siham 2026-11-10: L1/R1
-    /// froze after RomM downloads). False when the ROMs are the same ones
-    /// (Cart Studio's art): the caller then builds everything again.
+    /// froze after RomM downloads). The very same carts sent again: nothing
+    /// to do (true). False when the same ROMs come with other titles or
+    /// shells: the caller then builds everything again.
     pub(super) fn update_library(&mut self, version: u64, library: Option<&[RomEntry]>) -> bool {
         let (systems, video) = library_carts(library, Self::recents_root().as_deref());
         let roms = |carts: &mut dyn Iterator<Item = &slot_store::Cart>| {
@@ -5989,7 +6071,21 @@ impl Engine {
         };
         let before = roms(&mut self.system_carts().into_iter().flatten());
         let after = roms(&mut systems.iter().flatten().chain(video.iter()));
-        if before == after || self.shelves.len() <= VIDEO_RACK { return false; }
+        if self.shelves.len() <= VIDEO_RACK { return false; }
+        if before == after {
+            // The very same carts (a library sent again): nothing to do. A
+            // rebuild threw every face away for nothing, 5 s on an empty
+            // shelf (2.4.1-beta15 log). Other changes (titles, shells) still
+            // rebuild, as before.
+            let racks = (0..Platform::ALL.len()).chain(std::iter::once(VIDEO_RACK));
+            let same = racks.zip(systems.iter().chain(std::iter::once(&video)))
+                .all(|(rack, carts)| self.shelves[rack].carts == *carts);
+            if same {
+                self.library_version = version;
+                self.has_library |= library.is_some();
+            }
+            return same;
+        }
         let racks = (0..Platform::ALL.len()).chain(std::iter::once(VIDEO_RACK));
         for (rack, carts) in racks.zip(systems.into_iter().chain(std::iter::once(video))) {
             // A shelf the download left alone keeps its faces being drawn.
@@ -6001,6 +6097,7 @@ impl Engine {
         self.rebuild_recents();
         self.rebuild_favorites();
         self.library_version = version;
+        self.has_library |= library.is_some();
         if self.shelves.get(self.active).is_none_or(|s| s.carts.is_empty()) {
             self.active = self.next_shelf(self.active.min(Platform::ALL.len()), 1);
             self.platform_shown_at = Some(Instant::now());
@@ -6245,7 +6342,7 @@ impl Engine {
     /// and fills as the carts are read (Siham 2026-11-09).
     fn draw_first_scan(&self, out: &mut Vec<Draw>) {
         let width = out_w() as f32;
-        let (tex, w, h) = self.shelf_status_faces[1];
+        let (tex, w, h) = self.shelf_status_faces[usize::from(self.shelf_status)];
         let s = 0.75;
         let (tw, th) = (w as f32 * s, h as f32 * s);
         out.push(Draw::Tex { x: (width - tw) / 2.0, y: 74.0, w: tw, h: th, tex, alpha: 1.0 });
@@ -7284,6 +7381,14 @@ impl Engine {
         x
     }
 
+    /// About's DOWNLOADING line, with its percentage once known.
+    fn set_download_text(&mut self, text: &str) {
+        let Some(&(tex, _, _)) = self.menu_textures.get(114) else { return };
+        let face = quick_value_face(text, true);
+        self.gpu.update_face(tex, &face);
+        self.menu_textures[114] = (tex, face.w, face.h);
+    }
+
     fn draw_update_status_centered(&self, index: usize, x: f32, center_y: f32,
                                    max_w: f32, alpha: f32, out: &mut Vec<Draw>) {
         let (tex,w,h) = self.menu_textures[index];
@@ -7301,10 +7406,33 @@ impl Engine {
         let ink = self.menu_ink();
         if ink.is_some() { out.push(Draw::Ink(ink)); }
         let start = out.len();
+        self.pill_band.set(None);
         self.draw_overlay_page(out);
         if ink.is_some() {
             self.theme_hints(start, out);
             out.push(Draw::Ink(None));
+        }
+        // The in-game Screen page stays white over the game; on Light's or
+        // Original's bar its chosen row takes the theme's ink (Siham
+        // 2026-11-16: white on the light bar couldn't be read).
+        if self.screen_panel() {
+            if let (Some(theme), Some([x0, x1, y, h])) = (menu_style::ink_map(), self.pill_band.get()) {
+                let pill: Vec<slot_gfx::TexId> = self.menu_pill.iter().map(|p| p.0).collect();
+                let tail = out.split_off(start);
+                for draw in tail {
+                    match draw {
+                        Draw::Tex { x, y: ty, w, h: th, tex, .. }
+                            if !pill.contains(&tex)
+                                && (ty + th / 2.0) > y && (ty + th / 2.0) < y + h
+                                && x + w / 2.0 > x0 && x + w / 2.0 < x1 => {
+                            out.push(Draw::Ink(Some(theme)));
+                            out.push(draw);
+                            out.push(Draw::Ink(None));
+                        }
+                        _ => out.push(draw),
+                    }
+                }
+            }
         }
     }
 
@@ -7315,14 +7443,19 @@ impl Engine {
                 let items = [1, 2, 3, 48, 25, 31];
                 self.draw_original_style_menu(0, &items, row, out);
                 if self.update_status == 1 {
-                    // After About's label, as far as its mark: scale to
-                    // that width, then center the resulting shorter glyph
-                    // vertically within About's row.
+                    // At the right of About's row, as in 2.3 (2.4 put it
+                    // against the label), and drawn as the rows are: the
+                    // theme's ink and their contrast on any wallpaper
+                    // (Siham 2026-11-16).
                     let x1 = out_w() as f32 - self.menu_side_room(0, &items).unwrap_or(PILL_RIGHT);
-                    let x = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round();
-                    self.draw_update_status_centered(106, x,
-                        settings_row_top(6) + 5.5 * QUICK_PITCH,
-                        (x1 - 36.0 - x).clamp(40.0, 175.0), 0.70, out);
+                    let label_end = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round() + 24.0;
+                    let (_, w, _) = self.menu_textures[106];
+                    let room = (x1 - 18.0 - label_end).clamp(40.0, 175.0);
+                    let width = w as f32 * (room / w.max(1) as f32).min(0.79);
+                    let fade = self.menu_fade(0);
+                    let alpha = fade * if row == 5 { 1.0 } else { menu_look::ROW_REST };
+                    self.draw_update_status_centered(106, (x1 - 18.0 - width).round().max(label_end),
+                        settings_row_top(6) + 5.5 * QUICK_PITCH, room, alpha, out);
                 }
             }
             ShelfOverlay::Library { row } => {
@@ -7873,6 +8006,8 @@ impl Engine {
             .unwrap_or_else(|poison| poison.into_inner())
             .drain(..)
             .collect();
+        // Before onPause's Reset among them (jni_exports::EXTERNAL_BEGIN).
+        if jni_exports::EXTERNAL_BEGIN.swap(false, Ordering::AcqRel) { self.external_pending = true; }
         for event in events {
             self.handle(event);
         }
@@ -8574,6 +8709,7 @@ impl Engine {
         if repeated_letter { self.show_selected_letter(); }
         self.shelves[self.active].update(dt);
         self.tick_triggers();
+        self.relabel_one();
         self.prepare_visible();
         self.start_waiting_picker();
         // Only warm a settled carousel selection. Actual ROM I/O takes place
@@ -8741,10 +8877,10 @@ impl Engine {
         // never the Android overlay. No hint is drawn behind an open menu.
         if self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None) {
             let library_shown = self.shelves.iter().any(|s| !s.carts.is_empty());
-            if self.shelf_status == 1 && library_shown {
+            if status_has_bar(self.shelf_status) && library_shown {
                 // Refresh Library: the scan shows top right, by the labels'
                 // (Android's task rail), never over the carts.
-            } else if self.shelf_status == 1 {
+            } else if status_has_bar(self.shelf_status) {
                 self.draw_first_scan(&mut commands);
             } else if self.shelf_status > 0 {
                 let (tex, w, h) = self.shelf_status_faces[usize::from(self.shelf_status)];
@@ -8880,7 +9016,7 @@ impl Engine {
             && !self.awaiting_game && !self.external_pending
             && self.progress <= 0.0
             && matches!(self.overlay, ShelfOverlay::None)
-            && self.shelf_status != 1 // library scanner progress remains animated
+            && !status_has_bar(self.shelf_status) // scan and download progress stay animated
             && self.last_cart_navigation.elapsed() >= Duration::from_millis(3200)
             && self.menu_opened.elapsed() >= Duration::from_millis(1200)
             && !self.shelves[self.active].is_scrolling()
@@ -9337,6 +9473,7 @@ mod cart_studio;
 mod cart_library;
 mod romm;
 mod carousel_delete;
+mod touch;
 use carousel_delete::VIDEO_RACK;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) use jni_exports::exercise_session_graphics_recovery;
@@ -9480,6 +9617,12 @@ mod library_update_tests {
 
     #[test]
     fn new_roms_join_the_shelves_in_place_and_the_same_roms_rebuild() {
+        // The same ROMs with another title: everything is built again.
+        let renamed = |names: &[&str], title: &str| {
+            let mut list = entries(names);
+            list[0].title = title.into();
+            list
+        };
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries(&["AA", "CC"]))).unwrap();
         let gba = Platform::Gba as usize;
@@ -9491,7 +9634,10 @@ mod library_update_tests {
         assert_eq!(stems.len(), 3);
         assert_eq!(engine.shelves[gba].carts[engine.shelves[gba].index].rom,
                    PathBuf::from("content://roms/CC.gba"), "the selected cart stays selected");
-        assert!(!engine.update_library(3, Some(&entries(&["CC", "BB", "AA"]))),
-                "the same ROMs (Cart Studio's art) build everything again");
+        assert!(engine.update_library(3, Some(&entries(&["CC", "BB", "AA"]))),
+                "the very same carts sent again: nothing to rebuild");
+        assert_eq!(engine.library_version, 3);
+        assert!(!engine.update_library(4, Some(&renamed(&["CC", "BB", "AA"], "Other"))),
+                "the same ROMs with another title build everything again");
     }
 }
