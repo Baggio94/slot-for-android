@@ -264,6 +264,7 @@ class MainActivity : Activity() {
      *  every few seconds so their faces get drawn (2.4.1-beta15 log). */
     private var lastPublishedIndex: Pair<Int, Int>? = null
     private var lastSilentPublishAt = 0L
+    private var silentHeldLogged = false
     private lateinit var taskIndicators: SlotShelfTaskIndicators
     private lateinit var libraryRefreshIndicator: SlotLibraryRefreshIndicator
     private lateinit var autoLabelIndicator: SlotAutoLabelIndicator
@@ -3922,11 +3923,19 @@ class MainActivity : Activity() {
         if (!resumed || !nativeCanRefreshLibrary()) return
         if (next.silent && (next.json.length to next.json.hashCode()) == lastPublishedIndex) {
             pendingLibraryIndex = null
+            Log.i(TAG, "RomM: shelf already shows these games")
             return
         }
         // RomM's games while more are coming: a group every 2.5 s at most.
         if (next.silent && romm.downloading() &&
-            SystemClock.uptimeMillis() - lastSilentPublishAt < SILENT_PUBLISH_MS) return
+            SystemClock.uptimeMillis() - lastSilentPublishAt < SILENT_PUBLISH_MS) {
+            if (!silentHeldLogged) { silentHeldLogged = true; Log.i(TAG, "RomM: games held for the next group") }
+            return
+        }
+        if (next.silent) {
+            silentHeldLogged = false
+            Log.i(TAG, "RomM: group to the shelf (more coming: ${romm.downloading()})")
+        }
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
         if (saved != next.root.toString()) {
             pendingLibraryIndex = null

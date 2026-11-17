@@ -536,6 +536,7 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
             var failed = 0
             var out = false
             batch = intArrayOf(0, chosen.size, 0)
+            Log.i(TAG, "Download batch: ${chosen.size} game(s), page ${if (showing) "open" else "left"}")
             for ((i, game) in chosen.withIndex()) {
                 batch = intArrayOf(i, chosen.size, 0)
                 val ok = try {
@@ -569,6 +570,7 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                 }
             }
             batch = null
+            Log.i(TAG, "Download batch done: $saved saved, $failed failed")
             activity.runOnUiThread {
                 if (activity.isDestroyed) return@runOnUiThread
                 activity.nativeRommProgress(chosen.size, chosen.size, -1)

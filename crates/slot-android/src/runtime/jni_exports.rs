@@ -269,7 +269,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                     .then_some((engine.overlay, engine.external_pending))
             });
             let in_place = !reload && holder.borrow_mut().as_mut()
-                .is_some_and(|engine| (engine.has_library || engine.shelves.iter().any(|s| !s.carts.is_empty()))
+                // An empty list on the cold start's placeholder: nothing to
+                // show, so nothing to rebuild (5 s: 2.4.1-beta16 log).
+                .is_some_and(|engine| (engine.has_library || engine.shelves.iter().any(|s| !s.carts.is_empty())
+                        || snapshot.as_deref().is_some_and(|games| games.is_empty()))
                     && engine.update_library(version, snapshot.as_deref()));
             if !in_place {
                 // Destruct old GL resources on the GL thread before recreating them.
