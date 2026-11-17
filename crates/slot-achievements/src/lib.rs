@@ -29,6 +29,15 @@ const COVERAGE_SIZE: usize = 0x40000;
 pub fn supported_console(console: u32) -> bool {
     matches!(console, 1 | 3 | 4..=7)
 }
+
+/// Whether a ROM run as `rom` can play `game`'s set: the same console, or a
+/// Game Boy set on a Game Boy Color ROM. RetroAchievements files colourised
+/// "DX" hacks under the original Game Boy game; the Game Boy's memory is the
+/// Game Boy Color's, at the same addresses, so RetroArch plays that set on
+/// them (#117).
+pub(crate) fn same_console(rom: u32, game: u32) -> bool {
+    rom == game || (rom == 6 && game == 4)
+}
 // RetroArch evaluates every real frame. Here a frame the worker cannot take
 // is lost and resets all progress ("Achievement tracking interrupted"), so
 // the queue must absorb an unlock's fsync or a Fast Forward burst: about
@@ -722,7 +731,7 @@ fn evaluate(
                 game.warned_gap = true;
             }
         } else {
-            let earned = if game.console == frame.console {
+            let earned = if same_console(frame.console, game.console) {
                 game.runtime.frame(&frame.ram, &frame.valid, frame.console).to_vec()
             } else {
                 // ROM with an incompatible RA console ID: no false awards.
