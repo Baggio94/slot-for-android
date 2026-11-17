@@ -1497,6 +1497,9 @@ struct Engine {
     home_chip_blanks: [slot_gfx::TexId; 3],
     chip_shadow: slot_gfx::TexId,
     core_legend_faces: [(slot_gfx::TexId, u32); 3],
+    /// The same, their words in Light's dark ink: over a light shelf
+    /// (shelf_ink), as the shelf's name (Siham 2026-11-18).
+    core_legend_dark: [(slot_gfx::TexId, u32); 3],
     a_down_at: Option<Instant>,
     home_launch_held: bool,
     fresh_launch: bool,
@@ -1975,6 +1978,15 @@ impl Engine {
             let texture = gpu.create_face(&face);
             (texture, face.w)
         });
+        let dark_ink = menu_style::MenuPalette::LIGHT.ink.unwrap_or([0; 3]);
+        let core_legend_dark = [
+            slot_ui::hint_face_ink("B", "Cancel", dark_ink),
+            slot_ui::arrows_hint_face_ink("Swap", dark_ink),
+            slot_ui::hint_face_ink("A", "Choose", dark_ink),
+        ].map(|face| {
+            let texture = gpu.create_face(&face);
+            (texture, face.w)
+        });
 
         // Use the original Slot toast faces and HUD, not Android text banners.
         let mut hud = Hud::new();
@@ -2221,6 +2233,7 @@ impl Engine {
             home_chip_blanks,
             chip_shadow,
             core_legend_faces,
+            core_legend_dark,
             a_down_at: None,
             home_launch_held: false,
             fresh_launch: false,
@@ -7913,9 +7926,10 @@ impl Engine {
         // anchor Cancel to the board's left edge, Swap in the centre and
         // Choose to the board's right edge. Shrink uniformly only if needed
         // to preserve >=12px spacing on small screens / font changes.
-        let widths = self.core_legend_faces.map(|(_, w)| w.saturating_sub(HINT_EDGE));
+        let legends = if self.shelf_ink().is_some() { self.core_legend_dark } else { self.core_legend_faces };
+        let widths = legends.map(|(_, w)| w.saturating_sub(HINT_EDGE));
         let positions = crate::core_legend::positions(widths);
-        for ((tex, w), (x, scale)) in self.core_legend_faces.into_iter().zip(positions) {
+        for ((tex, w), (x, scale)) in legends.into_iter().zip(positions) {
             let height = HINT_H as f32 * scale;
             out.push(Draw::Tex {
                 x: x.round(),
