@@ -2039,6 +2039,33 @@ class MainActivity : Activity() {
             else SharedGbaChoice.CANCEL
     }
 
+    /** Issue #116. Null: cancelled (B), the game doesn't start. */
+    private fun askFolderSave(): RetroArchStorage.FolderSaveChoice? {
+        val ready = CountDownLatch(1)
+        val selected = java.util.concurrent.atomic.AtomicReference<RetroArchStorage.FolderSaveChoice?>(null)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "SAVE FOLDER",
+                    "Your save folder has a different game save from where you left off in slot.",
+                    onDismiss = { ready.countDown() })
+                dialog.addButton("USE THE FOLDER'S SAVE") {
+                    selected.set(RetroArchStorage.FolderSaveChoice.USE_FOLDER)
+                    dialog.dismiss()
+                }
+                dialog.addButton("RESUME WHERE YOU LEFT OFF") {
+                    selected.set(RetroArchStorage.FolderSaveChoice.RESUME)
+                    dialog.dismiss()
+                }
+                dialog.show()
+            } catch (error: Exception) {
+                Log.e(TAG, "Cannot open the save folder choice", error)
+                ready.countDown()
+            }
+        }
+        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get() else null
+    }
+
     private enum class CoreStateChoice { EXISTING, SHARED, CANCEL }
 
     /** This dialog is deliberately rare: only Share Saves ON, actual core
@@ -2161,22 +2188,39 @@ class MainActivity : Activity() {
                 // (amadeus12, 2026-11-15): it starts with slot.'s own saves,
                 // and nothing is copied to the folder this time, so a save
                 // there that slot. couldn't read is never overwritten.
+                // A save put in the folder outside slot. while slot. would
+                // resume its own state: the player chooses (issue #116).
+                var folderChoice: RetroArchStorage.FolderSaveChoice? = null
                 val folderFailed = try {
-                    try {
-                        RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
-                    } catch (error: RetroArchStorage.SaveConflict) {
-                        Log.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
-                        when (val choice = askSharedGbaConflict()) {
-                            SharedGbaChoice.CANCEL -> {
-                                nativeGameError(rawUri, "Shared save selection cancelled")
+                    var importing = true
+                    var conflictResolved = false
+                    while (importing) {
+                        try {
+                            RetroArchStorage.importBeforeLaunch(this@MainActivity, shared, folderChoice)
+                            importing = false
+                        } catch (error: RetroArchStorage.FolderSaveChanged) {
+                            folderChoice = askFolderSave()
+                            if (folderChoice == null) {
+                                nativeGameError(rawUri, "Save choice cancelled")
                                 return@execute
                             }
-                            SharedGbaChoice.MGBA, SharedGbaChoice.GPSP -> {
-                                val source = if (choice == SharedGbaChoice.MGBA)
-                                    "mGBA" else "gpSP"
-                                RetroArchStorage.resolveSharedGbaConflict(
-                                    this@MainActivity, shared, source)
-                                RetroArchStorage.importBeforeLaunch(this@MainActivity, shared)
+                        } catch (error: RetroArchStorage.SaveConflict) {
+                            // Asked once, as before: still in conflict, the
+                            // folder is treated as unreadable below.
+                            if (conflictResolved) throw error
+                            conflictResolved = true
+                            Log.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
+                            when (val choice = askSharedGbaConflict()) {
+                                SharedGbaChoice.CANCEL -> {
+                                    nativeGameError(rawUri, "Shared save selection cancelled")
+                                    return@execute
+                                }
+                                SharedGbaChoice.MGBA, SharedGbaChoice.GPSP -> {
+                                    val source = if (choice == SharedGbaChoice.MGBA)
+                                        "mGBA" else "gpSP"
+                                    RetroArchStorage.resolveSharedGbaConflict(
+                                        this@MainActivity, shared, source)
+                                }
                             }
                         }
                     }
