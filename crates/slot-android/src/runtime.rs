@@ -1342,6 +1342,10 @@ struct Engine {
     /// L2 / R2 on the carousel: delete held, GBA Video tapped.
     triggers: carousel_delete::Triggers,
     touch: Option<touch::Touch>,
+    /// The cart flying between the shelf and Cart Studio (cart_studio.rs).
+    studio_flight: Option<cart_studio::StudioFlight>,
+    /// A long press on a side cart: Cart Studio once it reaches the middle.
+    studio_when_settled: bool,
     /// The GBA Video shelf was the one of the two used last.
     gba_video: bool,
     /// Textures Cart Studio drew its small carts in, free to draw again.
@@ -1475,6 +1479,8 @@ struct Engine {
     link_inet_hints: [[(slot_gfx::TexId, u32); 6]; 2],
     board_texture: Option<slot_gfx::TexId>,
     picker: Option<CorePicker>,
+    /// A finger chose a core: A once the chip has hopped there (ms, born).
+    picker_auto_seat: Option<u64>,
     socket_textures: [slot_gfx::TexId; Core::ALL.len()],
     chip_textures: [slot_gfx::TexId; Core::ALL.len()],
     chip_blank: slot_gfx::TexId,
@@ -2103,6 +2109,8 @@ impl Engine {
             romm: None,
             triggers: Default::default(),
             touch: None,
+            studio_flight: None,
+            studio_when_settled: false,
             gba_video: false,
             studio_pool: Vec::new(),
             settings,
@@ -2189,6 +2197,7 @@ impl Engine {
             link_inet_hints,
             board_texture: None,
             picker: None,
+            picker_auto_seat: None,
             socket_textures,
             chip_textures,
             chip_blank,
@@ -4681,38 +4690,7 @@ impl Engine {
                                     match code {
                                         21 => { picker.press(Press::Left, now); }
                                         22 => { picker.press(Press::Right, now); }
-                                        96 => {
-                                            let core = picker.seat();
-                                            let cart = &self.shelves[self.active].carts
-                                                [self.shelves[self.active].index];
-                                            let uri = cart.rom.to_string_lossy().into_owned();
-                                            let platform = cart.platform;
-                                            let paths = PATHS.lock()
-                                                .unwrap_or_else(|e| e.into_inner()).clone();
-                                            if let Some((storage, library)) = paths {
-                                                let core_file = library.join(
-                                                    format!("lib{}_libretro.so", core.as_str()));
-                                                if !core_file.is_file() {
-                                                    set_message(format!(
-                                                        "{} isn't installed.", core.text()));
-                                                } else {
-                                                    match core_selection::choose(&storage, &uri, platform, core) {
-                                                        Ok(()) => {
-                                                            // A core swap must invalidate the
-                                                            // previous core's cached profile
-                                                            // immediately, even when Y was
-                                                            // opened before selecting this chip.
-                                                            self.game_emulation =
-                                                                EmulationProfile::load(
-                                                                    &storage, &uri, core);
-                                                            picker.press(Press::Keep, now);
-                                                        }
-                                                        Err(err) => set_error_message(
-                                                            "Couldn't save the selected core.", &err),
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        96 => self.seat_core_picker(),
                                         97 | 109 => { picker.press(Press::Back, now); }
                                         _ => {}
                                     }
@@ -4751,29 +4729,7 @@ impl Engine {
                             return;
                         }
                         109 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
-                            let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
-                            let face = board_face(selected);
-                            if let Some(texture) = self.board_texture {
-                                self.gpu.update_face(texture, &face);
-                            } else {
-                                self.board_texture = Some(self.gpu.create_face(&face));
-                            }
-                            let now = self.born.elapsed().as_millis() as u64;
-                            let current_core = PATHS.lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .as_ref()
-                                .map(|(storage, _)| core_selection::selected_for(
-                                    storage, &selected.rom.to_string_lossy(), selected.platform))
-                                .unwrap_or_else(|| Core::default_for(selected.platform));
-                            let mut picker = CorePicker::open_between(current_core,
-                                Core::primary_for(selected.platform),
-                                Core::alternate_for(selected.platform), now);
-                            // A clear cart's lid waits for its plastic without
-                            // the board (start_waiting_picker), or the shelf
-                            // face would lift with the board drawn on it.
-                            if self.picker_lid_ready() { picker.start(now); }
-                            self.picker = Some(picker);
-                            self.overlay = ShelfOverlay::Core;
+                            self.open_core_picker();
                             return;
                         }
                         102 | 103 if !self.inserted => {
@@ -4882,6 +4838,62 @@ impl Engine {
         };
         self.clear_material=Some(ClearMaterial{key,tex:textures});
     }
+    /// Select's core picker for the selected cart (also a finger pushing
+    /// the middle cart up, touch.rs).
+    pub(super) fn open_core_picker(&mut self) {
+        let Some(selected) = self.shelves[self.active].carts.get(self.shelves[self.active].index) else { return };
+        let face = board_face(selected);
+        if let Some(texture) = self.board_texture {
+            self.gpu.update_face(texture, &face);
+        } else {
+            self.board_texture = Some(self.gpu.create_face(&face));
+        }
+        let now = self.born.elapsed().as_millis() as u64;
+        let current_core = PATHS.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|(storage, _)| core_selection::selected_for(
+                storage, &selected.rom.to_string_lossy(), selected.platform))
+            .unwrap_or_else(|| Core::default_for(selected.platform));
+        let mut picker = CorePicker::open_between(current_core,
+            Core::primary_for(selected.platform),
+            Core::alternate_for(selected.platform), now);
+        // A clear cart's lid waits for its plastic without
+        // the board (start_waiting_picker), or the shelf
+        // face would lift with the board drawn on it.
+        if self.picker_lid_ready() { picker.start(now); }
+        self.picker = Some(picker);
+        self.picker_auto_seat = None;
+        self.overlay = ShelfOverlay::Core;
+    }
+
+    /// A on the core picker: the chip's core becomes the cart's.
+    pub(super) fn seat_core_picker(&mut self) {
+        let now = self.born.elapsed().as_millis() as u64;
+        let Some(core) = self.picker.map(|picker| picker.seat()) else { return };
+        let cart = &self.shelves[self.active].carts[self.shelves[self.active].index];
+        let uri = cart.rom.to_string_lossy().into_owned();
+        let platform = cart.platform;
+        let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some((storage, library)) = paths {
+            let core_file = library.join(format!("lib{}_libretro.so", core.as_str()));
+            if !core_file.is_file() {
+                set_message(format!("{} isn't installed.", core.text()));
+            } else {
+                match core_selection::choose(&storage, &uri, platform, core) {
+                    Ok(()) => {
+                        // A core swap must invalidate the previous core's
+                        // cached profile immediately, even when Y was opened
+                        // before selecting this chip.
+                        self.game_emulation = EmulationProfile::load(&storage, &uri, core);
+                        if let Some(picker) = self.picker.as_mut() { picker.press(Press::Keep, now); }
+                    }
+                    Err(err) => set_error_message("Couldn't save the selected core.", &err),
+                }
+            }
+        }
+    }
+
     /// Whether the selected cart's lid can lift: not clear, or its clear
     /// layers are uploaded.
     fn picker_lid_ready(&self) -> bool {
@@ -8132,6 +8144,17 @@ impl Engine {
             self.picker = None;
             self.overlay = ShelfOverlay::None;
         }
+        self.settle_studio_flight();
+        self.touch_tick();
+        if let Some(at) = self.picker_auto_seat {
+            let now = self.born.elapsed().as_millis() as u64;
+            if !matches!(self.overlay, ShelfOverlay::Core) || self.picker.is_none_or(|p| p.closing()) {
+                self.picker_auto_seat = None;
+            } else if now >= at {
+                self.picker_auto_seat = None;
+                self.seat_core_picker();
+            }
+        }
         if self.menu_reveal_at.is_some_and(|at| Instant::now() >= at) {
             self.menu_reveal_at = None;
             self.menu_seen = 0; // the menu's own fade-in, now
@@ -8858,6 +8881,13 @@ impl Engine {
         // is borrowed for drawing.
         let wallpaper_none = self.wallpaper_none();
         let wallpaper = self.active_wallpaper();
+        // A long press lifts the selected cart; it hides while it flies to or
+        // from Cart Studio (Siham 2026-11-17). Read before the shelf's borrow.
+        let press_lift = self.press_lift();
+        let flight_hides = self.studio_flight_hides_cart();
+        let lifted = self.shelves[self.active].selected_rect().map(|(x, y, w, h)| self.lifted([x, y, w, h]));
+        let mut studio_return = Vec::new();
+        self.draw_studio_return(&mut studio_return);
         let shelf = &mut self.shelves[self.active];
 
         // Original Slot: 450ms seating + 280ms hold. Start the original
@@ -8917,7 +8947,14 @@ impl Engine {
                 let shake = self.refusal.map_or(0.0, |r| r.offset(ms));
                 let row_from = commands.len();
                 let dim = if ROMS_MISSING.load(Ordering::Acquire) { MISSING_DIM } else { 1.0 };
-                shelf.draw_row(ejecting_stem.as_deref(), shake, 0.0, dim, &mut commands);
+                let hidden = ejecting_stem.as_deref().or_else(|| {
+                    (press_lift > 0.0 || flight_hides)
+                        .then(|| shelf.carts.get(shelf.index).map(|c| c.stem.as_str())).flatten()
+                });
+                shelf.draw_row(hidden, shake, 0.0, dim, &mut commands);
+                if let Some([x, y, w, h]) = lifted.filter(|_| press_lift > 0.0 && !flight_hides) {
+                    shelf.draw_selected_at(x, y, w, h, dim, &mut commands);
+                }
                 lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),
@@ -8967,6 +9004,7 @@ impl Engine {
                     slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
                 }
                 if shelf_ink.is_some() { commands.push(Draw::Ink(None)); }
+                commands.append(&mut studio_return);
             }
         } else {
             let cart = &shelf.carts[shelf.index];

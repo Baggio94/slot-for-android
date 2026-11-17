@@ -5,6 +5,10 @@
 //! the cart in the middle inserts it, as A does, and so does pulling it
 //! down; a tap on a cart beside it brings that one to the middle. Touch only works on the carousel itself:
 //! never in a game, a menu, or with the RG Rotate closed.
+//!
+//! Pushing the middle cart up opens its core picker, where a tap on a core
+//! chooses it and a tap anywhere else closes it; holding a finger still on a
+//! cart lifts it and opens Cart Studio (Siham 2026-11-17).
 use super::*;
 
 /// How far, in canvas pixels (the canvas is 480 high), a finger may move
@@ -15,6 +19,15 @@ const TAP_SLOP: f32 = 10.0;
 const PUSH_DOWN: f32 = 40.0;
 /// A touch held longer than this is not a tap (kept for a long press).
 const TAP_MS: i64 = 600;
+/// A finger held still this long on a cart opens Cart Studio.
+const LONG_PRESS_S: f32 = 0.5;
+/// The held cart starts rising after this (a tap never shows it).
+const LIFT_FROM_S: f32 = 0.18;
+/// How much the held cart grows and rises (canvas pixels).
+const LIFT_GROW: f32 = 0.04;
+const LIFT_RISE: f32 = 6.0;
+/// After a chosen core's chip lands, a beat before it's kept (ms).
+const SEAT_PAUSE_MS: u64 = 80;
 /// The finger's speed is measured over its last this many milliseconds.
 const SPEED_WINDOW_MS: i64 = 80;
 /// A finger that rested this long before letting go has no speed left.
@@ -35,6 +48,13 @@ pub(super) struct Touch {
     dragging: bool,
     /// The finger went mostly down, not sideways: no shelf drag.
     pulling: bool,
+    /// Mostly up: maybe the middle cart's core picker.
+    pushing: bool,
+    /// On the open core picker, not the shelf.
+    picker: bool,
+    /// The long press already opened Cart Studio.
+    long_fired: bool,
+    at: Instant,
     /// The finger stopped a moving shelf: letting go does not insert.
     caught: bool,
     /// The last positions: (time in ms, x), oldest first.
@@ -45,12 +65,18 @@ impl Touch {
     fn new(x: f32, y: f32, ms: i64, caught: bool) -> Self {
         let mut samples = VecDeque::with_capacity(SAMPLES);
         samples.push_back((ms, x));
-        Touch { start: (x, y), start_ms: ms, last_x: x, dragging: false, pulling: false, caught, samples }
+        Touch { start: (x, y), start_ms: ms, last_x: x, dragging: false, pulling: false, pushing: false,
+            picker: false, long_fired: false, at: Instant::now(), caught, samples }
     }
 
     fn sample(&mut self, ms: i64, x: f32) {
         if self.samples.len() == SAMPLES { self.samples.pop_front(); }
         self.samples.push_back((ms, x));
+    }
+
+    /// Still a candidate for a long press: not moved, not caught.
+    fn still(&self) -> bool {
+        !self.dragging && !self.pulling && !self.pushing && !self.caught && !self.picker && !self.long_fired
     }
 
     /// Canvas pixels a second, from the last samples.
@@ -95,6 +121,12 @@ impl Engine {
         let (x, y) = (x * out_w() as f32, y * OUT_H as f32);
         if action == DOWN {
             self.touch = None;
+            if self.picker_touchable() {
+                let mut touch = Touch::new(x, y, ms, false);
+                touch.picker = true;
+                self.touch = Some(touch);
+                return;
+            }
             if !self.touch_ready() { return; }
             let shelf = &mut self.shelves[self.active];
             let caught = shelf.is_scrolling();
@@ -103,6 +135,21 @@ impl Engine {
             return;
         }
         let Some(mut touch) = self.touch.take() else { return };
+        if touch.picker {
+            if action == MOVE {
+                self.touch = Some(touch);
+            } else if action == UP {
+                let (dx, dy) = (x - touch.start.0, y - touch.start.1);
+                if dx.hypot(dy) <= TAP_SLOP && ms - touch.start_ms <= TAP_MS && self.picker_touchable() {
+                    self.picker_tap(touch.start.0, touch.start.1);
+                }
+            }
+            return;
+        }
+        if touch.long_fired {
+            // Cart Studio is opening: the finger's lifting is not a tap.
+            return;
+        }
         if !self.touch_ready() {
             // Something else took the screen: the shelf settles where it is.
             self.shelves[self.active].let_go(0.0);
@@ -112,10 +159,13 @@ impl Engine {
             MOVE => {
                 touch.sample(ms, x);
                 let (dx, dy) = (x - touch.start.0, y - touch.start.1);
-                if !touch.dragging && !touch.pulling && dx.hypot(dy) > TAP_SLOP {
+                if !touch.dragging && !touch.pulling && !touch.pushing && dx.hypot(dy) > TAP_SLOP {
                     if dy > dx.abs() {
                         // Down, not sideways: maybe a push into the console.
                         touch.pulling = true;
+                    } else if -dy > dx.abs() {
+                        // Up: maybe the core picker.
+                        touch.pushing = true;
                     } else {
                         touch.dragging = true;
                         // The carts catch up with the finger from where it
@@ -136,6 +186,13 @@ impl Engine {
                     let speed = touch.speed(ms);
                     self.shelves[self.active].let_go(speed);
                     self.last_cart_navigation = Instant::now();
+                } else if touch.pushing {
+                    self.shelves[self.active].let_go(0.0);
+                    let (dx, dy) = (x - touch.start.0, y - touch.start.1);
+                    if !touch.caught && -dy >= PUSH_DOWN && dx.abs() < -dy
+                        && self.shelves[self.active].cart_under(touch.start.0, touch.start.1) == Some(0) {
+                        self.open_core_picker();
+                    }
                 } else if touch.pulling {
                     self.shelves[self.active].let_go(0.0);
                     let (dx, dy) = (x - touch.start.0, y - touch.start.1);
@@ -152,6 +209,82 @@ impl Engine {
             }
             _ => self.shelves[self.active].let_go(0.0),
         }
+    }
+
+    /// How far the held cart has risen, 0 to 1 (0 with no long press).
+    pub(super) fn press_lift(&self) -> f32 {
+        let Some(touch) = self.touch.as_ref().filter(|t| t.still()) else { return 0.0 };
+        if self.shelves.get(self.active).and_then(|s| s.cart_under(touch.start.0, touch.start.1)) != Some(0) {
+            return 0.0;
+        }
+        let t = ((touch.at.elapsed().as_secs_f32() - LIFT_FROM_S) / (LONG_PRESS_S - LIFT_FROM_S)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    /// The selected cart's (x, y, w, h), lifted as far as the press has.
+    pub(super) fn lifted(&self, [x, y, w, h]: [f32; 4]) -> [f32; 4] {
+        let lift = self.press_lift();
+        let grow = 1.0 + LIFT_GROW * lift;
+        [x - w * (grow - 1.0) / 2.0, y - LIFT_RISE * lift - h * (grow - 1.0) / 2.0, w * grow, h * grow]
+    }
+
+    /// Per frame: a finger held still long enough opens Cart Studio (a side
+    /// cart comes to the middle first).
+    pub(super) fn touch_tick(&mut self) {
+        if self.studio_when_settled {
+            if !self.touch_ready() {
+                self.studio_when_settled = false;
+            } else if !self.shelves[self.active].is_scrolling() {
+                self.studio_when_settled = false;
+                self.open_cart_studio();
+            }
+        }
+        let Some(touch) = self.touch.as_ref() else { return };
+        if !touch.still() || touch.at.elapsed().as_secs_f32() < LONG_PRESS_S || !self.touch_ready() { return; }
+        let (x, y) = touch.start;
+        let under = self.shelves[self.active].cart_under(x, y);
+        let Some(by) = under else { return };
+        self.shelves[self.active].let_go(0.0);
+        if by == 0 {
+            // Opened while still lifted, so the flight starts where it is.
+            self.open_cart_studio();
+            if let Some(touch) = self.touch.as_mut() { touch.long_fired = true; }
+        } else {
+            if let Some(touch) = self.touch.as_mut() { touch.long_fired = true; }
+            self.shelves[self.active].go_by(by);
+            self.last_cart_navigation = Instant::now();
+            self.studio_when_settled = true;
+        }
+    }
+
+    /// The core picker is open and settled: a tap chooses or closes it.
+    fn picker_touchable(&self) -> bool {
+        let now = self.born.elapsed().as_millis() as u64;
+        self.settings.touchscreen && self.game.is_none() && !self.lid_covered && self.lid_t <= 0.0
+            && matches!(self.overlay, ShelfOverlay::Core)
+            && self.picker.is_some_and(|p| !p.closing() && !p.waiting() && p.openness(now) >= 1.0)
+            && self.picker_auto_seat.is_none()
+    }
+
+    /// A tap on the open core picker: on one of the board's two halves, that
+    /// core (kept once its chip has hopped there; the one already in place
+    /// closes it); anywhere else, closes it as B.
+    fn picker_tap(&mut self, x: f32, y: f32) {
+        let now = self.born.elapsed().as_millis() as u64;
+        let Some(picker) = self.picker else { return };
+        let shelf = &self.shelves[self.active];
+        let Some(cart) = shelf.carts.get(shelf.index) else { return };
+        let board = slot_ui::board_layout_body(slot_ui::body_of(cart)).rest;
+        let on_board = (board.x..=board.x + board.w).contains(&x) && (board.y..=board.y + board.h).contains(&y);
+        let left = x < board.x + board.w / 2.0;
+        let core = if left { picker.left() } else { picker.right() };
+        let Some(picker) = self.picker.as_mut() else { return };
+        if !on_board || core == picker.seat() {
+            picker.press(Press::Back, now);
+            return;
+        }
+        picker.press(if left { Press::Left } else { Press::Right }, now);
+        self.picker_auto_seat = Some(now + crate::core_picker::HOP_MS + SEAT_PAUSE_MS);
     }
 
     /// Exactly A: pressed and let go at once (no fresh start).

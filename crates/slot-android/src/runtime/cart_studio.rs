@@ -28,6 +28,48 @@ const ROW_FINISH: usize = 3;
 const ROW_SHAPE: usize = 4;
 /// The rows start higher than a settings page's: the finish strip goes under.
 const ROWS_TOP: f32 = 84.0;
+
+/// The cart's flight between the shelf and Cart Studio, X or a long press
+/// (Siham 2026-11-17).
+const FLIGHT_S: f32 = 0.30;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StudioFlight {
+    pub(super) opening: bool,
+    started: Instant,
+    from: [f32; 4],
+    to: [f32; 4],
+    tex: slot_gfx::TexId,
+}
+
+impl StudioFlight {
+    fn progress(&self) -> f32 {
+        (self.started.elapsed().as_secs_f32() / FLIGHT_S).clamp(0.0, 1.0)
+    }
+
+    pub(super) fn flying(&self) -> bool { self.progress() < 1.0 }
+
+    /// Eased out: quick off the mark, settling into place.
+    fn eased(&self) -> f32 {
+        let t = self.progress();
+        1.0 - (1.0 - t).powi(3)
+    }
+
+    fn at(&self) -> [f32; 4] {
+        let k = self.eased();
+        std::array::from_fn(|i| self.from[i] + (self.to[i] - self.from[i]) * k)
+    }
+
+    fn draw(&self, rect: [f32; 4], out: &mut Vec<Draw>) {
+        out.push(Draw::Tex { x: rect[0], y: rect[1], w: rect[2], h: rect[3], tex: self.tex, alpha: 1.0 });
+    }
+}
+
+/// Where Cart Studio draws a cart of this size (its preview's).
+fn studio_cart_rect(size: (u32, u32)) -> [f32; 4] {
+    let layout = studio_layout(Some(size));
+    [layout.cart_x + (layout.cart_room - layout.cart_w) / 2.0, layout.cart_y, layout.cart_w, layout.cart_h]
+}
 const STRIP_BOTTOM: f32 = 414.0;
 /// The finish strip's height under the rows.
 const FINISH_STRIP_H: f32 = 70.0;
@@ -629,7 +671,69 @@ impl Engine {
     pub(super) fn open_cart_studio(&mut self) {
         let shelf = &self.shelves[self.active];
         let Some(cart) = shelf.carts.get(shelf.index).cloned() else { return };
+        // The cart leaves the shelf from where it is drawn (lifted by a long
+        // press) for its place on the page.
+        let flight = shelf.selected_rect().zip(shelf.face(shelf.index)).map(|((x, y, w, h), tex)| {
+            let [x, y, w, h] = self.lifted([x, y, w, h]);
+            let (cw, ch) = slot_ui::shelf_box_for(&cart);
+            StudioFlight {
+                opening: true,
+                started: Instant::now(),
+                from: [x, y, w, h],
+                to: studio_cart_rect(((cw * 10.0) as u32, (ch * 10.0) as u32)),
+                tex,
+            }
+        });
+        self.studio_when_settled = false;
         self.open_cart_studio_on(cart, None, false);
+        self.studio_flight = flight;
+    }
+
+    /// Back to the shelf: the cart flies to its place, as saved, or as the
+    /// shelf still has it when B left the changes.
+    fn fly_back_to_shelf(&mut self, saved: bool) {
+        let shelf = &self.shelves[self.active];
+        // Only to the cart it came from.
+        let same = shelf.carts.get(shelf.index).zip(self.studio.as_ref())
+            .is_some_and(|(cart, studio)| cart.rom.to_string_lossy() == studio.uri.as_str());
+        let to = shelf.selected_rect().filter(|_| same);
+        let shelf_face = shelf.face(shelf.index);
+        let from = self.studio.as_ref().and_then(|studio| studio.preview)
+            .map(|(tex, w, h)| (studio_cart_rect((w, h)), tex))
+            .or_else(|| self.studio_flight.filter(|f| f.opening).map(|f| (f.to, f.tex)))
+            .and_then(|(rect, preview)| if saved { Some((rect, preview)) } else { shelf_face.map(|f| (rect, f)) });
+        self.studio_flight = to.zip(from).map(|((x, y, w, h), (from, tex))| StudioFlight {
+            opening: false,
+            started: Instant::now(),
+            from,
+            to: [x, y, w, h],
+            tex,
+        });
+    }
+
+    /// Per frame: a finished flight ends (the opening one once the page's
+    /// own preview is there to take over).
+    pub(super) fn settle_studio_flight(&mut self) {
+        let Some(flight) = self.studio_flight else { return };
+        if flight.flying() { return; }
+        let previewed = self.studio.as_ref().is_some_and(|s| s.preview.is_some());
+        if !flight.opening || previewed || !matches!(self.overlay, ShelfOverlay::CartStudio) {
+            self.studio_flight = None;
+        }
+    }
+
+    /// The selected cart hides from the shelf while it flies.
+    pub(super) fn studio_flight_hides_cart(&self) -> bool {
+        self.studio_flight.is_some_and(|f| f.flying() || f.opening)
+    }
+
+    /// Closing: the page fades off the shelf as the cart lands.
+    pub(super) fn draw_studio_return(&self, out: &mut Vec<Draw>) {
+        let Some(flight) = self.studio_flight.filter(|f| !f.opening && f.flying()) else { return };
+        let mut ground = menu_ground();
+        ground[3] *= 1.0 - flight.eased();
+        out.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32, colour: ground });
+        self.without_ink(out, |out| flight.draw(flight.at(), out));
     }
 
     /// Cart Studio on `cart`; `pending` is a label the library session chose
@@ -813,7 +917,9 @@ impl Engine {
             self.return_to_cart_library();
             return;
         }
+        self.fly_back_to_shelf(save);
         self.overlay = ShelfOverlay::None;
+        let Some(studio) = self.studio.as_ref() else { return };
         if !save { return; }
         let uri = studio.uri.clone();
         let outcome = studio.outcome();
@@ -985,9 +1091,20 @@ impl Engine {
 
     pub(super) fn draw_cart_studio(&self, out: &mut Vec<Draw>) {
         let Some(studio) = self.studio.as_ref() else { return };
-        self.draw_menu_ground(0.0, out);
+        // Opening from the shelf: the page arrives around the flying cart,
+        // its rows in the second half of the flight.
+        let opening = self.studio_flight.filter(|f| f.opening);
+        let flying = opening.filter(|f| f.flying());
+        if let Some(flight) = flying {
+            let mut ground = menu_ground();
+            ground[3] *= flight.eased();
+            out.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32, colour: ground });
+        } else {
+            self.draw_menu_ground(0.0, out);
+        }
         let width = out_w() as f32;
         let fade = slot_ui::ease((self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
+        let fade = flying.map_or(fade, |f| fade.min(((f.progress() - 0.45) / 0.55).clamp(0.0, 1.0)));
         let face = |text: &str, lit: bool| self.controls_faces.get(&Self::face_key(text, lit)).copied();
         self.draw_page_title(out, "CART STUDIO", fade);
         // The cart and the rows as one block, centred, with a clear gap.
@@ -996,7 +1113,13 @@ impl Engine {
         let (left, right_edge) = (layout.cart_x, layout.cart_x + layout.cart_room);
         let mut below = 300.0;
         let mut cart_top = ROWS_TOP;
-        if let Some((tex, _, _)) = studio.preview {
+        if let Some(flight) = opening.filter(|_| flying.is_some() || studio.preview.is_none()) {
+            // In flight, then in its place until the page's preview is ready.
+            let rect = flight.at();
+            self.without_ink(out, |out| flight.draw(rect, out));
+            cart_top = rect[1];
+            below = rect[1] + rect[3] + 12.0;
+        } else if let Some((tex, _, _)) = studio.preview {
             let (dw, dh) = (layout.cart_w, layout.cart_h);
             let (x, y) = (left + (layout.cart_room - dw) / 2.0, layout.cart_y);
             cart_top = y;
@@ -1299,6 +1422,30 @@ fn studio_layout_in(width: f32, cart: Option<(u32, u32)>) -> StudioLayout {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[cfg(feature = "runtime-tests")]
+    #[test]
+    fn the_cart_flies_from_the_shelf_to_its_place_on_the_page() {
+        let to = studio_cart_rect((1080, 636));
+        let flight = |ago: f32| StudioFlight {
+            opening: true,
+            started: Instant::now() - std::time::Duration::from_secs_f32(ago),
+            from: [228.0, 130.0, 264.0, 156.0],
+            to,
+            tex: slot_gfx::TexId::from_raw(1),
+        };
+        let start = flight(0.0).at();
+        assert!((start[0] - 228.0).abs() < 4.0 && (start[2] - 264.0).abs() < 4.0);
+        let landed = flight(1.0);
+        assert!(!landed.flying());
+        assert_eq!(landed.at(), to);
+        // Eased out: past halfway in place by half the time.
+        assert!(flight(FLIGHT_S / 2.0).eased() > 0.8);
+        // Where the page draws a cart of that size.
+        let layout = studio_layout(Some((1080, 636)));
+        assert_eq!(to[1], layout.cart_y);
+        assert_eq!(to[2], layout.cart_w);
+    }
 
     #[test]
     fn editor_keeps_a_gap_and_centres_cart_and_rows() {
