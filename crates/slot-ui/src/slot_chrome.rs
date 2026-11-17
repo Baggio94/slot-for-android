@@ -486,6 +486,10 @@ pub fn draw_empty_slot_with(faces: Option<(TexId, TexId)>, out: &mut Vec<Draw>) 
 
 /// The empty slot with its closer shut.
 pub fn draw_empty_slot_closed(faces: Option<(TexId, TexId)>, closer: Option<SlotCloser>, out: &mut Vec<Draw>) {
+    // The resting shelf's bar too, not only while a cart goes in.
+    if faces.is_some() {
+        draw_bar_shadow(1.0, out);
+    }
     draw_slot_back_with(faces.map(|pair| pair.0), 1.0, out);
     if let Some(closer) = closer {
         closer.draw(0.0, 1.0, out);
