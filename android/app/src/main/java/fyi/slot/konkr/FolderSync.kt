@@ -217,7 +217,8 @@ internal object FolderSync {
         val name = path.substringAfterLast('/')
         if (name.endsWith(".tmp") || name.endsWith(".carried") || name.endsWith(".once")) return false
         if (name.startsWith(".")) return false
-        if (path.startsWith("Saves/RetroArchBackups/") || path.startsWith("Saves/ManualImports/")) return false
+        if (path.startsWith("Saves/RetroArchBackups/") || path.startsWith("Saves/ManualImports/") ||
+            path.startsWith("Saves/FolderBackups/")) return false
         if (path.startsWith("Saves/LinkBackups/") || path.startsWith("Saves/Link")) return false
         return true
     }
