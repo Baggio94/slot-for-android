@@ -98,6 +98,17 @@ pub(super) fn speed_of(samples: &VecDeque<(i64, f32)>, now: i64) -> f32 {
     if dt <= 0.0 { 0.0 } else { (last_x - first.1) / dt }
 }
 
+/// A cart's (x, y, w, h) lifted by `lift` (0 to 1) of a long press.
+fn lifted_by([x, y, w, h]: [f32; 4], lift: f32) -> [f32; 4] {
+    let grow = 1.0 + LIFT_GROW * lift;
+    [x - w * (grow - 1.0) / 2.0, y - LIFT_RISE * lift - h * (grow - 1.0) / 2.0, w * grow, h * grow]
+}
+
+/// As high as a long press lifts it: where X has a cart take off from.
+pub(super) fn lifted_fully(rect: [f32; 4]) -> [f32; 4] {
+    lifted_by(rect, 1.0)
+}
+
 impl Engine {
     /// The carousel alone is on screen, waiting for a cart.
     fn touch_ready(&self) -> bool {
@@ -222,10 +233,8 @@ impl Engine {
     }
 
     /// The selected cart's (x, y, w, h), lifted as far as the press has.
-    pub(super) fn lifted(&self, [x, y, w, h]: [f32; 4]) -> [f32; 4] {
-        let lift = self.press_lift();
-        let grow = 1.0 + LIFT_GROW * lift;
-        [x - w * (grow - 1.0) / 2.0, y - LIFT_RISE * lift - h * (grow - 1.0) / 2.0, w * grow, h * grow]
+    pub(super) fn lifted(&self, rect: [f32; 4]) -> [f32; 4] {
+        lifted_by(rect, self.press_lift())
     }
 
     /// Per frame: a finger held still long enough opens Cart Studio (a side

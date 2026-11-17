@@ -38,26 +38,41 @@ pub(super) struct StudioFlight {
     pub(super) opening: bool,
     started: Instant,
     from: [f32; 4],
+    /// Where the cart takes off from: `from` lifted. X lifts it first, over
+    /// `lead` seconds, as a long press already has (Siham 2026-11-17).
+    lifted: [f32; 4],
+    lead: f32,
     to: [f32; 4],
     tex: slot_gfx::TexId,
 }
 
+/// X's short lift before the cart takes off.
+const LEAD_S: f32 = 0.10;
+
 impl StudioFlight {
+    fn elapsed(&self) -> f32 { self.started.elapsed().as_secs_f32() }
+
+    /// The flight itself, 0 to 1 (0 during the lift).
     fn progress(&self) -> f32 {
-        (self.started.elapsed().as_secs_f32() / FLIGHT_S).clamp(0.0, 1.0)
+        ((self.elapsed() - self.lead) / FLIGHT_S).clamp(0.0, 1.0)
     }
 
-    pub(super) fn flying(&self) -> bool { self.progress() < 1.0 }
+    pub(super) fn flying(&self) -> bool { self.elapsed() < self.lead + FLIGHT_S }
 
-    /// Eased out: quick off the mark, settling into place.
+    /// A gentle start, then slowing into place: half smoothstep, half ease-out.
     fn eased(&self) -> f32 {
         let t = self.progress();
-        1.0 - (1.0 - t).powi(3)
+        0.5 * t * t * (3.0 - 2.0 * t) + 0.5 * (1.0 - (1.0 - t).powi(3))
     }
 
     fn at(&self) -> [f32; 4] {
+        if self.lead > 0.0 && self.elapsed() < self.lead {
+            let t = (self.elapsed() / self.lead).clamp(0.0, 1.0);
+            let k = t * t * (3.0 - 2.0 * t);
+            return std::array::from_fn(|i| self.from[i] + (self.lifted[i] - self.from[i]) * k);
+        }
         let k = self.eased();
-        std::array::from_fn(|i| self.from[i] + (self.to[i] - self.from[i]) * k)
+        std::array::from_fn(|i| self.lifted[i] + (self.to[i] - self.lifted[i]) * k)
     }
 
     fn draw(&self, rect: [f32; 4], out: &mut Vec<Draw>) {
@@ -673,13 +688,22 @@ impl Engine {
         let Some(cart) = shelf.carts.get(shelf.index).cloned() else { return };
         // The cart leaves the shelf from where it is drawn (lifted by a long
         // press) for its place on the page.
+        let pressed = self.press_lift() > 0.0;
         let flight = shelf.selected_rect().zip(shelf.face(shelf.index)).map(|((x, y, w, h), tex)| {
-            let [x, y, w, h] = self.lifted([x, y, w, h]);
             let (cw, ch) = slot_ui::shelf_box_for(&cart);
+            // A long press has lifted it already; X lifts it first.
+            let (from, lifted, lead) = if pressed {
+                let lifted = self.lifted([x, y, w, h]);
+                (lifted, lifted, 0.0)
+            } else {
+                ([x, y, w, h], super::touch::lifted_fully([x, y, w, h]), LEAD_S)
+            };
             StudioFlight {
                 opening: true,
                 started: Instant::now(),
-                from: [x, y, w, h],
+                from,
+                lifted,
+                lead,
                 to: studio_cart_rect(((cw * 10.0) as u32, (ch * 10.0) as u32)),
                 tex,
             }
@@ -706,6 +730,8 @@ impl Engine {
             opening: false,
             started: Instant::now(),
             from,
+            lifted: from,
+            lead: 0.0,
             to: [x, y, w, h],
             tex,
         });
@@ -1427,20 +1453,30 @@ mod layout_tests {
     #[test]
     fn the_cart_flies_from_the_shelf_to_its_place_on_the_page() {
         let to = studio_cart_rect((1080, 636));
-        let flight = |ago: f32| StudioFlight {
+        let shelf = [228.0, 130.0, 264.0, 156.0];
+        let lifted = super::touch::lifted_fully(shelf);
+        let flight = |ago: f32, lead: f32| StudioFlight {
             opening: true,
             started: Instant::now() - std::time::Duration::from_secs_f32(ago),
-            from: [228.0, 130.0, 264.0, 156.0],
+            from: shelf,
+            lifted: if lead > 0.0 { lifted } else { shelf },
+            lead,
             to,
             tex: slot_gfx::TexId::from_raw(1),
         };
-        let start = flight(0.0).at();
-        assert!((start[0] - 228.0).abs() < 4.0 && (start[2] - 264.0).abs() < 4.0);
-        let landed = flight(1.0);
+        let start = flight(0.0, 0.0).at();
+        assert!((start[0] - 228.0).abs() < 2.0 && (start[2] - 264.0).abs() < 2.0);
+        let landed = flight(1.0, 0.0);
         assert!(!landed.flying());
         assert_eq!(landed.at(), to);
-        // Eased out: past halfway in place by half the time.
-        assert!(flight(FLIGHT_S / 2.0).eased() > 0.8);
+        // A gentle start, past halfway by half the time.
+        assert!(flight(0.02, 0.0).eased() < 0.2);
+        assert!(flight(FLIGHT_S / 2.0, 0.0).eased() > 0.6);
+        // X: lifted first, as a long press has, then the same flight.
+        let x = flight(LEAD_S, LEAD_S);
+        assert!(x.flying() && x.progress() < 0.05);
+        assert!((x.at()[1] - lifted[1]).abs() < 1.0);
+        assert_eq!(flight(1.0, LEAD_S).at(), to);
         // Where the page draws a cart of that size.
         let layout = studio_layout(Some((1080, 636)));
         assert_eq!(to[1], layout.cart_y);

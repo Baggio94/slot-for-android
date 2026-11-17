@@ -17,6 +17,51 @@ internal object BiosLibrary {
         "gb_bios.bin" to 256
     )
 
+    /** The BIOS a system's games can use (none is required). */
+    fun namesFor(platform: String): List<String> = when (platform) {
+        Systems.GBA -> listOf("gba_bios.bin")
+        Systems.GBC -> listOf("gbc_bios.bin")
+        Systems.GB -> listOf("gb_bios.bin")
+        else -> emptyList()
+    }
+
+    /** Short system names for "BIOS added: GBA." */
+    fun systemOf(name: String): String = when (name) {
+        "gba_bios.bin" -> "GBA"
+        "gbc_bios.bin" -> "GBC"
+        else -> "GB"
+    }
+
+    /** Which of these systems' BIOS slot. doesn't have yet. */
+    fun missing(context: Context, platforms: Set<String>): Set<String> {
+        val dest = File(context.filesDir, "BIOS")
+        return platforms.flatMap(::namesFor).filterTo(linkedSetOf()) { !File(dest, it).isFile }
+    }
+
+    internal fun valid(name: String, bytes: ByteArray): Boolean {
+        val expected = lengths[name] ?: return false
+        if (bytes.size != expected) return false
+        return name != "gba_bios.bin" || bytes[0] == 0x18.toByte()
+    }
+
+    /** A BIOS from the player's RomM server, kept only where slot. has none:
+     *  one already there, from the BIOS folder or anywhere, is never
+     *  replaced (Siham 2026-11-17). */
+    fun addIfMissing(context: Context, name: String, bytes: ByteArray): Boolean {
+        if (!valid(name, bytes)) return false
+        val dest = File(context.filesDir, "BIOS").apply { mkdirs() }
+        val target = File(dest, name)
+        if (target.exists()) return false
+        val temp = File(dest, ".$name.tmp")
+        try {
+            temp.outputStream().use { out -> out.write(bytes); out.fd.sync() }
+            check(temp.renameTo(target)) { "Could not install $name" }
+        } finally {
+            temp.delete()
+        }
+        return true
+    }
+
     fun importFrom(context: Context, folder: Uri): List<String> {
         val resolver = context.contentResolver
         val found = linkedMapOf<String, ByteArray>()

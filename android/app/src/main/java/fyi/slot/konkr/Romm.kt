@@ -544,6 +544,43 @@ internal object Romm {
             save.optString("emulator"), save.optString("download_path"))
     }
 
+    /** The firmware the player keeps on RomM for one platform; none when
+     *  the server or this account doesn't offer it. */
+    private fun firmware(context: Context, platformId: Int): List<Pair<Long, String>> {
+        val reply = authorized(context, "/api/firmware?platform_id=$platformId")
+        if (reply.code != 200) return emptyList()
+        val list = try { JSONArray(String(reply.body, Charsets.UTF_8)) } catch (_: Exception) { return emptyList() }
+        return (0 until list.length()).mapNotNull { i ->
+            val f = list.optJSONObject(i) ?: return@mapNotNull null
+            if (f.optBoolean("missing_from_fs")) return@mapNotNull null
+            val name = f.optString("file_name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            f.optLong("id") to name
+        }
+    }
+
+    /** Fetches the BIOS named in `wanted` (gba_bios.bin…) from the player's
+     *  GB, GBC and GBA platforms on RomM; returns those slot. kept. */
+    fun fetchBios(context: Context, wanted: Set<String>): List<String> {
+        val left = wanted.toMutableSet()
+        val added = mutableListOf<String>()
+        val systems = setOf(Systems.GB, Systems.GBC, Systems.GBA)
+        for (console in consoles(context).filter { it.platform in systems }) {
+            if (left.isEmpty()) break
+            for ((id, file) in firmware(context, console.id)) {
+                val name = file.lowercase(Locale.ROOT)
+                if (name !in left) continue
+                val reply = authorizedRaw(context, "/api/firmware/$id/content/" +
+                    URLEncoder.encode(file, "UTF-8").replace("+", "%20"))
+                if (reply.code != 200) continue
+                if (BiosLibrary.addIfMissing(context, name, reply.body)) {
+                    added += name
+                    left -= name
+                }
+            }
+        }
+        return added
+    }
+
     /** As `authorized`, for a file rather than JSON. */
     private fun authorizedRaw(context: Context, path: String): Reply {
         val account = account(context) ?: throw SignedOut()
