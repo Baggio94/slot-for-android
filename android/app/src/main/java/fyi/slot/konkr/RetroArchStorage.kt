@@ -225,20 +225,20 @@ internal object RetroArchStorage {
     }
 
     /** A state slot. would resume at this launch. */
-    private fun hasResumePoint(context: Context, target: Target, folderState: ByteArray?): Boolean {
+    private fun hasResumePoint(context: Context, target: Target, folderState: () -> ByteArray?): Boolean {
         val saves = File(context.filesDir, "Saves")
         val lower = coreLower(target.core)
         val id = target.romIdentity
         if (File(saves, "$id.$lower.skip-resume.once").isFile ||
             File(saves, "$id.$lower.state-stale.once").isFile) return false
-        if (folderState != null) return true
         if (target.statesTree == null && target.stateDefaultLocal.isFile) return true
         val generation = File(saves, "$id.$lower.state-generation.active")
             .takeIf(File::isFile)?.readText()?.trim()
             ?.takeIf { it.startsWith("$id.$lower.gen-") && it.matches(Regex("[a-zA-Z0-9.-]{1,180}")) }
         return File(saves, "$id.$lower.state").isFile ||
             (generation != null && File(saves, "$generation.state").isFile) ||
-            (target.core == "mGBA" && File(saves, "$id.state").isFile)
+            (target.core == "mGBA" && File(saves, "$id.state").isFile) ||
+            folderState() != null
     }
 
     fun importBeforeLaunch(context: Context, target: Target,
@@ -255,19 +255,23 @@ internal object RetroArchStorage {
         val stateName = target.stem + ".state.auto"
         val saveTree = target.savesTree?.toString()
         val stateTree = target.statesTree?.toString()
-        // The folder's auto-state, read once: it decides the save below and
-        // is imported at the end.
-        val folderState = target.statesTree?.let { root ->
-            readNamed(context, root, target.core, stateName, MAX_STATE)
+        // The folder's auto-state, read at most once and only when needed:
+        // to decide the save below, and to import it at the end. Never when
+        // slot. sets it aside anyway.
+        val stateRead = lazy {
+            target.statesTree?.let { root -> readNamed(context, root, target.core, stateName, MAX_STATE) }
         }
         val statePrint = stateTree?.let { lastSynced(files, it, target.core, stateName) }
-        val stateOutside = stateChangedOutside(folderState, statePrint,
-            matchesSlotExport = if (folderState == null || statePrint != null) null else try {
-                activeExport(context, target).takeIf(File::isFile)?.readBytes()
-                    ?.contentEquals(RetroArchCompression.decode(folderState))
-            } catch (_: Exception) {
-                false
-            })
+        val stateOutside = lazy {
+            val folderState = stateRead.value
+            stateChangedOutside(folderState, statePrint,
+                matchesSlotExport = if (folderState == null || statePrint != null) null else try {
+                    activeExport(context, target).takeIf(File::isFile)?.readBytes()
+                        ?.contentEquals(RetroArchCompression.decode(folderState))
+                } catch (_: Exception) {
+                    false
+                })
+        }
         // The original implementation enumerated the entire save/state
         // directory SIX times per game launch. Large ROM collections with
         // Syncthing conflict files make SAF queries very expensive.
@@ -280,11 +284,19 @@ internal object RetroArchStorage {
             readNamed(context, root, target.core, saveName, MAX_SAVE)
         }
         val ownPrivate = target.saveLocal.takeIf { it.isFile }?.readBytes()
-        val action = if (folderKept || saveTree == null) FolderSaveAction.NONE else folderSaveAction(
-            folderSave, ownPrivate, lastSynced(files, saveTree, target.core, saveName),
-            hasResumePoint(context, target, folderState), stateOutside, shared,
-            journal = if (shared) sharedFiles(context, target).first.takeIf { it.isFile }?.readBytes()
-                else null)
+        val action = if (folderKept || saveTree == null) FolderSaveAction.NONE else {
+            val savePrint = lastSynced(files, saveTree, target.core, saveName)
+            val journal = if (shared) sharedFiles(context, target).first.takeIf { it.isFile }?.readBytes()
+                else null
+            // Whether the folder's save changed outside slot. needs no state:
+            // the state is read only when it did.
+            val changed = folderSaveAction(folderSave, ownPrivate, savePrint,
+                resumable = true, stateOutside = false, shared = shared, journal = journal)
+            if (changed != FolderSaveAction.ASK) changed else folderSaveAction(
+                folderSave, ownPrivate, savePrint,
+                hasResumePoint(context, target) { stateRead.value }, stateOutside.value,
+                shared, journal)
+        }
         var keepSlotSave = false
         when (action) {
             FolderSaveAction.ASK -> when (folderChoice) {
@@ -326,7 +338,7 @@ internal object RetroArchStorage {
             FolderSaveAction.NONE -> {}
         }
         if (shared) {
-            importSharedGba(context, target, ignoreOwnFolder = keepSlotSave)
+            importSharedGba(context, target, ownFolder = if (keepSlotSave) null else folderSave)
         } else if (!keepSlotSave) {
             folderSave?.let { stage(target.saveLocal, it) }
         }
@@ -349,9 +361,6 @@ internal object RetroArchStorage {
         }
         Log.i(TAG, "RetroArch manual states: ${SystemClock.elapsedRealtime() - manualAt}ms " +
             "(saves/RTC ${manualAt - started}ms)")
-        if (folderState != null && stateTree != null) {
-            rememberSynced(files, stateTree, target.core, stateName, folderState)
-        }
         // When Share Saves chooses cartridge SRAM over an older same-core
         // Save State, preserve the original imported RetroArch state byte for
         // byte. Rust will resume/write only a fresh generation and the export
@@ -366,9 +375,13 @@ internal object RetroArchStorage {
         // A state put in the folder since slot. last saw it, whatever its date
         // (a copy keeps the original's): RetroArch played on, or the player
         // pasted one (issue #116). Dates only before slot. kept a print.
-        val folderStateNewer = if (statePrint != null) stateOutside
-            else retroArchAutoIsNewer(context, target)
+        val folderStateNewer = !skipped && stateProtected &&
+            (if (statePrint != null) stateOutside.value else retroArchAutoIsNewer(context, target))
         if (skipped || (stateProtected && !folderStateNewer)) {
+            // What slot. saw of the folder's state stays what it saw.
+            stateRead.takeIf { it.isInitialized() }?.value?.let { seen ->
+                if (stateTree != null) rememberSynced(files, stateTree, target.core, stateName, seen)
+            }
             Log.i(TAG, "Deferred stale RetroArch state import; SRAM / existing states preserved")
             return
         }
@@ -383,7 +396,9 @@ internal object RetroArchStorage {
         }
         val savesAt = SystemClock.elapsedRealtime()
         val incoming = if (target.statesTree != null) {
-            folderState
+            stateRead.value?.also { seen ->
+                rememberSynced(files, stateTree!!, target.core, stateName, seen)
+            }
         } else if (target.stateDefaultLocal.isFile) {
             target.stateDefaultLocal.readBytes()
         } else null
@@ -757,18 +772,16 @@ internal object RetroArchStorage {
     private fun sameOptionalBytes(a: ByteArray?, b: ByteArray?) =
         if (a == null || b == null) a == null && b == null else a.contentEquals(b)
 
-    private fun importSharedGba(context: Context, target: Target,
-                                ignoreOwnFolder: Boolean = false) {
+    /** [ownFolder]: this core's save in the folder, already read by the
+     *  caller; null after "Resume where you left off" set it aside. */
+    private fun importSharedGba(context: Context, target: Target, ownFolder: ByteArray?) {
         val (journal, loaded) = sharedFiles(context, target)
         val conflict = File(journal.path + ".conflict")
         val previous = journal.takeIf { it.isFile }?.readBytes()
         val ownPrivate = target.saveLocal.takeIf { it.isFile }?.readBytes()
         val peerPrivateFile = otherPrivate(context, target)
         val peerPrivate = peerPrivateFile.takeIf { it.isFile }?.readBytes()
-        // "Resume where you left off": the folder's own copy was set aside.
-        val ownExternal = if (ignoreOwnFolder) null else target.savesTree?.let {
-            readNamed(context, it, target.core, target.stem + ".srm", MAX_SAVE)
-        }
+        val ownExternal = ownFolder
         val peerExternal = target.savesTree?.let {
             readNamed(context, it, otherCore(target.core), target.stem + ".srm", MAX_SAVE)
         }
