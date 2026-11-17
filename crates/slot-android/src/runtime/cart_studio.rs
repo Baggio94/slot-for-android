@@ -59,10 +59,12 @@ impl StudioFlight {
 
     pub(super) fn flying(&self) -> bool { self.elapsed() < self.lead + FLIGHT_S }
 
-    /// A gentle start, then slowing into place: half smoothstep, half ease-out.
+    /// Eased out: quick off the mark, settling into place. X's lift before
+    /// it keeps the start from looking abrupt, as a long press's does
+    /// (Siham 2026-11-17: the gentler start felt slower).
     fn eased(&self) -> f32 {
         let t = self.progress();
-        0.5 * t * t * (3.0 - 2.0 * t) + 0.5 * (1.0 - (1.0 - t).powi(3))
+        1.0 - (1.0 - t).powi(3)
     }
 
     fn at(&self) -> [f32; 4] {
@@ -1469,9 +1471,8 @@ mod layout_tests {
         let landed = flight(1.0, 0.0);
         assert!(!landed.flying());
         assert_eq!(landed.at(), to);
-        // A gentle start, past halfway by half the time.
-        assert!(flight(0.02, 0.0).eased() < 0.2);
-        assert!(flight(FLIGHT_S / 2.0, 0.0).eased() > 0.6);
+        // Eased out: well past halfway by half the time.
+        assert!(flight(FLIGHT_S / 2.0, 0.0).eased() > 0.8);
         // X: lifted first, as a long press has, then the same flight.
         let x = flight(LEAD_S, LEAD_S);
         assert!(x.flying() && x.progress() < 0.05);
