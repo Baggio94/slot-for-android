@@ -8,6 +8,7 @@ The Anbernic RG Rotate is the star of this update: slot. for Android now fits it
 - **Touch on the shelf** — Swipe to scroll the carts, tap a side cart to bring it to the middle, tap or pull down the middle cart to insert it. **Settings → Controls → Touchscreen**.
 - **GBA: X / Y as L / R** — A new **L / R** value for the X / Y row in **Systems → Controls**.
 - **Update progress** — **About** shows the download percentage.
+- **RomM labels** — The labels shown on the RomM page now go on the carts of the games you download.
 
 ### Fixed in 2.4.1
 
@@ -21,6 +22,7 @@ The Anbernic RG Rotate is the star of this update: slot. for Android now fits it
 - **Update available** sits at the right of the About row again.
 - Light and Original themes: the selected row of the in-game **Screen** page is readable.
 - **Settings → Controls**: the selection bar sits on its row again.
+- RomM: choosing your ROM folder from the RomM page keeps the page open, and the games reach the shelf in groups as they download, with **DOWNLOADING n/m** while they come in.
 
 ### Anbernic RG Rotate (since 2.4)
 
