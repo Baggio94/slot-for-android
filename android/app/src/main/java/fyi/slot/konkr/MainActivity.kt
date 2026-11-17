@@ -3769,7 +3769,9 @@ class MainActivity : Activity() {
                     // The same folder chosen again for RomM: only the right
                     // to write changed, the shelf stays as it is.
                     val forRomm = romm.folderChosen()
-                    if (!(same && forRomm)) scanFolder(uri)
+                    // From RomM the folder is often still empty: its own
+                    // "games added" message speaks once the downloads land.
+                    if (!(same && forRomm)) scanFolder(uri, quiet = forRomm, shown = true)
                 }
                 BIOS_REQUEST -> importBiosFolder(uri, persistSelection = true)
                 SAVE_REQUEST, STATE_REQUEST -> {
@@ -3971,7 +3973,8 @@ class MainActivity : Activity() {
                 Log.w(TAG, "ROM cache write failed; displayed shelf is intact", error)
             }
         }
-        if (!next.quiet) {
+        // No "0 cartridges ready.": an empty shelf already says so.
+        if (!next.quiet && count > 0) {
             SlotToast.makeText(this,
                 if (count == 1) "1 cartridge ready." else "$count cartridges ready.",
                 Toast.LENGTH_SHORT).show()
