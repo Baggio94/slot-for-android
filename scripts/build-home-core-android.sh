@@ -14,9 +14,9 @@ SUBMODULES=0
 case "$CORE" in
   fceumm)          REPO=libretro-fceumm;  PIN=ac0d00a7fc01166f84c7bac01d1084ebfd2b865e; JNI=jni;                         LICENCE=Copying ;;
   nestopia)        REPO=nestopia;         PIN=f1e02d12664834536edbf7352995a3d0cd1caef4; JNI=libretro/jni;                LICENCE=COPYING ;;
-  snes9x)          REPO=snes9x;           PIN=fae2fea08f74180759ef540ee94259213f503480; JNI=libretro/jni;                LICENCE=LICENSE ;;
+  snes9x)          REPO=snes9x;           PIN=204ea1c0b851f960cbf223075eb1c25641cb483c; JNI=libretro/jni;                LICENCE=LICENSE ;;
   bsnes)           REPO=bsnes;            PIN=63ee22f7af8f5d1ada295c2c98fd7bf261fa62a7; JNI=bsnes/target-libretro/jni;  LICENCE=LICENSE.txt ;;
-  genesis_plus_gx) REPO=Genesis-Plus-GX;  PIN=f27655b592ef43f317272d79883bcaa10d3ac8ad; JNI=libretro/jni;                LICENCE=LICENSE.txt ;;
+  genesis_plus_gx) REPO=Genesis-Plus-GX;  PIN=b9c2316441978d4015ba30e9a95d9b0e6f8ee981; JNI=libretro/jni;                LICENCE=LICENSE.txt ;;
   picodrive)       REPO=picodrive;        PIN=1890c2932234c9d30f4cd3851d02228baae8f09e; JNI=jni;                         LICENCE=COPYING; SUBMODULES=1 ;;
   *) echo "Unknown home console core: $CORE" >&2; exit 1 ;;
 esac

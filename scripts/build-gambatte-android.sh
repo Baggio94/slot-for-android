@@ -5,8 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NDK="${ANDROID_NDK_HOME:-${ANDROID_SDK_ROOT:?Set ANDROID_NDK_HOME or ANDROID_SDK_ROOT}/ndk/27.2.12479018}"
 [ -x "$NDK/ndk-build" ] || { echo "Android NDK ndk-build not found in $NDK" >&2; exit 1; }
 LLVM="$(echo "$NDK"/toolchains/llvm/prebuilt/*/bin)"
-# Pinned upstream libretro gambatte-libretro commit (2026-08-21).
-PIN="d9d6cd06382d1ced30de34d56d3609452323dab1"
+# Pinned upstream libretro gambatte-libretro commit (2026-10-30).
+PIN="77f2567d718b8973d02caa2daa8dce4953faf811"
 OUT="$ROOT/.build/gambatte"
 SRC="$OUT/source"
 mkdir -p "$OUT"

@@ -218,13 +218,13 @@ jobs:
               gambatte = json.loads(archive.read("assets/core-build-gambatte.json"))
           assert mgba["revision"] == "7a12d6d4b9acb14c0ae62c9166b6a2f3d08007f6"
           assert gpsp["revision"] == "5819380c2ffb0900219d700a382ee68c464ebb99"
-          assert gambatte["revision"] == "d9d6cd06382d1ced30de34d56d3609452323dab1"
+          assert gambatte["revision"] == "77f2567d718b8973d02caa2daa8dce4953faf811"
           home = {
               "fceumm": "ac0d00a7fc01166f84c7bac01d1084ebfd2b865e",
               "nestopia": "f1e02d12664834536edbf7352995a3d0cd1caef4",
-              "snes9x": "fae2fea08f74180759ef540ee94259213f503480",
+              "snes9x": "204ea1c0b851f960cbf223075eb1c25641cb483c",
               "bsnes": "63ee22f7af8f5d1ada295c2c98fd7bf261fa62a7",
-              "genesis_plus_gx": "f27655b592ef43f317272d79883bcaa10d3ac8ad",
+              "genesis_plus_gx": "b9c2316441978d4015ba30e9a95d9b0e6f8ee981",
               "picodrive": "1890c2932234c9d30f4cd3851d02228baae8f09e",
           }
           for name, revision in home.items():
