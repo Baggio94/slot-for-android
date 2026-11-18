@@ -29,6 +29,12 @@ for t in $transports; do
         continue
     fi
     echo "== $model: about a minute, don't touch it"
+    # Some handhelds keep only errors in their log (the Retroid Pocket
+    # Classic): slot.'s own lines are let through, for good.
+    for tag in SlotKonkr SlotKONKR SlotRomm; do
+        adb -t "$t" shell setprop persist.log.tag.$tag I > /dev/null 2>&1
+        adb -t "$t" shell setprop log.tag.$tag I > /dev/null 2>&1
+    done
     adb -t "$t" logcat -c
     adb -t "$t" shell setprop debug.slot.bench 1
     # Away and back, so slot. resumes and reads the property.
