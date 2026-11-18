@@ -8633,6 +8633,9 @@ impl Engine {
         // The slot sliding back down over the game just resumed.
         let mut footer_draws = Vec::new();
         self.draw_game_footer(&mut footer_draws);
+        // Read before the session's borrow: the low battery sign (#87).
+        let mut low_battery = Vec::new();
+        self.push_low_battery(&mut low_battery);
         if let Some(session) = self.game.as_mut() {
             // Resume only after the remote has also left its pause menu;
             // LinkPlay::frame holds either core while peer_paused is true.
@@ -8955,7 +8958,7 @@ impl Engine {
                 commands.push(Draw::Tex { x,y,w,h,tex,alpha:1.0 });
             }
             commands.extend_from_slice(&footer_draws);
-            self.push_low_battery(&mut commands);
+            commands.append(&mut low_battery);
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             frame_phases.submit_build_us = build_started.elapsed().as_micros() as u64;
             let draw_started = Instant::now();
