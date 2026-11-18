@@ -43,6 +43,9 @@ class FolderSyncTest {
         assertFalse(File(card, "Config/retroachievements.toml").exists())
         assertFalse("one-shot markers stay", File(card, "Saves/abc.mgba.skip-resume.once").exists())
         assertFalse(File(card, "Labels/old.png.carried").exists())
+        assertFalse("this handheld's own", FolderSync.travels("Saves/abc.mgba.retroarch-import.state.auto"))
+        assertFalse(FolderSync.travels("Saves/abc.mgba.state-export-protected"))
+        assertTrue(FolderSync.travels("Saves/abc.mgba.state"))
     }
 
     @Test fun whatAnotherHandheldChangedComesBack() {
@@ -85,15 +88,113 @@ class FolderSyncTest {
     @Test fun aPolaroidDeletedInSlotGoesFromTheFolderButOneDeletedByHandComesBack() {
         val (mine, card) = dirs()
         put(mine, "Saves/ManualExports/a.mgba.1.state", "polaroid")
-        put(mine, "Saves/mGBA/Emerald.srm", "save")
+        put(mine, "Labels/x.png", "label")
         val base = FolderSync.Base()
-        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, FolderSync.Start.MERGE)
+        val tombs = HashMap<String, FolderSync.Tomb>()
+        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, FolderSync.Start.MERGE, tombs = tombs)
         File(mine, "Saves/ManualExports/a.mgba.1.state").delete()
-        File(card, "Saves/mGBA/Emerald.srm").delete()
-        val report = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base)
+        File(card, "Labels/x.png").delete()
+        val report = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, tombs = tombs)
         assertEquals(1, report.removed)
         assertFalse(File(card, "Saves/ManualExports/a.mgba.1.state").exists())
-        assertTrue("put back (rule 3)", File(card, "Saves/mGBA/Emerald.srm").isFile)
+        assertTrue("noted for the other handhelds", "Saves/ManualExports/a.mgba.1.state" in tombs)
+        assertTrue("put back (rule 3)", File(card, "Labels/x.png").isFile)
+    }
+
+    @Test fun aSaveDeletedByHandIsHeldBackUntilThePlayerSays() {
+        val (mine, card) = dirs()
+        put(mine, "Saves/mGBA/Emerald.srm", "save")
+        put(mine, "States/mGBA/Emerald.state.auto", "state")
+        val base = FolderSync.Base()
+        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, FolderSync.Start.MERGE)
+        File(card, "Saves/mGBA/Emerald.srm").delete()
+        File(card, "States/mGBA/Emerald.state.auto").delete()
+        val held = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base)
+        assertEquals(setOf("Saves/mGBA/Emerald.srm", "States/mGBA/Emerald.state.auto"), held.gone)
+        assertFalse("not put back behind the player's back", File(card, "Saves/mGBA/Emerald.srm").exists())
+        assertTrue("slot.'s own copy is untouched", File(mine, "Saves/mGBA/Emerald.srm").isFile)
+        // Still held at the next copy, during a game too.
+        assertEquals(2, FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, pull = false).gone.size)
+        // PUT IT BACK for the save; DELETE IT for the state.
+        File(mine, "States/mGBA/Emerald.state.auto").delete()
+        val tombs = HashMap<String, FolderSync.Tomb>()
+        val after = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, tombs = tombs,
+            restore = setOf("Saves/mGBA/Emerald.srm"))
+        assertTrue(after.gone.isEmpty())
+        assertEquals("save", File(card, "Saves/mGBA/Emerald.srm").readText())
+        assertTrue("the deletion is noted for the other handhelds", "States/mGBA/Emerald.state.auto" in tombs)
+        assertTrue(after.tombsChanged)
+    }
+
+    @Test fun anotherHandheldFollowsADeletionMadeOnPurpose() {
+        // Handheld A and B share the card, both with the same save.
+        val (a, card) = dirs()
+        val b = Files.createTempDirectory("slot-b").toFile()
+        put(a, "Saves/mGBA/Emerald.srm", "save")
+        val baseA = FolderSync.Base()
+        val baseB = FolderSync.Base()
+        val tombs = HashMap<String, FolderSync.Tomb>()
+        FolderSync.sync(FolderSync.PrivateSide(a), Card(card), baseA, FolderSync.Start.MERGE, tombs = tombs)
+        FolderSync.sync(FolderSync.PrivateSide(b), Card(card), baseB, FolderSync.Start.MERGE, tombs = tombs)
+        assertTrue(File(b, "Saves/mGBA/Emerald.srm").isFile)
+        // A deletes it (DELETE IT): gone from A, then from the card.
+        File(a, "Saves/mGBA/Emerald.srm").delete()
+        FolderSync.sync(FolderSync.PrivateSide(a), Card(card), baseA, tombs = tombs)
+        assertFalse(File(card, "Saves/mGBA/Emerald.srm").exists())
+        // During a game B waits: neither deleted nor put back.
+        FolderSync.sync(FolderSync.PrivateSide(b), Card(card), baseB, pull = false, tombs = tombs)
+        assertTrue(File(b, "Saves/mGBA/Emerald.srm").isFile)
+        assertFalse(File(card, "Saves/mGBA/Emerald.srm").exists())
+        // Then B follows, without asking.
+        val report = FolderSync.sync(FolderSync.PrivateSide(b), Card(card), baseB, tombs = tombs)
+        assertEquals(listOf("Saves/mGBA/Emerald.srm"), report.deletedHere)
+        assertFalse(File(b, "Saves/mGBA/Emerald.srm").exists())
+        assertTrue(report.changedPrivate)
+    }
+
+    @Test fun aHandheldThatPlayedOnKeepsItsSaveDespiteTheDeletion() {
+        val (a, card) = dirs()
+        val b = Files.createTempDirectory("slot-b").toFile()
+        put(a, "Saves/mGBA/Emerald.srm", "save")
+        val baseA = FolderSync.Base()
+        val baseB = FolderSync.Base()
+        val tombs = HashMap<String, FolderSync.Tomb>()
+        FolderSync.sync(FolderSync.PrivateSide(a), Card(card), baseA, FolderSync.Start.MERGE, tombs = tombs)
+        FolderSync.sync(FolderSync.PrivateSide(b), Card(card), baseB, FolderSync.Start.MERGE, tombs = tombs)
+        File(a, "Saves/mGBA/Emerald.srm").delete()
+        FolderSync.sync(FolderSync.PrivateSide(a), Card(card), baseA, tombs = tombs)
+        // B played on before seeing the card again.
+        put(b, "Saves/mGBA/Emerald.srm", "further", 9_000_000L)
+        val report = FolderSync.sync(FolderSync.PrivateSide(b), Card(card), baseB, tombs = tombs)
+        assertTrue(report.deletedHere.isEmpty())
+        assertEquals("further", File(card, "Saves/mGBA/Emerald.srm").readText())
+        assertFalse("a save made again clears the tomb", "Saves/mGBA/Emerald.srm" in tombs)
+    }
+
+    @Test fun whatAMacOrAnotherAppLeavesInTheFolderIsIgnored() {
+        val (mine, card) = dirs()
+        put(card, "._slot.json", "mac")
+        put(card, ".DS_Store", "mac")
+        put(card, "slot (1).json", "copy")
+        put(card, "CustomCheats/GBA/._Golden Sun.cht", "mac")
+        put(card, "CustomCheats/GBA/Golden Sun.cht", "cheats")
+        val report = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), FolderSync.Base(), FolderSync.Start.MERGE)
+        assertEquals(1, report.toPrivate)
+        assertTrue(File(mine, "CustomCheats/GBA/Golden Sun.cht").isFile)
+        assertFalse(File(mine, "slot (1).json").exists())
+        assertFalse(File(mine, ".DS_Store").exists())
+        assertFalse(File(mine, "CustomCheats/GBA/._Golden Sun.cht").exists())
+    }
+
+    @Test fun tombsSurviveARestartAndAreForgottenAfterAYear() {
+        val tombs = mapOf("Saves/mGBA/a.srm" to FolderSync.Tomb("sha", 5L))
+        assertEquals(tombs, FolderSync.tombsFromJson(FolderSync.tombsToJson(tombs)))
+        val (mine, card) = dirs()
+        val old = HashMap(tombs)
+        val report = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), FolderSync.Base(),
+            now = 400L * 24 * 3600 * 1000, tombs = old)
+        assertTrue(old.isEmpty())
+        assertTrue(report.tombsChanged)
     }
 
     @Test fun usingTheFolderReplacesTheHandheldsCopy() {

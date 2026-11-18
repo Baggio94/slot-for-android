@@ -93,8 +93,15 @@ internal object RommSaves {
         if (!enabled(context) || !Romm.signedIn(context)) return Outcome(null)
         val platform = platformOf(target) ?: return Outcome(null)
         return try {
+            // A deletion the server didn't take yet (offline): again now;
+            // until it does, nothing comes back from the server.
+            if (record(context, target)?.saveId == DELETE_PENDING) {
+                deleted(context, target)
+                if (record(context, target)?.saveId == DELETE_PENDING) return Outcome(null)
+            }
             val kept = record(context, target)
-            val romId = kept?.romId ?: Romm.romIdFor(context, platform, target.stem) ?: return Outcome(null)
+            val romId = kept?.romId?.takeIf { it > 0 } ?: Romm.romIdFor(context, platform, target.stem)
+                ?: return Outcome(null)
             val server = newest(Romm.saves(context, romId), target) ?: return Outcome(null)
             val local = target.saveLocal.takeIf { it.isFile }?.readBytes()
             val localSha = local?.let(::sha1)
@@ -133,6 +140,38 @@ internal object RommSaves {
         }
     }
 
+    /** Record saveId: the save was deleted, the server too. */
+    private const val DELETED = -1L
+    /** Record saveId: the save was deleted, the server not yet. */
+    private const val DELETE_PENDING = -2L
+
+    /**
+     * The player deleted this game's save everywhere (SaveDeletes): the
+     * server's saves of this game from slot.'s core go too, and nothing
+     * older comes back from the server (only a save made after it). Offline,
+     * the deletion waits for the next launch.
+     */
+    fun deleted(context: Context, target: RetroArchStorage.Target) {
+        if (!enabled(context) || !Romm.signedIn(context)) return
+        val platform = platformOf(target) ?: return
+        val kept = record(context, target)
+        try {
+            val romId = kept?.romId?.takeIf { it > 0 } ?: Romm.romIdFor(context, platform, target.stem) ?: return
+            val saves = Romm.saves(context, romId)
+            val ours = saves.filter {
+                it.fileName.endsWith(".srm", ignoreCase = true) && it.emulator.equals(emulator(target), ignoreCase = true)
+            }
+            Romm.deleteSaves(context, ours.map { it.id })
+            // What stays on the server (another client's) is "unchanged".
+            val left = newest(saves - ours.toSet(), target)
+            keep(context, target, Record(romId, DELETED, left?.updatedAt.orEmpty(), ""))
+            Log.i(TAG, "RomM: ${ours.size} save(s) of ${target.stem} deleted")
+        } catch (error: Exception) {
+            Log.w(TAG, "RomM save deletion waits", error)
+            keep(context, target, Record(kept?.romId ?: 0L, DELETE_PENDING, kept?.serverStamp.orEmpty(), ""))
+        }
+    }
+
     /** After a save in slot.: sends it when it changed since the exchange. */
     fun afterSave(context: Context, target: RetroArchStorage.Target): String? {
         if (!enabled(context) || !Romm.signedIn(context)) return null
@@ -142,7 +181,12 @@ internal object RommSaves {
         return try {
             val kept = record(context, target)
             if (kept != null && kept.sha1 == localSha) return null
-            val romId = kept?.romId ?: Romm.romIdFor(context, platform, target.stem) ?: return null
+            // A deletion the server hasn't taken yet goes first.
+            if (kept?.saveId == DELETE_PENDING) {
+                deleted(context, target)
+                if (record(context, target)?.saveId == DELETE_PENDING) return null
+            }
+            val romId = kept?.romId?.takeIf { it > 0 } ?: Romm.romIdFor(context, platform, target.stem) ?: return null
             val sent = Romm.uploadSave(context, romId, emulator(target), target.stem + ".srm", local)
             keep(context, target, Record(romId, sent.id, sent.updatedAt, localSha))
             null

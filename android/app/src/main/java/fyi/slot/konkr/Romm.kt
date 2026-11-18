@@ -507,6 +507,21 @@ internal object Romm {
         throw IOException("RomM save download HTTP ${reply.code}")
     }
 
+    /** Deletes saves from the server (POST /api/saves/delete, RomM 3 and
+     *  later): a save the player deleted everywhere (SaveDeletes). */
+    fun deleteSaves(context: Context, ids: List<Long>) {
+        if (ids.isEmpty()) return
+        val account = account(context) ?: throw SignedOut()
+        val body = JSONObject().put("saves", JSONArray(ids))
+        var reply = call(account.server + "/api/saves/delete", "POST", authorization(context, account), json = body)
+        if (reply.code == 401 && account.kind != "client") {
+            synchronized(this) { access = null }
+            reply = call(account.server + "/api/saves/delete", "POST", authorization(context, account), json = body)
+        }
+        if (reply.code == 401) { signOut(context); throw SignedOut() }
+        if (reply.code !in 200..299) throw IOException("RomM save delete HTTP ${reply.code}")
+    }
+
     /** Sends a game's save, replacing the one of the same name and emulator. */
     fun uploadSave(context: Context, romId: Long, emulator: String, fileName: String,
                    bytes: ByteArray): ServerSave {

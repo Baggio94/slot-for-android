@@ -776,6 +776,8 @@ const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
 const LIBRARY_VALUE_NAMES: [&str; 3] = ["INTERNAL", "SD CARD", "NEEDS ROMM"];
 /// The slot. folder's place: 0 none, 1 internal storage, 2 SD card.
 static SLOT_FOLDER: AtomicU8 = AtomicU8::new(0);
+/// The slot. folder's first copy under way: its percent, -1 none.
+static SLOT_FOLDER_COPY: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 /// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
 static ROMM_SYNC: AtomicU8 = AtomicU8::new(0);
 /// The ROM folder's SD card isn't in this handheld.
@@ -1457,6 +1459,9 @@ struct Engine {
     update_badge: (slot_gfx::TexId, u32, u32),
     /// LIBRARY_VALUE_NAMES' faces.
     library_values: [(slot_gfx::TexId, u32, u32); 3],
+    /// Library's slot. folder row while the first copy runs: COPYING n%.
+    slot_copy_face: (slot_gfx::TexId, u32, u32),
+    slot_copy_shown: i32,
     /// Each page's path line, made when first shown.
     menu_paths: std::collections::HashMap<&'static str, (slot_gfx::TexId, u32, u32)>,
     /// The cart beside the main and game menus: its name, then its title
@@ -1918,6 +1923,10 @@ impl Engine {
             let face = quick_value_face(value, true);
             (gpu.create_face(&face), face.w, face.h)
         });
+        let slot_copy_face = {
+            let face = quick_value_face("COPYING...", true);
+            (gpu.create_face(&face), face.w, face.h)
+        };
         let palette_values = slot_store::GbPalette::all().map(|palette| {
             let face = quick_value_face(palette.label(), true);
             (gpu.create_face(&face), face.w, face.h)
@@ -2218,6 +2227,8 @@ impl Engine {
             menu_opens,
             update_badge,
             library_values,
+            slot_copy_face,
+            slot_copy_shown: -1,
             menu_paths: Default::default(),
             menu_side: None,
             menu_textures,
@@ -2555,6 +2566,17 @@ impl Engine {
             x: out_w() as f32 - 12.0 - slot_ui::BADGE_W, y: 10.0,
             w: slot_ui::BADGE_W, h: slot_ui::BADGE_H, tex: self.low_battery_badge, alpha: 1.0,
         });
+    }
+
+    /// COPYING n% on Library's slot. folder row, redrawn as it moves.
+    fn refresh_slot_copy_face(&mut self) {
+        let percent = SLOT_FOLDER_COPY.load(Ordering::Acquire);
+        if percent == self.slot_copy_shown { return; }
+        self.slot_copy_shown = percent;
+        if percent < 0 { return; }
+        let face = quick_value_face(&format!("COPYING {percent}%"), true);
+        self.gpu.update_face(self.slot_copy_face.0, &face);
+        self.slot_copy_face = (self.slot_copy_face.0, face.w, face.h);
     }
 
     fn reset_time_controls(&mut self) {
@@ -7050,8 +7072,13 @@ impl Engine {
             self.current_cart_platform(), video, &self.default_cores)
     }
 
-    /// Library's values: the slot. folder's place (nothing without one).
+    /// Library's values: the slot. folder's place (nothing without one);
+    /// COPYING n% while its first copy runs.
     fn draw_library_values(&self, row: usize, out: &mut Vec<Draw>) {
+        if SLOT_FOLDER_COPY.load(Ordering::Acquire) >= 0 {
+            self.draw_row_value(LIBRARY_SLOT_ROW, LIBRARY_ROWS.len(), row, self.slot_copy_face, false, out);
+            return;
+        }
         let place = SLOT_FOLDER.load(Ordering::Acquire);
         if (1..=2).contains(&place) {
             let face = self.library_values[usize::from(place) - 1];
@@ -8155,6 +8182,7 @@ impl Engine {
             | u32::from(self.settings.rotate_shelf_cover == 3) << 30
             | 1 << 31, Ordering::Release);
         self.refresh_system_status();
+        self.refresh_slot_copy_face();
         self.poll_shelf_wallpapers();
         // Poll the already-running achievement evaluator without blocking GL.
         // Only Android's foreground UI displays notices; the worker never

@@ -138,6 +138,8 @@ class MainActivity : Activity() {
     external fun nativeTouch(action: Int, x: Float, y: Float, timeMs: Long)
     external fun nativeUpdateProgress(percent: Int)
     external fun nativeSetSlotFolder(place: Int)
+    /** Library's slot. folder row while the first copy runs: 0-100, -1 done. */
+    external fun nativeSetSlotFolderCopy(percent: Int)
     external fun nativeReloadAll()
     external fun nativeSetRommSync(state: Int)
     external fun nativeSetRomsMissing(missing: Boolean)
@@ -2148,6 +2150,66 @@ class MainActivity : Activity() {
             else RommSaves.Choice.KEEP_HANDHELD
     }
 
+    /**
+     * A save or save state deleted outside slot. (in the RetroArch folders,
+     * or by hand in the slot. folder), asked before the game starts (Siham
+     * 2026-11-18): PUT IT BACK as before, or DELETE IT everywhere. False:
+     * cancelled (B), the game doesn't start.
+     */
+    private fun settleDeletedOutside(target: RetroArchStorage.Target): Boolean {
+        val retroArch = RetroArchStorage.goneFromRetroArch(this, target)
+        val inFolder = SaveDeletes.forGame(slotFolder.gonePaths(), target.core, target.stem,
+            target.romIdentity, target.isGba && target.shareGbaSaves)
+        val kinds = retroArch + inFolder.values
+        if (kinds.isEmpty()) return true
+        val where = buildSet {
+            if (retroArch.isNotEmpty()) add(SaveDeletes.Where.RETROARCH)
+            if (inFolder.isNotEmpty()) add(SaveDeletes.Where.SLOT_FOLDER)
+        }
+        val gone = SaveDeletes.Gone(kinds, where, inFolder.keys)
+        Log.i(TAG, "Deleted outside slot.: ${target.core}/${target.stem} $kinds from $where")
+        when (askDeleted(SaveDeletes.message(target.stem, gone))) {
+            null -> return false
+            SaveDeletes.Choice.PUT_BACK -> {
+                if (retroArch.isNotEmpty()) {
+                    RetroArchStorage.exportAfterSave(this, target).forEach { Log.w(TAG, "Put back: $it") }
+                }
+                slotFolder.putBack(inFolder.keys)
+            }
+            SaveDeletes.Choice.DELETE -> {
+                RetroArchStorage.deleteEverywhere(this, target, kinds)
+                if (SaveDeletes.Kind.SAVE in kinds) RommSaves.deleted(this, target)
+                slotFolder.deleted(inFolder.keys)
+            }
+        }
+        return true
+    }
+
+    /** The window of [settleDeletedOutside]. Null: cancelled (B). */
+    private fun askDeleted(message: String): SaveDeletes.Choice? {
+        val ready = CountDownLatch(1)
+        val selected = java.util.concurrent.atomic.AtomicReference<SaveDeletes.Choice?>(null)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "DELETED", message, onDismiss = { ready.countDown() })
+                dialog.addButton("PUT IT BACK") {
+                    selected.set(SaveDeletes.Choice.PUT_BACK)
+                    dialog.dismiss()
+                }
+                dialog.addButton("DELETE IT") {
+                    selected.set(SaveDeletes.Choice.DELETE)
+                    dialog.dismiss()
+                }
+                dialog.show()
+            } catch (error: Exception) {
+                Log.e(TAG, "Cannot open the deleted save choice", error)
+                ready.countDown()
+            }
+        }
+        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get() else null
+    }
+
     /** Issue #116. Null: cancelled (B), the game doesn't start. */
     private fun askFolderSave(): RetroArchStorage.FolderSaveChoice? {
         val ready = CountDownLatch(1)
@@ -2300,6 +2362,12 @@ class MainActivity : Activity() {
                 // there that slot. couldn't read is never overwritten.
                 // A save put in the folder outside slot. while slot. would
                 // resume its own state: the player chooses (issue #116).
+                // A save or state deleted outside slot.: the player says
+                // first, put back or deleted everywhere (Siham 2026-11-18).
+                if (!settleDeletedOutside(shared)) {
+                    nativeGameError(rawUri, "Deleted save choice cancelled")
+                    return@execute
+                }
                 var folderChoice: RetroArchStorage.FolderSaveChoice? = null
                 val folderFailed = try {
                     var importing = true

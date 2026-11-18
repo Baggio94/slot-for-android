@@ -22,8 +22,14 @@ import java.util.TimeZone
  *  - changed on both: the newer one wins, the other is kept in the
  *    folder's Conflicts/ (nothing is lost, rule 4);
  *  - removed from slot. (a polaroid deleted): removed from the folder too,
- *    but only if the folder's copy is the one slot. last wrote;
- *  - removed from the folder by hand: put back (rule 3).
+ *    but only if the folder's copy is the one slot. last wrote, and noted
+ *    in the folder (a [Tomb]) so other handhelds remove theirs too;
+ *  - a game's save or state removed from the folder by hand: held back
+ *    until the player says, at that game's launch, whether to put it back
+ *    or delete it everywhere (Siham 2026-11-18, SaveDeletes);
+ *  - anything else removed from the folder by hand: put back (rule 3).
+ * Only what travels is taken from the folder: nothing a Mac or another app
+ * leaves there (._ files, .DS_Store, copies Android renamed).
  * Every copy goes through a temporary file, so a cut never leaves half a
  * file, and is checked by size before it counts.
  */
@@ -68,6 +74,33 @@ internal object FolderSync {
         }
     }
 
+    /** A file deleted on purpose: what it was then, and when. Kept in the
+     *  folder, so every handheld knows not to put its own copy back. */
+    data class Tomb(val sha1: String, val at: Long)
+
+    /** Tombs are forgotten after this long (a handheld away a year puts
+     *  its copies back, as before). */
+    private const val TOMB_MS = 365L * 24 * 3600 * 1000
+
+    fun tombsToJson(tombs: Map<String, Tomb>): String {
+        val json = JSONObject()
+        for ((path, t) in tombs) json.put(path, JSONArray().put(t.sha1).put(t.at))
+        return json.toString()
+    }
+
+    fun tombsFromJson(text: String?): MutableMap<String, Tomb> {
+        val tombs = HashMap<String, Tomb>()
+        if (text.isNullOrBlank()) return tombs
+        try {
+            val json = JSONObject(text)
+            for (path in json.keys()) {
+                val a = json.getJSONArray(path)
+                tombs[path] = Tomb(a.getString(0), a.getLong(1))
+            }
+        } catch (_: Exception) {}
+        return tombs
+    }
+
     /** How the first copy into a folder decides. */
     enum class Start {
         /** Later copies: each side's changes since the last one. */
@@ -84,47 +117,98 @@ internal object FolderSync {
         var conflicts = 0
         var removed = 0
         val failures = ArrayList<String>()
-        val changedPrivate: Boolean get() = toPrivate > 0
+        /** Saves and states removed from the folder by hand: held back. */
+        val gone = LinkedHashSet<String>()
+        /** Removed here because another handheld deleted them on purpose. */
+        val deletedHere = ArrayList<String>()
+        var tombsChanged = false
+        val changedPrivate: Boolean get() = toPrivate > 0 || deletedHere.isNotEmpty()
     }
 
-    /** [pull]: false copies to the folder only (during a game, at pause). */
+    /**
+     * [pull]: false copies to the folder only (during a game, at pause).
+     * [tombs]: the folder's deletions, read and updated ([Report.tombsChanged]).
+     * [restore]: held-back paths the player chose to put back.
+     * [progress]: files done, of all, as the copy goes.
+     */
     fun sync(private: Side, folder: Side, base: Base, start: Start = Start.SYNC,
-             pull: Boolean = true, now: Long = System.currentTimeMillis()): Report {
+             pull: Boolean = true, now: Long = System.currentTimeMillis(),
+             tombs: MutableMap<String, Tomb> = HashMap(), restore: Set<String> = emptySet(),
+             progress: (Int, Int) -> Unit = { _, _ -> }): Report {
         val report = Report()
         val mine = private.list()
-        val theirs = folder.list()
-        for (path in (mine.keys + theirs.keys).sorted()) {
+        val theirs = folder.list().filterKeys { travels(it) }
+        val paths = (mine.keys + theirs.keys).sorted()
+        for ((done, path) in paths.withIndex()) {
+            progress(done, paths.size)
             if (path.startsWith("Conflicts/")) continue
             try {
-                step(path, mine[path], theirs[path], base, private, folder, start, pull, now, report)
+                step(path, mine[path], theirs[path], base, private, folder, start, pull, now, report,
+                    tombs, restore)
             } catch (error: Exception) {
                 report.failures.add("$path: ${error.message}")
             }
         }
-        // Forget what neither side holds any more.
+        progress(paths.size, paths.size)
+        // Gone from both since the last copy: deleted here on purpose (DELETE
+        // IT, at a game's launch). Other handhelds follow it.
+        for ((path, entry) in base.entries) {
+            if (path !in mine && path !in theirs && tombs[path]?.sha1 != entry.sha1) {
+                tombs[path] = Tomb(entry.sha1, now)
+                report.tombsChanged = true
+            }
+        }
+        // Forget what neither side holds any more, and old tombs.
         base.entries.keys.retainAll(mine.keys + theirs.keys)
+        if (tombs.values.removeAll { now - it.at > TOMB_MS }) report.tombsChanged = true
         return report
     }
 
     private fun step(path: String, p: Meta?, f: Meta?, base: Base, private: Side, folder: Side,
-                     start: Start, pull: Boolean, now: Long, report: Report) {
+                     start: Start, pull: Boolean, now: Long, report: Report,
+                     tombs: MutableMap<String, Tomb>, restore: Set<String>) {
         val b = if (start == Start.SYNC) base.entries[path] else null
         val pChanged = p != null && (b == null || p.size != b.privateSize || p.modified != b.privateModified)
         val fChanged = f != null && (b == null || f.size != b.folderSize || f.modified != b.folderModified)
         when {
             p != null && f == null -> {
-                // New in slot., or removed from the folder by hand: put back.
-                val bytes = private.read(path)
-                val written = folder.write(path, bytes)
-                check(written.size == bytes.size.toLong()) { "copy to the folder came out short" }
-                base.entries[path] = Entry(p.size, p.modified, written.size, written.modified, sha1(bytes))
-                report.toFolder++
+                val tomb = tombs[path]
+                val deletedElsewhere = tomb != null &&
+                    ((b != null && !pChanged && b.sha1 == tomb.sha1) || sha1(private.read(path)) == tomb.sha1)
+                when {
+                    deletedElsewhere -> {
+                        // Another handheld deleted this very file on purpose:
+                        // this one follows (the private side keeps a backup of
+                        // a save or state). Not during a game.
+                        if (!pull) return
+                        private.delete(path)
+                        base.entries.remove(path)
+                        report.deletedHere.add(path)
+                    }
+                    b != null && !pChanged && SaveDeletes.kindOf(path) != null && path !in restore -> {
+                        // A save or state removed from the folder by hand:
+                        // the player says at the game's launch what to do.
+                        report.gone.add(path)
+                    }
+                    else -> {
+                        // New in slot., or removed from the folder by hand: put back.
+                        val bytes = private.read(path)
+                        val written = folder.write(path, bytes)
+                        check(written.size == bytes.size.toLong()) { "copy to the folder came out short" }
+                        base.entries[path] = Entry(p.size, p.modified, written.size, written.modified, sha1(bytes))
+                        if (tombs.remove(path) != null) report.tombsChanged = true
+                        report.toFolder++
+                    }
+                }
             }
             p == null && f != null -> {
                 if (b != null && !fChanged) {
-                    // slot. removed it, and the folder's is the one it wrote.
+                    // slot. removed it, and the folder's is the one it wrote:
+                    // gone from the folder, and other handhelds are told.
                     folder.delete(path)
                     base.entries.remove(path)
+                    tombs[path] = Tomb(b.sha1, now)
+                    report.tombsChanged = true
                     report.removed++
                 } else if (pull) {
                     val bytes = folder.read(path)
@@ -216,6 +300,11 @@ internal object FolderSync {
         if (top !in TRAVELLING_DIRS || !path.contains('/')) return false
         val name = path.substringAfterLast('/')
         if (name.endsWith(".tmp") || name.endsWith(".carried") || name.endsWith(".once")) return false
+        // The RetroArch state decoded at each launch, and the guard that
+        // protects this handheld's own RetroArch auto-state: both belong to
+        // this handheld. Travelling, one handheld's routine deletion of them
+        // reached the others (2.5).
+        if (name.endsWith(".retroarch-import.state.auto") || name.endsWith(".state-export-protected")) return false
         if (name.startsWith(".")) return false
         if (path.startsWith("Saves/RetroArchBackups/") || path.startsWith("Saves/ManualImports/") ||
             path.startsWith("Saves/FolderBackups/")) return false
@@ -224,7 +313,7 @@ internal object FolderSync {
     }
 
     /** slot.'s private files as a [Side], only those that travel. */
-    class PrivateSide(private val root: File) : Side {
+    open class PrivateSide(private val root: File) : Side {
         override fun list(): Map<String, Meta> {
             val out = HashMap<String, Meta>()
             fun walk(dir: File, prefix: String) {

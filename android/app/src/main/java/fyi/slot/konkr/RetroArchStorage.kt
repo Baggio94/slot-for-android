@@ -241,10 +241,178 @@ internal object RetroArchStorage {
             folderState() != null
     }
 
+    // -----------------------------------------------------------------
+    // Saves and states deleted outside slot. (SaveDeletes, 2.5)
+
+    /** The RetroArch folder answers (not a card that is out). */
+    private fun reachable(context: Context, root: Uri): Boolean = try {
+        children(context, root, DocumentsContract.getTreeDocumentId(root))
+        true
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun existsNamed(context: Context, root: Uri, core: String, name: String): Boolean {
+        directDocument(root, core, name)?.let { uri -> directExists(context, uri)?.let { return it } }
+        return find(context, root, core, name) != null
+    }
+
+    private fun deleteNamed(context: Context, root: Uri, core: String, name: String) {
+        val uri = directDocument(root, core, name)?.takeIf { directExists(context, it) == true }
+            ?: find(context, root, core, name) ?: return
+        check(DocumentsContract.deleteDocument(context.contentResolver, uri)) { "Cannot delete RetroArch $name" }
+    }
+
+    /**
+     * What slot. synced with the RetroArch folders and is no longer there,
+     * while slot. still has its own: the player deleted it there. Only a
+     * folder that answers, and a file slot. left there itself (its print).
+     */
+    internal fun goneFromRetroArch(context: Context, target: Target): Set<SaveDeletes.Kind> {
+        val files = context.filesDir
+        val out = HashSet<SaveDeletes.Kind>()
+        try {
+            target.savesTree?.let { root ->
+                val name = target.stem + ".srm"
+                val own = target.saveLocal.isFile ||
+                    (target.isGba && target.shareGbaSaves && sharedFiles(context, target).first.isFile)
+                if (own && lastSynced(files, root.toString(), target.core, name) != null &&
+                    reachable(context, root) && !existsNamed(context, root, target.core, name)) {
+                    out += SaveDeletes.Kind.SAVE
+                }
+            }
+            target.statesTree?.let { root ->
+                val name = target.stem + ".state.auto"
+                if (lastSynced(files, root.toString(), target.core, name) != null &&
+                    hasResumePoint(context, target) { null } &&
+                    reachable(context, root) && !existsNamed(context, root, target.core, name)) {
+                    out += SaveDeletes.Kind.STATE
+                }
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "RetroArch folders not checked for deletions", error)
+            return emptySet()
+        }
+        return out
+    }
+
+    /** A RetroArch file to delete once its folder answers again. */
+    private fun pendingMark(files: File, core: String, name: String) = File(files, "SaveDeletes/$core/$name")
+
+    /**
+     * DELETE IT: this game's save or auto-state goes from slot.'s own files
+     * (each kept in Saves/FolderBackups, on this handheld only) and from
+     * the RetroArch folders; a folder that doesn't answer has it deleted
+     * at a later launch. The slot. folder follows at its next copy, RomM
+     * through RommSaves.deleted.
+     */
+    internal fun deleteEverywhere(context: Context, target: Target, kinds: Set<SaveDeletes.Kind>,
+                                  now: Long = System.currentTimeMillis()) {
+        val files = context.filesDir
+        val saves = File(files, "Saves")
+        val lower = coreLower(target.core)
+        val id = target.romIdentity
+        fun retire(file: File, core: String = target.core) {
+            if (file.name.endsWith(".srm") || file.name.endsWith(".rtc") ||
+                file.name.endsWith(".state") || file.name.endsWith(".state.auto")) {
+                SaveDeletes.retire(files, file, core, now)
+            } else {
+                file.delete()
+            }
+        }
+        val folders = mutableListOf<Triple<Uri?, String, String>>()
+        if (SaveDeletes.Kind.SAVE in kinds) {
+            retire(target.saveLocal); retire(target.rtcLocal)
+            val cores = mutableListOf(target.core)
+            if (target.isGba && target.shareGbaSaves) {
+                val other = otherCore(target.core)
+                cores += other
+                retire(otherPrivate(context, target), other)
+                retire(File(saves, "$other/${target.stem}.rtc"), other)
+                val (journal, loaded) = sharedFiles(context, target)
+                journal.delete(); loaded.delete(); File(journal.path + ".core").delete()
+            }
+            folderSaveMark(files, target.core, target.stem).delete()
+            File(target.saveLocal.parentFile, target.saveLocal.name + ".romm").delete()
+            for (core in cores) {
+                folders += Triple(target.savesTree, core, target.stem + ".srm")
+                folders += Triple(target.savesTree, core, target.stem + ".rtc")
+            }
+        }
+        if (SaveDeletes.Kind.STATE in kinds) {
+            val record = File(saves, "$id.$lower.state-generation.active")
+            val generation = record.takeIf(File::isFile)?.readText()?.trim()
+                ?.takeIf { it.startsWith("$id.$lower.gen-") && it.matches(Regex("[a-zA-Z0-9.-]{1,180}")) }
+            generation?.let {
+                retire(File(saves, "$it.state"))
+                File(saves, "$it.retroarch-export.state.auto").delete()
+            }
+            retire(File(saves, "$id.$lower.state"))
+            if (target.core == "mGBA") retire(File(saves, "$id.state"))
+            retire(target.stateDefaultLocal)
+            for (file in listOf(target.stateExportLocal, target.stateImportLocal, record,
+                    File(saves, "$id.$lower.state-export-protected"),
+                    File(saves, "$id.$lower.skip-resume.once"),
+                    File(saves, "$id.$lower.state-stale.once"))) file.delete()
+            folders += Triple(target.statesTree, target.core, target.stem + ".state.auto")
+        }
+        for ((root, core, name) in folders) {
+            syncPrint(files, core, name).delete()
+            if (root == null) continue
+            try {
+                if (!reachable(context, root)) error("RetroArch folder unavailable")
+                deleteNamed(context, root, core, name)
+            } catch (error: Exception) {
+                Log.w(TAG, "RetroArch $core/$name deleted later", error)
+                stage(pendingMark(files, core, name), byteArrayOf(1))
+            }
+        }
+        Log.i(TAG, "Deleted everywhere: ${target.core}/${target.stem} $kinds")
+    }
+
+    /**
+     * Deletions this handheld still owes its RetroArch folders: one that
+     * didn't answer then, or one another handheld made through the slot.
+     * folder (SaveDeletes marks). The folder's file goes only if it is still
+     * what slot. last left there; a newer one (RetroArch played on) stays.
+     */
+    private fun applyPendingDeletes(context: Context, target: Target) {
+        val files = context.filesDir
+        val lower = coreLower(target.core)
+        val byId = File(files, "SaveDeletes/id/${target.romIdentity}.$lower")
+        if (byId.isFile) {
+            stage(pendingMark(files, target.core, target.stem + ".state.auto"), byteArrayOf(1))
+            byId.delete()
+        }
+        for ((root, name) in listOf(target.savesTree to target.stem + ".srm",
+                target.savesTree to target.stem + ".rtc",
+                target.statesTree to target.stem + ".state.auto")) {
+            val mark = pendingMark(files, target.core, name)
+            if (!mark.isFile) continue
+            if (root == null) { mark.delete(); continue }
+            try {
+                if (!reachable(context, root)) continue
+                val print = lastSynced(files, root.toString(), target.core, name)
+                val bytes = readNamed(context, root, target.core, name,
+                    if (name.endsWith(".state.auto")) MAX_STATE else MAX_SAVE)
+                // .rtc has no print: it goes with its .srm.
+                val unchanged = bytes != null && (if (name.endsWith(".rtc")) true
+                    else print != null && digestOf(bytes) == print)
+                if (unchanged) deleteNamed(context, root, target.core, name)
+                syncPrint(files, target.core, name).delete()
+                mark.delete()
+                Log.i(TAG, "RetroArch ${target.core}/$name: ${if (unchanged) "deleted" else "kept, newer"}")
+            } catch (error: Exception) {
+                Log.w(TAG, "RetroArch ${target.core}/$name deletion waits", error)
+            }
+        }
+    }
+
     fun importBeforeLaunch(context: Context, target: Target,
                            folderChoice: FolderSaveChoice? = null) {
         val started = SystemClock.elapsedRealtime()
         val files = context.filesDir
+        applyPendingDeletes(context, target)
         val folderKept = applyFolderSaveMark(files, target.core, target.stem, target.romIdentity)
         if (folderKept) {
             Log.i(TAG, "Folder save kept for ${target.core}/${target.stem}: starting from it")

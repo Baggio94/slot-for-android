@@ -1230,6 +1230,14 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetSlotFolder(
     SLOT_FOLDER.store(place.clamp(0, 2) as u8, Ordering::Release);
 }
 
+/// The slot. folder's first copy, as Library shows it: 0-100, -1 none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetSlotFolderCopy(
+    _env: *mut c_void, _this: *mut c_void, percent: i32,
+) {
+    SLOT_FOLDER_COPY.store(percent.clamp(-1, 100), Ordering::Release);
+}
+
 /// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetRommSync(

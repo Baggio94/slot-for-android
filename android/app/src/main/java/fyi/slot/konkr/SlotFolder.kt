@@ -53,6 +53,14 @@ internal class SlotFolder(private val activity: MainActivity) {
         private const val ENV = "env"
         const val REQUEST = 4720
         private const val JSON = "slot.json"
+        /** The folder's deletions (FolderSync.Tomb), for every handheld. */
+        private const val TOMBS = "deleted.json"
+        /** The systems' folders made in CustomCheats/ for the player's files. */
+        private val CHEAT_SYSTEMS = listOf("GBA", "GB", "GBC", "NES", "SNES", "MD")
+        private const val CHEAT_README = "CustomCheats/README.txt"
+        private val CHEAT_HELP = ("Your own cheats, in RetroArch's .cht format: put each file in its " +
+            "system's folder, named exactly like the game's ROM with .cht at the end, for example " +
+            "GBA/Golden Sun (USA).cht. slot. shows them first in the game's Cheats, as My Cheats.\n")
         private const val FORMAT = 1
         private const val EXTERNAL = "com.android.externalstorage.documents"
     }
@@ -60,6 +68,11 @@ internal class SlotFolder(private val activity: MainActivity) {
     private val prefs get() = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val worker = Executors.newSingleThreadExecutor()
     private val baseFile get() = File(File(activity.filesDir, "SlotFolder"), "base.json")
+    /** Saves and states removed from the folder by hand, held back until
+     *  the player says at the game's launch (SaveDeletes). */
+    private val goneFile get() = File(File(activity.filesDir, "SlotFolder"), "gone.txt")
+    /** Of those, the ones the player chose to put back. */
+    private val restoreFile get() = File(File(activity.filesDir, "SlotFolder"), "restore.txt")
     @Volatile private var warnedMissing = false
     /** The storage the player chose in slot.'s window, for the picker. */
     private var wantedVolume: String? = null
@@ -237,14 +250,26 @@ internal class SlotFolder(private val activity: MainActivity) {
         val first = old.second != doc
         if (backup) backupPrivate()
         val base = if (first) FolderSync.Base() else FolderSync.Base.parse(baseFile.takeIf { it.isFile }?.readText())
+        val side = SafSide(activity, tree, doc)
+        // The copy can take minutes (labels): Library shows how far it is.
+        ui { toast("Copying to your slot. folder…") }
         val report = try {
-            FolderSync.sync(FolderSync.PrivateSide(activity.filesDir), SafSide(activity, tree, doc), base,
-                if (first) start else FolderSync.Start.SYNC)
+            val tombs = readTombs(side)
+            FolderSync.sync(privateSide(), side, base, if (first) start else FolderSync.Start.SYNC,
+                tombs = tombs, restore = paths(restoreFile), progress = progress()).also {
+                if (it.tombsChanged) writeTombs(side, tombs)
+                keepGone(it)
+                side.makeCheatFolders()
+            }
         } catch (error: Exception) {
             Log.w(TAG, "First copy into the slot folder failed", error)
-            ui { activity.nativeExternalReturn(); toast("Couldn't copy into this folder: ${error.message}") }
+            ui { activity.nativeSetSlotFolderCopy(-1); activity.nativeExternalReturn()
+                toast("Couldn't copy into this folder: ${error.message}") }
             return
+        } finally {
+            ui { activity.nativeSetSlotFolderCopy(-1) }
         }
+        Log.i(TAG, "Slot folder copy: ${report.toFolder} out, ${report.toPrivate} in")
         // Scenario A13: the folder only counts once the copy is complete.
         if (report.failures.isNotEmpty()) {
             Log.w(TAG, "Slot folder copy: " + report.failures.joinToString(" | "))
@@ -330,9 +355,13 @@ internal class SlotFolder(private val activity: MainActivity) {
      * [pull] false (during a game, at pause) only sends this one's changes.
      */
     fun sync(pull: Boolean) {
-        val tree = tree() ?: return
-        val doc = rootDoc() ?: return
+        if (tree() == null) return
         worker.execute {
+            // Which folder, read when the copy runs: one asked for just
+            // before the player chose another went to the old one with the
+            // new one's base (2.5.0-beta35: 540 files copied back for nothing).
+            val tree = tree() ?: return@execute
+            val doc = rootDoc() ?: return@execute
             val side = SafSide(activity, tree, doc)
             if (!side.reachable()) {
                 // Scenario E1/E2: the card is away; slot. plays on its copy.
@@ -351,7 +380,13 @@ internal class SlotFolder(private val activity: MainActivity) {
             }
             val base = FolderSync.Base.parse(baseFile.takeIf { it.isFile }?.readText())
             val report = try {
-                FolderSync.sync(FolderSync.PrivateSide(activity.filesDir), side, base, pull = pull)
+                val tombs = readTombs(side)
+                FolderSync.sync(privateSide(), side, base, pull = pull, tombs = tombs,
+                    restore = paths(restoreFile)).also {
+                    if (it.tombsChanged) writeTombs(side, tombs)
+                    keepGone(it)
+                    if (pull) side.makeCheatFolders()
+                }
             } catch (error: Exception) {
                 Log.w(TAG, "Slot folder sync failed", error)
                 return@execute
@@ -364,7 +399,90 @@ internal class SlotFolder(private val activity: MainActivity) {
             }
             if (report.changedPrivate) ui { if (activity.nativeCanRefreshLibrary()) activity.nativeReloadAll() }
             Log.i(TAG, "Slot folder: ${report.toFolder} out, ${report.toPrivate} in, " +
-                "${report.conflicts} conflicts, ${report.removed} removed")
+                "${report.conflicts} conflicts, ${report.removed} removed, " +
+                "${report.deletedHere.size} deleted here, ${report.gone.size} held back")
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Deletions (SaveDeletes)
+
+    /** slot.'s files, whose saves and states deleted because another
+     *  handheld deleted them are kept in a backup, and their RetroArch
+     *  copies deleted at the game's next launch. */
+    private fun privateSide(): FolderSync.PrivateSide {
+        val files = activity.filesDir
+        return object : FolderSync.PrivateSide(files) {
+            override fun delete(path: String) {
+                if (SaveDeletes.kindOf(path) != null) {
+                    SaveDeletes.retire(files, File(files, path), SaveDeletes.coreOf(path), System.currentTimeMillis())
+                    SaveDeletes.markRetroArch(files, path)
+                } else {
+                    super.delete(path)
+                }
+            }
+        }
+    }
+
+    private fun readTombs(side: SafSide): MutableMap<String, FolderSync.Tomb> =
+        FolderSync.tombsFromJson(side.readRootText(TOMBS))
+
+    private fun writeTombs(side: SafSide, tombs: Map<String, FolderSync.Tomb>) {
+        try {
+            side.write(TOMBS, FolderSync.tombsToJson(tombs).toByteArray(Charsets.UTF_8))
+        } catch (error: Exception) {
+            Log.w(TAG, "Deletions not noted in the slot folder", error)
+        }
+    }
+
+    private fun paths(file: File): Set<String> = try {
+        if (file.isFile) file.readLines().filter { it.isNotBlank() }.toSet() else emptySet()
+    } catch (_: Exception) { emptySet() }
+
+    private fun writePaths(file: File, paths: Collection<String>) {
+        try {
+            file.parentFile?.mkdirs()
+            if (paths.isEmpty()) file.delete() else file.writeText(paths.joinToString("\n"))
+        } catch (error: Exception) {
+            Log.w(TAG, "Couldn't keep ${file.name}", error)
+        }
+    }
+
+    /** What the copy held back is what the launch asks about; what was
+     *  put back is no longer to restore. */
+    private fun keepGone(report: FolderSync.Report) {
+        writePaths(goneFile, report.gone)
+        writePaths(restoreFile, paths(restoreFile).filter { it in report.gone })
+    }
+
+    /** Saves and states removed from the folder by hand, still held back. */
+    fun gonePaths(): Set<String> = if (tree() == null) emptySet() else paths(goneFile)
+
+    /** PUT IT BACK: these go back into the folder now. */
+    fun putBack(paths: Collection<String>) {
+        if (paths.isEmpty()) return
+        writePaths(restoreFile, paths(restoreFile) + paths)
+        sync(pull = false)
+    }
+
+    /** DELETE IT: slot.'s copies are gone; the folder follows now. */
+    fun deleted(paths: Collection<String>) {
+        writePaths(goneFile, paths(goneFile) - paths.toSet())
+        sync(pull = false)
+    }
+
+    /** The first copy's progress on Library's row, a few times a second. */
+    private fun progress(): (Int, Int) -> Unit {
+        var shown = -1
+        var at = 0L
+        return { done, all ->
+            val percent = if (all == 0) 100 else done * 100 / all
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (percent != shown && (now - at >= 250 || percent == 100)) {
+                shown = percent
+                at = now
+                activity.nativeSetSlotFolderCopy(percent)
+            }
         }
     }
 
@@ -426,9 +544,12 @@ internal class SlotFolder(private val activity: MainActivity) {
                 for (child in children(doc)) {
                     val path = prefix + child.name
                     if (child.dir) { dirs[path] = child.id; walk(child.id, "$path/") }
-                    else if (path != JSON && !child.name.endsWith(".slot-tmp")) {
-                        out[path] = FolderSync.Meta(child.size, child.modified)
+                    else if (!child.name.endsWith(".slot-tmp")) {
+                        // Every file's id, slot.json's too: written again,
+                        // it replaces the old one rather than making
+                        // "slot (1).json" beside it (2.5.0-beta35).
                         files[path] = child.id
+                        if (path != JSON) out[path] = FolderSync.Meta(child.size, child.modified)
                     }
                 }
             }
@@ -442,6 +563,28 @@ internal class SlotFolder(private val activity: MainActivity) {
 
         private fun dirOf(path: String): String = folderFor(path, root, dirs) { above, name ->
             children(above).firstOrNull { it.dir && it.name == name }?.id ?: createDir(above, name)
+        }
+
+        /** A file at the folder's top, as text; null if absent. */
+        fun readRootText(name: String): String? = try {
+            children(root).firstOrNull { !it.dir && it.name == name }?.let {
+                files[name] = it.id
+                String(readDoc(it.id), Charsets.UTF_8)
+            }
+        } catch (_: Exception) { null }
+
+        /** CustomCheats/ and a folder per system, ready for the player's
+         *  .cht files, with a word on how to name them. */
+        fun makeCheatFolders() {
+            try {
+                for (system in CHEAT_SYSTEMS) dirOf("CustomCheats/$system/x")
+                val readme = dirOf(CHEAT_README)
+                if (children(readme).none { it.name == "README.txt" }) {
+                    write(CHEAT_README, CHEAT_HELP.toByteArray(Charsets.UTF_8))
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "CustomCheats folders not made", error)
+            }
         }
 
         override fun read(path: String): ByteArray {
