@@ -101,6 +101,8 @@ internal object FolderSync {
         return tombs
     }
 
+    private val LAUNCH_ONLY = listOf("Saves/", "States/", "Cheats/", "CustomCheats/", "GameEmulation/")
+
     /** How the first copy into a folder decides. */
     enum class Start {
         /** Later copies: each side's changes since the last one. */
@@ -122,7 +124,15 @@ internal object FolderSync {
         /** Removed here because another handheld deleted them on purpose. */
         val deletedHere = ArrayList<String>()
         var tombsChanged = false
+        /** What came in from the folder. */
+        val pulled = ArrayList<String>()
         val changedPrivate: Boolean get() = toPrivate > 0 || deletedHere.isNotEmpty()
+        /** Whether the shelf must be rebuilt: not for saves, states, cheats or
+         *  a game's settings, read when a game starts (beta38: a rebuild
+         *  froze the shelf for seconds). */
+        val changedShelf: Boolean get() = (pulled + deletedHere).any { path ->
+            LAUNCH_ONLY.none { path.startsWith(it) }
+        }
     }
 
     /**
@@ -167,9 +177,23 @@ internal object FolderSync {
     private fun step(path: String, p: Meta?, f: Meta?, base: Base, private: Side, folder: Side,
                      start: Start, pull: Boolean, now: Long, report: Report,
                      tombs: MutableMap<String, Tomb>, restore: Set<String>) {
-        val b = if (start == Start.SYNC) base.entries[path] else null
-        val pChanged = p != null && (b == null || p.size != b.privateSize || p.modified != b.privateModified)
-        val fChanged = f != null && (b == null || f.size != b.folderSize || f.modified != b.folderModified)
+        var b = if (start == Start.SYNC) base.entries[path] else null
+        var pChanged = p != null && (b == null || p.size != b.privateSize || p.modified != b.privateModified)
+        var fChanged = f != null && (b == null || f.size != b.folderSize || f.modified != b.folderModified)
+        // Only the time changed, not the size: the bytes say (beta38). An SD
+        // card gives back other times than at the copy, and a save rewritten
+        // as it was is not a change: copying hundreds of such files froze
+        // the shelf, and a deleted save came back without asking.
+        if (b != null && pChanged && p!!.size == b.privateSize && sha1(private.read(path)) == b.sha1) {
+            b = b.copy(privateModified = p.modified)
+            base.entries[path] = b
+            pChanged = false
+        }
+        if (b != null && fChanged && f!!.size == b.folderSize && sha1(folder.read(path)) == b.sha1) {
+            b = b.copy(folderModified = f.modified)
+            base.entries[path] = b
+            fChanged = false
+        }
         when {
             p != null && f == null -> {
                 val tomb = tombs[path]
@@ -185,9 +209,14 @@ internal object FolderSync {
                         base.entries.remove(path)
                         report.deletedHere.add(path)
                     }
-                    b != null && !pChanged && SaveDeletes.kindOf(path) != null && path !in restore -> {
+                    // (A deletion made on purpose elsewhere, after this one
+                    // played on: this handheld's save stays, as before.)
+                    b != null && SaveDeletes.kindOf(path) != null && path !in restore &&
+                        (tomb == null || !pChanged) -> {
                         // A save or state removed from the folder by hand:
-                        // the player says at the game's launch what to do.
+                        // the player says at the game's launch what to do,
+                        // even after playing on here (PUT IT BACK then puts
+                        // this handheld's newer one back, beta38).
                         report.gone.add(path)
                     }
                     else -> {
@@ -215,6 +244,7 @@ internal object FolderSync {
                     val written = private.write(path, bytes)
                     base.entries[path] = Entry(written.size, written.modified, f.size, f.modified, sha1(bytes))
                     report.toPrivate++
+                    report.pulled.add(path)
                 }
             }
             p != null && f != null -> when {
@@ -246,6 +276,7 @@ internal object FolderSync {
                         val written = private.write(path, theirBytes)
                         base.entries[path] = Entry(written.size, written.modified, f.size, f.modified, ts)
                         report.toPrivate++
+                        report.pulled.add(path)
                     } else {
                         folder.write("Conflicts/$path.$stamp", theirBytes)
                         val written = folder.write(path, mineBytes)
@@ -271,6 +302,7 @@ internal object FolderSync {
         check(written.size == bytes.size.toLong()) { "copy from the folder came out short" }
         base.entries[path] = Entry(written.size, written.modified, f.size, f.modified, sha1(bytes))
         report.toPrivate++
+        report.pulled.add(path)
     }
 
     private fun stamp(now: Long): String = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT)
@@ -305,6 +337,9 @@ internal object FolderSync {
         // this handheld. Travelling, one handheld's routine deletion of them
         // reached the others (2.5).
         if (name.endsWith(".retroarch-import.state.auto") || name.endsWith(".state-export-protected")) return false
+        // The copy staged for this handheld's RetroArch: made again from the
+        // game's own state, it doubled the states' room in the folder (beta38).
+        if (name.endsWith(".retroarch-export.state.auto")) return false
         if (name.startsWith(".")) return false
         if (path.startsWith("Saves/RetroArchBackups/") || path.startsWith("Saves/ManualImports/") ||
             path.startsWith("Saves/FolderBackups/")) return false

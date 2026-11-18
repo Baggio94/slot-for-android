@@ -41,14 +41,27 @@ internal object LogExport {
             "slot-logs-${stamp(System.currentTimeMillis(), "yyyyMMdd-HHmmss")}.txt")
     }
 
+    /** slot.'s own journal (SlotLog): there even where Android's log keeps
+     *  only errors (beta38). */
+    private fun journal(native: String, out: java.io.Writer) {
+        out.write("\n== slot.'s journal ==\n")
+        for ((at, line) in SlotLog.snapshot(native)) {
+            out.write(stamp(at, "MM-dd HH:mm:ss.SSS"))
+            out.write(" ")
+            out.write(line)
+            out.write("\n")
+        }
+    }
+
     /** Writes the logs into [uri] off the UI thread; [done] hears whether it worked. */
-    fun write(activity: Activity, uri: Uri, done: (Boolean) -> Unit) {
+    fun write(activity: Activity, uri: Uri, native: String, done: (Boolean) -> Unit) {
         val context = activity.applicationContext
         worker.execute {
             val ok = try {
                 context.contentResolver.openOutputStream(uri, "wt")?.bufferedWriter()?.use { out ->
                     header(context, out)
                     exits(context, out)
+                    journal(native, out)
                     logcat(out)
                 } != null
             } catch (error: Exception) {

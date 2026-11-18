@@ -49,6 +49,10 @@ class SaveDeletesTest {
         val state = SaveDeletes.Gone(setOf(SaveDeletes.Kind.STATE), setOf(SaveDeletes.Where.SLOT_FOLDER), emptySet())
         assertEquals("The save state of Sonic was deleted from your slot. folder. " +
             "Delete it from slot. too, or put it back?", SaveDeletes.message("Sonic", state))
+        val save = SaveDeletes.Gone(setOf(SaveDeletes.Kind.SAVE), setOf(SaveDeletes.Where.SLOT_FOLDER), emptySet())
+        assertEquals("The save of F-Zero was deleted from your slot. folder. " +
+            "Delete it from slot. too, with the game's save state, or put it back?",
+            SaveDeletes.message("F-Zero", save, withState = true))
     }
 
     @Test fun aDeletedSaveIsKeptAsideAndItsRetroArchCopyMarked() {

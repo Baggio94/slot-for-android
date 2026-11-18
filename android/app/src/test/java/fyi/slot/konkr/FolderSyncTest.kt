@@ -214,4 +214,38 @@ class FolderSyncTest {
         base.entries["Saves/a.srm"] = FolderSync.Entry(1, 2, 3, 4, "sha")
         assertEquals(base.entries, FolderSync.Base.parse(base.toJson()).entries)
     }
+
+    @Test fun aCardGivingOtherTimesForTheSameBytesCopiesNothing() {
+        // beta38: an SD card's times moved after the copy; 194 files came
+        // back for nothing and the shelf froze.
+        val (mine, card) = dirs()
+        put(mine, "Labels/GBA/a.png", "label")
+        put(mine, "Saves/mGBA/Emerald.srm", "save")
+        val base = FolderSync.Base()
+        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, FolderSync.Start.MERGE)
+        File(card, "Labels/GBA/a.png").setLastModified(7_000_000L)
+        File(mine, "Saves/mGBA/Emerald.srm").setLastModified(8_000_000L)
+        val report = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base)
+        assertEquals(0, report.toPrivate)
+        assertEquals(0, report.toFolder)
+        assertFalse(report.changedPrivate)
+        // And the next copy doesn't read them again.
+        assertEquals(7_000_000L, base.entries["Labels/GBA/a.png"]!!.folderModified)
+        assertEquals(8_000_000L, base.entries["Saves/mGBA/Emerald.srm"]!!.privateModified)
+    }
+
+    @Test fun aSaveDeletedByHandIsAskedAboutEvenAfterPlayingOn() {
+        val (mine, card) = dirs()
+        put(mine, "Saves/mGBA/Emerald.srm", "save")
+        val base = FolderSync.Base()
+        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, FolderSync.Start.MERGE)
+        put(mine, "Saves/mGBA/Emerald.srm", "played on", 9_000_000L)
+        File(card, "Saves/mGBA/Emerald.srm").delete()
+        val held = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base)
+        assertEquals(setOf("Saves/mGBA/Emerald.srm"), held.gone)
+        assertFalse(File(card, "Saves/mGBA/Emerald.srm").exists())
+        // PUT IT BACK: the newer one.
+        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, restore = setOf("Saves/mGBA/Emerald.srm"))
+        assertEquals("played on", File(card, "Saves/mGBA/Emerald.srm").readText())
+    }
 }

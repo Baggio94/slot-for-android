@@ -17,6 +17,22 @@ pub(crate) const WORK_LIBRARY: u8 = 8;
 
 static WORK: AtomicU8 = AtomicU8::new(0);
 
+/// Parts of a shelf frame timed on their own (beta38), to say what a slow
+/// frame spent its time on: the rest is building the frame's commands.
+pub(crate) const PART_WALLPAPER: usize = 0;
+pub(crate) const PART_UPLOAD: usize = 1;
+pub(crate) const PART_GPU: usize = 2;
+const PART_NAMES: [&str; 4] = ["wallpaper", "upload", "gpu", "build"];
+static PARTS: Mutex<[u32; 3]> = Mutex::new([0; 3]);
+
+/// [part] took [took] this frame (microseconds kept).
+pub(crate) fn part(part: usize, took: Duration) {
+    let mut parts = PARTS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(slot) = parts.get_mut(part) {
+        *slot = slot.saturating_add(took.as_micros().min(u128::from(u32::MAX)) as u32);
+    }
+}
+
 /// This frame did [work] (WORK_*).
 pub(crate) fn did(work: u8) {
     WORK.fetch_or(work, Ordering::Relaxed);
@@ -47,6 +63,8 @@ struct Window {
     very_slow: u32,
     max_ms: f32,
     causes: [u32; 9],
+    /// Slow frames by the part that took most of them.
+    parts: [u32; 4],
 }
 
 impl Window {
@@ -55,15 +73,20 @@ impl Window {
             .filter(|(_, n)| *n > 0)
             .map(|(name, n)| format!("{name}={n}"))
             .collect::<Vec<_>>().join(" ");
+        let parts = PART_NAMES.iter().zip(self.parts)
+            .filter(|(_, n)| *n > 0)
+            .map(|(name, n)| format!("{name}={n}"))
+            .collect::<Vec<_>>().join(" ");
         format!("Shelf frames ({why}): {} drawn, {} over {SLOW_MS:.0}ms, {} over {VERY_SLOW_MS:.0}ms, \
-            longest {:.1}ms; during: {}",
+            longest {:.1}ms; during: {}{}",
             self.frames, self.slow, self.very_slow, self.max_ms,
-            if causes.is_empty() { "-".into() } else { causes })
+            if causes.is_empty() { "-".into() } else { causes },
+            if parts.is_empty() { String::new() } else { format!("; slowest part: {parts}") })
     }
 }
 
 static SHELF: Mutex<Window> = Mutex::new(Window {
-    started: None, frames: 0, slow: 0, very_slow: 0, max_ms: 0.0, causes: [0; 9],
+    started: None, frames: 0, slow: 0, very_slow: 0, max_ms: 0.0, causes: [0; 9], parts: [0; 4],
 });
 
 /// One cart's way in or out.
@@ -146,6 +169,7 @@ pub(crate) fn cancel() {
 /// After each nativeDrawFrame: [took] it, while the shelf did [moment].
 pub(crate) fn frame(took: Duration, moment: Moment) {
     let work = WORK.swap(0, Ordering::Relaxed);
+    let parts = std::mem::take(&mut *PARTS.lock().unwrap_or_else(|e| e.into_inner()));
     let ms = took.as_secs_f32() * 1000.0;
     if let Some(c) = cart().as_mut() { c.longest_ms = c.longest_ms.max(ms); }
     if moment.playing && !moment.ejecting { return; }
@@ -168,6 +192,11 @@ pub(crate) fn frame(took: Duration, moment: Moment) {
         count(6, work & WORK_LIBRARY != 0);
         count(7, work & WORK_CORE != 0);
         if !any { window.causes[8] += 1; }
+        // The part that took most of it, or the commands' building.
+        let total_us = (ms * 1000.0) as u32;
+        let (worst, worst_us) = parts.iter().copied().enumerate().max_by_key(|(_, us)| *us).unwrap_or((3, 0));
+        let rest = total_us.saturating_sub(parts.iter().sum::<u32>());
+        window.parts[if worst_us >= rest { worst } else { 3 }] += 1;
     }
     if now.duration_since(started) >= WINDOW {
         if window.slow > 0 { crate::game::log_launch_timing(&window.line("5 s")); }

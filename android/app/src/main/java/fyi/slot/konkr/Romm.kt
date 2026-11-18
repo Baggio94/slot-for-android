@@ -286,7 +286,7 @@ internal object Romm {
                 else -> Result.Failed("RomM refused the code (HTTP ${reply.code}).")
             }
         } catch (error: Exception) {
-            Log.w(TAG, "Pairing failed", error)
+            SlotLog.w(TAG, "Pairing failed", error)
             Result.Failed(unreachable(error))
         }
     }
@@ -310,7 +310,7 @@ internal object Romm {
                 else -> Result.Failed("RomM refused the token (HTTP ${reply.code}).")
             }
         } catch (error: Exception) {
-            Log.w(TAG, "Token check failed", error)
+            SlotLog.w(TAG, "Token check failed", error)
             Result.Failed(unreachable(error))
         }
     }
@@ -341,7 +341,7 @@ internal object Romm {
                 else -> Result.Failed("RomM refused the sign in (HTTP ${reply.code}).")
             }
         } catch (error: Exception) {
-            Log.w(TAG, "Sign in failed", error)
+            SlotLog.w(TAG, "Sign in failed", error)
             Result.Failed(unreachable(error))
         }
     }
@@ -676,7 +676,7 @@ internal object Romm {
             atomic.finishWrite(out)
         } catch (error: Exception) {
             atomic.failWrite(out)
-            Log.w(TAG, "RomM library not kept", error)
+            SlotLog.w(TAG, "RomM library not kept", error)
         }
     }
 
@@ -701,7 +701,7 @@ internal object Romm {
             }
         }
     } catch (error: Exception) {
-        Log.w(TAG, "RomM library kept unreadable", error)
+        SlotLog.w(TAG, "RomM library kept unreadable", error)
         null
     }
 
@@ -775,7 +775,7 @@ internal object Romm {
             else JSONObject(String(response.data.use { it.readBytes() }, Charsets.UTF_8))
                 .also { oldIndex = it }
         } catch (error: Exception) {
-            Log.w(TAG, "slot.'s art set index unavailable for RomM", error)
+            SlotLog.w(TAG, "slot.'s art set index unavailable for RomM", error)
             null
         }
     }
@@ -804,7 +804,7 @@ internal object Romm {
                 ownLabel(context, game, (listOf(game.crc) + crcsByName(context, game))
                     .filter { it.isNotBlank() }.distinct())
             } catch (error: Exception) {
-                Log.w(TAG, "Label lookup failed for ${game.file}", error)
+                SlotLog.w(TAG, "Label lookup failed for ${game.file}", error)
                 failed = true
                 null
             }

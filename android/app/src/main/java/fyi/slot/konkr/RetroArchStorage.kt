@@ -179,7 +179,7 @@ internal object RetroArchStorage {
         try {
             stage(syncPrint(files, core, name), "$tree\n${digestOf(bytes)}".toByteArray())
         } catch (error: Exception) {
-            Log.w(TAG, "Folder sync print not kept for $core/$name", error)
+            SlotLog.w(TAG, "Folder sync print not kept for $core/$name", error)
         }
     }
 
@@ -225,6 +225,11 @@ internal object RetroArchStorage {
     }
 
     /** A state slot. would resume at this launch. */
+    /** slot. would resume this game from its own state: a save deleted
+     *  alone would come back from it (beta38). */
+    internal fun hasOwnState(context: Context, target: Target): Boolean =
+        hasResumePoint(context, target) { null }
+
     private fun hasResumePoint(context: Context, target: Target, folderState: () -> ByteArray?): Boolean {
         val saves = File(context.filesDir, "Saves")
         val lower = coreLower(target.core)
@@ -290,7 +295,7 @@ internal object RetroArchStorage {
                 }
             }
         } catch (error: Exception) {
-            Log.w(TAG, "RetroArch folders not checked for deletions", error)
+            SlotLog.w(TAG, "RetroArch folders not checked for deletions", error)
             return emptySet()
         }
         return out
@@ -363,11 +368,11 @@ internal object RetroArchStorage {
                 if (!reachable(context, root)) error("RetroArch folder unavailable")
                 deleteNamed(context, root, core, name)
             } catch (error: Exception) {
-                Log.w(TAG, "RetroArch $core/$name deleted later", error)
+                SlotLog.w(TAG, "RetroArch $core/$name deleted later", error)
                 stage(pendingMark(files, core, name), byteArrayOf(1))
             }
         }
-        Log.i(TAG, "Deleted everywhere: ${target.core}/${target.stem} $kinds")
+        SlotLog.i(TAG, "Deleted everywhere: ${target.core}/${target.stem} $kinds")
     }
 
     /**
@@ -401,9 +406,9 @@ internal object RetroArchStorage {
                 if (unchanged) deleteNamed(context, root, target.core, name)
                 syncPrint(files, target.core, name).delete()
                 mark.delete()
-                Log.i(TAG, "RetroArch ${target.core}/$name: ${if (unchanged) "deleted" else "kept, newer"}")
+                SlotLog.i(TAG, "RetroArch ${target.core}/$name: ${if (unchanged) "deleted" else "kept, newer"}")
             } catch (error: Exception) {
-                Log.w(TAG, "RetroArch ${target.core}/$name deletion waits", error)
+                SlotLog.w(TAG, "RetroArch ${target.core}/$name deletion waits", error)
             }
         }
     }
@@ -415,7 +420,7 @@ internal object RetroArchStorage {
         applyPendingDeletes(context, target)
         val folderKept = applyFolderSaveMark(files, target.core, target.stem, target.romIdentity)
         if (folderKept) {
-            Log.i(TAG, "Folder save kept for ${target.core}/${target.stem}: starting from it")
+            SlotLog.i(TAG, "Folder save kept for ${target.core}/${target.stem}: starting from it")
         }
         val coreLower = coreLower(target.core)
         val guardRoot = File(files, "Saves")
@@ -454,7 +459,7 @@ internal object RetroArchStorage {
         val ownPrivate = target.saveLocal.takeIf { it.isFile }?.readBytes()
         // One line per launch: what the RetroArch folders gave (beta37).
         // Nothing is read for it: only what the launch read anyway.
-        fun folderNote(state: String) = Log.i(TAG, "RetroArch folders for ${target.core}/${target.stem}: " +
+        fun folderNote(state: String) = SlotLog.i(TAG, "RetroArch folders for ${target.core}/${target.stem}: " +
             "save " + (if (saveTree == null) "no folder" else folderSave?.let { "${it.size} bytes" } ?: "absent") +
             "; state " + (if (stateTree == null) "no folder" else state))
         fun stateSeen() = if (!stateRead.isInitialized()) "not needed" else
@@ -486,7 +491,7 @@ internal object RetroArchStorage {
                     }
                     stage(File(guardRoot, "${target.romIdentity}.$coreLower.state-stale.once"),
                         byteArrayOf(1))
-                    Log.i(TAG, "Folder save chosen for ${target.core}/${target.stem}; slot.'s resume point set aside")
+                    SlotLog.i(TAG, "Folder save chosen for ${target.core}/${target.stem}; slot.'s resume point set aside")
                 }
                 FolderSaveChoice.RESUME -> {
                     // The folder's save stays beside slot.'s, under a dated name.
@@ -496,18 +501,18 @@ internal object RetroArchStorage {
                         folderSave!!, isState = false, createOnly = true, backup = false)
                     rememberSynced(files, saveTree!!, target.core, saveName, folderSave)
                     keepSlotSave = true
-                    Log.i(TAG, "Resuming slot.'s ${target.core}/${target.stem}; folder save kept as .folder-$stamp")
+                    SlotLog.i(TAG, "Resuming slot.'s ${target.core}/${target.stem}; folder save kept as .folder-$stamp")
                 }
             }
             FolderSaveAction.KEEP_SLOT_SAVE -> {
                 keepSlotSave = true
-                Log.i(TAG, "Folder unchanged since slot.'s last sync; its newer save goes back to it: " +
+                SlotLog.i(TAG, "Folder unchanged since slot.'s last sync; its newer save goes back to it: " +
                     "${target.core}/${target.stem}")
                 try {
                     writeSaf(context, target.savesTree!!, target.core, saveName, ownPrivate!!,
                         isState = false)
                 } catch (error: Exception) {
-                    Log.w(TAG, "slot.'s save not sent back to the folder yet", error)
+                    SlotLog.w(TAG, "slot.'s save not sent back to the folder yet", error)
                 }
             }
             FolderSaveAction.NONE -> {}
@@ -532,9 +537,9 @@ internal object RetroArchStorage {
         try {
             importManualStates(context, target)
         } catch (error: Exception) {
-            Log.w(TAG, "RetroArch manual states not brought into the Polaroids", error)
+            SlotLog.w(TAG, "RetroArch manual states not brought into the Polaroids", error)
         }
-        Log.i(TAG, "RetroArch manual states: ${SystemClock.elapsedRealtime() - manualAt}ms " +
+        SlotLog.i(TAG, "RetroArch manual states: ${SystemClock.elapsedRealtime() - manualAt}ms " +
             "(saves/RTC ${manualAt - started}ms)")
         // When Share Saves chooses cartridge SRAM over an older same-core
         // Save State, preserve the original imported RetroArch state byte for
@@ -557,7 +562,7 @@ internal object RetroArchStorage {
             stateRead.takeIf { it.isInitialized() }?.value?.let { seen ->
                 if (stateTree != null) rememberSynced(files, stateTree, target.core, stateName, seen)
             }
-            Log.i(TAG, "Deferred stale RetroArch state import; SRAM / existing states preserved")
+            SlotLog.i(TAG, "Deferred stale RetroArch state import; SRAM / existing states preserved")
             folderNote(stateSeen() + ", set aside")
             return
         }
@@ -568,7 +573,7 @@ internal object RetroArchStorage {
             check(File(guardRoot, "${target.romIdentity}.$coreLower.state-export-protected").delete()) {
                 "Cannot lift the RetroArch auto-state guard"
             }
-            Log.i(TAG, "RetroArch auto-state is newer than the protected one; syncing it again")
+            SlotLog.i(TAG, "RetroArch auto-state is newer than the protected one; syncing it again")
         }
         val savesAt = SystemClock.elapsedRealtime()
         val incoming = if (target.statesTree != null) {
@@ -584,7 +589,7 @@ internal object RetroArchStorage {
                 // Rust validates RASTATE before passing the memory to libretro.
                 stage(target.stateImportLocal, RetroArchCompression.decode(incoming))
             } catch (error: Exception) {
-                Log.w(TAG, "RetroArch state not importable; private fallback preserved", error)
+                SlotLog.w(TAG, "RetroArch state not importable; private fallback preserved", error)
                 target.stateImportLocal.delete()
             }
             folderNote(if (target.statesTree == null) "slot.'s own" else stateSeen() +
@@ -594,7 +599,7 @@ internal object RetroArchStorage {
             folderNote(stateSeen())
         }
         val doneAt = SystemClock.elapsedRealtime()
-        Log.i(TAG, "RetroArch SAF import breakdown: saves=${savesAt - started}ms, " +
+        SlotLog.i(TAG, "RetroArch SAF import breakdown: saves=${savesAt - started}ms, " +
             "state read=${readAt - savesAt}ms, state decode/stage=${doneAt - readAt}ms, " +
             "total=${doneAt - started}ms")
     }
@@ -606,7 +611,7 @@ internal object RetroArchStorage {
             try {
                 exportSharedGba(context, target)
             } catch (e: Exception) {
-                Log.e(TAG, "Shared GBA SRAM sync deferred; originals preserved", e)
+                SlotLog.e(TAG, "Shared GBA SRAM sync deferred; originals preserved", e)
                 failures.add("Shared GBA save sync deferred: " + (e.message ?: "check existing saves"))
             }
         } else if (target.savesTree != null && target.saveLocal.isFile) {
@@ -617,7 +622,7 @@ internal object RetroArchStorage {
                         target.stem + ".srm", data, isState = false)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "RetroArch SRAM export failed for ${target.core}/${target.stem}", e)
+                SlotLog.e(TAG, "RetroArch SRAM export failed for ${target.core}/${target.stem}", e)
                 failures.add("Save sync failed (${target.core}): " + (e.message ?: "access denied"))
             }
         }
@@ -628,7 +633,7 @@ internal object RetroArchStorage {
                 writeSaf(context, target.savesTree, target.core,
                     target.stem + ".rtc", data, isState = false)
             } catch (e: Exception) {
-                Log.e(TAG, "RetroArch RTC export failed for ${target.core}/${target.stem}", e)
+                SlotLog.e(TAG, "RetroArch RTC export failed for ${target.core}/${target.stem}", e)
                 failures.add("RTC sync failed (${target.core}): " + (e.message ?: "access denied"))
             }
         }
@@ -662,9 +667,9 @@ internal object RetroArchStorage {
                         "Default state verification failed"
                     }
                 }
-                if (guarded && !guard.delete()) Log.w(TAG, "RetroArch auto-state guard not lifted yet")
+                if (guarded && !guard.delete()) SlotLog.w(TAG, "RetroArch auto-state guard not lifted yet")
             } catch (e: Exception) {
-                Log.e(TAG, "RetroArch state export failed for ${target.core}/${target.stem}", e)
+                SlotLog.e(TAG, "RetroArch state export failed for ${target.core}/${target.stem}", e)
                 failures.add("State sync skipped (${target.core}): " + (e.message ?: "unsupported format"))
             }
         }
@@ -705,7 +710,7 @@ internal object RetroArchStorage {
         retroArch != null && retroArch.modified > 0 &&
             (export == target.stateExportLocal || !own.isFile || retroArch.modified > own.lastModified())
     } catch (error: Exception) {
-        Log.w(TAG, "Cannot compare RetroArch and slot. auto-states", error)
+        SlotLog.w(TAG, "Cannot compare RetroArch and slot. auto-states", error)
         false
     }
 
@@ -926,7 +931,7 @@ internal object RetroArchStorage {
                         }
                     }
                 } catch (rollback: Exception) {
-                    Log.e(TAG, "SRAM external rollback needs manual recovery", rollback)
+                    SlotLog.e(TAG, "SRAM external rollback needs manual recovery", rollback)
                 }
             }
             // Restore each modified private mirror iff it is still our
@@ -937,11 +942,11 @@ internal object RetroArchStorage {
                     val old = oldPrivate[i]
                     if (old != null) stage(privateFiles[i], old)
                     else if (privateFiles[i].isFile && !privateFiles[i].delete()) {
-                        Log.e(TAG, "Failed to remove newly seeded private SRAM")
+                        SlotLog.e(TAG, "Failed to remove newly seeded private SRAM")
                     }
                 }
             } catch (restore: Exception) {
-                Log.e(TAG, "Private SRAM rollback needs recovery backup", restore)
+                SlotLog.e(TAG, "Private SRAM rollback needs recovery backup", restore)
             }
             // Never delete an immutable recovery snapshot on failure.
             throw SaveConflict("Sharing not changed safely: ${e.message}. Originals backed up.")
@@ -1030,7 +1035,7 @@ internal object RetroArchStorage {
         val atLaunch = loadedFile.takeIf { it.isFile }?.readBytes()
         if (baseline != null && (gbaRamAtSize(current, baseline.size) == null ||
                     gbaRamAtSize(baseline, current.size) == null)) {
-            Log.w(TAG, "Shared GBA mismatch: core=${target.core} " +
+            SlotLog.w(TAG, "Shared GBA mismatch: core=${target.core} " +
                 "current=${current.size} published=${baseline.size} " +
                 "loaded=${atLaunch?.size ?: 0}, non-erased bytes prevent safe capacity conversion")
             error("GBA save sizes differ with non-erased data; no mirrors overwritten")
@@ -1076,7 +1081,7 @@ internal object RetroArchStorage {
                 writes.add(core to data)
             }
         }
-        Log.i(TAG, "Shared GBA export: core=${target.core}, native=${current.size}, " +
+        SlotLog.i(TAG, "Shared GBA export: core=${target.core}, native=${current.size}, " +
             "published=${baseline?.size ?: 0}, loaded=${atLaunch?.size ?: 0}, " +
             "peer=${otherOld?.size ?: 0}, erased-padding-only=true")
         if (external != null) {
@@ -1247,7 +1252,7 @@ internal object RetroArchStorage {
                 stage(File(staging, "$stamp.rastate"), state)
                 links[suffix] = ManualStateLinks.Link(hash, stamp, file.modified, file.size)
             } catch (e: Exception) {
-                Log.w(TAG, "RetroArch $name not brought into the Polaroids", e)
+                SlotLog.w(TAG, "RetroArch $name not brought into the Polaroids", e)
             }
         }
         writeLinks(context, target, links)
@@ -1281,10 +1286,10 @@ internal object RetroArchStorage {
             links[suffix] = ManualStateLinks.Link(ManualStateLinks.hash(compressed), stamp,
                 written.modified, written.size)
             writeLinks(context, target, links)
-            if (!staged.delete()) Log.w(TAG, "Manual staging cleanup deferred: $staged")
+            if (!staged.delete()) SlotLog.w(TAG, "Manual staging cleanup deferred: $staged")
             thumb.delete()
         } catch (e: Exception) {
-            Log.e(TAG, "RetroArch manual state export skipped", e)
+            SlotLog.e(TAG, "RetroArch manual state export skipped", e)
             failures.add("Manual state sync skipped: " + (e.message ?: "unsupported format"))
         }
         return failures
@@ -1309,7 +1314,7 @@ internal object RetroArchStorage {
             links.remove(suffix)
             writeLinks(context, target, links)
         } catch (e: Exception) {
-            Log.e(TAG, "RetroArch manual state delete skipped", e)
+            SlotLog.e(TAG, "RetroArch manual state delete skipped", e)
             failures.add("Manual state delete skipped: " + (e.message ?: "access denied"))
         }
         return failures
@@ -1541,7 +1546,7 @@ internal object RetroArchStorage {
                         else -> different.add(item)
                     }
                 } catch (error: Exception) {
-                    Log.w(TAG, "Folder transfer cannot compare $core/$name; treated as different", error)
+                    SlotLog.w(TAG, "Folder transfer cannot compare $core/$name; treated as different", error)
                     different.add(item)
                 }
             }
@@ -1567,7 +1572,7 @@ internal object RetroArchStorage {
                     createOnly = true, backup = false)
                 copied++
             } catch (error: Exception) {
-                Log.w(TAG, "Folder transfer skipped ${item.core}/${item.name}; kept in slot.", error)
+                SlotLog.w(TAG, "Folder transfer skipped ${item.core}/${item.name}; kept in slot.", error)
                 failed++
             }
         }
@@ -1590,11 +1595,11 @@ internal object RetroArchStorage {
                     kept++
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "Folder transfer skipped ${item.core}/${item.name}; both copies kept", error)
+                SlotLog.w(TAG, "Folder transfer skipped ${item.core}/${item.name}; both copies kept", error)
                 failed++
             }
         }
-        Log.i(TAG, "Folder transfer (${if (plan.states) "states" else "saves"}): copied=$copied " +
+        SlotLog.i(TAG, "Folder transfer (${if (plan.states) "states" else "saves"}): copied=$copied " +
             "same=${plan.same} replaced=$replaced kept=$kept failed=$failed")
         return Transfer(copied, plan.same, replaced, kept, failed)
     }

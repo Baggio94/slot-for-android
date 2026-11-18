@@ -1284,3 +1284,11 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeFrameWatchFlush(
 ) {
     crate::frame_watch::flush("bench");
 }
+
+/// slot.'s native journal for About's X Logs (SlotLog), "epoch-ms|line" each.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeJournal(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    env.new_string(crate::journal_text()).map_or(std::ptr::null_mut(), |s| s.into_raw())
+}

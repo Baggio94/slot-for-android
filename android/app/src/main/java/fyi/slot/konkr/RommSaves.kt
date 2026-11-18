@@ -112,7 +112,7 @@ internal object RommSaves {
                 error is java.net.UnknownHostException || error is java.net.NoRouteToHostException) {
                 try { uncheckedFile(context, target).apply { parentFile?.mkdirs() }.writeText("1") } catch (_: Exception) {}
             }
-            Log.w(TAG, "RomM save check skipped after ${(System.nanoTime() - started) / 1_000_000}ms: " +
+            SlotLog.w(TAG, "RomM save check skipped after ${(System.nanoTime() - started) / 1_000_000}ms: " +
                 "the handheld's save", error)
             Outcome(null)
         }
@@ -188,9 +188,9 @@ internal object RommSaves {
             // What stays on the server (another client's) is "unchanged".
             val left = newest(saves - ours.toSet(), target)
             keep(context, target, Record(romId, DELETED, left?.updatedAt.orEmpty(), ""))
-            Log.i(TAG, "RomM: ${ours.size} save(s) of ${target.stem} deleted")
+            SlotLog.i(TAG, "RomM: ${ours.size} save(s) of ${target.stem} deleted")
         } catch (error: Exception) {
-            Log.w(TAG, "RomM save deletion waits", error)
+            SlotLog.w(TAG, "RomM save deletion waits", error)
             keep(context, target, Record(kept?.romId ?: 0L, DELETE_PENDING, kept?.serverStamp.orEmpty(), ""))
         }
     }
@@ -217,7 +217,7 @@ internal object RommSaves {
                 // stays, and the next launch asks which to keep.
                 val server = newest(Romm.saves(context, romId), target)
                 if (server != null && (kept == null || server.updatedAt != kept.serverStamp)) {
-                    Log.i(TAG, "RomM: the server's save of ${target.stem} changed while slot. couldn't " +
+                    SlotLog.i(TAG, "RomM: the server's save of ${target.stem} changed while slot. couldn't " +
                         "check it; not sent, the next launch asks")
                     return null
                 }
@@ -229,7 +229,7 @@ internal object RommSaves {
         } catch (error: Romm.SignedOut) {
             "Signed out of RomM: this save wasn't sent."
         } catch (error: Exception) {
-            Log.w(TAG, "RomM save upload skipped", error)
+            SlotLog.w(TAG, "RomM save upload skipped", error)
             if (error.message?.contains("can't keep saves") == true) "This RomM account can't keep saves."
             else null
         }

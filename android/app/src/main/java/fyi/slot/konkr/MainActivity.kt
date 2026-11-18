@@ -141,6 +141,7 @@ class MainActivity : Activity() {
     /** Library's slot. folder row while the first copy runs: 0-100, -1 done. */
     external fun nativeSetSlotFolderCopy(percent: Int)
     external fun nativeFrameWatchFlush()
+    external fun nativeJournal(): String
     external fun nativeReloadAll()
     external fun nativeSetRommSync(state: Int)
     external fun nativeSetRomsMissing(missing: Boolean)
@@ -306,7 +307,7 @@ class MainActivity : Activity() {
                         }
                     }
                 } catch (error: Exception) {
-                    Log.w(TAG, "RomM save work skipped", error)
+                    SlotLog.w(TAG, "RomM save work skipped", error)
                 } finally {
                     rommBusy.computeIfPresent(key) { _, n -> if (n > 1) n - 1 else null }
                 }
@@ -314,7 +315,7 @@ class MainActivity : Activity() {
         } catch (error: Exception) {
             if (upload) rommQueued.remove(key)
             rommBusy.computeIfPresent(key) { _, n -> if (n > 1) n - 1 else null }
-            Log.w(TAG, "RomM save work not queued", error)
+            SlotLog.w(TAG, "RomM save work not queued", error)
         }
     }
     // Optional I/O must never delay a real ROM launch or pending save exports.
@@ -395,7 +396,7 @@ class MainActivity : Activity() {
             val json = try {
                 previous?.let { RomLibrary.withSavedFiles(this, root, it, files) }
             } catch (error: Exception) {
-                Log.w(TAG, "Downloaded games not read; scanning the folder", error)
+                SlotLog.w(TAG, "Downloaded games not read; scanning the folder", error)
                 null
             }
             if (previous == null || json == null) {
@@ -408,7 +409,7 @@ class MainActivity : Activity() {
             if (waiting == null && RomLibrary.sameIndex(previous, json)) return@execute
             giveRommLabels(json)
             val prepared = CartStudioCatalog.withOverrides(this, json)
-            Log.i(TAG, "RomM: ${files.size} game(s) added without a folder scan")
+            SlotLog.i(TAG, "RomM: ${files.size} game(s) added without a folder scan")
             runOnUiThread {
                 if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
                 pendingLibraryIndex = PendingLibraryIndex(root, json, prepared, serial, quiet = true, silent = true)
@@ -448,7 +449,7 @@ class MainActivity : Activity() {
                 }
                 autoLabelUpdates.add(uri)
             } catch (error: Exception) {
-                Log.w(TAG, "RomM label not given to its cart; the label search will", error)
+                SlotLog.w(TAG, "RomM label not given to its cart; the label search will", error)
             }
         }
     }
@@ -466,7 +467,7 @@ class MainActivity : Activity() {
         val ok = try {
             DocumentsContract.deleteDocument(contentResolver, Uri.parse(uri))
         } catch (error: Exception) {
-            Log.w(TAG, "Couldn't delete a ROM", error)
+            SlotLog.w(TAG, "Couldn't delete a ROM", error)
             false
         }
         if (ok) {
@@ -483,7 +484,7 @@ class MainActivity : Activity() {
                     storeCachedLibrary(root, kept.toString())
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "ROM cache not updated after a delete", error)
+                SlotLog.w(TAG, "ROM cache not updated after a delete", error)
             }
         }
         runOnUiThread {
@@ -597,7 +598,7 @@ class MainActivity : Activity() {
                 updateAfterPermission = false
                 returnFromSlotChild = false
                 nativeExternalReturn()
-                Log.w(TAG, "Cannot open the install permission; downloading first", error)
+                SlotLog.w(TAG, "Cannot open the install permission; downloading first", error)
             }
         }
         slotUpdater.downloadAndInstall { apk ->
@@ -605,7 +606,7 @@ class MainActivity : Activity() {
                 try {
                     slotUpdater.startInstaller(apk)
                 } catch (error: Exception) {
-                    Log.w(TAG, "User-confirmed installer not available", error)
+                    SlotLog.w(TAG, "User-confirmed installer not available", error)
                     SlotToast.makeText(this@MainActivity,
                         "Allow updates from slot. in Android settings.",
                         Toast.LENGTH_LONG).show()
@@ -738,7 +739,7 @@ class MainActivity : Activity() {
         // Diagnostic-only event: a switch from continuous GL rendering to
         // Choreographer during the first 100ms of gameplay could explain
         // an isolated startup hitch. Do not change frame scheduling here.
-        Log.i(TAG, "Game display pacing transition: " +
+        SlotLog.i(TAG, "Game display pacing transition: " +
             (if (swapLoop) "Swap-paced" else if (enabled) "Choreographer" else "Continuous") +
             ", playing=${nativeIsPlaying()}")
         displaySyncApplied = enabled
@@ -851,7 +852,7 @@ class MainActivity : Activity() {
             val iface = try {
                 java.net.NetworkInterface.getByName(interfaceName)
             } catch (error: java.net.SocketException) {
-                Log.w(TAG, "Link Wi-Fi could not inspect interface $interfaceName", error)
+                SlotLog.w(TAG, "Link Wi-Fi could not inspect interface $interfaceName", error)
                 null
             } ?: continue
             val addresses = try {
@@ -864,7 +865,7 @@ class MainActivity : Activity() {
                 }
                 values
             } catch (error: java.net.SocketException) {
-                Log.w(TAG, "Link Wi-Fi interface $interfaceName unavailable", error)
+                SlotLog.w(TAG, "Link Wi-Fi interface $interfaceName unavailable", error)
                 continue
             }
             for (address in links.linkAddresses) {
@@ -872,13 +873,13 @@ class MainActivity : Activity() {
                 if (ip is Inet4Address && !ip.isLoopbackAddress &&
                     !ip.isLinkLocalAddress && !ip.isMulticastAddress &&
                     !ip.isAnyLocalAddress && addresses.contains(ip.hostAddress)) {
-                    Log.i(TAG, "Link Wi-Fi selected: interface=$interfaceName ipv4=${ip.hostAddress}")
+                    SlotLog.i(TAG, "Link Wi-Fi selected: interface=$interfaceName ipv4=${ip.hostAddress}")
                     return ip.hostAddress
                 }
             }
-            Log.w(TAG, "Link Wi-Fi skipped stale address on interface=$interfaceName")
+            SlotLog.w(TAG, "Link Wi-Fi skipped stale address on interface=$interfaceName")
         }
-        Log.w(TAG, "Link Wi-Fi could not find a live interface with a matching IPv4 address")
+        SlotLog.w(TAG, "Link Wi-Fi could not find a live interface with a matching IPv4 address")
         return null
     }
 
@@ -886,7 +887,7 @@ class MainActivity : Activity() {
         val current = linkMulticastLock
         linkMulticastLock = null
         try { if (current?.isHeld == true) current.release() }
-        catch (error: RuntimeException) { Log.w(TAG, "Link multicast release failed", error) }
+        catch (error: RuntimeException) { SlotLog.w(TAG, "Link multicast release failed", error) }
         releaseLinkLowLatency()
     }
 
@@ -905,9 +906,9 @@ class MainActivity : Activity() {
             lock.setReferenceCounted(false)
             lock.acquire()
             linkLowLatencyLock = lock
-            Log.i(TAG, "Link Wi-Fi low latency on")
+            SlotLog.i(TAG, "Link Wi-Fi low latency on")
         } catch (error: RuntimeException) {
-            Log.w(TAG, "Link Wi-Fi low latency unavailable", error)
+            SlotLog.w(TAG, "Link Wi-Fi low latency unavailable", error)
         }
     }
 
@@ -915,7 +916,7 @@ class MainActivity : Activity() {
         val current = linkLowLatencyLock ?: return
         linkLowLatencyLock = null
         try { if (current.isHeld) current.release() }
-        catch (error: RuntimeException) { Log.w(TAG, "Link Wi-Fi lock release failed", error) }
+        catch (error: RuntimeException) { SlotLog.w(TAG, "Link Wi-Fi lock release failed", error) }
     }
 
     /** The peer has proven possession of an installation-bound Ed25519 key
@@ -932,7 +933,7 @@ class MainActivity : Activity() {
                 as android.content.ClipboardManager
             clipboard.setPrimaryClip(android.content.ClipData.newPlainText("slot. room code", text))
         } catch (error: Exception) {
-            Log.w(TAG, "Cannot copy the room code", error)
+            SlotLog.w(TAG, "Cannot copy the room code", error)
         }
         try {
             val send = Intent(Intent.ACTION_SEND).apply {
@@ -941,7 +942,7 @@ class MainActivity : Activity() {
             }
             startActivity(Intent.createChooser(send, "Send the room code"))
         } catch (error: Exception) {
-            Log.w(TAG, "No app can share the room code", error)
+            SlotLog.w(TAG, "No app can share the room code", error)
             SlotToast.makeText(this, "Code copied. Paste it in a message to your friend.",
                 Toast.LENGTH_LONG).show()
         }
@@ -971,7 +972,7 @@ class MainActivity : Activity() {
             dialog.addButton("ALWAYS ALLOW") { reply(2); dialog.dismiss() }
             dialog.show()
         } catch (error: Exception) {
-            Log.w(TAG, "Cannot show Slot peer permission", error)
+            SlotLog.w(TAG, "Cannot show Slot peer permission", error)
             reply(0)
         }
     }
@@ -997,7 +998,7 @@ class MainActivity : Activity() {
             nativeLinkNetworkReady(address)
         } catch (error: Exception) {
             releaseLinkMulticast()
-            Log.w(TAG, "Unable to acquire LAN discovery lock", error)
+            SlotLog.w(TAG, "Unable to acquire LAN discovery lock", error)
             nativeLinkNetworkError("Couldn't search for other consoles on this Wi-Fi.")
         }
     }
@@ -1122,7 +1123,7 @@ class MainActivity : Activity() {
                         openRetroAchievementsAccount()
                     } catch (error: Exception) {
                         nativeExternalReturn()
-                        Log.e(TAG, "Unable to open RetroAchievements", error)
+                        SlotLog.e(TAG, "Unable to open RetroAchievements", error)
                         SlotToast.makeText(this@MainActivity,
                             "Couldn't open RetroAchievements.", Toast.LENGTH_SHORT).show()
                     }
@@ -1150,7 +1151,7 @@ class MainActivity : Activity() {
                     } catch (error: Exception) {
                         returnFromSlotChild = false
                         nativeExternalReturn()
-                        Log.w(TAG, "Cannot open Apps", error)
+                        SlotLog.w(TAG, "Cannot open Apps", error)
                         SlotToast.makeText(this@MainActivity, "Couldn't open Apps.",
                             Toast.LENGTH_SHORT).show()
                     }
@@ -1214,7 +1215,7 @@ class MainActivity : Activity() {
                 // Keep the complete diagnostic in Logcat. Actionable failures
                 // receive a longer on-screen warning rather than vanishing
                 // after the same interval as a simple confirmation.
-                Log.w(TAG, message)
+                SlotLog.w(TAG, message)
                 val concise = SlotToast.userMessage(message)
                 val needsAction = listOf(
                     "can't", "cannot", "couldn't", "failed", "unavailable",
@@ -1278,7 +1279,7 @@ class MainActivity : Activity() {
                             }
                         }
                     } catch (_: Exception) {
-                        Log.w(TAG, "Ignoring malformed RetroAchievements notice")
+                        SlotLog.w(TAG, "Ignoring malformed RetroAchievements notice")
                     }
                 }
                 // Ejection cleanup is edge-triggered above, not performed
@@ -1325,7 +1326,7 @@ class MainActivity : Activity() {
                         if (failures.isNotEmpty()) {
                             runOnUiThread {
                                 if (!isDestroyed) {
-                                    Log.w(TAG, "Save export warnings: " + failures.joinToString(" | "))
+                                    SlotLog.w(TAG, "Save export warnings: " + failures.joinToString(" | "))
                                     val onlyMirrors = failures.all {
                                         it.startsWith("Shared GBA save sync deferred")
                                     }
@@ -1339,7 +1340,7 @@ class MainActivity : Activity() {
                     }
                 }
             } catch (error: Exception) {
-                Log.e(TAG, "Invalid save sync notification", error)
+                SlotLog.e(TAG, "Invalid save sync notification", error)
             }
             completed = nativePollSaveFlush()
         }
@@ -1396,14 +1397,14 @@ class MainActivity : Activity() {
         // The Retroid Pocket Classic reports its maker as "Moorechip"
         // (getprop ro.product.manufacturer, Siham 2026-11-04): go by the model.
         val retroidPocketClassic = Build.MODEL.contains("Retroid Pocket Classic", ignoreCase = true)
-        Log.i(TAG, "Device: model=${Build.MODEL} manufacturer=${Build.MANUFACTURER} " +
+        SlotLog.i(TAG, "Device: model=${Build.MODEL} manufacturer=${Build.MANUFACTURER} " +
             "retroid_pocket_classic=$retroidPocketClassic")
         nativeConfigure(filesDir.absolutePath, applicationInfo.nativeLibraryDir, retroidPocketClassic)
         nativeSetDevice(SlotDevice.displayName(Build.MANUFACTURER, Build.MODEL), Build.MODEL)
         // The slot. canvas takes the display's shape (3:2 on the KONKR, 16:9,
         // 4:3...) before the renderer builds its first face.
         windowManager.maximumWindowMetrics.bounds.let { panel ->
-            Log.i(TAG, "Panel ${panel.width()}x${panel.height()}")
+            SlotLog.i(TAG, "Panel ${panel.width()}x${panel.height()}")
             nativeSetPanelSize(panel.width(), panel.height())
             // A square panel (RG Rotate) has no landscape: asking for one
             // turned the screen 90 degrees for an instant on each unlock.
@@ -1414,7 +1415,7 @@ class MainActivity : Activity() {
         // App-private A12 A/B marker; no save or ROM folders are touched.
         val a12Recovery = !File(filesDir, "a12-mgba-legacy-pacing.flag").exists()
         nativeSetMgbaLinkRecoveryEnabled(a12Recovery)
-        Log.i(TAG, "A12 recovery mode: " + if (a12Recovery) "a11" else "legacy")
+        SlotLog.i(TAG, "A12 recovery mode: " + if (a12Recovery) "a11" else "legacy")
         nativeSetShareSaves(getSharedPreferences(PREFS, MODE_PRIVATE)
             .getBoolean(SHARE_GBA_SAVES, false))
         if (cleanSignOut && RaAccount.configuredUser(filesDir) != null) nativeRaAccountConfigured()
@@ -1428,7 +1429,7 @@ class MainActivity : Activity() {
             private fun restoreGraphics(): Boolean {
                 val restored = graphicsRecovery.attempt(SystemClock.uptimeMillis()) {
                     nativeSurfaceCreated().also { ok ->
-                        if (!ok) Log.e(TAG, "Slot GLES recovery failed; retrying with session retained")
+                        if (!ok) SlotLog.e(TAG, "Slot GLES recovery failed; retrying with session retained")
                     }
                 }
                 if (restored) {
@@ -1472,7 +1473,7 @@ class MainActivity : Activity() {
                     android.os.Process.setThreadPriority(
                         android.os.Process.THREAD_PRIORITY_DISPLAY)
                 } catch (error: Exception) {
-                    Log.w(TAG, "GL thread display priority unavailable", error)
+                    SlotLog.w(TAG, "GL thread display priority unavailable", error)
                 }
                 resetTiming()
                 nativeEglPresentationReset()
@@ -1556,7 +1557,7 @@ class MainActivity : Activity() {
                     val spanNs = SystemClock.elapsedRealtimeNanos() - probeStartNs
                     if (spanNs >= 5_000_000_000L) {
                         val fpsX10 = callbacks.toLong() * 10_000_000_000L / spanNs
-                        Log.i(TAG, "GL callback pacing: callbacks=$callbacks fps_x10=$fpsX10 " +
+                        SlotLog.i(TAG, "GL callback pacing: callbacks=$callbacks fps_x10=$fpsX10 " +
                             "gap_over_25ms=$gapOver25ms gap_over_40ms=$gapOver40ms " +
                             "gap_us_max=$gapUsMax native_us_max=$nativeUsMax " +
                             "native_over_16ms=$nativeOver16ms native_over_33ms=$nativeOver33ms " +
@@ -1564,7 +1565,7 @@ class MainActivity : Activity() {
                             "vsync_gl_age_max_us=$vsyncAgeMaxUs " +
                             "early_pcm_wakes_5s=${earlyPcmWakes.getAndSet(0)}")
                         val frameCorrelation = glPacingCorrelation.snapshotAndReset()
-                        Log.i(TAG, "GL vsync correlation: scheduler=ui " +
+                        SlotLog.i(TAG, "GL vsync correlation: scheduler=ui " +
                             "ui_vsync_callbacks=${uiVsyncCallbacks.getAndSet(0L)} " +
                             "ui_vsync_over25=${uiVsyncOver25ms.getAndSet(0L)} " +
                             "ui_vsync_over40=${uiVsyncOver40ms.getAndSet(0L)} " +
@@ -1576,7 +1577,7 @@ class MainActivity : Activity() {
                             "ui_vsync_without_gl=${frameCorrelation.vsyncCallbacksWithoutGl} " +
                             "not_actual_present_time=true")
                         if (displaySyncApplied) {
-                            Log.i(TAG, nativeEglPresentationReport())
+                            SlotLog.i(TAG, nativeEglPresentationReport())
                         }
                         probeStartNs = a12StartedNs
                         callbacks = 0
@@ -1665,7 +1666,7 @@ class MainActivity : Activity() {
                     }) {
                     importBiosFolder(uri, persistSelection = false)
                 } else {
-                    Log.w(TAG, "BIOS folder access expired; choose it again")
+                    SlotLog.w(TAG, "BIOS folder access expired; choose it again")
                 }
             }
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
@@ -1726,7 +1727,7 @@ class MainActivity : Activity() {
             }
         }
     } catch (error: Exception) {
-        Log.w(TAG, "Original Slot boot logo could not be loaded", error)
+        SlotLog.w(TAG, "Original Slot boot logo could not be loaded", error)
         null
     }
 
@@ -1738,13 +1739,13 @@ class MainActivity : Activity() {
         val vectorLogo = try {
             getDrawable(R.drawable.slot_boot_wordmark_vector)
         } catch (error: Exception) {
-            Log.w(TAG, "Vector Slot boot wordmark unavailable", error)
+            SlotLog.w(TAG, "Vector Slot boot wordmark unavailable", error)
             null
         }
         val fallbackBitmap = if (vectorLogo == null) try {
             assets.open("slot-bootlogo-kpa-960x640.png").use(BitmapFactory::decodeStream)
         } catch (error: Exception) {
-            Log.w(TAG, "Original Slot boot logo fallback unavailable", error)
+            SlotLog.w(TAG, "Original Slot boot logo fallback unavailable", error)
             null
         } else null
         if (vectorLogo == null && fallbackBitmap == null) return
@@ -1821,7 +1822,7 @@ class MainActivity : Activity() {
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_BUTTON_MODE && event.repeatCount == 0) {
-            Log.i(TAG, "KONKR MENU BTN_MODE down: Android code=" + keyCode +
+            SlotLog.i(TAG, "KONKR MENU BTN_MODE down: Android code=" + keyCode +
                 " scan=" + event.scanCode + " device=" + event.deviceId)
         }
         // START / SELECT on the shelf are now rendered by Slot itself.
@@ -1829,7 +1830,7 @@ class MainActivity : Activity() {
         // key can be mapped from real device evidence, not a guessed keycode.
         if (!readsKey(keyCode)) {
             if (event.repeatCount == 0) {
-                Log.i(TAG, "Unmapped hardware key down: code=" + keyCode +
+                SlotLog.i(TAG, "Unmapped hardware key down: code=" + keyCode +
                     " name=" + KeyEvent.keyCodeToString(keyCode) +
                     " device=" + event.deviceId + " scan=" + event.scanCode)
             }
@@ -2060,7 +2061,7 @@ class MainActivity : Activity() {
             // lock screen taking over at sleep): that release is not the
             // lid opening (2.4.0-menus9 on Siham's Rotate, 2026-11-14).
             if (event.isCanceled) {
-                Log.i(TAG, "Rotate: canceled lid release ignored, still closed")
+                SlotLog.i(TAG, "Rotate: canceled lid release ignored, still closed")
                 return true
             }
             lidCover.open()
@@ -2099,7 +2100,7 @@ class MainActivity : Activity() {
         }
         if (keyCode == KeyEvent.KEYCODE_BACK) return true
         if (keyCode == KeyEvent.KEYCODE_BUTTON_MODE) {
-            Log.i(TAG, "KONKR MENU BTN_MODE up: Android code=" + keyCode)
+            SlotLog.i(TAG, "KONKR MENU BTN_MODE up: Android code=" + keyCode)
         }
         if (!readsKey(keyCode)) return super.onKeyUp(keyCode, event)
         EmulationDiagnostics.input(keyCode, false, event, keyCode)
@@ -2155,7 +2156,7 @@ class MainActivity : Activity() {
                 }
                 dialog.show()
             } catch (error: Exception) {
-                Log.e(TAG, "Cannot open shared-save choice", error)
+                SlotLog.e(TAG, "Cannot open shared-save choice", error)
                 ready.countDown()
             }
         }
@@ -2183,7 +2184,7 @@ class MainActivity : Activity() {
                 }
                 dialog.show()
             } catch (error: Exception) {
-                Log.e(TAG, "Cannot open the RomM save choice", error)
+                SlotLog.e(TAG, "Cannot open the RomM save choice", error)
                 ready.countDown()
             }
         }
@@ -2208,17 +2209,22 @@ class MainActivity : Activity() {
             if (inFolder.isNotEmpty()) add(SaveDeletes.Where.SLOT_FOLDER)
         }
         val gone = SaveDeletes.Gone(kinds, where, inFolder.keys)
-        Log.i(TAG, "Deleted outside slot.: ${target.core}/${target.stem} $kinds from $where")
-        when (askDeleted(SaveDeletes.message(target.stem, gone))) {
+        SlotLog.i(TAG, "Deleted outside slot.: ${target.core}/${target.stem} $kinds from $where")
+        // A save alone: its game's save state holds it too, and would bring
+        // it back at the next launch (Siham 2026-11-18).
+        val withState = SaveDeletes.Kind.SAVE in kinds && SaveDeletes.Kind.STATE !in kinds &&
+            RetroArchStorage.hasOwnState(this, target)
+        when (askDeleted(SaveDeletes.message(target.stem, gone, withState))) {
             null -> return false
             SaveDeletes.Choice.PUT_BACK -> {
                 if (retroArch.isNotEmpty()) {
-                    RetroArchStorage.exportAfterSave(this, target).forEach { Log.w(TAG, "Put back: $it") }
+                    RetroArchStorage.exportAfterSave(this, target).forEach { SlotLog.w(TAG, "Put back: $it") }
                 }
                 slotFolder.putBack(inFolder.keys)
             }
             SaveDeletes.Choice.DELETE -> {
-                RetroArchStorage.deleteEverywhere(this, target, kinds)
+                RetroArchStorage.deleteEverywhere(this, target,
+                    if (withState) kinds + SaveDeletes.Kind.STATE else kinds)
                 if (SaveDeletes.Kind.SAVE in kinds) rommLater(target, upload = false) {
                     RommSaves.deleted(this, target)
                     null
@@ -2247,7 +2253,7 @@ class MainActivity : Activity() {
                 }
                 dialog.show()
             } catch (error: Exception) {
-                Log.e(TAG, "Cannot open the deleted save choice", error)
+                SlotLog.e(TAG, "Cannot open the deleted save choice", error)
                 ready.countDown()
             }
         }
@@ -2274,7 +2280,7 @@ class MainActivity : Activity() {
                 }
                 dialog.show()
             } catch (error: Exception) {
-                Log.e(TAG, "Cannot open the save folder choice", error)
+                SlotLog.e(TAG, "Cannot open the save folder choice", error)
                 ready.countDown()
             }
         }
@@ -2308,7 +2314,7 @@ class MainActivity : Activity() {
                 }
                 dialog.show()
             } catch (error: Exception) {
-                Log.e(TAG, "Cannot open core-state choice", error)
+                SlotLog.e(TAG, "Cannot open core-state choice", error)
                 ready.countDown()
             }
         }
@@ -2328,7 +2334,7 @@ class MainActivity : Activity() {
             val launchStart = SystemClock.elapsedRealtime()
             val queueWait = launchStart - queuedAt
             if (queueWait > 20) {
-                Log.i(TAG, "Slot launch queue delay: ${queueWait}ms (waiting for preceding save exports)")
+                SlotLog.i(TAG, "Slot launch queue delay: ${queueWait}ms (waiting for preceding save exports)")
             }
             // Which step failed, for the message on screen (runtime.rs).
             var step = "rom"
@@ -2411,13 +2417,21 @@ class MainActivity : Activity() {
                 // A copy with the slot. folder under way (slot. just came
                 // back, the card just went in) finishes first: the game
                 // starts from what it brings, and its deletions are known.
+                // A whole copy (a folder just chosen) can take minutes: the
+                // player is told instead of waiting (beta38). A copy that
+                // only writes to the folder isn't waited for.
+                slotFolder.copyPercent()?.let { percent ->
+                    nativeGameError(rawUri, "say:Copying to your slot. folder… $percent%")
+                    return@execute
+                }
                 val folderWaitAt = SystemClock.elapsedRealtime()
-                if (!slotFolder.awaitIdle(15_000L)) Log.w(TAG, "Slot folder copy still running; launching anyway")
+                if (slotFolder.pulling() && !slotFolder.awaitIdle(15_000L))
+                    SlotLog.w(TAG, "Slot folder copy still running; launching anyway")
                 (SystemClock.elapsedRealtime() - folderWaitAt).takeIf { it > 20 }?.let {
-                    Log.i(TAG, "Slot launch waited ${it}ms for the slot. folder")
+                    SlotLog.i(TAG, "Slot launch waited ${it}ms for the slot. folder")
                 }
                 if (!settleDeletedOutside(shared)) {
-                    nativeGameError(rawUri, "Deleted save choice cancelled")
+                    nativeGameError(rawUri, "quiet:Deleted save choice cancelled")
                     return@execute
                 }
                 var folderChoice: RetroArchStorage.FolderSaveChoice? = null
@@ -2439,7 +2453,7 @@ class MainActivity : Activity() {
                             // folder is treated as unreadable below.
                             if (conflictResolved) throw error
                             conflictResolved = true
-                            Log.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
+                            SlotLog.w(TAG, "Conflicting mGBA/gpSP SRAM needs explicit choice", error)
                             when (val choice = askSharedGbaConflict()) {
                                 SharedGbaChoice.CANCEL -> {
                                     nativeGameError(rawUri, "Shared save selection cancelled")
@@ -2457,7 +2471,7 @@ class MainActivity : Activity() {
                     false
                 } catch (error: Exception) {
                     if (shared.savesTree == null && shared.statesTree == null) throw error
-                    Log.e(TAG, "Save folder unreadable; starting with slot.'s own saves", error)
+                    SlotLog.e(TAG, "Save folder unreadable; starting with slot.'s own saves", error)
                     true
                 }
                 if (folderFailed) {
@@ -2472,7 +2486,7 @@ class MainActivity : Activity() {
                 // in first. Never stops the game.
                 // Not while this game's save is still going up: it's the newest.
                 if (rommBusy.containsKey(rommKey(shared))) {
-                    Log.i(TAG, "RomM: ${shared.stem}'s save is still being sent; launching with it")
+                    SlotLog.i(TAG, "RomM: ${shared.stem}'s save is still being sent; launching with it")
                 } else RommSaves.beforeLaunch(this@MainActivity, shared) { askRommConflict() }.message?.let { note ->
                     runOnUiThread {
                         if (!isDestroyed) SlotToast.makeText(this@MainActivity, note, Toast.LENGTH_SHORT).show()
@@ -2553,13 +2567,13 @@ class MainActivity : Activity() {
                 }
                 if (folderFailed) activeTargets.remove(rawUri) else activeTargets[rawUri] = shared
                 val readyAt = SystemClock.elapsedRealtime()
-                Log.i(TAG, "Slot launch preparation: ROM cache=${romReadyAt - launchStart}ms, " +
+                SlotLog.i(TAG, "Slot launch preparation: ROM cache=${romReadyAt - launchStart}ms, " +
                     "RetroArch import=${readyAt - romReadyAt}ms, total=${readyAt - launchStart}ms")
                 nativeSetNextResumeMode(resumeChoice)
                 nativeGameReady(rawUri, target.absolutePath)
                 if (ext == "gba") prefs.edit().putString("last_gba_core_$digest", core).apply()
             } catch (error: Exception) {
-                Log.e(TAG, "Could not prepare ROM ($step)", error)
+                SlotLog.e(TAG, "Could not prepare ROM ($step)", error)
                 nativeGameError(rawUri, "$step: " + (error.message ?: "Cannot open ROM"))
             } finally {
                 RomWarmCache.launching.compareAndSet(rawUri, null)
@@ -2586,7 +2600,7 @@ class MainActivity : Activity() {
             manager.registerListener(sensorListener, sensor, SensorManager.SENSOR_DELAY_GAME)
         }
         sensorsListening = wanted
-        Log.i(TAG, "Sensors listening: $wanted")
+        SlotLog.i(TAG, "Sensors listening: $wanted")
     }
 
     private fun stopSensors() {
@@ -2608,7 +2622,7 @@ class MainActivity : Activity() {
             val intensity = (strength / 257).coerceIn(10, 255)
             device.vibrate(VibrationEffect.createOneShot(45L, intensity))
         } catch (error: RuntimeException) {
-            Log.w(TAG, "KONKR rumble unavailable", error)
+            SlotLog.w(TAG, "KONKR rumble unavailable", error)
         }
     }
 
@@ -2626,9 +2640,9 @@ class MainActivity : Activity() {
             try {
                 android.os.Process.setThreadPriority(
                     android.os.Process.THREAD_PRIORITY_AUDIO)
-                Log.i(TAG, "Audio worker: THREAD_PRIORITY_AUDIO enabled")
+                SlotLog.i(TAG, "Audio worker: THREAD_PRIORITY_AUDIO enabled")
             } catch (error: Exception) {
-                Log.w(TAG, "Audio priority unavailable; using default worker priority", error)
+                SlotLog.w(TAG, "Audio priority unavailable; using default worker priority", error)
             }
             var player: AudioTrack? = null
             // F9: the worker owns one reusable PCM buffer (8192 bytes). A
@@ -2688,7 +2702,7 @@ class MainActivity : Activity() {
                         val bufferBytes = maxOf(16384, minBytes * 2)
                         audioBufferBytes = bufferBytes
                         nativeSetAudioOutputDepth(0, bufferBytes / 4)
-                        Log.i(TAG, "Audio diagnostic: rate=$wanted Hz, " +
+                        SlotLog.i(TAG, "Audio diagnostic: rate=$wanted Hz, " +
                             "minBuffer=$minBytes bytes, allocated=$bufferBytes bytes")
                         player = AudioTrack.Builder()
                             .setAudioAttributes(AudioAttributes.Builder()
@@ -2713,7 +2727,7 @@ class MainActivity : Activity() {
                             audioBufferBytes = capacityFrames * 4
                             nativeSetAudioOutputDepth(0, capacityFrames)
                         }
-                        Log.i(TAG, "Audio output: low_latency_requested=$lowLatency " +
+                        SlotLog.i(TAG, "Audio output: low_latency_requested=$lowLatency " +
                             "performance_mode=${player.performanceMode} " +
                             "capacity_frames=$capacityFrames")
                         rate = wanted
@@ -2754,9 +2768,9 @@ class MainActivity : Activity() {
                                 .setAudioFallbackMode(PlaybackParams.AUDIO_FALLBACK_MODE_MUTE)
                             player.playbackParams = params
                             nativeFastAudioSupported(true)
-                            Log.i(TAG, "FF audio: speed=${speed / 1000f}x, pitch=1.0x")
+                            SlotLog.i(TAG, "FF audio: speed=${speed / 1000f}x, pitch=1.0x")
                         } catch (error: Exception) {
-                            Log.w(TAG, "Pitch-preserving FF unsupported; silent fallback", error)
+                            SlotLog.w(TAG, "Pitch-preserving FF unsupported; silent fallback", error)
                             nativeFastAudioSupported(false)
                             try {
                                 player.playbackParams = PlaybackParams()
@@ -2837,7 +2851,7 @@ class MainActivity : Activity() {
                         }
                     } else firstWritten
                     if (written < sampleCount && audioRunning.get()) {
-                        Log.w(TAG, "AudioTrack incomplete PCM write: " +
+                        SlotLog.w(TAG, "AudioTrack incomplete PCM write: " +
                             "$written/${sampleCount} shorts")
                     }
                     playedShorts += written.toLong()
@@ -2858,11 +2872,11 @@ class MainActivity : Activity() {
                         val underflows = player.underrunCount
                         diagnosticAudioUnderruns = underflows
                         if (underflows > observedUnderruns) {
-                            Log.i(TAG, "AudioTrack underruns: +${underflows - observedUnderruns}" +
+                            SlotLog.i(TAG, "AudioTrack underruns: +${underflows - observedUnderruns}" +
                                 " over 5s (total=$underflows, rate=$wanted Hz)")
                         }
                         if (underflows > observedUnderruns) {
-                            Log.i(TAG, "Audio diagnostic: rate=$wanted, " +
+                            SlotLog.i(TAG, "Audio diagnostic: rate=$wanted, " +
                                 "bufferBytes=$audioBufferBytes, " +
                                 "writtenShorts=$playedShorts over 5s, " +
                                 "emptyReads=$emptyAudioReads, " +
@@ -2877,7 +2891,7 @@ class MainActivity : Activity() {
                         // Report the exact source of FIFO sample loss. This
                         // is one 5s log line, never a per-audio-read probe.
                         if (nativeWindow != null) {
-                            Log.i(TAG, "Audio FIFO loss: " +
+                            SlotLog.i(TAG, "Audio FIFO loss: " +
                                 "overflow_events=${nativeWindow.fifoOverflowEvents} " +
                                 "dropped_shorts=${nativeWindow.fifoDroppedShorts} " +
                                 "queued_now_shorts=${nativeAudioQueuedShorts()}")
@@ -2907,15 +2921,15 @@ class MainActivity : Activity() {
                             priorHardwareFrame = hardwareTimestamp.framePosition
                             priorHardwareTimeNs = hardwareTimestamp.nanoTime
                         }
-                        Log.i(TAG, "AudioTrack hardware clock: " +
+                        SlotLog.i(TAG, "AudioTrack hardware clock: " +
                             "rate_delta_ppm=${if (hardwareRatePpm.isFinite()) hardwareRatePpm else -1.0} " +
                             "hardware_span_ms=$hardwareSpanMs")
-                        Log.i(TAG, "AudioTrack queue depth: " +
+                        SlotLog.i(TAG, "AudioTrack queue depth: " +
                             "sample_count=$outputDepthSamples " +
                             "minimum_ms=${if (minimumOutputFrames == Long.MAX_VALUE) -1.0 else minimumOutputFrames * 1000.0 / wanted} " +
                             "maximum_ms=${maximumOutputFrames * 1000.0 / wanted} " +
                             "buffer_capacity_ms=${audioBufferBytes * 250.0 / wanted}")
-                        Log.i(TAG, "A12 PCM pacing: rate=$wanted span_ms=$spanMs " +
+                        SlotLog.i(TAG, "A12 PCM pacing: rate=$wanted span_ms=$spanMs " +
                             "written_shorts=$playedShorts expected_shorts=$expected " +
                             "playback_frames=$playbackFrames submitted_frames=${playedShorts / 2L} " +
                             "speed_permille=$requestedSpeed " +
@@ -2936,14 +2950,14 @@ class MainActivity : Activity() {
                     // gets a bounded 1s recovery delay. No UI-thread join or
                     // expanded PCM buffers; the existing heartbeat restarts it.
                     audioRetryNotBeforeMs.set(SystemClock.elapsedRealtime() + 1_000L)
-                    Log.e(TAG, "Android AudioTrack error; worker will recover", error)
+                    SlotLog.e(TAG, "Android AudioTrack error; worker will recover", error)
                 }
             } finally {
                 runCatching { player?.stop() }.onFailure {
-                    Log.w(TAG, "AudioTrack stop cleanup failed", it)
+                    SlotLog.w(TAG, "AudioTrack stop cleanup failed", it)
                 }
                 runCatching { player?.release() }.onFailure {
-                    Log.w(TAG, "AudioTrack release cleanup failed", it)
+                    SlotLog.w(TAG, "AudioTrack release cleanup failed", it)
                 }
                 if (audioWorkerGeneration.get() == myGeneration) {
                     audioRunning.set(false)
@@ -2991,7 +3005,7 @@ class MainActivity : Activity() {
                         },
                         submit = { hash, console -> nativeRaPrefetchHash(hash, console) })
                 } catch (_: Exception) {
-                    Log.w(TAG, "RA Smart Cache indexing postponed")
+                    SlotLog.w(TAG, "RA Smart Cache indexing postponed")
                 } finally {
                     raSmartRunning.set(false)
                 }
@@ -3123,7 +3137,7 @@ class MainActivity : Activity() {
         } catch (error: Exception) {
             // No background polling fallback: the HTTP engine already retries
             // with bounded exponential backoff when notifications are unavailable.
-            Log.w(TAG, "RA network reconnect callback unavailable")
+            SlotLog.w(TAG, "RA network reconnect callback unavailable")
         }
     }
 
@@ -3503,7 +3517,7 @@ class MainActivity : Activity() {
                     }
                 }
             } catch (error: Exception) {
-                Log.e(TAG, "BIOS folder import failed", error)
+                SlotLog.e(TAG, "BIOS folder import failed", error)
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     if (!persistSelection) {
@@ -3550,7 +3564,7 @@ class MainActivity : Activity() {
         } catch (error: ActivityNotFoundException) {
             nativeExternalReturn()
             nativeSetShelfStatus(shelfPickerError)
-            Log.w(TAG, "Android folder picker unavailable", error)
+            SlotLog.w(TAG, "Android folder picker unavailable", error)
         }
     }
 
@@ -3610,7 +3624,7 @@ class MainActivity : Activity() {
                     contentResolver.delete(uri, null, null)
                     throw error
                 }
-            }.onFailure { Log.w(TAG, "Cannot save screenshot", it) }.isSuccess
+            }.onFailure { SlotLog.w(TAG, "Cannot save screenshot", it) }.isSuccess
             runOnUiThread {
                 if (!isDestroyed) SlotToast.makeText(this,
                     if (saved) "Screenshot saved." else "Couldn't save the screenshot.",
@@ -3679,7 +3693,7 @@ class MainActivity : Activity() {
             nativeReloadVisualAssets()
             SlotToast.makeText(this, "Wallpaper updated.", Toast.LENGTH_SHORT).show()
         } catch (error: Exception) {
-            Log.e(TAG, "Cannot import Slot visual file", error)
+            SlotLog.e(TAG, "Cannot import Slot visual file", error)
             SlotToast.makeText(this, error.message?.takeIf { it.startsWith("Wallpaper must") }
                 ?: "Couldn't import this file.", Toast.LENGTH_LONG).show()
         }
@@ -3713,7 +3727,7 @@ class MainActivity : Activity() {
                     else -> AutoCartLabels.studioArt(applicationContext, platform)
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "Cart Studio art unavailable", error)
+                SlotLog.w(TAG, "Cart Studio art unavailable", error)
                 null to null
             }
 
@@ -3741,7 +3755,7 @@ class MainActivity : Activity() {
                     }
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "Another game's label unavailable", error)
+                SlotLog.w(TAG, "Another game's label unavailable", error)
             }
             nativeStudioArt(uri, real, logo, kind, name)
         }
@@ -3808,7 +3822,7 @@ class MainActivity : Activity() {
                     }
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "Cart Studio picture unreadable", error)
+                SlotLog.w(TAG, "Cart Studio picture unreadable", error)
             }
             nativeStudioArt(cart, opaque, transparent, 2, "")
         }
@@ -3880,7 +3894,7 @@ class MainActivity : Activity() {
             nativeReloadCartLabel(romUri)
             SlotToast.makeText(this, "Label updated.", Toast.LENGTH_SHORT).show()
         } catch (error: Exception) {
-            Log.e(TAG, "Could not import cartridge label", error)
+            SlotLog.e(TAG, "Could not import cartridge label", error)
             SlotToast.makeText(this, error.message?.takeIf { it.startsWith("Labels must") }
                 ?: "Couldn't import this label.", Toast.LENGTH_LONG).show()
         }
@@ -3899,7 +3913,7 @@ class MainActivity : Activity() {
             wakeCarouselRender()
             val uri = data?.data
             if (resultCode == RESULT_OK && uri != null) {
-                LogExport.write(this, uri) { saved ->
+                LogExport.write(this, uri, nativeJournal()) { saved ->
                     if (!isDestroyed) SlotToast.makeText(this,
                         if (saved) "Logs saved." else "Couldn't save the logs.",
                         Toast.LENGTH_SHORT).show()
@@ -3990,7 +4004,7 @@ class MainActivity : Activity() {
             } else {
                 SlotToast.makeText(this, "Couldn't access this folder. Select it again.", Toast.LENGTH_LONG).show()
             }
-            Log.e(TAG, "Android folder permission error", error)
+            SlotLog.e(TAG, "Android folder permission error", error)
         }
     }
 
@@ -4009,7 +4023,7 @@ class MainActivity : Activity() {
                     }.distinct().size)
                 RetroArchStorage.applyTransfer(applicationContext, plan, keepSlot)
             } catch (error: Exception) {
-                Log.e(TAG, "Folder transfer failed", error)
+                SlotLog.e(TAG, "Folder transfer failed", error)
                 null
             }
             val text = when {
@@ -4049,7 +4063,7 @@ class MainActivity : Activity() {
                 dialog.addButton("KEEP FOLDER ${noun.uppercase()}") { dialog.dismiss() }
                 dialog.show()
             } catch (error: Exception) {
-                Log.e(TAG, "Cannot open the folder transfer choice", error)
+                SlotLog.e(TAG, "Cannot open the folder transfer choice", error)
                 ready.countDown()
             }
         }
@@ -4067,7 +4081,7 @@ class MainActivity : Activity() {
                 metadata.optString("root") != root.toString()) null
             else metadata.optJSONArray("games")?.toString()
         } catch (error: Exception) {
-            Log.w(TAG, "Invalid ROM cache; scanning without replacing it first", error)
+            SlotLog.w(TAG, "Invalid ROM cache; scanning without replacing it first", error)
             null
         }
     }
@@ -4079,10 +4093,10 @@ class MainActivity : Activity() {
             val count = setStudioOverrides(games)
             if (count < 0) return false
             nativeSetShelfStatus(if (count == 0) shelfEmpty else shelfNone)
-            Log.i(TAG, "Restored $count cached ROMs without SAF rescan")
+            SlotLog.i(TAG, "Restored $count cached ROMs without SAF rescan")
             true
         } catch (error: Exception) {
-            Log.w(TAG, "Cached library unavailable; scanning", error)
+            SlotLog.w(TAG, "Cached library unavailable; scanning", error)
             false
         }
     }
@@ -4095,7 +4109,7 @@ class MainActivity : Activity() {
             .put("games", JSONArray(json))
             .toString().toByteArray(Charsets.UTF_8)
         if (payload.size > ROM_CACHE_MAX_BYTES) {
-            Log.w(TAG, "ROM library cache exceeds safe limit")
+            SlotLog.w(TAG, "ROM library cache exceeds safe limit")
             return
         }
         val atomic = AtomicFile(File(filesDir, ROM_CACHE_NAME))
@@ -4123,18 +4137,18 @@ class MainActivity : Activity() {
         if (!resumed || !nativeCanRefreshLibrary()) return
         if (next.silent && (next.json.length to next.json.hashCode()) == lastPublishedIndex) {
             pendingLibraryIndex = null
-            Log.i(TAG, "RomM: shelf already shows these games")
+            SlotLog.i(TAG, "RomM: shelf already shows these games")
             return
         }
         // RomM's games while more are coming: a group every 2.5 s at most.
         if (next.silent && romm.downloading() &&
             SystemClock.uptimeMillis() - lastSilentPublishAt < SILENT_PUBLISH_MS) {
-            if (!silentHeldLogged) { silentHeldLogged = true; Log.i(TAG, "RomM: games held for the next group") }
+            if (!silentHeldLogged) { silentHeldLogged = true; SlotLog.i(TAG, "RomM: games held for the next group") }
             return
         }
         if (next.silent) {
             silentHeldLogged = false
-            Log.i(TAG, "RomM: group to the shelf (more coming: ${romm.downloading()})")
+            SlotLog.i(TAG, "RomM: group to the shelf (more coming: ${romm.downloading()})")
         }
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null)
         if (saved != next.root.toString()) {
@@ -4147,7 +4161,7 @@ class MainActivity : Activity() {
         else lastSilentPublishAt = SystemClock.uptimeMillis()
         lastPublishedIndex = next.json.length to next.json.hashCode()
         val count = try { nativeSetLibrary(next.prepared) } catch (error: Exception) {
-            Log.e(TAG, "Changed ROM library could not be applied", error)
+            SlotLog.e(TAG, "Changed ROM library could not be applied", error)
             -1
         }
         if (count < 0) {
@@ -4168,7 +4182,7 @@ class MainActivity : Activity() {
                     startAutoCartLabels()
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "ROM cache write failed; displayed shelf is intact", error)
+                SlotLog.w(TAG, "ROM cache write failed; displayed shelf is intact", error)
             }
         }
         // No "0 cartridges ready.": an empty shelf already says so.
@@ -4219,7 +4233,7 @@ class MainActivity : Activity() {
                 // A bounded/incomplete SAF scan is not evidence that a ROM
                 // was removed. Fail closed, retaining the previous shelf.
                 if (result.truncated) {
-                    Log.w(TAG, "Incomplete SAF ROM listing: retaining existing index")
+                    SlotLog.w(TAG, "Incomplete SAF ROM listing: retaining existing index")
                     val gone = romFolderGone(uri)
                     runOnUiThread {
                         if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
@@ -4238,7 +4252,7 @@ class MainActivity : Activity() {
                 // games came by a scan rather than an add).
                 giveRommLabels(result.json)
                 if (previous != null && RomLibrary.sameIndex(previous, result.json)) {
-                    Log.i(TAG, "ROM library unchanged: " + result.count +
+                    SlotLog.i(TAG, "ROM library unchanged: " + result.count +
                         " carts; no renderer rebuild")
                     runOnUiThread {
                         if (!isDestroyed && scanSerial.get() == serial && shown) {
@@ -4260,7 +4274,7 @@ class MainActivity : Activity() {
                     publishPendingLibraryIfIdle()
                 }
             } catch (error: Exception) {
-                Log.e(TAG, "SAF ROM scan failed; previous cache retained", error)
+                SlotLog.e(TAG, "SAF ROM scan failed; previous cache retained", error)
                 val gone = romFolderGone(uri)
                 runOnUiThread {
                     if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
@@ -4309,7 +4323,7 @@ class MainActivity : Activity() {
     /** The deleted ROM folder's carts go; saves, states, labels, favourites
      *  and settings stay for when the games come back (Siham 2026-11-16). */
     private fun showRomFolderGone(tree: Uri) {
-        Log.w(TAG, "ROM folder no longer exists: the shelf empties")
+        SlotLog.w(TAG, "ROM folder no longer exists: the shelf empties")
         libraryRefreshIndicator.hide()
         if (!resumed || !nativeCanRefreshLibrary()) {
             // At boot or with a game on: once the shelf is free, while the
@@ -4362,7 +4376,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         if (RgRotate.device && rotateMiddleDown) {
             homeHoldPause = true
-            Log.i(TAG, "Rotate: middle button Home; light pause")
+            SlotLog.i(TAG, "Rotate: middle button Home; light pause")
             super.onPause()
             return
         }
@@ -4404,7 +4418,7 @@ class MainActivity : Activity() {
         val complete = CountDownLatch(1)
         view.queueEvent { try { nativeSuspend() } finally { complete.countDown() } }
         try {
-            if (!complete.await(2, TimeUnit.SECONDS)) Log.w(TAG, "Suspend save timed out")
+            if (!complete.await(2, TimeUnit.SECONDS)) SlotLog.w(TAG, "Suspend save timed out")
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
         }

@@ -783,7 +783,10 @@ static ROMM_SYNC: AtomicU8 = AtomicU8::new(0);
 /// The ROM folder's SD card isn't in this handheld.
 static ROMS_MISSING: AtomicBool = AtomicBool::new(false);
 /// How bright the carts are while their card is out.
-const MISSING_DIM: f32 = 0.45;
+/// Carts whose SD card is out: grey and dark, as a handheld switched off,
+/// opaque (Siham 2026-11-18, "B"; they were 45% see-through before).
+const MISSING_INK: slot_gfx::InkMap = slot_gfx::InkMap { paper: [0.05, 0.05, 0.06], ink: [0.50, 0.50, 0.52] };
+const MISSING_FADE_S: f32 = 0.3;
 /// Settings > Interface > RG Rotate: its rows and their keys (85, Sleep
 /// When Closed, is Android's "Lock the screen" right, not a setting).
 /// Game Info (84) right under Playing, which it shows on; Animations are
@@ -1462,6 +1465,10 @@ struct Engine {
     /// Library's slot. folder row while the first copy runs: COPYING n%.
     slot_copy_face: (slot_gfx::TexId, u32, u32),
     slot_copy_shown: i32,
+    /// How grey the carts are without their SD card (0 normal, 1 grey) and
+    /// when it was last moved: a 0.3 s fade (beta38).
+    missing_mix: f32,
+    missing_at: Instant,
     /// Each page's path line, made when first shown.
     menu_paths: std::collections::HashMap<&'static str, (slot_gfx::TexId, u32, u32)>,
     /// The cart beside the main and game menus: its name, then its title
@@ -2229,6 +2236,8 @@ impl Engine {
             library_values,
             slot_copy_face,
             slot_copy_shown: -1,
+            missing_mix: if ROMS_MISSING.load(Ordering::Acquire) { 1.0 } else { 0.0 },
+            missing_at: Instant::now(),
             menu_paths: Default::default(),
             menu_side: None,
             menu_textures,
@@ -2570,12 +2579,29 @@ impl Engine {
     }
 
     /// COPYING n% on Library's slot. folder row, redrawn as it moves.
+    /// Moves the carts' grey toward the card's state: 0.3 s each way.
+    fn advance_missing(&mut self) -> f32 {
+        let target = if ROMS_MISSING.load(Ordering::Acquire) { 1.0 } else { 0.0 };
+        let dt = self.missing_at.elapsed().as_secs_f32().min(0.1);
+        self.missing_at = Instant::now();
+        let step = dt / MISSING_FADE_S;
+        self.missing_mix = if self.missing_mix < target { (self.missing_mix + step).min(target) }
+            else { (self.missing_mix - step).max(target) };
+        self.missing_mix
+    }
+
     fn refresh_slot_copy_face(&mut self) {
         let percent = SLOT_FOLDER_COPY.load(Ordering::Acquire);
         if percent == self.slot_copy_shown { return; }
         self.slot_copy_shown = percent;
         if percent < 0 { return; }
-        let face = quick_value_face(&format!("COPYING {percent}%"), true);
+        // "COPYING n%", or just "n%" where it would reach the row's own
+        // label (a square screen like the Pocket Classic's, beta38).
+        let long = quick_value_face(&format!("COPYING {percent}%"), true);
+        let label = self.menu_textures[LIBRARY_ROWS[LIBRARY_SLOT_ROW]].1 as f32 * 0.79;
+        let room = out_w() as f32 - 34.0 - 37.0 - label - 24.0;
+        let face = if long.w as f32 * 0.79 <= room { long }
+            else { quick_value_face(&format!("{percent}%"), true) };
         self.gpu.update_face(self.slot_copy_face.0, &face);
         self.slot_copy_face = (self.slot_copy_face.0, face.w, face.h);
     }
@@ -4064,7 +4090,17 @@ impl Engine {
                 {
                     return;
                 }
-                set_error_message(game_error_text(&message), &message);
+                // "say:" a sentence for the player as is; "quiet:" the player
+                // chose not to play (B in a window): no message (beta38).
+                if let Some(text) = message.strip_prefix("say:") {
+                    crate::game::log_launch_timing(&format!("Launch held: {text}"));
+                    set_message(text.to_string());
+                } else if let Some(why) = message.strip_prefix("quiet:") {
+                    crate::game::log_launch_timing(&format!("Launch cancelled: {why}"));
+                } else {
+                    set_error_message(game_error_text(&message), &message);
+                }
+                crate::frame_watch::cancel();
                 self.awaiting_game = false;
                 self.inserted = false;
                 self.requested_uri = None;
@@ -8198,7 +8234,10 @@ impl Engine {
             | 1 << 31, Ordering::Release);
         self.refresh_system_status();
         self.refresh_slot_copy_face();
+        let missing_mix = self.advance_missing();
+        let wallpaper_at = Instant::now();
         self.poll_shelf_wallpapers();
+        crate::frame_watch::part(crate::frame_watch::PART_WALLPAPER, wallpaper_at.elapsed());
         // Poll the already-running achievement evaluator without blocking GL.
         // Only Android's foreground UI displays notices; the worker never
         // touches JNI, an Activity, the renderer or the filesystem here.
@@ -9058,8 +9097,10 @@ impl Engine {
         if repeated_letter { self.show_selected_letter(); }
         self.shelves[self.active].update(dt);
         self.tick_triggers();
+        let upload_at = Instant::now();
         self.relabel_one();
         self.prepare_visible();
+        crate::frame_watch::part(crate::frame_watch::PART_UPLOAD, upload_at.elapsed());
         self.start_waiting_picker();
         // Only warm a settled carousel selection. Actual ROM I/O takes place
         // on an independently cancelable Android background executor.
@@ -9162,14 +9203,26 @@ impl Engine {
                 // The physical slot stays fixed; no input delay or layout changes.
                 let shake = self.refusal.map_or(0.0, |r| r.offset(ms));
                 let row_from = commands.len();
-                let dim = if ROMS_MISSING.load(Ordering::Acquire) { MISSING_DIM } else { 1.0 };
                 let hidden = ejecting_stem.as_deref().or_else(|| {
                     (press_lift > 0.0 || flight_hides)
                         .then(|| shelf.carts.get(shelf.index).map(|c| c.stem.as_str())).flatten()
                 });
-                shelf.draw_row(hidden, shake, 0.0, dim, &mut commands);
-                if let Some([x, y, w, h]) = lifted.filter(|_| press_lift > 0.0 && !flight_hides) {
-                    shelf.draw_selected_at(x, y, w, h, dim, &mut commands);
+                // In colour, then grey over it as the card goes (a crossfade
+                // while it changes; one row only otherwise).
+                let grey = missing_mix;
+                if grey < 1.0 {
+                    shelf.draw_row(hidden, shake, 0.0, 1.0, &mut commands);
+                    if let Some([x, y, w, h]) = lifted.filter(|_| press_lift > 0.0 && !flight_hides) {
+                        shelf.draw_selected_at(x, y, w, h, 1.0, &mut commands);
+                    }
+                }
+                if grey > 0.0 {
+                    commands.push(Draw::Ink(Some(MISSING_INK)));
+                    shelf.draw_row(hidden, shake, 0.0, grey, &mut commands);
+                    if let Some([x, y, w, h]) = lifted.filter(|_| press_lift > 0.0 && !flight_hides) {
+                        shelf.draw_selected_at(x, y, w, h, grey, &mut commands);
+                    }
+                    commands.push(Draw::Ink(None));
                 }
                 lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
@@ -9377,10 +9430,12 @@ impl Engine {
             }
         }
         SHELF_INDICATOR_FLAGS.store(indicator_flags, Ordering::Release);
+        let gpu_at = Instant::now();
         self.gpu.fit(self.size);
         self.gpu.begin_frame();
         self.gpu.draw_list(&commands);
         self.gpu.end_frame(self.size);
+        crate::frame_watch::part(crate::frame_watch::PART_GPU, gpu_at.elapsed());
         // Idle throttle is an output-only pacing hint; never change upstream
         // animation timings, input handling, or cartridge prefetch priorities.
         let quiet = !self.inserted
@@ -9399,6 +9454,7 @@ impl Engine {
             && self.lid_t == if self.lid_covered { 1.0 } else { 0.0 }
             // A long title scrolling its passes (#119).
             && !self.title_scroll().1
+            && self.missing_mix == if ROMS_MISSING.load(Ordering::Acquire) { 1.0 } else { 0.0 }
             && self.cart_render.is_idle();
         CAROUSEL_QUIET.store(quiet, Ordering::Release);
     }

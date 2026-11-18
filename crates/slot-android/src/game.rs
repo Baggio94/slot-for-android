@@ -25,6 +25,7 @@ unsafe extern "C" {
 }
 
 pub(crate) fn log_launch_timing(message: &str) {
+    crate::journal('I', message);
     #[cfg(target_os = "android")]
     if let Ok(text) = std::ffi::CString::new(message) {
         unsafe {

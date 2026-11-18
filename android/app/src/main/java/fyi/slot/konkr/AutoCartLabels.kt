@@ -54,7 +54,7 @@ internal object AutoCartLabels {
         batchDelayMs = maxOf(NEXT_BATCH_MS,
             retry.nextDelayMs(remaining.map { it.uri }, now))
             .coerceAtMost(180_000L)
-        Log.i(TAG, "Pending automatic labels: ${remaining.size}; next pass in ${batchDelayMs}ms")
+        SlotLog.i(TAG, "Pending automatic labels: ${remaining.size}; next pass in ${batchDelayMs}ms")
         return true
     }
 
@@ -62,7 +62,7 @@ internal object AutoCartLabels {
      *  for the carts our own set doesn't hold; null when it can't be had. */
     private fun loadOfficialIndex(context: Context, shouldContinue: () -> Boolean): JSONObject? {
         fun failed(reason: String): JSONObject? {
-            Log.w(TAG, "Official art index temporarily unavailable: $reason")
+            SlotLog.w(TAG, "Official art index temporarily unavailable: $reason")
             return null
         }
         val indexBytes = try {
@@ -84,12 +84,12 @@ internal object AutoCartLabels {
                 output.toByteArray()
             }
         } catch (error: Exception) {
-            Log.w(TAG, "Official art index request failed", error)
+            SlotLog.w(TAG, "Official art index request failed", error)
             return failed(error.javaClass.simpleName)
         }
         val index = try { JSONObject(String(indexBytes, Charsets.UTF_8)) }
             catch (error: Exception) {
-                Log.w(TAG, "Official art index could not be parsed", error)
+                SlotLog.w(TAG, "Official art index could not be parsed", error)
                 return failed("invalid JSON")
             }
         return index
@@ -137,6 +137,33 @@ internal object AutoCartLabels {
         return out
     }
 
+    /** Games with no official label (hacks, homebrew), remembered between
+     *  runs for a week: "2/2 labels, 0 saved" no longer showed at every
+     *  start (beta38). After a week, a newer art set may have them. */
+    private const val MISS_DAYS = 7L
+    private var missesLoaded = false
+
+    private fun missFile(context: Context) = java.io.File(context.filesDir, "AutoLabels/no-official-label.txt")
+
+    private fun rememberedMisses(context: Context) {
+        if (missesLoaded) return
+        missesLoaded = true
+        val oldest = System.currentTimeMillis() - MISS_DAYS * 24 * 3600 * 1000
+        try {
+            missFile(context).takeIf { it.isFile }?.readLines()?.forEach { line ->
+                val at = line.substringBefore('\t').toLongOrNull() ?: return@forEach
+                if (at >= oldest) retry.finished(line.substringAfter('\t'))
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun rememberMiss(context: Context, uri: String) {
+        try {
+            missFile(context).apply { parentFile?.mkdirs() }
+                .appendText("${System.currentTimeMillis()}\t$uri\n")
+        } catch (_: Exception) {}
+    }
+
     /** Returns true if more bounded foreground work is pending, including retries. */
     fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit): Boolean {
         if (!shouldContinue()) return false
@@ -145,13 +172,14 @@ internal object AutoCartLabels {
         // Super Nintendo and Mega Drive labels from ScreenScraper.
         val games = CartStudioCatalog.games(context).filter { it.platform !in Systems.HOME_PLATFORMS }
         if (games.isEmpty()) {
-            Log.i(TAG, "Deferred: cached ROM library not ready (zero indexed games)")
+            SlotLog.i(TAG, "Deferred: cached ROM library not ready (zero indexed games)")
             return false
         }
+        rememberedMisses(context)
         val missing = games.filter { !CartLabelPaths.file(context.filesDir, it.uri).exists() }
         val pending = missing.filter { retry.pending(it.uri) }
         if (pending.isEmpty()) {
-            Log.i(TAG, "No pending official art: games=${games.size}, missing=${missing.size}, savedTotal=$savedTotal")
+            SlotLog.i(TAG, "No pending official art: games=${games.size}, missing=${missing.size}, savedTotal=$savedTotal")
             return false
         }
         var checked = games.count { !retry.pending(it.uri) }
@@ -174,7 +202,7 @@ internal object AutoCartLabels {
             cachedIndex = loaded
             if (loaded != null) {
                 retry.reset(INDEX_KEY)
-                Log.i(TAG, "Official art index ready: CRC entries=${loaded.length()}")
+                SlotLog.i(TAG, "Official art index ready: CRC entries=${loaded.length()}")
             } else if (shouldContinue()) {
                 retry.transient(INDEX_KEY, android.os.SystemClock.elapsedRealtime())
             }
@@ -219,7 +247,7 @@ internal object AutoCartLabels {
                 var bytes: ByteArray? = if (pre.containsKey(rom.uri)) pre[rom.uri] else try {
                     ownScan(context, rom, crc.hex)
                 } catch (error: Exception) {
-                    Log.w(TAG, "Own art set lookup failed; trying slot.'s", error)
+                    SlotLog.w(TAG, "Own art set lookup failed; trying slot.'s", error)
                     null
                 }
                 if (bytes == null) {
@@ -321,7 +349,7 @@ internal object AutoCartLabels {
             } catch (error: Exception) {
                 if (outcome != "SAVED") outcome = "ERROR"
                 errors++
-                Log.w(TAG, "Auto-art deferred for ${rom.title.take(80)}", error)
+                SlotLog.w(TAG, "Auto-art deferred for ${rom.title.take(80)}", error)
             } finally {
                 val wasPending = retry.pending(rom.uri)
                 // A real stored label always wins, including when the user
@@ -329,12 +357,14 @@ internal object AutoCartLabels {
                 if (target.exists()) retry.finished(rom.uri)
                 else if (shouldContinue()) {
                     when (outcome) {
-                        "NOT_FOUND", "INVALID_ARTWORK", "EXISTS" ->
+                        "NOT_FOUND", "INVALID_ARTWORK", "EXISTS" -> {
                             retry.finished(rom.uri)
+                            if (outcome != "EXISTS") rememberMiss(context, rom.uri)
+                        }
                         "DAT_UNAVAILABLE", "NETWORK_ERROR", "ERROR" -> {
                             val scheduled = retry.transient(
                                 rom.uri, android.os.SystemClock.elapsedRealtime())
-                            Log.i(TAG, "ART_RETRY ${rom.title.take(72)}: " +
+                            SlotLog.i(TAG, "ART_RETRY ${rom.title.take(72)}: " +
                                 if (scheduled) "scheduled (attempt ${retry.failedAttempts(rom.uri)}/" +
                                     "${AutoLabelRetryPolicy.MAX_ATTEMPTS})"
                                 else "exhausted for this app process")
@@ -345,13 +375,13 @@ internal object AutoCartLabels {
                 if (wasPending && !retry.pending(rom.uri)) checked++
                 AutoCartLabelDiagnostics.result(checked, savedTotal, outcome)
                 if (outcome == "NOT_FOUND") notFound++
-                Log.i(TAG, "ART_RESULT $outcome [${rom.platform}] ${rom.title.take(96)}")
+                SlotLog.i(TAG, "ART_RESULT $outcome [${rom.platform}] ${rom.title.take(96)}")
             }
         }
         try { CartStudioCatalog.flush(context) }
-        catch (error: Exception) { Log.w(TAG, "Could not persist cartridge checksums", error) }
+        catch (error: Exception) { SlotLog.w(TAG, "Could not persist cartridge checksums", error) }
 
-        Log.i(TAG, "Art pass: attempted=$attempted, saved=$saved, fetched=$fetched, " +
+        SlotLog.i(TAG, "Art pass: attempted=$attempted, saved=$saved, fetched=$fetched, " +
             "no_official_match=$notFound, retryable_errors=$errors")
         return reschedule(pending, shouldContinue)
     }
@@ -371,12 +401,12 @@ internal object AutoCartLabels {
             if (indexed.statusCode == 200)
                 JSONObject(String(indexed.data.use { it.readBytes() }, Charsets.UTF_8)) else null
         } catch (error: Exception) {
-            Log.w(TAG, "slot.'s art set index unavailable for Cart Studio", error); null
+            SlotLog.w(TAG, "slot.'s art set index unavailable for Cart Studio", error); null
         }
         fun ownScan(dump: String): ByteArray? = try {
             SlotArtSet.scanPng(context, rom.platform, dump)
         } catch (error: Exception) {
-            Log.w(TAG, "Own art set lookup failed for Cart Studio", error); null
+            SlotLog.w(TAG, "Own art set lookup failed for Cart Studio", error); null
         }
         fun theirScan(dump: String): ByteArray? = try {
             index?.let { OfficialArtResolver.artPath(it, rom.platform, dump) }?.let { path ->
@@ -384,7 +414,7 @@ internal object AutoCartLabels {
                 if (image.statusCode == 200) image.data.use { it.readBytes() } else null
             }
         } catch (error: Exception) {
-            Log.w(TAG, "slot.'s art set lookup failed for Cart Studio", error); null
+            SlotLog.w(TAG, "slot.'s art set lookup failed for Cart Studio", error); null
         }
         fun hasArt(dump: String): Boolean = try {
             SlotArtSet.entries(context, rom.platform, dump)?.any { it.type == "support-texture" } == true ||
@@ -401,7 +431,7 @@ internal object AutoCartLabels {
                     }
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "No-Intro name match failed for Cart Studio", error); null
+                SlotLog.w(TAG, "No-Intro name match failed for Cart Studio", error); null
             }
             if (named != null) {
                 dump = named
@@ -415,7 +445,7 @@ internal object AutoCartLabels {
                 SlotArtSet.entries(context, rom.platform, candidate)?.firstOrNull { it.type == "wheel" }
             }?.let { SlotArtSet.file(context, it) }?.let(SlotArtSet::toPng)
         } catch (error: Exception) {
-            Log.w(TAG, "Logo lookup failed for Cart Studio", error); null
+            SlotLog.w(TAG, "Logo lookup failed for Cart Studio", error); null
         }
         return real to logo
     }
@@ -443,11 +473,11 @@ internal object AutoCartLabels {
         val h = opts.outHeight
         if (w !in 64..4096 || h !in 64..4096 ||
             w.toLong() * h.toLong() > 12_000_000L) {
-            Log.i(TAG, "Unsupported official source dimensions: ${w}x${h} for $platform")
+            SlotLog.i(TAG, "Unsupported official source dimensions: ${w}x${h} for $platform")
             return null
         }
         val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: run {
-            Log.i(TAG, "Official source PNG could not be decoded: ${w}x${h}")
+            SlotLog.i(TAG, "Official source PNG could not be decoded: ${w}x${h}")
             return null
         }
         return try {

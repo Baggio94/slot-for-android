@@ -88,6 +88,23 @@ internal class SlotFolder(private val activity: MainActivity) {
     fun volume(): String? = prefs.getString(ROOT, null)?.substringBefore(':', "")?.takeIf { it.isNotEmpty() }
     private fun rootDoc(): String? = prefs.getString(ROOT, null)
 
+    /** Copies that bring files in (pulls), queued or running: only those
+     *  are waited for at a launch (beta38). */
+    private val pulls = java.util.concurrent.atomic.AtomicInteger()
+    /** The whole copy into a folder just chosen, in percent; -1 when none. */
+    @Volatile private var copyAt = -1
+
+    fun pulling(): Boolean = pulls.get() > 0
+    fun copyPercent(): Int? = copyAt.takeIf { it >= 0 }
+
+    /** Runs [block] once no game is on (a window, the ROM picker, a reload
+     *  never land on a game, beta38). */
+    private fun whenFree(block: () -> Unit) {
+        if (activity.isDestroyed) return
+        if (!activity.nativeIsPlaying()) block()
+        else activity.window.decorView.postDelayed({ whenFree(block) }, 2_000L)
+    }
+
     /** Waits, at most [millis], for the copy under way, so a game starts from
      *  what the folder just brought (beta37). True when none is left. */
     fun awaitIdle(millis: Long): Boolean = try {
@@ -114,7 +131,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         if (tree() == null) { wasMounted = null; pullWhenFree = false; return }
         val now = mounted()
         if (wasMounted == false && now) {
-            Log.i(TAG, "Slot folder's card is back")
+            SlotLog.i(TAG, "Slot folder's card is back")
             pullWhenFree = true
         }
         wasMounted = now
@@ -129,6 +146,12 @@ internal class SlotFolder(private val activity: MainActivity) {
 
     /** Library > Choose slot. Folder: slot.'s window, then Android's picker. */
     fun choose() {
+        copyPercent()?.let { percent ->
+            // One copy at a time: the row shows how far it is.
+            activity.nativeExternalReturn()
+            toast("Copying to your slot. folder… $percent%")
+            return
+        }
         val volumes = removableVolume()
         val dialog = SlotModalDialog(activity, "SLOT. FOLDER",
             "Where should slot. keep your saves, states and settings? Already have a slot " +
@@ -189,7 +212,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             activity.contentResolver.takePersistableUriPermission(uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         } catch (error: SecurityException) {
-            Log.w(TAG, "No lasting access to the slot folder", error)
+            SlotLog.w(TAG, "No lasting access to the slot folder", error)
             activity.nativeExternalReturn()
             SlotToast.makeText(activity, "Android didn't give slot. access to this folder.", Toast.LENGTH_LONG).show()
             return
@@ -208,7 +231,7 @@ internal class SlotFolder(private val activity: MainActivity) {
     private fun look(tree: Uri, doc: String) {
         val side = SafSide(activity, tree, doc)
         val children = try { side.children(doc) } catch (error: Exception) {
-            Log.w(TAG, "Slot folder unreadable", error)
+            SlotLog.w(TAG, "Slot folder unreadable", error)
             ui { activity.nativeExternalReturn(); toast("Couldn't read this folder.") }
             return
         }
@@ -261,7 +284,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                             val child = existing?.id ?: side.createDir(doc, "slot")
                             look(tree, child)
                         } catch (error: Exception) {
-                            Log.w(TAG, "Couldn't create the slot folder", error)
+                            SlotLog.w(TAG, "Couldn't create the slot folder", error)
                             ui { activity.nativeExternalReturn(); toast("Couldn't create the slot folder.") }
                         }
                     }
@@ -287,8 +310,11 @@ internal class SlotFolder(private val activity: MainActivity) {
         if (backup) backupPrivate()
         val base = if (first) FolderSync.Base() else FolderSync.Base.parse(baseFile.takeIf { it.isFile }?.readText())
         val side = SafSide(activity, tree, doc)
-        // The copy can take minutes (labels): Library shows how far it is.
-        ui { toast("Copying to your slot. folder…") }
+        // The copy can take minutes (labels): Library shows how far it is,
+        // and the menus are free meanwhile (beta38: A did nothing until the
+        // copy ended).
+        copyAt = 0
+        ui { activity.nativeExternalReturn(); toast("Copying to your slot. folder…") }
         val report = try {
             val tombs = readTombs(side)
             FolderSync.sync(privateSide(), side, base, if (first) start else FolderSync.Start.SYNC,
@@ -298,17 +324,18 @@ internal class SlotFolder(private val activity: MainActivity) {
                 side.makeCheatFolders()
             }
         } catch (error: Exception) {
-            Log.w(TAG, "First copy into the slot folder failed", error)
+            SlotLog.w(TAG, "First copy into the slot folder failed", error)
             ui { activity.nativeSetSlotFolderCopy(-1); activity.nativeExternalReturn()
                 toast("Couldn't copy into this folder: ${error.message}") }
             return
         } finally {
+            copyAt = -1
             ui { activity.nativeSetSlotFolderCopy(-1) }
         }
-        Log.i(TAG, "Slot folder copy: ${report.toFolder} out, ${report.toPrivate} in")
+        SlotLog.i(TAG, "Slot folder copy: ${report.toFolder} out, ${report.toPrivate} in")
         // Scenario A13: the folder only counts once the copy is complete.
         if (report.failures.isNotEmpty()) {
-            Log.w(TAG, "Slot folder copy: " + report.failures.joinToString(" | "))
+            SlotLog.w(TAG, "Slot folder copy: " + report.failures.joinToString(" | "))
             ui { activity.nativeExternalReturn(); toast("Some files couldn't be copied. Check the card's space and try again.") }
             return
         }
@@ -324,12 +351,16 @@ internal class SlotFolder(private val activity: MainActivity) {
             if (report.changedPrivate) activity.nativeExternalClose() else activity.nativeExternalReturn()
             toast(if (report.changedPrivate) "slot. folder ready: your saves and settings are back."
                 else "slot. folder ready.")
-            if (report.changedPrivate) activity.nativeReloadAll()
-            // Scenario D1: the ROM folder next to it, if this handheld has none.
-            json?.optString("roms")?.takeIf { it.isNotBlank() }?.let { activity.suggestRomFolder(it) }
-            // Scenario A10: the old folder, once the new one is complete.
-            val (oldTree, oldDoc) = old
-            if (first && oldTree != null && oldDoc != null && oldDoc != doc) offerToClear(oldTree, oldDoc)
+            // The rest never over a game (beta38): the player may have
+            // left Library during the copy.
+            whenFree {
+                if (report.changedPrivate) activity.nativeReloadAll()
+                // Scenario D1: the ROM folder next to it, if this handheld has none.
+                json?.optString("roms")?.takeIf { it.isNotBlank() }?.let { activity.suggestRomFolder(it) }
+                // Scenario A10: the old folder, once the new one is complete.
+                val (oldTree, oldDoc) = old
+                if (first && oldTree != null && oldDoc != null && oldDoc != doc) offerToClear(oldTree, oldDoc)
+            }
         }
     }
 
@@ -344,7 +375,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                 target.parentFile?.mkdirs()
                 File(activity.filesDir, path).copyTo(target, overwrite = true)
             } catch (error: Exception) {
-                Log.w(TAG, "Backup of $path skipped", error)
+                SlotLog.w(TAG, "Backup of $path skipped", error)
             }
         }
     }
@@ -367,7 +398,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                 try {
                     SafSide(activity, tree, doc).clear()
                 } catch (error: Exception) {
-                    Log.w(TAG, "Old slot folder not cleared", error)
+                    SlotLog.w(TAG, "Old slot folder not cleared", error)
                     ui { toast("Couldn't delete the old slot folder.") }
                 }
             }
@@ -392,12 +423,24 @@ internal class SlotFolder(private val activity: MainActivity) {
      */
     fun sync(pull: Boolean) {
         if (tree() == null) return
-        worker.execute {
+        if (pull) pulls.incrementAndGet()
+        try {
+            worker.execute {
+                try { runSync(pull) } finally { if (pull) pulls.decrementAndGet() }
+            }
+        } catch (error: Exception) {
+            if (pull) pulls.decrementAndGet()
+            SlotLog.w(TAG, "Slot folder copy not queued", error)
+        }
+    }
+
+    private fun runSync(pull: Boolean) {
+        run {
             // Which folder, read when the copy runs: one asked for just
             // before the player chose another went to the old one with the
             // new one's base (2.5.0-beta35: 540 files copied back for nothing).
-            val tree = tree() ?: return@execute
-            val doc = rootDoc() ?: return@execute
+            val tree = tree() ?: return@run
+            val doc = rootDoc() ?: return@run
             val side = SafSide(activity, tree, doc)
             if (!side.reachable()) {
                 // Scenario E1/E2: the card is away; slot. plays on its copy.
@@ -405,14 +448,14 @@ internal class SlotFolder(private val activity: MainActivity) {
                     warnedMissing = true
                     ui { toast("slot. folder unavailable: playing from this handheld's copy.") }
                 }
-                return@execute
+                return@run
             }
             warnedMissing = false
             val stranger = side.readJsonEnv()
             if (stranger != null && stranger != prefs.getString(ENV, null)) {
                 // Scenario E3: another card's slot folder in the same place.
-                Log.w(TAG, "Another slot folder is in place: nothing written")
-                return@execute
+                SlotLog.w(TAG, "Another slot folder is in place: nothing written")
+                return@run
             }
             val base = FolderSync.Base.parse(baseFile.takeIf { it.isFile }?.readText())
             val report = try {
@@ -424,17 +467,17 @@ internal class SlotFolder(private val activity: MainActivity) {
                     if (pull) side.makeCheatFolders()
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "Slot folder sync failed", error)
-                return@execute
+                SlotLog.w(TAG, "Slot folder sync failed", error)
+                return@run
             }
-            if (report.failures.isNotEmpty()) Log.w(TAG, "Slot folder: " + report.failures.joinToString(" | "))
+            if (report.failures.isNotEmpty()) SlotLog.w(TAG, "Slot folder: " + report.failures.joinToString(" | "))
             saveBase(base)
             if (report.toFolder > 0 || report.toPrivate > 0) {
-                try { writeJson(side, doc, prefs.getString(ENV, null) ?: return@execute, side.readJson()) }
-                catch (error: Exception) { Log.w(TAG, "slot.json not updated", error) }
+                try { writeJson(side, doc, prefs.getString(ENV, null) ?: return@run, side.readJson()) }
+                catch (error: Exception) { SlotLog.w(TAG, "slot.json not updated", error) }
             }
-            if (report.changedPrivate) ui { if (activity.nativeCanRefreshLibrary()) activity.nativeReloadAll() }
-            Log.i(TAG, "Slot folder: ${report.toFolder} out, ${report.toPrivate} in, " +
+            if (report.changedShelf) ui { whenFree { if (activity.nativeCanRefreshLibrary()) activity.nativeReloadAll() } }
+            SlotLog.i(TAG, "Slot folder: ${report.toFolder} out, ${report.toPrivate} in, " +
                 "${report.conflicts} conflicts, ${report.removed} removed, " +
                 "${report.deletedHere.size} deleted here, ${report.gone.size} held back")
         }
@@ -467,7 +510,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         try {
             side.write(TOMBS, FolderSync.tombsToJson(tombs).toByteArray(Charsets.UTF_8))
         } catch (error: Exception) {
-            Log.w(TAG, "Deletions not noted in the slot folder", error)
+            SlotLog.w(TAG, "Deletions not noted in the slot folder", error)
         }
     }
 
@@ -480,7 +523,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             file.parentFile?.mkdirs()
             if (paths.isEmpty()) file.delete() else file.writeText(paths.joinToString("\n"))
         } catch (error: Exception) {
-            Log.w(TAG, "Couldn't keep ${file.name}", error)
+            SlotLog.w(TAG, "Couldn't keep ${file.name}", error)
         }
     }
 
@@ -517,6 +560,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             if (percent != shown && (now - at >= 250 || percent == 100)) {
                 shown = percent
                 at = now
+                copyAt = percent.coerceAtMost(99)
                 activity.nativeSetSlotFolderCopy(percent)
             }
         }
@@ -596,6 +640,8 @@ internal class SlotFolder(private val activity: MainActivity) {
         }
         private val files = HashMap<String, String>()
         private var listed = false
+        /** Pictures, written straight when new (see write). */
+        private val DIRECT = listOf("Labels/", "ArtNames/", "Studio/", "Wallpapers/")
 
         private fun dirOf(path: String): String = folderFor(path, root, dirs) { above, name ->
             children(above).firstOrNull { it.dir && it.name == name }?.id ?: createDir(above, name)
@@ -619,7 +665,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                     write(CHEAT_README, CHEAT_HELP.toByteArray(Charsets.UTF_8))
                 }
             } catch (error: Exception) {
-                Log.w(TAG, "CustomCheats folders not made", error)
+                SlotLog.w(TAG, "CustomCheats folders not made", error)
             }
         }
 
@@ -634,6 +680,23 @@ internal class SlotFolder(private val activity: MainActivity) {
             val parentUri = DocumentsContract.buildDocumentUriUsingTree(tree, parent)
             val existing = files[path]
                 ?: if (!listed) children(parent).firstOrNull { !it.dir && it.name == name }?.id else null
+            // A new label or picture straight under its name: three calls to
+            // Android instead of six, the first copy of hundreds of labels
+            // took minutes (beta38). Saves, states and settings still go
+            // through a temporary file.
+            if (existing == null && DIRECT.any { path.startsWith(it) }) {
+                val made = DocumentsContract.createDocument(resolver, parentUri, "application/octet-stream", name)
+                    ?: throw IOException("couldn't write $path")
+                try {
+                    resolver.openOutputStream(made, "wt")?.use { it.write(bytes) } ?: throw IOException("couldn't write $path")
+                } catch (error: Exception) {
+                    try { DocumentsContract.deleteDocument(resolver, made) } catch (_: Exception) {}
+                    throw error
+                }
+                val id = DocumentsContract.getDocumentId(made)
+                files[path] = id
+                return meta(id) ?: FolderSync.Meta(bytes.size.toLong(), System.currentTimeMillis())
+            }
             // Through a temporary file: a cut never leaves half a save.
             val temp = DocumentsContract.createDocument(resolver, parentUri, "application/octet-stream",
                 "$name.slot-tmp") ?: throw IOException("couldn't write $path")

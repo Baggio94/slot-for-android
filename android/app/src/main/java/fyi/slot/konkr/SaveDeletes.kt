@@ -69,7 +69,9 @@ internal object SaveDeletes {
     }
 
     /** The window's words: what was deleted, of which game, from where. */
-    fun message(title: String, gone: Gone): String {
+    /** [withState]: only the save is gone, and the game has a save state,
+     *  which holds the save too: DELETE IT takes it as well (beta38). */
+    fun message(title: String, gone: Gone, withState: Boolean = false): String {
         val what = when {
             gone.kinds.size == 2 -> "The save and save state"
             Kind.SAVE in gone.kinds -> "The save"
@@ -81,7 +83,9 @@ internal object SaveDeletes {
             Where.RETROARCH in gone.where -> "your RetroArch folder"
             else -> "your slot. folder"
         }
-        return "$what of $title $verb deleted from $from. Delete it from slot. too, or put it back?"
+        val too = if (withState) "Delete it from slot. too, with the game's save state, or put it back?"
+            else "Delete it from slot. too, or put it back?"
+        return "$what of $title $verb deleted from $from. $too"
     }
 
     /** Where a file deleted from slot. is kept, on this handheld only. */
