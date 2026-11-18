@@ -88,6 +88,42 @@ internal class SlotFolder(private val activity: MainActivity) {
     fun volume(): String? = prefs.getString(ROOT, null)?.substringBefore(':', "")?.takeIf { it.isNotEmpty() }
     private fun rootDoc(): String? = prefs.getString(ROOT, null)
 
+    /** Waits, at most [millis], for the copy under way, so a game starts from
+     *  what the folder just brought (beta37). True when none is left. */
+    fun awaitIdle(millis: Long): Boolean = try {
+        worker.submit { }.get(millis, java.util.concurrent.TimeUnit.MILLISECONDS)
+        true
+    } catch (_: Exception) { false }
+
+    /** Whether the folder's storage is in (Android's volumes only: cheap). */
+    private fun mounted(): Boolean {
+        val volume = volume() ?: return false
+        if (volume == "primary") return true
+        return try {
+            activity.getSystemService(StorageManager::class.java).storageVolumes.any {
+                it.uuid.equals(volume, ignoreCase = true) && it.state == android.os.Environment.MEDIA_MOUNTED
+            }
+        } catch (_: Exception) { false }
+    }
+    private var wasMounted: Boolean? = null
+    private var pullWhenFree = false
+
+    /** Every 2 seconds: the card came back while slot. was open, what changed
+     *  in the folder comes in, once no game is on ([canPull]). */
+    fun cardCheck(canPull: Boolean) {
+        if (tree() == null) { wasMounted = null; pullWhenFree = false; return }
+        val now = mounted()
+        if (wasMounted == false && now) {
+            Log.i(TAG, "Slot folder's card is back")
+            pullWhenFree = true
+        }
+        wasMounted = now
+        if (pullWhenFree && now && canPull) {
+            pullWhenFree = false
+            sync(pull = true)
+        }
+    }
+
     // -----------------------------------------------------------------
     // Choosing it
 

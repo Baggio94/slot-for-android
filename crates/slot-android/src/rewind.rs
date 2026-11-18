@@ -59,7 +59,7 @@ impl Rewind {
                 self.cur = Some(prev);
             }
             Err(e) => {
-                eprintln!("slot: rewind: {e}");
+                crate::log_warn(&format!("rewind: {e}"));
                 self.deltas.clear();
                 self.bytes = 0;
             }

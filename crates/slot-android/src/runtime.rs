@@ -1587,7 +1587,7 @@ struct Engine {
 /// Android's fresh app-private filesDir does not necessarily contain it yet.
 fn pick_wallpaper_android(root: &Path) -> Option<PathBuf> {
     if let Err(error) = std::fs::create_dir_all(root.join("Config")) {
-        eprintln!("slot-konkr: cannot initialize wallpaper deck: {error}");
+        crate::log_warn(&format!("cannot initialize wallpaper deck: {error}"));
     }
     crate::wallpaper::pick(root, 0)
 }
@@ -2381,7 +2381,7 @@ impl Engine {
         });
         match spawned {
             Ok(_) => self.shelf_wallpaper_rx = Some(rx),
-            Err(error) => eprintln!("slot-konkr: shelf wallpaper worker failed: {error}"),
+            Err(error) => crate::log_warn(&format!("shelf wallpaper worker failed: {error}")),
         }
     }
 
@@ -2389,6 +2389,7 @@ impl Engine {
     fn poll_shelf_wallpapers(&mut self) {
         let Some(rx) = self.shelf_wallpaper_rx.as_ref() else { return };
         let Ok((index, rgba, luma, personal)) = rx.try_recv() else { return };
+        crate::frame_watch::did(crate::frame_watch::WORK_WALLPAPER);
         let Some(slot) = self.shelf_wallpaper_texs.get_mut(index) else { return };
         // The size General's wallpaper is made at (reload_wallpaper).
         let (w, h) = (slot_ui::native_w(), slot_ui::native_h());
@@ -3927,6 +3928,7 @@ impl Engine {
                 // only live emulator state. Keep gameplay and the save menu
                 // available so a storage issue can be resolved and retried.
                 let with_state = self.live_game_options().eject_save;
+                let mut eject_save_took = None;
                 let eject_saved = match self.game.as_mut() {
                     Some(session) if session.runahead_rollback_failed() => {
                         // The in-memory core may be from speculative time.
@@ -3943,7 +3945,12 @@ impl Engine {
                             "Unsafe Run-Ahead core discarded WITHOUT SRAM/state/RetroArch export");
                         false
                     }
-                    Some(session) => match session.save_for_eject(with_state) {
+                    Some(session) => match {
+                        let save_at = Instant::now();
+                        let saved = session.save_for_eject(with_state);
+                        eject_save_took = Some(save_at.elapsed());
+                        saved
+                    } {
                         Ok(saved) => {
                             if session.take_kept_flash_save() {
                                 set_message("In-game save kept: this state has none yet.".into());
@@ -3970,6 +3977,7 @@ impl Engine {
                 // power-off before the mechanical 450ms cartridge ejection.
                 if self.game.is_some() {
                     self.exiting_screen = true;
+                    crate::frame_watch::eject_started(eject_save_took);
                     self.eject_hold_remaining = EJECT_HOLD_S;
                     // The next input is most likely a scroll: keep the shelf
                     // at full rate (no 4 Hz idle) for 3.2 s after the eject.
@@ -4070,6 +4078,7 @@ impl Engine {
                 {
                     self.awaiting_game = false;
                     self.prepared_rom = Some(path);
+                    crate::frame_watch::rom_ready();
                 }
             }
             Input::PadKey { device, code, pressed, stick } =>
@@ -4887,6 +4896,7 @@ impl Engine {
                                         self.prepared_rom = None;
                             self.pending_game = None;
                             self.insert_started = Some(Instant::now());
+                            crate::frame_watch::insert_started();
                             self.a_down_at = self.insert_started;
                             self.fresh_launch = false;
                             if uri.starts_with("content://") {
@@ -4906,6 +4916,7 @@ impl Engine {
                             if self.inserted && self.progress > 0.0 {
                                 self.eject_sound_armed = true;
                             }
+                            if self.inserted { crate::frame_watch::cancel(); }
                             self.inserted = false;
                             self.a_down_at = None;
                             self.fresh_launch = false;
@@ -5057,7 +5068,10 @@ impl Engine {
             || self.last_cart_navigation.elapsed() < Duration::from_millis(250)
             // Nor while a cart flies to or from Cart Studio.
             || self.studio_flight.is_some_and(|f| f.flying()) { return; }
-        if let Some(uri) = self.relabel.pop_front() { self.reload_cart_label(&uri); }
+        if let Some(uri) = self.relabel.pop_front() {
+            self.reload_cart_label(&uri);
+            crate::frame_watch::did(crate::frame_watch::WORK_LABEL);
+        }
     }
 
     fn reload_cart_label(&mut self, uri: &str) {
@@ -5088,6 +5102,7 @@ impl Engine {
         for _ in 0..limit {
             if upload_started.elapsed()>=CART_GPU_UPLOAD_BUDGET {break}
             let Some(((shelf_id,index),face,layers))=self.cart_render.ready() else {break};
+            crate::frame_watch::did(crate::frame_watch::WORK_LABEL);
             // Library > RomM's carts live on its page, not on a shelf.
             if shelf_id==romm::ROMM_RACK { self.romm_face(index,&face); continue; }
             let Some(shelf)=self.shelves.get(shelf_id) else {continue};
@@ -6252,7 +6267,7 @@ impl Engine {
                 if let Some(root)=Self::recents_root() {
                     let focus=crate::selection::Focus { rack:*rack,uri:uri.clone() };
                     if let Err(err)=crate::selection::store(&root,&focus) {
-                        eprintln!("slot-konkr: last selection could not persist: {err}");
+                        crate::log_warn(&format!("last selection could not persist: {err}"));
                     }
                 }
             }
@@ -6401,14 +6416,14 @@ impl Engine {
         // game identity now, rather than relying on a 500ms idle debounce.
         let focus=crate::selection::Focus {rack:self.active,uri:uri.clone()};
         if let Err(err)=crate::selection::store(&root,&focus) {
-            eprintln!("slot-konkr: launch shelf-focus save failed: {err}");
+            crate::log_warn(&format!("launch shelf-focus save failed: {err}"));
         } else {
             self.focus_seen=Some((focus.rack,focus.uri));
             self.focus_dirty_since=None;
         }
         let next=crate::recents::append(&crate::recents::load(&root),&uri);
         if let Err(err)=crate::recents::store(&root,&next) {
-            eprintln!("slot-konkr: unable to update recents rack: {err}");
+            crate::log_warn(&format!("unable to update recents rack: {err}"));
         } else {
             self.rebuild_recents();
         }
@@ -8504,7 +8519,10 @@ impl Engine {
                 && self.pending_game.is_none()
             {
                 if let Some(local) = self.prepared_rom.take() {
+                    let core_at = Instant::now();
                     self.prepare_game_core(&local);
+                    crate::frame_watch::did(crate::frame_watch::WORK_CORE);
+                    crate::frame_watch::core_prepared(core_at.elapsed());
                 }
             }
             // Re-read wall time after core.load() and save-state import.
@@ -8515,6 +8533,7 @@ impl Engine {
                         "Start CRT: {}ms since A (upstream target 730ms)",
                         self.insert_started.map_or(0, |at| at.elapsed().as_millis())
                     ));
+                    crate::frame_watch::insert_done();
                     self.buttons = 0;
                     // RETROARCH resamples to 48kHz; open AudioTrack there once.
                     let ra_sync = !session.linked();
@@ -9091,12 +9110,17 @@ impl Engine {
             && self.progress >= INSERT_SOUND_PROGRESS
         {
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_INSERT_SFX);
+            crate::frame_watch::sound();
         }
         if !self.inserted && self.eject_sound_armed
             && self.progress < previous_progress
             && self.progress <= EJECT_SOUND_PROGRESS {
             self.eject_sound_armed = false;
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_EJECT_SFX);
+            crate::frame_watch::sound();
+        }
+        if previous_progress > 0.0 && self.progress <= 0.0 && !self.inserted {
+            crate::frame_watch::cart_out();
         }
 
         // The shelf's carts in `commands` (the closed RG Rotate shrinks them).

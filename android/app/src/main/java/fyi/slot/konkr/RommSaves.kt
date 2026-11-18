@@ -24,6 +24,8 @@ import java.util.Locale
 internal object RommSaves {
     private const val TAG = "SlotRomm"
     private const val PREFS = "slot-romm-saves"
+    /** How long a launch waits on the server, at most (beta37). */
+    internal const val LAUNCH_BUDGET_MS = 2_000L
 
     fun enabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("enabled", false)
@@ -49,6 +51,12 @@ internal object RommSaves {
     private fun recordFile(context: Context, target: RetroArchStorage.Target): File =
         File(File(context.filesDir, "RommSync"),
             GameKeys.digest(target.romUri) + "." + RetroArchStorage.coreLower(target.core) + ".json")
+
+    /** The launch couldn't check the server (it didn't answer in time):
+     *  the save goes up only once the server is known not to have changed,
+     *  else the next launch asks, as when both sides changed. */
+    private fun uncheckedFile(context: Context, target: RetroArchStorage.Target): File =
+        File(recordFile(context, target).path.removeSuffix(".json") + ".unchecked")
 
     private fun record(context: Context, target: RetroArchStorage.Target): Record? = try {
         val json = JSONObject(recordFile(context, target).readText(Charsets.UTF_8))
@@ -92,7 +100,27 @@ internal object RommSaves {
     fun beforeLaunch(context: Context, target: RetroArchStorage.Target, ask: () -> Choice): Outcome {
         if (!enabled(context) || !Romm.signedIn(context)) return Outcome(null)
         val platform = platformOf(target) ?: return Outcome(null)
+        val started = System.nanoTime()
         return try {
+            Romm.within(LAUNCH_BUDGET_MS) { checkServer(context, target, platform, ask) }.also {
+                uncheckedFile(context, target).delete()
+            }
+        } catch (error: Romm.SignedOut) {
+            Outcome("Signed out of RomM: saves aren't synced.")
+        } catch (error: Exception) {
+            if (error is java.net.SocketTimeoutException || error is java.net.ConnectException ||
+                error is java.net.UnknownHostException || error is java.net.NoRouteToHostException) {
+                try { uncheckedFile(context, target).apply { parentFile?.mkdirs() }.writeText("1") } catch (_: Exception) {}
+            }
+            Log.w(TAG, "RomM save check skipped after ${(System.nanoTime() - started) / 1_000_000}ms: " +
+                "the handheld's save", error)
+            Outcome(null)
+        }
+    }
+
+    private fun checkServer(context: Context, target: RetroArchStorage.Target, platform: String,
+                      ask: () -> Choice): Outcome {
+        return run {
             // A deletion the server didn't take yet (offline): again now;
             // until it does, nothing comes back from the server.
             if (record(context, target)?.saveId == DELETE_PENDING) {
@@ -130,13 +158,8 @@ internal object RommSaves {
                 // The server's save, kept beside ours; ours goes up after the game.
                 File(target.saveLocal.parentFile, target.saveLocal.name + ".romm").writeBytes(bytes)
                 keep(context, target, Record(romId, server.id, server.updatedAt, ""))
-                Outcome(null)
+                return Outcome(null)
             }
-        } catch (error: Romm.SignedOut) {
-            Outcome("Signed out of RomM: saves aren't synced.")
-        } catch (error: Exception) {
-            Log.w(TAG, "RomM save check skipped", error)
-            Outcome(null)
         }
     }
 
@@ -187,6 +210,19 @@ internal object RommSaves {
                 if (record(context, target)?.saveId == DELETE_PENDING) return null
             }
             val romId = kept?.romId?.takeIf { it > 0 } ?: Romm.romIdFor(context, platform, target.stem) ?: return null
+            val unchecked = uncheckedFile(context, target)
+            if (unchecked.isFile) {
+                // The launch didn't reach the server: send only over what
+                // slot. last saw there. A save another handheld sent since
+                // stays, and the next launch asks which to keep.
+                val server = newest(Romm.saves(context, romId), target)
+                if (server != null && (kept == null || server.updatedAt != kept.serverStamp)) {
+                    Log.i(TAG, "RomM: the server's save of ${target.stem} changed while slot. couldn't " +
+                        "check it; not sent, the next launch asks")
+                    return null
+                }
+                unchecked.delete()
+            }
             val sent = Romm.uploadSave(context, romId, emulator(target), target.stem + ".srm", local)
             keep(context, target, Record(romId, sent.id, sent.updatedAt, localSha))
             null

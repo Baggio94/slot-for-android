@@ -51,9 +51,18 @@ internal class CartSounds(context: Context) {
     fun play(kind: Int) {
         if (closed || kind !in INSERT..EJECT) return
         val id = samples[kind]
-        if (id == 0 || !synchronized(loaded) { loaded.contains(id) }) return
+        if (id == 0 || !synchronized(loaded) { loaded.contains(id) }) {
+            Log.w("SlotKonkr", "Cart sound $kind not ready: no click this time")
+            return
+        }
+        val queued = android.os.SystemClock.uptimeMillis()
         playerHandler.post {
-            if (!closed) soundPool.play(id, CART_SFX_VOLUME, CART_SFX_VOLUME, 1, 0, 1f)
+            if (closed) return@post
+            val started = android.os.SystemClock.uptimeMillis()
+            soundPool.play(id, CART_SFX_VOLUME, CART_SFX_VOLUME, 1, 0, 1f)
+            // How late the click went out (beta37): its wait, then Android's.
+            Log.i("SlotKonkr", "Cart sound ${if (kind == INSERT) "insert" else "eject"}: " +
+                "${started - queued}ms waiting, ${android.os.SystemClock.uptimeMillis() - started}ms to play")
         }
     }
 

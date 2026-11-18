@@ -452,6 +452,13 @@ internal object RetroArchStorage {
             readNamed(context, root, target.core, saveName, MAX_SAVE)
         }
         val ownPrivate = target.saveLocal.takeIf { it.isFile }?.readBytes()
+        // One line per launch: what the RetroArch folders gave (beta37).
+        // Nothing is read for it: only what the launch read anyway.
+        fun folderNote(state: String) = Log.i(TAG, "RetroArch folders for ${target.core}/${target.stem}: " +
+            "save " + (if (saveTree == null) "no folder" else folderSave?.let { "${it.size} bytes" } ?: "absent") +
+            "; state " + (if (stateTree == null) "no folder" else state))
+        fun stateSeen() = if (!stateRead.isInitialized()) "not needed" else
+            stateRead.value?.let { "${it.size} bytes" } ?: "absent"
         val action = if (folderKept || saveTree == null) FolderSaveAction.NONE else {
             val savePrint = lastSynced(files, saveTree, target.core, saveName)
             val journal = if (shared) sharedFiles(context, target).first.takeIf { it.isFile }?.readBytes()
@@ -551,6 +558,7 @@ internal object RetroArchStorage {
                 if (stateTree != null) rememberSynced(files, stateTree, target.core, stateName, seen)
             }
             Log.i(TAG, "Deferred stale RetroArch state import; SRAM / existing states preserved")
+            folderNote(stateSeen() + ", set aside")
             return
         }
         if (stateProtected) {
@@ -579,8 +587,11 @@ internal object RetroArchStorage {
                 Log.w(TAG, "RetroArch state not importable; private fallback preserved", error)
                 target.stateImportLocal.delete()
             }
+            folderNote(if (target.statesTree == null) "slot.'s own" else stateSeen() +
+                (if (target.stateImportLocal.isFile) ", ready" else ", unreadable"))
         } else {
             target.stateImportLocal.delete()
+            folderNote(stateSeen())
         }
         val doneAt = SystemClock.elapsedRealtime()
         Log.i(TAG, "RetroArch SAF import breakdown: saves=${savesAt - started}ms, " +

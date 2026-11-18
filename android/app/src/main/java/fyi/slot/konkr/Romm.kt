@@ -158,11 +158,36 @@ internal object Romm {
         fun detail(): String = json()?.optString("detail").orEmpty()
     }
 
-    private fun open(url: String, method: String, auth: String?): HttpURLConnection =
+    /** When the requests of this thread must be done by (System.nanoTime),
+     *  for a launch that never waits long on the server (beta37). */
+    private val deadline = ThreadLocal<Long?>()
+
+    /** Runs [block] with its requests cut short after [millis]: a server
+     *  that doesn't answer (RomM at home, the handheld elsewhere) costs the
+     *  launch at most that, not 10 to 40 seconds. */
+    internal fun <T> within(millis: Long, block: () -> T): T {
+        val before = deadline.get()
+        deadline.set(System.nanoTime() + millis * 1_000_000)
+        try {
+            return block()
+        } finally {
+            deadline.set(before)
+        }
+    }
+
+    /** A timeout for the next step: [usual], or what's left of the time. */
+    private fun timeLeft(usual: Int): Int {
+        val by = deadline.get() ?: return usual
+        val left = (by - System.nanoTime()) / 1_000_000
+        if (left <= 0) throw java.net.SocketTimeoutException("RomM didn't answer in time")
+        return minOf(usual.toLong(), left).toInt()
+    }
+
+    internal fun open(url: String, method: String, auth: String?): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            connectTimeout = 10_000
-            readTimeout = 30_000
+            connectTimeout = timeLeft(10_000)
+            readTimeout = timeLeft(30_000)
             instanceFollowRedirects = true
             setRequestProperty("User-Agent", "slot. for Android")
             setRequestProperty("Accept", "application/json")
@@ -178,6 +203,7 @@ internal object Romm {
                 val n = it.read(buffer)
                 if (n < 0) break
                 if (out.size() + n > limit) throw IOException("RomM reply too large")
+                timeLeft(1)
                 out.write(buffer, 0, n)
             }
         }
@@ -457,10 +483,20 @@ internal object Romm {
 
     /** The RomM game a cart is: same system, same file name without its
      *  extension, from the library kept, else by asking the server. */
+    /** A file name as Android's storage writes it: `: ? * " < > | \` and
+     *  control characters become `_` (FileUtils.buildValidFatFilename), so
+     *  `Zelda: Minish Cap.gba` is `Zelda_ Minish Cap.gba` on the handheld. */
+    internal fun storedName(name: String): String = buildString {
+        for (c in name) append(if (c.code < 0x20 || c.code == 0x7f || c in "\"*/:<>?\\|") '_' else c)
+    }
+
+    /** The same game's name, on the server and on the handheld. */
+    internal fun sameName(server: String, handheld: String): Boolean =
+        storedName(server).lowercase(Locale.ROOT) == storedName(handheld).lowercase(Locale.ROOT)
+
     fun romIdFor(context: Context, platform: String, stem: String): Long? {
-        val wanted = stem.lowercase(Locale.ROOT)
         cachedLibrary(context)?.first?.firstOrNull {
-            it.platform == platform && it.file.substringBeforeLast('.').lowercase(Locale.ROOT) == wanted
+            it.platform == platform && sameName(it.file.substringBeforeLast('.'), stem)
         }?.let { return it.id }
         val console = consoles(context).firstOrNull { it.platform == platform } ?: return null
         val reply = authorized(context, "/api/roms?platform_ids=${console.id}&platform_id=${console.id}" +
@@ -474,7 +510,7 @@ internal object Romm {
         for (i in 0 until items.length()) {
             val rom = items.optJSONObject(i) ?: continue
             val name = rom.optString("fs_name_no_ext").ifBlank { rom.optString("fs_name").substringBeforeLast('.') }
-            if (name.lowercase(Locale.ROOT) == wanted) return rom.optLong("id")
+            if (sameName(name, stem)) return rom.optLong("id")
         }
         return null
     }
@@ -1002,9 +1038,15 @@ internal object Romm {
     fun download(context: Context, tree: Uri, game: Game, progress: (Long, Long) -> Unit): RomLibrary.SavedFile {
         val account = account(context) ?: throw SignedOut()
         val (folder, folderName) = systemFolder(context, tree, game)
-        childNamed(context, tree, folder, game.file)?.let { return RomLibrary.SavedFile(it, folderName) }
-        childNamed(context, tree, folder, game.file + ".part")?.let {
-            DocumentsContract.deleteDocument(context.contentResolver, it)
+        // Already there, under its name or the one Android gave it.
+        val stored = storedName(game.file)
+        (childNamed(context, tree, folder, game.file)
+            ?: stored.takeIf { it != game.file }?.let { childNamed(context, tree, folder, it) })
+            ?.let { return RomLibrary.SavedFile(it, folderName) }
+        for (part in setOf(game.file + ".part", stored + ".part")) {
+            childNamed(context, tree, folder, part)?.let {
+                DocumentsContract.deleteDocument(context.contentResolver, it)
+            }
         }
         val path = "/api/roms/${game.id}/content/" + URLEncoder.encode(game.file, "UTF-8").replace("+", "%20")
         var connection = open(account.server + path, "GET", authorization(context, account))

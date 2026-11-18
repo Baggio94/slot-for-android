@@ -35,6 +35,7 @@ pub(crate) fn log_launch_timing(message: &str) {
     eprintln!("SlotKONKR: {message}");
 }
 
+
 // A Link core must NEVER become a standalone emulator after End Link,
 // peer loss or Android sleep. The private GBA state is a multiplayer-only
 // timeline. Resume requires safe Eject followed by a new solo core launch.
@@ -794,7 +795,7 @@ impl GameSession {
             crate::gb_core_switch::carry_battery_for(&root, rom_stem, which, platform, Some(rom)) {
             Ok(carried) => carried,
             Err(error) => {
-                eprintln!("slot-konkr: battery carry from the other core skipped: {error}");
+                crate::log_warn(&format!("battery carry from the other core skipped: {error}"));
                 false
             }
         };
@@ -813,7 +814,11 @@ impl GameSession {
                     })
             } else { Err(err) }
         });
+        // What the launch line says came back, for a save that "didn't load".
+        let mut sram_note = String::from("none");
+        let mut state_note = String::from(if resume_state { "none" } else { "off" });
         if let Ok(ram) = ram {
+            sram_note = format!("{} bytes", ram.len());
             if let Err(error) = core.load_save_ram(&ram) {
                 // Never continue with blank RAM and subsequently export it
                 // over a verified shared save from the OTHER emulator.
@@ -824,12 +829,16 @@ impl GameSession {
                     // Abandon this isolated attempt and restore the solo core.
                     return Err(format!("Core rejected required GBA SRAM; originals preserved: {error}"));
                 }
-                eprintln!("slot-konkr: SRAM restore skipped: {error}");
+                crate::log_warn(&format!("SRAM restore skipped: {error}"));
+                sram_note = format!("refused ({error})");
             }
         }
         if let Ok(bytes) = std::fs::read(&rtc) {
             if let Err(error) = core.load_rtc(&bytes) {
-                eprintln!("slot-konkr: RTC restore skipped: {error}");
+                crate::log_warn(&format!("RTC restore skipped: {error}"));
+                sram_note.push_str(&format!(", RTC refused ({error})"));
+            } else {
+                sram_note.push_str(", RTC");
             }
         }
         // Both Link cores start from this player's exact live SOLO snapshot
@@ -914,6 +923,9 @@ impl GameSession {
         let gambatte_legacy_export = which == Core::Gambatte && std::fs::read(&retroarch_import)
             .ok().and_then(|bytes| retroarch_state::decode(&bytes).ok())
             .is_some_and(|raw| crate::gambatte_state::lacks_sachen(&raw));
+        if resume_state && (cross_core_import || carried_battery) {
+            state_note = String::from("set aside, the save is newer");
+        }
         if resume_state && linked_boot.is_none() && !cross_core_import && !carried_battery {
             // Prefer a successfully decoded RetroArch auto state, then the
             // Slot private state. A compressed/unrecognized external file is
@@ -925,7 +937,7 @@ impl GameSession {
                         Some(crate::gambatte_state::add_sachen(&raw).unwrap_or(raw)),
                     Ok(raw) => Some(raw),
                     Err(error) => {
-                        eprintln!("slot-konkr: external {} savestate skipped: {error}", which.text());
+                        crate::log_warn(&format!("external {} savestate skipped: {error}", which.text()));
                         None
                     }
                 });
@@ -941,6 +953,7 @@ impl GameSession {
             // RetroArch imports must not silently roll back that timeline.
             let marker = state.with_extension("prefer-solo-after-link.once");
             let prefer_private = marker.is_file();
+            let from_retroarch = external.is_some();
             let (chosen, used_private) = if state != root.join(format!("{id}.{}.state", which.as_str()))
                 && generation_export_guard.is_file() {
                 // A state deliberately skipped during SharedGBA migration
@@ -954,22 +967,26 @@ impl GameSession {
                     None => (external, false),
                 }
             } else { (external.or_else(local), false) };
+            let source = if from_retroarch && !used_private { "RetroArch" } else { "slot." };
             if let Some(bytes) = chosen {
                 match core.unserialize(&bytes) {
                     Ok(()) if used_private => {
                         std::fs::remove_file(&marker).map_err(|e|
                             format!("Cannot clear one-shot solo-state guard: {e}"))?;
+                        state_note = format!("slot.'s, {} bytes", bytes.len());
                     }
-                    Ok(()) => {}
+                    Ok(()) => state_note = format!("{source}'s, {} bytes", bytes.len()),
                     Err(error) => {
-                        eprintln!("slot-konkr: {} state resume skipped: {error}", which.text());
+                        crate::log_warn(&format!("{} state resume skipped: {error}", which.text()));
+                        state_note = format!("{source}'s refused ({error}, {} bytes)", bytes.len());
                     }
                 }
             }
         }
         log_launch_timing(&format!(
-            "Core init + ROM: {load_ms}ms, SRAM/RTC/state restore: {}ms, resume={resume_state}, total: {}ms",
-            restore_started.elapsed().as_millis(), opening_at.elapsed().as_millis()
+            "Core init + ROM: {load_ms}ms, SRAM/RTC/state restore: {}ms, resume={resume_state}, total: {}ms; \
+             {}: save {sram_note}; state {state_note}",
+            restore_started.elapsed().as_millis(), opening_at.elapsed().as_millis(), which.text()
         ));
         let sample_rate = core.av_info().sample_rate.round() as i32;
         let fps = core.av_info().fps.clamp(30.0, 120.0);

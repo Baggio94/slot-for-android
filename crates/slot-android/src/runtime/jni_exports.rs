@@ -34,7 +34,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             let result = engine.gpu.restore_after_context_loss(&AndroidSurface { size: engine.size });
             if let Err(error) = result {
-                eprintln!("slot-konkr: graphics recovery failed; session retained: {error}");
+                crate::log_warn(&format!("graphics recovery failed; session retained: {error}"));
                 return 0;
             }
             if let Some(session) = engine.game.as_ref() { engine.gpu.upload_game(session.frame()); }
@@ -67,7 +67,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
                 1
             }
             Err(error) => {
-                eprintln!("slot-konkr: OpenGL renderer initialization failed: {error}");
+                crate::log_warn(&format!("OpenGL renderer initialization failed: {error}"));
                 0
             }
         }
@@ -221,6 +221,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
     activity: JObject<'_>,
     vsync_frame_ns: jni::sys::jlong,
 ) {
+    let frame_at = Instant::now();
     ENGINE.with(|holder| {
         // Even a direct JNI draw must not advance or save while recovery failed.
         if holder.borrow().as_ref().is_some_and(|e| !e.gpu.graphics_ready()) { return; }
@@ -243,6 +244,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
             }
         };
         if let Some((version, snapshot)) = updated {
+            crate::frame_watch::did(crate::frame_watch::WORK_LIBRARY);
             // Saving an in-progress game on library replacement is mandatory.
             if let Some(engine) = holder.borrow_mut().as_mut() {
                 if let Some(mut session) = engine.game.take() { session.save(true); }
@@ -291,7 +293,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                         }
                         *holder.borrow_mut() = Some(engine);
                     }
-                    Err(error) => eprintln!("slot-konkr: could not reload library: {error}"),
+                    Err(error) => crate::log_warn(&format!("could not reload library: {error}")),
                 }
             }
         }
@@ -304,6 +306,14 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 }
             });
             engine.observe_frame_delay(vsync_frame_ns);
+            let moment = crate::frame_watch::Moment {
+                playing: engine.game.is_some(),
+                scrolling: engine.shelves.get(engine.active).is_some_and(|s| s.is_scrolling()),
+                menu: !matches!(engine.overlay, ShelfOverlay::None),
+                inserting: engine.inserted && engine.game.is_none(),
+                ejecting: engine.exiting_screen || (!engine.inserted && engine.progress > 0.0),
+            };
+            crate::frame_watch::frame(frame_at.elapsed(), moment);
         }
         let now_safe = holder.borrow().as_ref().is_some_and(|e|
             may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game)
@@ -1264,4 +1274,13 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReloadAll(
     _env: *mut c_void, _this: *mut c_void,
 ) {
     RELOAD_ALL.store(true, Ordering::Release);
+}
+
+/// The bench's end (SlotBench): the shelf's frames since the last line.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeFrameWatchFlush(
+    _env: *mut c_void,
+    _activity: *mut c_void,
+) {
+    crate::frame_watch::flush("bench");
 }

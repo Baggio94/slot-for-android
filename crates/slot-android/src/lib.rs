@@ -1,6 +1,28 @@
 //! Android host for the unmodified Slot cartridge graphics and shelf behavior.
 //!
 //! Stage M1: display-only preview carts, not executable games.
+
+#[cfg(target_os = "android")]
+#[link(name = "log")]
+unsafe extern "C" {
+    fn __android_log_write(priority: i32, tag: *const std::ffi::c_char,
+        text: *const std::ffi::c_char) -> i32;
+}
+
+/// A save, a state or a file slot. could not use: a warning in Android's
+/// log, where the player's exported logs show it. stderr goes nowhere on
+/// Android, so these were lost before 2.5.0-beta37.
+#[allow(dead_code)]
+pub(crate) fn log_warn(message: &str) {
+    #[cfg(target_os = "android")]
+    if let Ok(text) = std::ffi::CString::new(message) {
+        unsafe {
+            __android_log_write(5, c"SlotKONKR".as_ptr(), text.as_ptr());
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("SlotKONKR: {message}");
+}
 mod library;
 mod cart_disk_cache;
 mod settings;
@@ -144,6 +166,8 @@ mod game;
 mod cart_render;
 #[cfg(any(target_os = "android", all(test, feature = "runtime-tests")))]
 mod runtime;
+#[cfg(any(target_os = "android", all(test, feature = "runtime-tests")))]
+mod frame_watch;
 #[cfg(target_os = "android")]
 mod egl_presentation;
 

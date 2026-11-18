@@ -140,6 +140,7 @@ class MainActivity : Activity() {
     external fun nativeSetSlotFolder(place: Int)
     /** Library's slot. folder row while the first copy runs: 0-100, -1 done. */
     external fun nativeSetSlotFolderCopy(percent: Int)
+    external fun nativeFrameWatchFlush()
     external fun nativeReloadAll()
     external fun nativeSetRommSync(state: Int)
     external fun nativeSetRomsMissing(missing: Boolean)
@@ -277,6 +278,45 @@ class MainActivity : Activity() {
     }
     private val raSmartRunning = AtomicBoolean(false)
     private val gameLoader = Executors.newSingleThreadExecutor()
+    /** RomM's saves go up here, not on gameLoader: the next cart's insertion
+     *  never waits on the server (beta37). */
+    private val rommSync = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "slot-romm-saves").apply { priority = Thread.MIN_PRIORITY }
+    }
+    /** Per game: RomM work queued or running ([rommLater]); while some is,
+     *  its launch doesn't ask the server, the handheld's save being newer. */
+    private val rommBusy = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    /** Per game: an upload queued and not started, so 30-second saves don't
+     *  pile up (the one queued sends the newest save). */
+    private val rommQueued = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun rommKey(target: RetroArchStorage.Target) = target.romIdentity + "." + target.core
+
+    private fun rommLater(target: RetroArchStorage.Target, upload: Boolean, work: () -> String?) {
+        val key = rommKey(target)
+        if (upload && !rommQueued.add(key)) return
+        rommBusy.merge(key, 1) { a, b -> a + b }
+        try {
+            rommSync.execute {
+                if (upload) rommQueued.remove(key)
+                try {
+                    work()?.let { note ->
+                        runOnUiThread {
+                            if (!isDestroyed) SlotToast.makeText(this@MainActivity, note, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } catch (error: Exception) {
+                    Log.w(TAG, "RomM save work skipped", error)
+                } finally {
+                    rommBusy.computeIfPresent(key) { _, n -> if (n > 1) n - 1 else null }
+                }
+            }
+        } catch (error: Exception) {
+            if (upload) rommQueued.remove(key)
+            rommBusy.computeIfPresent(key) { _, n -> if (n > 1) n - 1 else null }
+            Log.w(TAG, "RomM save work not queued", error)
+        }
+    }
     // Optional I/O must never delay a real ROM launch or pending save exports.
     private val romWarmWorker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "slot-kpa-rom-warm").apply { priority = Thread.MIN_PRIORITY }
@@ -617,6 +657,8 @@ class MainActivity : Activity() {
         override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
     }
     @Volatile private var resumed = false
+    /** adb's shelf bench (SlotBench): never during a game. */
+    private val bench by lazy { SlotBench(this) { resumed && !nativeIsPlaying() } }
     private val raSmartForeground = java.lang.Object()
     private var carouselDozing = false
     private var lastCarouselHeartbeat = 0L
@@ -1149,6 +1191,7 @@ class MainActivity : Activity() {
                 nativeSetRommSync(RommSaves.state(this@MainActivity))
                 nativeSetSlotFolder(slotFolder.place())
                 nativeSetRomsMissing(romCardMissing())
+                slotFolder.cardCheck(resumed && nativeCanRefreshLibrary())
             }
             if (resumed && nowPerf - lastEmulationReportPollAt >= 1_000L) {
                 lastEmulationReportPollAt = nowPerf
@@ -1272,12 +1315,10 @@ class MainActivity : Activity() {
                                 uiHandler.postDelayed(slotFolderPush, 5_000L)
                             }
                             RetroArchStorage.exportAfterSave(this@MainActivity, target).also {
-                                // Then to RomM, when Sync Saves with RomM is on.
-                                RommSaves.afterSave(this@MainActivity, target)?.let { note ->
-                                    runOnUiThread {
-                                        if (!isDestroyed) SlotToast.makeText(this@MainActivity, note,
-                                            Toast.LENGTH_SHORT).show()
-                                    }
+                                // Then to RomM, when Sync Saves with RomM is on:
+                                // on its own queue, the next launch doesn't wait.
+                                if (RommSaves.enabled(this@MainActivity)) rommLater(target, upload = true) {
+                                    RommSaves.afterSave(this@MainActivity, target)
                                 }
                             }
                         }
@@ -2178,7 +2219,10 @@ class MainActivity : Activity() {
             }
             SaveDeletes.Choice.DELETE -> {
                 RetroArchStorage.deleteEverywhere(this, target, kinds)
-                if (SaveDeletes.Kind.SAVE in kinds) RommSaves.deleted(this, target)
+                if (SaveDeletes.Kind.SAVE in kinds) rommLater(target, upload = false) {
+                    RommSaves.deleted(this, target)
+                    null
+                }
                 slotFolder.deleted(inFolder.keys)
             }
         }
@@ -2364,6 +2408,14 @@ class MainActivity : Activity() {
                 // resume its own state: the player chooses (issue #116).
                 // A save or state deleted outside slot.: the player says
                 // first, put back or deleted everywhere (Siham 2026-11-18).
+                // A copy with the slot. folder under way (slot. just came
+                // back, the card just went in) finishes first: the game
+                // starts from what it brings, and its deletions are known.
+                val folderWaitAt = SystemClock.elapsedRealtime()
+                if (!slotFolder.awaitIdle(15_000L)) Log.w(TAG, "Slot folder copy still running; launching anyway")
+                (SystemClock.elapsedRealtime() - folderWaitAt).takeIf { it > 20 }?.let {
+                    Log.i(TAG, "Slot launch waited ${it}ms for the slot. folder")
+                }
                 if (!settleDeletedOutside(shared)) {
                     nativeGameError(rawUri, "Deleted save choice cancelled")
                     return@execute
@@ -2418,7 +2470,10 @@ class MainActivity : Activity() {
                 }
                 // Sync Saves with RomM (2.5): the server's newer save comes
                 // in first. Never stops the game.
-                RommSaves.beforeLaunch(this@MainActivity, shared) { askRommConflict() }.message?.let { note ->
+                // Not while this game's save is still going up: it's the newest.
+                if (rommBusy.containsKey(rommKey(shared))) {
+                    Log.i(TAG, "RomM: ${shared.stem}'s save is still being sent; launching with it")
+                } else RommSaves.beforeLaunch(this@MainActivity, shared) { askRommConflict() }.message?.let { note ->
                     runOnUiThread {
                         if (!isDestroyed) SlotToast.makeText(this@MainActivity, note, Toast.LENGTH_SHORT).show()
                     }
@@ -4384,6 +4439,7 @@ class MainActivity : Activity() {
         // out of a game only.
         uiHandler.removeCallbacks(slotFolderPush)
         slotFolder.sync(pull = nativeCanRefreshLibrary())
+        bench.maybeStart()
         // Controllers may have come or gone while slot. was away.
         pushControllers()
         publishSensors()
