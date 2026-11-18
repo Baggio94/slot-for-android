@@ -22,6 +22,12 @@ fi
 
 for t in $transports; do
     model=$(adb -t "$t" shell getprop ro.product.model | tr -d '\r' | tr -c 'A-Za-z0-9\n' '_')
+    # An Android emulator on the Mac, or a device without slot.: skipped.
+    if [ "$(adb -t "$t" shell getprop ro.kernel.qemu | tr -d '\r')" = "1" ] ||
+        ! adb -t "$t" shell pm path fyi.slot.konkr 2>/dev/null | grep -q package:; then
+        echo "== $model: skipped (emulator, or slot. isn't installed)"
+        continue
+    fi
     echo "== $model: about a minute, don't touch it"
     adb -t "$t" logcat -c
     adb -t "$t" shell setprop debug.slot.bench 1
