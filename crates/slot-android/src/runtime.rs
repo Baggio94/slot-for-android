@@ -1087,6 +1087,8 @@ const PICKER_LID_WAIT_MS: u64 = 600;
 const SHELF_PICK_KEY: usize = 101;
 /// "GENERAL" among the setting values: a shelf showing General's wallpaper.
 const GENERAL_VALUE: usize = 121;
+/// About's X: MainActivity saves slot.'s logs where the player picks (#107).
+const EXPORT_LOGS_ACTION: i32 = 80;
 /// Wallpaper slot. and slot. Blur's value faces.
 const SLOT_WALLPAPER_VALUE: usize = 122;
 const SLOT_BLUR_WALLPAPER_VALUE: usize = 123;
@@ -1438,6 +1440,8 @@ struct Engine {
     /// The long text scrolling now (page, row) and since when.
     /// (page, row, travel), since when, last drawn.
     marquee: std::cell::Cell<Option<((usize, usize, u32), Instant, Instant)>>,
+    /// The selected game's title's own scroll, apart from the menus' (#119).
+    title_marquee: std::cell::Cell<Option<((usize, usize, u32), Instant, Instant)>>,
     menu_cursor_y: f32,
     /// A long page's first row shown, and where its list is on the way there.
     menu_scroll_top: usize,
@@ -1460,6 +1464,8 @@ struct Engine {
     menu_side: Option<(String, [(slot_gfx::TexId, u32, u32); 2])>,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
+    /// About's third legend, X Logs: saves slot.'s logs to a file (#107).
+    about_logs_hint: (slot_gfx::TexId, u32),
     first_run_hint: (slot_gfx::TexId, u32),
     onboarding_note: (slot_gfx::TexId, u32),
     shelf_no_games_hint: (slot_gfx::TexId, u32),
@@ -1544,6 +1550,10 @@ struct Engine {
     clock_texture: Option<slot_gfx::TexId>,
     clock_face: Printed,
     battery_percent: Option<u8>,
+    /// The percent printed in red, the battery low (#87).
+    battery_low_shown: bool,
+    /// The game's blinking low battery sign (#87).
+    low_battery_badge: slot_gfx::TexId,
     battery_texture: Option<slot_gfx::TexId>,
     battery_face: Printed,
     battery: Option<Battery>,
@@ -1821,6 +1831,10 @@ impl Engine {
             let tex = gpu.create_face(&face);
             (tex, face.w)
         });
+        let about_logs_hint = {
+            let face = hint_face("X", "Logs");
+            (gpu.create_face(&face), face.w)
+        };
         // Authentic Slot raster/keycap for a clean library. Render it in the
         // GL scene rather than above it in an Android TextView.
         let first_run_hint = {
@@ -1984,6 +1998,7 @@ impl Engine {
             let texture = gpu.create_face(&face);
             (texture, face.w)
         });
+        let low_battery_badge = gpu.create_face(&slot_ui::low_battery_badge());
         let dark_ink = menu_style::MenuPalette::LIGHT.ink.unwrap_or([0; 3]);
         let core_legend_dark = [
             slot_ui::hint_face_ink("B", "Cancel", dark_ink),
@@ -2194,6 +2209,7 @@ impl Engine {
             menu_seen: 0,
             menu_opened: now,
             marquee: std::cell::Cell::new(None),
+            title_marquee: std::cell::Cell::new(None),
             menu_cursor_y: 0.0,
             menu_scroll_top: 0,
             menu_scroll_y: 0.0,
@@ -2206,6 +2222,7 @@ impl Engine {
             menu_side: None,
             menu_textures,
             menu_hints,
+            about_logs_hint,
             first_run_hint,
             onboarding_note,
             shelf_no_games_hint,
@@ -2265,6 +2282,8 @@ impl Engine {
             clock_texture: None,
             clock_face: Printed::default(),
             battery_percent: None,
+            battery_low_shown: false,
+            low_battery_badge,
             battery_texture: None,
             battery_face: Printed::default(),
             battery: None,
@@ -2467,7 +2486,7 @@ impl Engine {
             self.clock_face = Printed::new(tex, face.w);
         }
         if let (Some(tex), Some(percent)) = (self.battery_texture, self.battery_percent) {
-            let face = slot_ui::word_ink(&format!("{percent}%"), ink);
+            let face = slot_ui::word_ink(&format!("{percent}%"), self.battery_ink(ink));
             self.gpu.update_face(tex, &face);
             self.battery_face = Printed::new(tex, face.w);
         }
@@ -2494,8 +2513,10 @@ impl Engine {
         self.battery = status.battery;
         self.date_text = status.date;
         let percent = self.battery.map(|b| b.percent);
-        if percent != self.battery_percent {
+        let low = slot_ui::battery_low(self.battery, slot_ui::LOW_PERCENT);
+        if percent != self.battery_percent || low != self.battery_low_shown {
             self.battery_percent = percent;
+            self.battery_low_shown = low;
             // Just as with original Slot, the About label reflects the live
             // battery without rebuilding it on every animation frame.
             if let Some(tex) = self.about_texture {
@@ -2508,7 +2529,8 @@ impl Engine {
                 self.gpu.update_face(tex, &sticker);
             }
             if let Some(percent) = percent {
-                let face = slot_ui::word_ink(&format!("{percent}%"), slot_ui::footer_ink(self.footer_inked_dark));
+                let face = slot_ui::word_ink(&format!("{percent}%"),
+                    self.battery_ink(slot_ui::footer_ink(self.footer_inked_dark)));
                 let tex = match self.battery_texture {
                     Some(tex) => { self.gpu.update_face(tex, &face); tex }
                     None => { let tex = self.gpu.create_face(&face);
@@ -2517,6 +2539,22 @@ impl Engine {
                 self.battery_face = Printed::new(tex, face.w);
             } else { self.battery_face = Printed::default(); }
         }
+    }
+
+    /// The battery percent's ink: red while it is low (#87).
+    fn battery_ink(&self, ink: [u8; 3]) -> [u8; 3] {
+        if slot_ui::battery_low(self.battery, slot_ui::LOW_PERCENT) { slot_ui::LOW_RED } else { ink }
+    }
+
+    /// Over the game, under 10 % and not charging: a small red battery in
+    /// the top right corner, a second on, a second off (#87).
+    fn push_low_battery(&self, out: &mut Vec<Draw>) {
+        if !slot_ui::battery_low(self.battery, slot_ui::VERY_LOW_PERCENT) { return; }
+        if (self.born.elapsed().as_millis() / 1000) % 2 == 1 { return; }
+        out.push(Draw::Tex {
+            x: out_w() as f32 - 12.0 - slot_ui::BADGE_W, y: 10.0,
+            w: slot_ui::BADGE_W, h: slot_ui::BADGE_H, tex: self.low_battery_badge, alpha: 1.0,
+        });
     }
 
     fn reset_time_controls(&mut self) {
@@ -4739,6 +4777,9 @@ impl Engine {
                                 },
                                 21 | 22 if row == 1 =>
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(22),
+                                // X: slot.'s logs saved to a file (#107).
+                                99 => UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                    .push_back(EXPORT_LOGS_ACTION),
                                 97 => self.overlay = ShelfOverlay::Menu { row: 5 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
@@ -6891,8 +6932,11 @@ impl Engine {
         let name=self.shelves.get(self.active)
             .and_then(|s|s.carts.get(s.index))
             .map(slot_ui::label_text).unwrap_or_default();
+        // The screen's width is part of it: the title fits its window.
+        let name=format!("{name}\u{1f}{}", out_w());
         if name==self.selected_title_name {return;}
         self.selected_title_name=name.clone();
+        let name=name.split('\u{1f}').next().unwrap_or_default().to_string();
         if name.is_empty(){self.selected_title_face=Printed::default();return;}
         let image=slot_ui::title_line_face(&name);
         if image.w==0 || image.h==0 {
@@ -7134,25 +7178,59 @@ impl Engine {
     /// still a moment, along at an even pace, still a moment at its end,
     /// then back to its start. 0 for text that fits.
     pub(super) fn marquee_offset(&self, what: (usize, usize), travel: f32) -> f32 {
+        marquee_shift(&self.marquee, what, travel)
+    }
+
+    /// The selected game's title too long for its window (#119): from the
+    /// moment it shows, three passes as the menus' long values (a moment
+    /// still, along, a moment at its end), then at rest at its start, so
+    /// the settled shelf still dozes. With whether it is moving.
+    fn title_scroll(&self) -> (f32, bool) {
+        let travel = slot_ui::slot_title_travel(self.selected_title_face);
+        if !self.settings.show_titles || travel <= 0.5 { return (0.0, false); }
+        let now = Instant::now();
+        let key = (self.active, self.shelves[self.active].index, travel.to_bits());
+        let since = match self.title_marquee.get() {
+            Some((seen, at, _)) if seen == key => at,
+            _ => now,
+        };
+        self.title_marquee.set(Some((key, since, now)));
+        const HOLD: f32 = 1.2;
+        const PACE: f32 = 40.0;
+        const PASSES: f32 = 3.0;
+        let run = travel / PACE;
+        let pass = HOLD + run + HOLD;
+        let t = now.duration_since(since).as_secs_f32();
+        if t >= PASSES * pass { return (0.0, false); }
+        (((t % pass - HOLD) / run).clamp(0.0, 1.0) * travel, true)
+    }
+}
+
+/// How far a long text has scrolled, kept in `cell` (see marquee_offset).
+fn marquee_shift(cell: &std::cell::Cell<Option<((usize, usize, u32), Instant, Instant)>>,
+                 what: (usize, usize), travel: f32) -> f32 {
+    {
         if travel <= 0.5 { return 0.0; }
         let now = Instant::now();
         // From its start whenever it comes back into view or changes
         // (another value is another travel): it once picked up where an
         // earlier pass had left off, at its end (Siham 2026-11-15).
         let key = (what.0, what.1, travel.to_bits());
-        let since = match self.marquee.get() {
+        let since = match cell.get() {
             Some((seen, at, last)) if seen == key
                 && now.duration_since(last) < Duration::from_millis(200) => at,
             _ => now,
         };
-        self.marquee.set(Some((key, since, now)));
+        cell.set(Some((key, since, now)));
         const HOLD: f32 = 1.2;
         const PACE: f32 = 40.0;
         let run = travel / PACE;
         let t = now.duration_since(since).as_secs_f32() % (HOLD + run + HOLD);
         ((t - HOLD) / run).clamp(0.0, 1.0) * travel
     }
+}
 
+impl Engine {
     fn draw_values(&self, heading: usize, items: &[usize], row: usize, keys: &[usize],
                    scales: &[(f32, f32)], out: &mut Vec<Draw>) {
         // Six rows at most on screen; a longer page scrolls (as Controls).
@@ -7797,7 +7875,8 @@ impl Engine {
                     self.draw_update_status_centered(status, 37.0,
                         status_center, 610.0 + narrower, 0.78 * fade, out);
                 }
-                for (tex,w,x) in centred_hints(&self.menu_hints, LEGEND_GAP) {
+                let hints = [self.menu_hints[0], self.menu_hints[1], self.about_logs_hint];
+                for (tex,w,x) in centred_hints(&hints, LEGEND_GAP) {
                     out.push(Draw::Tex {
                         x, y: 427.0, w: w as f32, h: HINT_H as f32,
                         tex, alpha: fade,
@@ -8876,6 +8955,7 @@ impl Engine {
                 commands.push(Draw::Tex { x,y,w,h,tex,alpha:1.0 });
             }
             commands.extend_from_slice(&footer_draws);
+            self.push_low_battery(&mut commands);
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             frame_phases.submit_build_us = build_started.elapsed().as_micros() as u64;
             let draw_started = Instant::now();
@@ -8964,6 +9044,8 @@ impl Engine {
         // from Cart Studio (Siham 2026-11-17). Read before the shelf's borrow.
         let press_lift = self.press_lift();
         let flight_hides = self.studio_flight_hides_cart();
+        // A title too long for a narrow screen scrolls (#119).
+        let (title_shift, _) = self.title_scroll();
         let lifted = self.shelves[self.active].selected_rect().map(|(x, y, w, h)| self.lifted([x, y, w, h]));
         let mut studio_return = Vec::new();
         self.draw_studio_return(&mut studio_return);
@@ -9080,7 +9162,7 @@ impl Engine {
                 // HOLD TO DELETE takes the title's place while L2 + R2 are held.
                 if self.settings.show_titles && self.triggers.hold.is_none() && self.triggers.ejecting.is_none() {
                     let alpha=name.map_or(1.0,|(_,elapsed,_)|slot_title_alpha(elapsed));
-                    slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
+                    slot_ui::draw_slot_title_scrolled(self.selected_title_face,alpha,title_shift,&mut commands);
                 }
                 if shelf_ink.is_some() { commands.push(Draw::Ink(None)); }
                 commands.append(&mut studio_return);
@@ -9260,6 +9342,8 @@ impl Engine {
             && self.triggers.hold.is_none() && self.triggers.ejecting.is_none()
             // The RG Rotate's cover animation (clock and battery growing).
             && self.lid_t == if self.lid_covered { 1.0 } else { 0.0 }
+            // A long title scrolling its passes (#119).
+            && !self.title_scroll().1
             && self.cart_render.is_idle();
         CAROUSEL_QUIET.store(quiet, Ordering::Release);
     }

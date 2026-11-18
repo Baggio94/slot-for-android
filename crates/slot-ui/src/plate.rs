@@ -291,17 +291,39 @@ fn band_width(label: &str) -> u32 {
 }
 
 /// Pixel geometry and white ink copied from upstream v1.7.0 plate.rs.
+/// Room each side of the selected game's title: on a narrow screen (the RG
+/// Rotate's 480) a 560 line went past both edges (#119).
+const TITLE_LINE_MARGIN: f32 = 24.0;
+/// The most texels a scrolling title's face gets across: a texture size
+/// every GPU takes.
+const TITLE_LINE_TEXELS: f32 = 4096.0;
+
+/// The selected game's title's room on this screen.
+pub fn title_line_window() -> f32 {
+    (out_w() as f32 - 2.0 * TITLE_LINE_MARGIN).clamp(1.0, TITLE_LINE_MAX_W)
+}
+
 pub fn title_line_face(text: &str) -> UndoFace {
+    title_line_face_within(text, title_line_window())
+}
+
+/// The title shrunk to fit `max_w` (24 px down to 14); still too long at
+/// 14 px, it is laid out whole, wider than `max_w`, for the shelf to scroll
+/// rather than cut it (#119).
+pub fn title_line_face_within(text: &str, max_w: f32) -> UndoFace {
     let Some(font) = text::label_font() else {
         return UndoFace { rgba: Vec::new(), w: 0, h: 0 };
     };
-    let layout = text::fit(
-        font, text, TITLE_LINE_MAX_W, 1, TITLE_LINE_PX, TITLE_LINE_MIN_PX,
-    );
+    let layout = if text::fits_line(font, text, max_w, TITLE_LINE_MIN_PX) {
+        text::fit(font, text, max_w, 1, TITLE_LINE_PX, TITLE_LINE_MIN_PX)
+    } else {
+        text::one_line(text, TITLE_LINE_MIN_PX)
+    };
     let ink = layout.lines.iter()
         .map(|line| text::line_width(font, line, layout.px, layout.tracking))
         .fold(0.0, f32::max);
-    let w = (ink.ceil() as u32).clamp(1, TITLE_LINE_MAX_W as u32);
+    let longest = (TITLE_LINE_TEXELS / density::scale().max(1.0)).floor() as u32;
+    let w = (ink.ceil() as u32).clamp(1, longest);
     let mut face = Canvas::new(w, TITLE_LINE_H);
     face.text(&layout, [0xff, 0xff, 0xff]);
     face.into_undo()

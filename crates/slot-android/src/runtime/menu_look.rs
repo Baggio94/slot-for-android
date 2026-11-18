@@ -186,6 +186,7 @@ impl Engine {
             (self.settings_hints[0].0, key("B", "Back")), (self.settings_hints[1].0, Arrows("Change".into())),
         ];
         hints.push((self.screen_size_hint.0, key("L1+R1", "Size")));
+        hints.push((self.about_logs_hint.0, key("X", "Logs")));
         for (white, spec) in hints { self.register_ink_hint(white, spec); }
     }
 

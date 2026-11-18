@@ -461,6 +461,30 @@ pub fn draw_slot_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
     draw_slot_name_at_scale(name, alpha, 1.0, out);
 }
 
+/// How far a title too long for its window has to scroll (0 when it fits).
+pub fn slot_title_travel(title: Printed) -> f32 {
+    (title.w as f32 - crate::plate::title_line_window()).max(0.0)
+}
+
+/// The title in its window (#119): centred when it fits, else cut at the
+/// window's edges with a fade and moved `shift` px along, as the menus'
+/// long values.
+pub fn draw_slot_title_scrolled(title: Printed, alpha: f32, shift: f32, out: &mut Vec<Draw>) {
+    let travel = slot_title_travel(title);
+    if travel <= 0.5 { return draw_slot_title(title, alpha, out); }
+    let (Some(tex), true) = (title.face, alpha > 0.0) else { return };
+    let (w, h) = (title.w as f32, crate::plate::TITLE_LINE_H as f32);
+    let window = crate::plate::title_line_window();
+    let left = cx() - window / 2.0;
+    const FEATHER: f32 = 18.0;
+    out.push(Draw::Span(Some(slot_gfx::Span {
+        left, right: left + window,
+        feather_left: shift.min(FEATHER), feather_right: (travel - shift).min(FEATHER),
+    })));
+    out.push(Draw::Tex { x: left - shift, y: SLOT_NAME_Y + HINT_H as f32 - h, w, h, tex, alpha });
+    out.push(Draw::Span(None));
+}
+
 /// Original Slot v1.7 title overlay: 32px high and eight pixels above
 /// the shelf platform text, with the same centred slot-mouth origin.
 pub fn draw_slot_title(title: Printed, alpha: f32, out: &mut Vec<Draw>) {

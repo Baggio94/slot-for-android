@@ -1124,6 +1124,7 @@ class MainActivity : Activity() {
                 18 -> showPeerCartridgeConsent()
                 23 -> shareLinkCode()
                 40 -> saveScreenshot()
+                80 -> exportLogs()
                 19 -> slotUpdater.check(true)
                 20 -> slotUpdater.openNotes()
                 21 -> installUpdate()
@@ -3445,6 +3446,19 @@ class MainActivity : Activity() {
         }
     }
 
+    /** About's X (#107): Android's "save as" page for slot.'s logs; About
+     *  stays behind it. */
+    private fun exportLogs() {
+        nativeExternalBegin()
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(LogExport.intent(), LogExport.REQUEST)
+        } catch (error: ActivityNotFoundException) {
+            nativeExternalReturn()
+            SlotToast.makeText(this, "Couldn't open the file picker.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     /** The Screenshot hotkey (Siham 2026-11-09): the PNG Rust read from the
      * screen, filed where Android keeps its own, Pictures/Screenshots. */
     private fun saveScreenshot() {
@@ -3755,6 +3769,19 @@ class MainActivity : Activity() {
         if (requestCode == SlotFolder.REQUEST) {
             wakeCarouselRender()
             slotFolder.picked(resultCode, data)
+            return
+        }
+        if (requestCode == LogExport.REQUEST) {
+            nativeExternalReturn()
+            wakeCarouselRender()
+            val uri = data?.data
+            if (resultCode == RESULT_OK && uri != null) {
+                LogExport.write(this, uri) { saved ->
+                    if (!isDestroyed) SlotToast.makeText(this,
+                        if (saved) "Logs saved." else "Couldn't save the logs.",
+                        Toast.LENGTH_SHORT).show()
+                }
+            }
             return
         }
         if (requestCode in setOf(FOLDER_REQUEST, BIOS_REQUEST, SAVE_REQUEST, STATE_REQUEST,

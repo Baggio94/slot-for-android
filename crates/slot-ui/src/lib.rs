@@ -47,7 +47,7 @@ mod toast;
 
 pub use backdrop::{bezel_face, blur_background, blur_background_native, default_background, default_background_native, draw_backdrop, draw_ground_tinted, top_line_luma, wallpaper_face, wallpaper_face_native, LIGHT_WALLPAPER};
 pub use barcode::{code39, CODE39_NARROW, CODE39_WIDE};
-pub use battery::{draw_gauge, draw_status_gauge, status_gauge_width, BOLT_PX, GAUGE_H, GAUGE_W, WALL};
+pub use battery::{battery_low, draw_gauge, draw_status_gauge, low_battery_badge, status_gauge_width, BADGE_H, BADGE_W, BOLT_PX, GAUGE_H, GAUGE_W, LOW_PERCENT, LOW_RED, VERY_LOW_PERCENT, WALL};
 pub use board::{
     board_at, board_face, pak_chip_face, home_chip_face, board_layout_body, lid_rest_body, picker_span_body, shelf_cart_body, board_layout, board_toward, BoardLayout, board_from, board_zoom, chip_face, chip_shadow_face, grown, lid_at,
     lid_from, lid_rest, lid_toward, lift_of, on_board, padded, pak_marking_face, picker_span, rom_marking, rom_marking_face, shelf_cart, shelf_cart_at, shelf_cart_for,
@@ -78,7 +78,7 @@ pub use link_art::{
 };
 pub use plate::{
     arrows_hint_face, arrows_hint_face_ink, hint_face_ink, hint_label_x, arrows_label_x, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
-    hint_width, title_face, title_line_face, word_face, word_ink, word_ink_scaled, word_width, platform_name_face, PLATFORM_NAME_SCALE,
+    hint_width, title_face, title_line_face, title_line_face_within, title_line_window, word_face, word_ink, word_ink_scaled, word_width, platform_name_face, PLATFORM_NAME_SCALE,
     onboarding_instruction_face, onboarding_note_face, onboarding_max_w,
     Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,
     HINT_EDGE, HINT_GAP, HINT_H, LEGEND_GAP, TITLE_H, TITLE_W,
@@ -106,7 +106,7 @@ pub use net_switch::{
     NET_KNOB_Y, NET_SWITCH_H, NET_SWITCH_W,
 };
 pub use slot_chrome::{
-    draw_empty_slot, draw_empty_slot_closed, draw_empty_slot_with, draw_slot_name, draw_slot_title, draw_platform_name, ease, edge, housing, opening, recess,
+    draw_empty_slot, draw_empty_slot_closed, draw_empty_slot_with, draw_slot_name, draw_slot_title, draw_slot_title_scrolled, slot_title_travel, draw_platform_name, ease, edge, housing, opening, recess,
     set_theme, CloserKind, SlotChrome, SlotCloser,
     ALERT_PX, LIP_H, MOUTH_H, MOUTH_W,
 };
