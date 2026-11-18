@@ -26,6 +26,24 @@ import java.util.concurrent.Executors
  * slot.'s working copy: without the card slot. plays as before, and the
  * copy catches up when the folder is back.
  */
+/**
+ * The id of the folder a file at `path` ("Saves/mGBA/x.srm") goes in, under
+ * `root`: each folder on the way is looked up in `known`, else found or made
+ * by `make(parent id, name)`, and remembered. It once asked for the folder of
+ * "<parent>/x", the same parent again, without end: a new slot. folder with
+ * subfolders to write overflowed the stack (2.5.0-beta34, KPA, 18 Nov).
+ */
+internal fun folderFor(path: String, root: String, known: MutableMap<String, String>,
+                       make: (String, String) -> String): String {
+    if (!path.contains('/')) return root
+    val parent = path.substringBeforeLast('/')
+    known[parent]?.let { return it }
+    val above = folderFor(parent, root, known, make)
+    val id = make(above, parent.substringAfterLast('/'))
+    known[parent] = id
+    return id
+}
+
 internal class SlotFolder(private val activity: MainActivity) {
     companion object {
         private const val TAG = "SlotFolder"
@@ -422,16 +440,8 @@ internal class SlotFolder(private val activity: MainActivity) {
         private val files = HashMap<String, String>()
         private var listed = false
 
-        private fun dirOf(path: String): String {
-            if (!path.contains('/')) return root
-            val parent = path.substringBeforeLast('/')
-            dirs[parent]?.let { return it }
-            val above = dirOf("$parent/x")
-            val name = parent.substringAfterLast('/')
-            val existing = children(above).firstOrNull { it.dir && it.name == name }?.id
-            val id = existing ?: createDir(above, name)
-            dirs[parent] = id
-            return id
+        private fun dirOf(path: String): String = folderFor(path, root, dirs) { above, name ->
+            children(above).firstOrNull { it.dir && it.name == name }?.id ?: createDir(above, name)
         }
 
         override fun read(path: String): ByteArray {
