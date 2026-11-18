@@ -80,10 +80,29 @@ pub fn mosaic_ground(shelf: usize, theme: MosaicTheme) -> Option<[u8; 3]> {
     COLOURS.get(shelf).map(|c| c[theme as usize][0])
 }
 
-/// Shelf `shelf`'s mosaic in `theme` at w x h, RGBA, softened for Default Blur.
-pub fn mosaic(shelf: usize, theme: MosaicTheme, blur: bool, w: u32, h: u32) -> Option<Vec<u8>> {
-    let mask = mask(shelf, w, h)?;
+/// How a mosaic is drawn: Default, Default Blur or Default Halo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MosaicLook { Sharp, Blur, Halo }
+
+/// Default Halo: the lines kept sharp but faint, in a wide soft glow
+/// (Siham 2026-11-18). The glow's spread as a share of the width, and how
+/// much of the line and of the glow is drawn.
+const HALO_SPREAD: f32 = 0.0052;
+const HALO_LINE: f32 = 0.45;
+const HALO_GLOW: f32 = 0.9;
+
+/// Shelf `shelf`'s mosaic in `theme` at w x h, RGBA, as `look` draws it.
+pub fn mosaic(shelf: usize, theme: MosaicTheme, look: MosaicLook, w: u32, h: u32) -> Option<Vec<u8>> {
+    let mut mask = mask(shelf, w, h)?;
     let [ground, line] = COLOURS.get(shelf)?[theme as usize];
+    if look == MosaicLook::Halo {
+        let mut glow: Vec<u8> = mask.iter().flat_map(|m| [*m, *m, *m, 255]).collect();
+        soften(&mut glow, w as usize, h as usize, (w as f32 * HALO_SPREAD).round().max(1.0) as usize);
+        for (m, g) in mask.iter_mut().zip(glow.chunks_exact(4)) {
+            let v = HALO_LINE * *m as f32 + HALO_GLOW * g[0] as f32;
+            *m = v.round().min(255.0) as u8;
+        }
+    }
     let mut rgba = vec![255u8; mask.len() * 4];
     for (px, m) in rgba.chunks_exact_mut(4).zip(&mask) {
         let m = *m as f32 / 255.0;
@@ -91,15 +110,15 @@ pub fn mosaic(shelf: usize, theme: MosaicTheme, blur: bool, w: u32, h: u32) -> O
             px[c] = (ground[c] as f32 + m * (line[c] as f32 - ground[c] as f32)).round() as u8;
         }
     }
-    if blur {
+    if look == MosaicLook::Blur {
         soften(&mut rgba, w as usize, h as usize, (w as f32 * BLUR_SPREAD).round().max(1.0) as usize);
     }
     Some(rgba)
 }
 
 /// At the panel's own size, for the carousel.
-pub fn mosaic_native(shelf: usize, theme: MosaicTheme, blur: bool) -> Option<Vec<u8>> {
-    mosaic(shelf, theme, blur, crate::native_w(), crate::native_h())
+pub fn mosaic_native(shelf: usize, theme: MosaicTheme, look: MosaicLook) -> Option<Vec<u8>> {
+    mosaic(shelf, theme, look, crate::native_w(), crate::native_h())
 }
 
 /// Three box blurs of radius `r` each way: close to a Gaussian.
@@ -146,7 +165,7 @@ mod tests {
     fn every_shelf_has_its_mosaic_in_every_theme() {
         for shelf in 0..MOSAIC_KEYS.len() {
             for theme in [MosaicTheme::Original, MosaicTheme::Light, MosaicTheme::Dark, MosaicTheme::Oled] {
-                let image = mosaic(shelf, theme, false, 480, 320).expect("mask decodes");
+                let image = mosaic(shelf, theme, MosaicLook::Sharp, 480, 320).expect("mask decodes");
                 assert_eq!(image.len(), 480 * 320 * 4);
                 let [ground, line] = COLOURS[shelf][theme as usize];
                 // Mostly ground, with some line drawn over it.
@@ -161,8 +180,8 @@ mod tests {
 
     #[test]
     fn the_blur_softens_and_keeps_the_colours() {
-        let sharp = mosaic(3, MosaicTheme::Light, false, 480, 320).unwrap();
-        let soft = mosaic(3, MosaicTheme::Light, true, 480, 320).unwrap();
+        let sharp = mosaic(3, MosaicTheme::Light, MosaicLook::Sharp, 480, 320).unwrap();
+        let soft = mosaic(3, MosaicTheme::Light, MosaicLook::Blur, 480, 320).unwrap();
         let edges = |img: &[u8]| img.chunks_exact(4).collect::<Vec<_>>().windows(2)
             .map(|p| p[0][1].abs_diff(p[1][1]) as u64).sum::<u64>();
         assert!(edges(&soft) * 3 < edges(&sharp) * 2);
@@ -171,9 +190,22 @@ mod tests {
     }
 
     #[test]
+    fn the_halo_keeps_the_lines_and_glows_around_them() {
+        let sharp = mosaic(3, MosaicTheme::Dark, MosaicLook::Sharp, 480, 320).unwrap();
+        let halo = mosaic(3, MosaicTheme::Dark, MosaicLook::Halo, 480, 320).unwrap();
+        let ground = COLOURS[3][MosaicTheme::Dark as usize][0];
+        let lit = |img: &[u8]| img.chunks_exact(4).filter(|p| p[1].abs_diff(ground[1]) > 2).count();
+        // The glow reaches past the lines...
+        assert!(lit(&halo) > lit(&sharp) * 3 / 2);
+        // ...and the lines are still there: brightest where the sharp one is.
+        let peak = |img: &[u8]| img.chunks_exact(4).map(|p| p[1]).max().unwrap();
+        assert!(peak(&halo) >= ground[1] + (peak(&sharp) - ground[1]) / 2);
+    }
+
+    #[test]
     fn any_screen_shape_is_filled() {
         for (w, h) in [(720, 720), (960, 640), (1024, 768), (1920, 1080), (1080, 1920), (2560, 1600)] {
-            let image = mosaic(0, MosaicTheme::Dark, false, w, h).unwrap();
+            let image = mosaic(0, MosaicTheme::Dark, MosaicLook::Sharp, w, h).unwrap();
             assert_eq!(image.len(), (w * h * 4) as usize);
         }
     }

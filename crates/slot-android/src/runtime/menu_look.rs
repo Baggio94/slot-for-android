@@ -624,7 +624,7 @@ mod render {
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
         engine.settings.wallpaper = crate::settings::WallpaperPick::Default;
         engine.reload_wallpaper(None);
-        let mosaic = |engine: &Engine, theme| slot_ui::mosaic_native(engine.active, theme, false).unwrap();
+        let mosaic = |engine: &Engine, theme| slot_ui::mosaic_native(engine.active, theme, slot_ui::MosaicLook::Sharp).unwrap();
         // Dark: the dark mosaic, the status line white over it.
         assert_eq!(engine.settings.appearance, crate::settings::Appearance::Dark);
         assert_eq!(engine.wallpaper_top_luma, Some(slot_ui::top_line_luma(
