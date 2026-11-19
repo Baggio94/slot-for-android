@@ -250,7 +250,11 @@ internal class SlotStatusIndicators(
         val to = if (closed) 0f else 1f
         for (group in listOf(left, right)) {
             group.animate().cancel()
-            if (animate) group.animate().alpha(to).setDuration(300L).start() else group.alpha = to
+            // On the lid's own 450 ms and curve, with the clock it grows
+            // (beta42): 300 ms straight, the icons left before the rest.
+            if (animate) group.animate().alpha(to).setDuration(450L)
+                .setInterpolator(android.view.animation.AccelerateDecelerateInterpolator()).start()
+            else group.alpha = to
         }
     }
 

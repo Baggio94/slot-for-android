@@ -4,6 +4,11 @@
 use super::*;
 use crate::controls::VISIBLE_ROWS;
 
+/// The paths over the menus' pages, drawn ahead (prepare_menu_look).
+const MENU_PATHS_AHEAD: [&str; 9] = ["slot.", "Menu", "Menu \u{203a} Library", "Menu \u{203a} Settings",
+    "Settings \u{203a} Interface", "Settings \u{203a} Systems", "Settings \u{203a} Controls",
+    "Menu \u{203a} Cart Studio", "Game Menu"];
+
 /// An unselected row's ink, against the selected row's.
 pub(super) const ROW_REST: f32 = 0.58;
 /// A page's title: where it sits under its path line.
@@ -342,6 +347,17 @@ impl Engine {
             ShelfOverlay::ScreenSystemSettings { .. } => self.menu_path(91),
             _ => self.menu_path(33),
         };
+        // The menus' paths drawn ahead on a still shelf, one a frame
+        // (beta42): a page's first opening drew its own, ~50 ms on the KONKR.
+        if matches!(self.overlay, ShelfOverlay::None) && self.game.is_none() && !self.inserted
+            && self.last_cart_navigation.elapsed() >= Duration::from_secs(2)
+            && !self.shelves.get(self.active).is_some_and(|s| s.is_scrolling()) {
+            if let Some(&ahead) = MENU_PATHS_AHEAD.iter().find(|p| !self.menu_paths.contains_key(*p)) {
+                let face = menu_style::menu_path_face(ahead);
+                let tex = self.gpu.create_face(&face);
+                self.menu_paths.insert(ahead, (tex, face.w, face.h));
+            }
+        }
         if !path.is_empty() && !self.menu_paths.contains_key(path) {
             let face = menu_style::menu_path_face(path);
             let tex = self.gpu.create_face(&face);
