@@ -819,6 +819,7 @@ fn narrow_label(label: &str) -> &str {
     match label {
         "Fast Forward Sound" => "FF Sound",
         "Sync Saves with RomM" => "Sync with RomM",
+        "Wi-Fi & Bluetooth" => "Wi-Fi & BT",
         _ => label,
     }
 }
