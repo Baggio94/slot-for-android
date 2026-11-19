@@ -301,7 +301,9 @@ class MainActivity : Activity() {
         val tasks = ArrayList<TaskPill.Task>()
         slotFolder.copyPercent()?.let { tasks.add(TaskPill.Task(TaskPill.COPY, "COPYING $it%", it / 100f)) }
         slotFolder.syncProgress()?.let { (done, total) ->
-            tasks.add(TaskPill.Task(TaskPill.SYNC, "SYNCING $done/$total", done.toFloat() / total))
+            // From the card's arrival, counted once its listing is read.
+            tasks.add(if (total > 0) TaskPill.Task(TaskPill.SYNC, "SYNCING $done/$total", done.toFloat() / total)
+                else TaskPill.Task(TaskPill.SYNC, "SYNCING", -1f))
         }
         taskIndicators.downloads.pillWords?.let {
             tasks.add(TaskPill.Task(TaskPill.DOWNLOADS, it, taskIndicators.downloads.pillProgress))

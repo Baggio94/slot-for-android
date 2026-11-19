@@ -121,7 +121,7 @@ internal class SlotFolder(private val activity: MainActivity) {
      *  all; null when none runs (beta39). */
     @Volatile private var syncDone = 0
     @Volatile private var syncTotal = 0
-    fun syncProgress(): IntArray? = if (pullRunning && syncTotal > 0) intArrayOf(syncDone, syncTotal) else null
+    fun syncProgress(): IntArray? = if (pullRunning) intArrayOf(syncDone, syncTotal) else null
 
     /** Runs [block] once no game is on (a window, the ROM picker, a reload
      *  never land on a game, beta38). */

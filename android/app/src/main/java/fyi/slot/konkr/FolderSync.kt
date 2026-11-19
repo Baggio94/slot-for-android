@@ -167,7 +167,6 @@ internal object FolderSync {
         if (tombs.keys.removeAll { !travels(it) }) report.tombsChanged = true
         val mine = private.list()
         val theirs = folder.list().filterKeys { travels(it) }
-        if (pull) report.stale = folder.dropStale()
         // What a game reads at its launch first (beta39): a launch waits for
         // those only, never for the labels behind them.
         val paths = (mine.keys + theirs.keys).sortedWith(compareBy({ !forLaunch(it) }, { it }))
@@ -185,6 +184,9 @@ internal object FolderSync {
         }
         if (!launchDone) launchFilesDone()
         progress(paths.size, paths.size)
+        // Old leftovers go last (beta40): removing thousands of badges from
+        // a card takes minutes, and held up a launch when it came first.
+        if (pull) report.stale = folder.dropStale()
         // Gone from both since the last copy: deleted here on purpose (DELETE
         // IT, at a game's launch). Other handhelds follow it.
         for ((path, entry) in base.entries) {
