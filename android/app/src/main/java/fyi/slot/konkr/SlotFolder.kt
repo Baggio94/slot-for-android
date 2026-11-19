@@ -23,7 +23,7 @@ import java.util.concurrent.Executors
  * choices (FolderSync.travels), so another handheld picking it gets
  * everything back. ROMs are never copied into it.
  *
- * Scenarios: claude/slot-portable-scenarios-v1.md. The private files stay
+ * The private files stay
  * slot.'s working copy: without the card slot. plays as before, and the
  * copy catches up when the folder is back.
  */

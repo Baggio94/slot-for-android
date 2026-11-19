@@ -11,7 +11,7 @@ import java.util.TimeZone
 
 /**
  * The two-way copy between slot.'s private files and the slot. folder
- * (slot. 2.5, claude/slot-portable-scenarios-v1.md). Pure logic over two
+ * (slot. 2.5). Pure logic over two
  * [Side]s, so it is tested on plain folders.
  *
  * The private files stay slot.'s working copy; the folder is their mirror,

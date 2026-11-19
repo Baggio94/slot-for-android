@@ -2,12 +2,14 @@
 //! for the four themes. A theme only changes two colours, the ground and
 //! the line, so each shelf ships one 2048x2048 4-bit mask (how much of the
 //! line a pixel is) and the colours below; the panel's own size is cut from
-//! its centre, like any wallpaper. Default Blur is the same image softened
-//! about as much as the bundled wood's blur.
+//! its centre, like any wallpaper, each panel pixel weighing the mask's
+//! pixels by how much of them it covers. Blur and Halo come after, at the
+//! panel's own pixels.
 
 use std::sync::Mutex;
 
 use crate::art;
+use crate::wallpaper_scale::{self, Crop};
 
 /// The shelves' keys, in wallpaper::SHELF_KEYS's order.
 pub const MOSAIC_KEYS: [&str; 9] =
@@ -63,16 +65,22 @@ static CUT: Mutex<Vec<(usize, u32, u32, Vec<u8>)>> = Mutex::new(Vec::new());
 
 /// The mask of shelf `shelf`, cut from its centre to w x h, one byte a pixel.
 fn mask(shelf: usize, w: u32, h: u32) -> Option<Vec<u8>> {
+    if w == 0 || h == 0 { return None; }
     if let Some((_, _, _, cut)) = CUT.lock().unwrap_or_else(|e| e.into_inner()).iter()
         .find(|(s, cw, ch, _)| *s == shelf && *cw == w && *ch == h) {
         return Some(cut.clone());
     }
     let (rgba, sw, sh) = art::decode_png_bytes(MASKS.get(shelf)?)?;
-    let cut: Vec<u8> = art::cover_rgba(&rgba, sw, sh, w, h)?.chunks_exact(4).map(|p| p[0]).collect();
+    let source: Vec<u8> = rgba.chunks_exact(4).map(|p| p[0]).collect();
+    drop(rgba);
+    let cut = wallpaper_scale::sample::<1>(&source, sw, sh, Crop::cover(sw, sh, w, h)?, w, h)?;
     let mut cache = CUT.lock().unwrap_or_else(|e| e.into_inner());
     // One size at a time (the RG Rotate turns): a new size drops the others.
     cache.retain(|(_, cw, ch, _)| *cw == w && *ch == h);
-    cache.push((shelf, w, h, cut.clone()));
+    // A General and a shelf worker may finish the same mask together.
+    if !cache.iter().any(|(s, _, _, _)| *s == shelf) {
+        cache.push((shelf, w, h, cut.clone()));
+    }
     Some(cut)
 }
 
@@ -181,6 +189,25 @@ fn box_pass(rgba: &mut [u8], start: usize, step: usize, n: usize, r: usize, line
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_panels_and_shelves_are_rejected() {
+        assert!(mosaic(0, MosaicTheme::Dark, MosaicLook::SHARP, 0, 480).is_none());
+        assert!(mosaic(0, MosaicTheme::Dark, MosaicLook::SHARP, 480, 0).is_none());
+        assert!(mosaic(MOSAIC_KEYS.len(), MosaicTheme::Dark, MosaicLook::SHARP, 480, 320).is_none());
+    }
+
+    #[test]
+    fn blur_kernel_is_unchanged() {
+        let mut row: Vec<u8> = [0u8, 0, 0, 0, 255, 0, 0, 0, 0].into_iter()
+            .flat_map(|v| [v, v, v, 255]).collect();
+        blur_wallpaper(&mut row, 9, 1, 30);
+        assert_eq!(row.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), [0, 9, 28, 57, 66, 57, 28, 9, 0]);
+        assert!(row.chunks_exact(4).all(|p| p[3] == 255));
+        for w in [640u32, 720, 960, 1080, 1920] {
+            assert_eq!(blur_radius(w, 30), Some((w as f32 * 0.0025).round().max(1.0) as usize));
+        }
+    }
 
     #[test]
     fn every_shelf_has_its_mosaic_in_every_theme() {

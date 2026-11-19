@@ -1,4 +1,5 @@
 mod art;
+mod wallpaper_scale;
 pub mod bitmaps;
 pub mod fit_overlay;
 pub mod watomsk;
