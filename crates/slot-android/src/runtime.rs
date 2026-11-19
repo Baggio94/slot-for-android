@@ -8409,6 +8409,7 @@ impl Engine {
         let wallpaper_at = Instant::now();
         self.poll_shelf_wallpapers();
         crate::frame_watch::part(crate::frame_watch::PART_WALLPAPER, wallpaper_at.elapsed());
+        let before_at = Instant::now();
         // Poll the already-running achievement evaluator without blocking GL.
         // Only Android's foreground UI displays notices; the worker never
         // touches JNI, an Activity, the renderer or the filesystem here.
@@ -9272,6 +9273,7 @@ impl Engine {
         self.shelves[self.active].update(dt);
         self.tick_triggers();
         crate::frame_watch::span(crate::frame_watch::SPAN_TICK, tick_at.elapsed());
+        crate::frame_watch::span(crate::frame_watch::SPAN_BEFORE, before_at.elapsed());
         let upload_at = Instant::now();
         self.relabel_one();
         self.prepare_visible();
@@ -9299,6 +9301,7 @@ impl Engine {
         let focus_at = Instant::now();
         self.persist_focus_if_idle();
         crate::frame_watch::span(crate::frame_watch::SPAN_FOCUS, focus_at.elapsed());
+        let state_at = Instant::now();
         // Resolve the optional transparent material before mutably borrowing
         // the selected rack, otherwise Rust rejects the overlapping borrows.
         let (selected_clear_back, selected_clear_front) = self.clear_layers();
@@ -9322,6 +9325,8 @@ impl Engine {
         // The grey of carts whose card is out (beta39), read before the
         // shelf is borrowed.
         let (missing_ink, cart_ink) = (self.missing_ink(), self.cart_ink());
+        crate::frame_watch::span(crate::frame_watch::SPAN_STATE, state_at.elapsed());
+        let shelf_at = Instant::now();
         let shelf = &mut self.shelves[self.active];
 
         // Original Slot: 450ms seating + 280ms hold. Start the original
@@ -9546,9 +9551,11 @@ impl Engine {
                 });
             }
         }
+        crate::frame_watch::span(crate::frame_watch::SPAN_SHELF, shelf_at.elapsed());
         let overlay_at = Instant::now();
         self.draw_overlay(&mut commands);
         crate::frame_watch::span(crate::frame_watch::SPAN_OVERLAY, overlay_at.elapsed());
+        let chrome_at = Instant::now();
         self.draw_menu_task_pill(&mut commands);
         if cover_with_hold {
             let mut hold = Vec::with_capacity(commands.len() + 8);
@@ -9624,6 +9631,7 @@ impl Engine {
             }
         }
         SHELF_INDICATOR_FLAGS.store(indicator_flags, Ordering::Release);
+        crate::frame_watch::span(crate::frame_watch::SPAN_CHROME, chrome_at.elapsed());
         let gpu_at = Instant::now();
         self.gpu.fit(self.size);
         self.gpu.begin_frame();

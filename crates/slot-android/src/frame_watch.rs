@@ -34,8 +34,12 @@ pub(crate) const SPAN_TITLE: usize = 1;
 pub(crate) const SPAN_FOCUS: usize = 2;
 pub(crate) const SPAN_TICK: usize = 3;
 pub(crate) const SPAN_OVERLAY: usize = 4;
-const SPAN_NAMES: [&str; 5] = ["menus", "title", "focus", "tick", "overlay"];
-static SPANS: Mutex<[u32; 5]> = Mutex::new([0; 5]);
+pub(crate) const SPAN_STATE: usize = 5;
+pub(crate) const SPAN_SHELF: usize = 6;
+pub(crate) const SPAN_CHROME: usize = 7;
+pub(crate) const SPAN_BEFORE: usize = 8;
+const SPAN_NAMES: [&str; 9] = ["menus", "title", "focus", "tick", "overlay", "state", "shelf", "chrome", "before"];
+static SPANS: Mutex<[u32; 9]> = Mutex::new([0; 9]);
 
 /// A frame slower than this writes its own line, with every part (bits of
 /// an f32, so the bench can lower it).
@@ -53,7 +57,7 @@ pub(crate) fn span(span: usize, took: Duration) {
 }
 
 /// The line of one very slow frame: every part and span, in ms.
-fn hitch_line(ms: f32, parts: &[u32; 3], spans: &[u32; 5], moment: Moment, work: u8) -> String {
+fn hitch_line(ms: f32, parts: &[u32; 3], spans: &[u32; 9], moment: Moment, work: u8) -> String {
     let at = |us: u32| format!("{:.1}", us as f32 / 1000.0);
     let total_us = (ms * 1000.0) as u32;
     let build = total_us.saturating_sub(parts.iter().sum::<u32>());
@@ -308,7 +312,7 @@ mod tests {
             w.causes[0] = 1; w.causes[1] = 2;
             w.line("bench")
         };
-        assert_eq!(hitch_line(120.0, &[1000, 2000, 7000], &[0, 4000, 90000, 0, 0],
+        assert_eq!(hitch_line(120.0, &[1000, 2000, 7000], &[0, 4000, 90000, 0, 0, 0, 0, 0, 0],
             Moment { scrolling: false, ..Moment::default() }, WORK_LABEL),
             "Slow frame 120ms: wallpaper 1.0, upload 2.0, gpu 7.0, build 110.0 \
             (title 4.0, focus 90.0); during: label");
