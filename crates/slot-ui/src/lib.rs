@@ -8,7 +8,7 @@ pub use art::cover;
 pub use art::decode_png_bytes as decode_png;
 mod backdrop;
 pub mod mosaic;
-pub use mosaic::{mosaic_ground, mosaic_native, MosaicLook, MosaicTheme};
+pub use mosaic::{blur_wallpaper, mosaic_ground, mosaic_native, MosaicLook, MosaicTheme};
 mod barcode;
 mod battery;
 mod board;

@@ -651,7 +651,7 @@ mod render {
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
         engine.settings.wallpaper = crate::settings::WallpaperPick::Default;
         engine.reload_wallpaper(None);
-        let mosaic = |engine: &Engine, theme| slot_ui::mosaic_native(engine.active, theme, slot_ui::MosaicLook::Sharp).unwrap();
+        let mosaic = |engine: &Engine, theme| slot_ui::mosaic_native(engine.active, theme, slot_ui::MosaicLook::SHARP).unwrap();
         // Dark: the dark mosaic, the status line white over it.
         assert_eq!(engine.settings.appearance, crate::settings::Appearance::Dark);
         assert_eq!(engine.wallpaper_top_luma, Some(slot_ui::top_line_luma(
@@ -718,7 +718,8 @@ mod render {
         assert_eq!(corner(&mut engine), menu_style::MenuPalette::original(6).shelf);
         assert!(engine.shelf_ink().is_some());
         // Any image chosen covers the colour again.
-        engine.settings.wallpaper = crate::settings::WallpaperPick::SlotBlur;
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Slot;
+        engine.settings.wallpaper_look.blur = 60;
         engine.reload_wallpaper(None);
         assert_ne!(corner(&mut engine), menu_style::MenuPalette::original(6).shelf);
         assert!(engine.shelf_ink().is_none());
@@ -750,7 +751,8 @@ mod render {
             assert_eq!(ground(&mut engine), menu_style::shelf_ground());
         }
         // An image is drawn under the cart, as on the shelf: no dark screen.
-        engine.settings.wallpaper = crate::settings::WallpaperPick::SlotBlur;
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Slot;
+        engine.settings.wallpaper_look.blur = 60;
         engine.reload_wallpaper(None);
         let tex = engine.active_wallpaper().unwrap().0;
         let mut scene = Vec::new();

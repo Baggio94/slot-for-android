@@ -193,8 +193,8 @@ internal class SlotFolder(private val activity: MainActivity) {
         }
         val volumes = removableVolume()
         val dialog = SlotModalDialog(activity, "SLOT. FOLDER",
-            "Where should slot. keep your saves, states and settings? Already have a slot " +
-                "folder from another handheld? Pick it to get everything back.",
+            "Where should slot. keep its own data? Already have a slot. folder from " +
+                "another handheld? Pick it to get everything back.",
             onDismiss = { if (!picking) activity.nativeExternalReturn() })
         dialog.addButton("INTERNAL STORAGE") { picking = true; dialog.dismiss(); pick("primary") }
         if (volumes != null) dialog.addButton("SD CARD") { picking = true; dialog.dismiss(); pick(volumes) }

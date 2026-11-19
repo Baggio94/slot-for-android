@@ -578,7 +578,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 153] = [
+const MENU_TEXT: [&str; 156] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -735,6 +735,10 @@ const MENU_TEXT: [&str; 153] = [
     "Saves & States",                     // 150, Library's page
     "SAVES & STATES",                     // 151
     "Sync Saves with RomM",               // 152
+    // 153-155: Interface > Wallpaper's looks (Siham 2026-11-19).
+    "Blur",                               // 153
+    "Halo",                               // 154
+    "Darken",                             // 155
 ];
 
 /// Settings > Systems, top to bottom.
@@ -748,7 +752,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 146] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -785,6 +789,10 @@ const SETTING_VALUE_NAMES: [&str; 146] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "slot.", "slot. Blur",
                                // 124: the mosaic in a soft glow.
                                "Default Halo",
+                               // 125-134 (PERCENT_VALUES): Wallpaper's Blur,
+                               // Halo and Darken; 0 % shows OFF (5).
+                               "10%", "20%", "30%", "40%", "50%",
+                               "60%", "70%", "80%", "90%", "100%",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -1191,10 +1199,21 @@ const INTERFACE_PAGE_ROWS: [usize; 5] = [85, 83, 86, 87, 58];
 const INTERFACE_PAGE_KEYS: [usize; 5] = [18, usize::MAX, 19, 20, usize::MAX];
 const INTERFACE_WALLPAPER_ROW: usize = 1;
 const INTERFACE_STATUS_ROW: usize = 4;
-/// Settings > Interface > Wallpaper: Shelf (General or a shelf), its
-/// Wallpaper, Wallpaper Tint (for every image), Import, Delete.
-const WALLPAPER_ROWS: [usize; 5] = [133, 83, 84, 43, 45];
-const WALLPAPER_KEYS: [usize; 5] = [SHELF_PICK_KEY, WALLPAPER_PICK_KEY, 17, usize::MAX, usize::MAX];
+/// Settings > Interface > Wallpaper (Engine::wallpaper_rows): Shelf
+/// (General or a shelf), its Wallpaper, Blur, then Halo with Default or
+/// Darken with an image (none with None and slot.), Import, Delete.
+const BLUR_ROW: usize = 153;
+const HALO_ROW: usize = 154;
+const DARKEN_ROW: usize = 155;
+const BLUR_KEY: usize = 104;
+const HALO_KEY: usize = 105;
+const DARKEN_KEY: usize = 106;
+/// "10%" among the setting values; 20 % to 100 % follow.
+const PERCENT_VALUES: usize = 125;
+/// A look's value face: OFF at 0 %, then 10 % to 100 %.
+fn percent_value(percent: u8) -> usize {
+    match percent.min(100) / 10 { 0 => 5, tens => PERCENT_VALUES + usize::from(tens) - 1 }
+}
 
 /// Library: ROM folder, RomM, BIOS, Save and State folders, Share Saves,
 /// Refresh. Seven rows: the page scrolls, six shown (Siham 2026-11-09).
@@ -1427,9 +1446,12 @@ struct Engine {
     shelf_wallpaper_texs: Vec<Option<slot_gfx::TexId>>,
     shelf_wallpaper_ready: Vec<bool>,
     shelf_wallpaper_luma: Vec<Option<f32>>,
-    /// A shelf's own wallpaper is an image (Wallpaper Tint darkens it).
+    /// A shelf's own wallpaper is an image (its Darken shades it).
     shelf_wallpaper_personal: Vec<bool>,
     shelf_wallpaper_rx: Option<std::sync::mpsc::Receiver<(usize, Vec<u8>, f32, bool)>>,
+    /// General's wallpaper being made (reload_wallpaper): the one on screen
+    /// stays until it is ready.
+    wallpaper_rx: Option<std::sync::mpsc::Receiver<(Option<Vec<u8>>, bool)>>,
     wallpaper_name_face: Option<(slot_gfx::TexId, u32, u32)>,
     /// Interface > Wallpaper > Shelf: None for General, else the shelf
     /// (SHELF_KEYS) whose own wallpaper the page shows and changes.
@@ -1674,24 +1696,27 @@ fn user_wallpaper_stamp(root: &Path) -> Option<std::time::SystemTime> {
 }
 
 /// Wallpapers/ files are eligible: never access ROMs or external SAF paths.
-/// Default and Default Blur are shelf `shelf`'s mosaic in `theme`; with no
-/// shelf yet (the engine is being built) there is none to make.
+/// Default is shelf `shelf`'s mosaic in `theme`; with no shelf yet (the
+/// engine is being built) there is none to make. `look`'s Blur softens
+/// every wallpaper and its Halo lights Default's lines.
 fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperPick,
-    shelf: Option<usize>, theme: slot_ui::MosaicTheme) -> (Option<Vec<u8>>, bool)
+    look: crate::settings::WallpaperLook, shelf: Option<usize>, theme: slot_ui::MosaicTheme)
+    -> (Option<Vec<u8>>, bool)
 {
     use crate::settings::WallpaperPick;
-    use slot_ui::MosaicLook;
-    let mosaic = |look: MosaicLook| shelf.and_then(|shelf| slot_ui::mosaic_native(shelf, theme, look));
-    let wood = || slot_ui::default_background_native().map(|v|v.to_vec());
-    let default = || if shelf.is_some() { mosaic(MosaicLook::Sharp) } else { wood() };
+    let blurred = |mut rgba: Vec<u8>| {
+        slot_ui::blur_wallpaper(&mut rgba, slot_ui::native_w(), slot_ui::native_h(), look.blur);
+        rgba
+    };
+    let mosaic = || shelf.and_then(|shelf| slot_ui::mosaic_native(shelf, theme, look.mosaic()));
+    let wood = || slot_ui::default_background_native().map(|v| blurred(v.to_vec()));
+    let default = || if shelf.is_some() { mosaic() } else { wood() };
     let personal = match (selection, root) {
         (WallpaperPick::None, _) => return (None, false),
-        (WallpaperPick::Default, _) => return (mosaic(MosaicLook::Sharp), false),
-        (WallpaperPick::Blur, _) => return (mosaic(MosaicLook::Blur), false),
-        (WallpaperPick::Halo, _) => return (mosaic(MosaicLook::Halo), false),
-        (WallpaperPick::Slot, _) => return (wood(), false),
-        (WallpaperPick::SlotBlur, _) =>
-            return (slot_ui::blur_background_native().map(|v|v.to_vec()), false),
+        // Default Blur and Halo are read as Default with their look.
+        (WallpaperPick::Default | WallpaperPick::Blur | WallpaperPick::Halo, _) =>
+            return (mosaic(), false),
+        (WallpaperPick::Slot | WallpaperPick::SlotBlur, _) => return (wood(), false),
         // Shelves without their own file show the bundled default.
         (WallpaperPick::Shelf, _) => return (default(), false),
         (WallpaperPick::File(name), Some(root)) => {
@@ -1703,11 +1728,34 @@ fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperP
         _ => None,
     };
     if let Some(image) = personal.and_then(|p|slot_ui::wallpaper_face_native(&p)) {
-        (Some(image), true)
+        (Some(blurred(image)), true)
     } else {
         // Official Slot falls back to the bundled default for an empty random
         // deck or a deleted file. Never silently mutate the saved selection.
         (default(), false)
+    }
+}
+
+/// A shelf's own wallpaper as its worker makes it: None when its image is
+/// gone (the shelf shows General's).
+fn shelf_wallpaper_pixels(root: Option<&Path>, pick: &crate::settings::WallpaperPick,
+    look: crate::settings::WallpaperLook, shelf: usize, theme: slot_ui::MosaicTheme)
+    -> (Option<Vec<u8>>, bool)
+{
+    use crate::settings::WallpaperPick;
+    match pick {
+        WallpaperPick::File(name) => (root
+            .map(|root| root.join("Wallpapers").join(name))
+            .filter(|path| path.is_file())
+            .and_then(|path| slot_ui::wallpaper_face_native(&path))
+            .map(|mut rgba| {
+                slot_ui::blur_wallpaper(&mut rgba, slot_ui::native_w(), slot_ui::native_h(), look.blur);
+                rgba
+            }), true),
+        WallpaperPick::Default | WallpaperPick::Blur | WallpaperPick::Halo
+        | WallpaperPick::Slot | WallpaperPick::SlotBlur =>
+            wallpaper_pixels(root, pick, look, Some(shelf), theme),
+        _ => (None, false),
     }
 }
 
@@ -1722,8 +1770,6 @@ impl Engine {
         slot_ui::density::set_scale(size.1 as f32 / OUT_H as f32);
         // The slot bars and bezels decode on worker threads while GL starts.
         let start_pixels = start_pixels();
-        let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
-        steps.mark("gl");
         let device = crate::settings::Device {
             konkr: is_konkr(),
             retroid_pocket_classic: RPC_DEFAULT_RESPONSIVE.load(Ordering::Acquire),
@@ -1732,6 +1778,20 @@ impl Engine {
         let settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| Settings::load_for_device(root, device))
             .unwrap_or_else(|| Settings::first_install_defaults_for_device(device));
+        // General's wallpaper too (a blur takes a moment): Default's mosaic
+        // follows the shelf on screen, not known yet, and is made once the
+        // engine is (with_shelf_wallpapers).
+        let visuals_root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root, _)| root.clone());
+        let general_wallpaper = {
+            let (root, pick, look) = (visuals_root.clone(), settings.wallpaper.clone(), settings.wallpaper_look);
+            let theme = settings.appearance.mosaic_theme();
+            let make = move || wallpaper_pixels(root.as_deref(), &pick, look, None, theme);
+            std::thread::Builder::new().name("slot-wallpaper-start".into()).spawn(make.clone())
+                .map_err(|_| make)
+        };
+        let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
+        steps.mark("gl");
         let mut controls = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| crate::controls::Controls::load(root))
             .unwrap_or_default();
@@ -1743,18 +1803,16 @@ impl Engine {
         menu_style::set_oled(settings.appearance == crate::settings::Appearance::Oled);
         gpu.set_colour_correction(false);
         FF_AUDIO_ENABLED.store(settings.ff_sound, Ordering::Release);
-        let visuals_root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
-            .as_ref().map(|(root, _)| root.clone());
         if let Some(root) = visuals_root.as_deref() {
             slot_ui::set_theme(slot_store::Theme::read(root));
         }
         let custom_wallpaper_present = visuals_root.as_deref()
             .is_some_and(|root| root.join("Wallpapers/user.png").is_file());
         let user_wallpaper_stamp = visuals_root.as_deref().and_then(user_wallpaper_stamp);
-        // Default's mosaic follows the shelf on screen, not known yet: it is
-        // made once the engine is (with_shelf_wallpapers).
-        let (wallpaper_pixels, wallpaper_personal) = wallpaper_pixels(visuals_root.as_deref(),
-            &settings.wallpaper, None, settings.appearance.mosaic_theme());
+        let (wallpaper_pixels, wallpaper_personal) = match general_wallpaper {
+            Ok(worker) => worker.join().unwrap_or((None, false)),
+            Err(make) => make(),
+        };
         steps.mark("settings and wallpaper read");
         let wallpaper_top_luma = wallpaper_pixels.as_deref()
             .map(|rgba| slot_ui::top_line_luma(rgba, slot_ui::native_w()));
@@ -2237,6 +2295,7 @@ impl Engine {
             shelf_wallpaper_luma: Vec::new(),
             shelf_wallpaper_personal: Vec::new(),
             shelf_wallpaper_rx: None,
+            wallpaper_rx: None,
             wallpaper_name_face,
             wallpaper_edit: None,
             wallpaper_import: None,
@@ -2396,46 +2455,43 @@ impl Engine {
         use crate::settings::WallpaperPick;
         let count = self.shelves.len();
         self.shelf_wallpaper_texs.resize(count, None);
-        self.shelf_wallpaper_ready = vec![false; count];
-        self.shelf_wallpaper_luma = vec![None; count];
-        self.shelf_wallpaper_personal = vec![false; count];
+        self.shelf_wallpaper_ready.resize(count, false);
+        self.shelf_wallpaper_luma.resize(count, None);
+        self.shelf_wallpaper_personal.resize(count, false);
         self.shelf_wallpaper_rx = None;
         let mut order: Vec<usize> = (0..count).collect();
         order.sort_by_key(|i| *i != self.active);
-        // A shelf's own wallpaper, and General's Default (or Default Blur):
-        // each shelf has its own mosaic.
-        let jobs: Vec<(usize, WallpaperPick)> = order.into_iter()
+        // A shelf's own wallpaper, and General's Default: each shelf has its
+        // own mosaic. Each with the look it shows (Blur, Halo).
+        let jobs: Vec<(usize, WallpaperPick, crate::settings::WallpaperLook)> = order.into_iter()
             .filter_map(|i| self.settings.shelf_wallpaper(i).cloned()
                 .or_else(|| self.settings.wallpaper.is_mosaic().then(|| self.settings.wallpaper.clone()))
-                .map(|pick| (i, pick)))
-            .filter(|(_, pick)| matches!(pick, WallpaperPick::Default | WallpaperPick::Blur
+                .map(|pick| (i, pick, self.settings.look_on(i))))
+            .filter(|(_, pick, _)| matches!(pick, WallpaperPick::Default | WallpaperPick::Blur
                 | WallpaperPick::Halo | WallpaperPick::Slot | WallpaperPick::SlotBlur | WallpaperPick::File(_)))
             .collect();
+        // A shelf being remade keeps its wallpaper until the new one is
+        // ready (no flash of General's while Blur or Halo change); the
+        // others show General's.
+        for shelf in 0..count {
+            if !jobs.iter().any(|(i, _, _)| *i == shelf) {
+                self.shelf_wallpaper_ready[shelf] = false;
+                self.shelf_wallpaper_luma[shelf] = None;
+                self.shelf_wallpaper_personal[shelf] = false;
+            }
+        }
         if jobs.is_empty() { return; }
         let root = root.map(Path::to_path_buf);
         let theme = self.settings.appearance.mosaic_theme();
         let (tx, rx) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new().name("slot-wallpaper".into()).spawn(move || {
-            for (index, pick) in jobs {
-                let (rgba, personal) = match &pick {
-                    WallpaperPick::Default =>
-                        (slot_ui::mosaic_native(index, theme, slot_ui::MosaicLook::Sharp), false),
-                    WallpaperPick::Blur =>
-                        (slot_ui::mosaic_native(index, theme, slot_ui::MosaicLook::Blur), false),
-                    WallpaperPick::Halo =>
-                        (slot_ui::mosaic_native(index, theme, slot_ui::MosaicLook::Halo), false),
-                    WallpaperPick::Slot =>
-                        (slot_ui::default_background_native().map(|v| v.to_vec()), false),
-                    WallpaperPick::SlotBlur =>
-                        (slot_ui::blur_background_native().map(|v| v.to_vec()), false),
-                    WallpaperPick::File(name) => (root.as_ref()
-                        .map(|root| root.join("Wallpapers").join(name))
-                        .filter(|path| path.is_file())
-                        .and_then(|path| slot_ui::wallpaper_face_native(&path)), true),
-                    _ => (None, false),
-                };
+            for (index, pick, look) in jobs {
+                let (rgba, personal) = shelf_wallpaper_pixels(root.as_deref(), &pick, look, index, theme);
                 // A missing or unreadable image: the shelf shows General's.
-                let Some(rgba) = rgba else { continue };
+                let Some(rgba) = rgba else {
+                    if tx.send((index, Vec::new(), 0.0, false)).is_err() { return; }
+                    continue
+                };
                 let luma = slot_ui::top_line_luma(&rgba, slot_ui::native_w());
                 if tx.send((index, rgba, luma, personal)).is_err() { return; }
             }
@@ -2450,6 +2506,11 @@ impl Engine {
     fn poll_shelf_wallpapers(&mut self) {
         let Some(rx) = self.shelf_wallpaper_rx.as_ref() else { return };
         let Ok((index, rgba, luma, personal)) = rx.try_recv() else { return };
+        if rgba.is_empty() {
+            // Its image is gone: General's shows.
+            if let Some(ready) = self.shelf_wallpaper_ready.get_mut(index) { *ready = false; }
+            return;
+        }
         crate::frame_watch::did(crate::frame_watch::WORK_WALLPAPER);
         let Some(slot) = self.shelf_wallpaper_texs.get_mut(index) else { return };
         // The size General's wallpaper is made at (reload_wallpaper).
@@ -2467,21 +2528,23 @@ impl Engine {
 
     /// The wallpaper the shelf on screen shows: its own once decoded (its
     /// own pick, or its mosaic for General's Default), else General's; with
-    /// whether it is an image (tinted) and its top line's luma. None for
-    /// Wallpaper None, the theme's ground.
-    fn active_wallpaper(&self) -> Option<(slot_gfx::TexId, bool, Option<f32>)> {
+    /// how much its Darken shades it (an image only) and its top line's
+    /// luma. None for Wallpaper None, the theme's ground.
+    fn active_wallpaper(&self) -> Option<(slot_gfx::TexId, f32, Option<f32>)> {
         use crate::settings::WallpaperPick;
         let shelf = self.active;
         if *self.settings.wallpaper_on(shelf) == WallpaperPick::None { return None; }
         if (self.settings.shelf_wallpaper(shelf).is_some() || self.settings.wallpaper.is_mosaic())
             && self.shelf_wallpaper_ready.get(shelf).copied().unwrap_or(false) {
             if let Some(tex) = self.shelf_wallpaper_texs.get(shelf).copied().flatten() {
-                return Some((tex, self.shelf_wallpaper_personal.get(shelf).copied().unwrap_or(false),
-                    self.shelf_wallpaper_luma.get(shelf).copied().flatten()));
+                let personal = self.shelf_wallpaper_personal.get(shelf).copied().unwrap_or(false);
+                let darken = if personal { self.settings.look_on(shelf).darken_alpha() } else { 0.0 };
+                return Some((tex, darken, self.shelf_wallpaper_luma.get(shelf).copied().flatten()));
             }
         }
         if self.settings.wallpaper == WallpaperPick::None { return None; }
-        self.wallpaper_texture.map(|tex| (tex, self.wallpaper_personal, self.wallpaper_top_luma))
+        let darken = if self.wallpaper_personal { self.settings.wallpaper_look.darken_alpha() } else { 0.0 };
+        self.wallpaper_texture.map(|tex| (tex, darken, self.wallpaper_top_luma))
     }
 
     /// The shelf on screen shows Wallpaper None: the theme's own colour.
@@ -2496,8 +2559,7 @@ impl Engine {
     fn top_line_dark_ink(&self) -> bool {
         // None is the theme's own colour (menu_style::shelf_ground).
         if self.wallpaper_none() { return menu_style::shelf_takes_dark_ink(); }
-        let Some((_, personal, luma)) = self.active_wallpaper() else { return false };
-        let tint = if personal { self.settings.wallpaper_tint.alpha() } else { 0.0 };
+        let Some((_, tint, luma)) = self.active_wallpaper() else { return false };
         luma.unwrap_or(0.0) * (1.0 - tint) > slot_ui::LIGHT_WALLPAPER
     }
 
@@ -4904,14 +4966,20 @@ impl Engine {
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
-                            ShelfOverlay::WallpaperSettings { row } => match code {
-                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::WallpaperSettings {
-                                    row: move_menu_row(row, code, WALLPAPER_ROWS.len(), self.menu_repeat_dispatch),
-                                },
-                                21 | 22 | 96 => self.cycle_wallpaper_row(row, code != 21, code == 96),
-                                97 => self.overlay = ShelfOverlay::GeneralSettings { row: INTERFACE_WALLPAPER_ROW },
-                                108 => self.overlay = ShelfOverlay::None,
-                                _ => {}
+                            ShelfOverlay::WallpaperSettings { row } => {
+                                // Halo or Darken comes and goes with the
+                                // wallpaper: the cursor stays on the page.
+                                let count = self.wallpaper_rows().0.len();
+                                let row = row.min(count - 1);
+                                match code {
+                                    19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::WallpaperSettings {
+                                        row: move_menu_row(row, code, count, self.menu_repeat_dispatch),
+                                    },
+                                    21 | 22 | 96 => self.cycle_wallpaper_row(row, code != 21, code == 96),
+                                    97 => self.overlay = ShelfOverlay::GeneralSettings { row: INTERFACE_WALLPAPER_ROW },
+                                    108 => self.overlay = ShelfOverlay::None,
+                                    _ => {}
+                                }
                             },
                             ShelfOverlay::InterfaceSettings { row } => match code {
                                 19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::InterfaceSettings {
@@ -6395,9 +6463,43 @@ impl Engine {
         }
     }
 
+    /// General's wallpaper, made on a worker (a Blur takes a moment): the
+    /// one on screen stays until it is ready. In tests, at once.
     fn reload_wallpaper(&mut self, root: Option<&Path>) {
-        let (image, personal) = wallpaper_pixels(root, &self.settings.wallpaper,
-            Some(self.active), self.settings.appearance.mosaic_theme());
+        let (pick, look) = (self.settings.wallpaper.clone(), self.settings.wallpaper_look);
+        let (shelf, theme) = (Some(self.active), self.settings.appearance.mosaic_theme());
+        self.wallpaper_rx = None;
+        if cfg!(test) {
+            let made = wallpaper_pixels(root, &pick, look, shelf, theme);
+            self.take_wallpaper(made);
+        } else {
+            let owned = root.map(Path::to_path_buf);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new().name("slot-wallpaper-general".into())
+                .spawn(move || { let _ = tx.send(wallpaper_pixels(owned.as_deref(), &pick, look, shelf, theme)); });
+            match spawned {
+                Ok(_) => self.wallpaper_rx = Some(rx),
+                Err(error) => {
+                    crate::log_warn(&format!("wallpaper worker failed: {error}"));
+                    let made = wallpaper_pixels(root, &self.settings.wallpaper,
+                        self.settings.wallpaper_look, shelf, theme);
+                    self.take_wallpaper(made);
+                }
+            }
+        }
+        self.reload_shelf_wallpapers(root);
+    }
+
+    /// General's new wallpaper, once made; true when it was uploaded.
+    fn poll_wallpaper(&mut self) -> bool {
+        let Some(made) = self.wallpaper_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else { return false };
+        self.wallpaper_rx = None;
+        crate::frame_watch::did(crate::frame_watch::WORK_WALLPAPER);
+        self.take_wallpaper(made);
+        true
+    }
+
+    fn take_wallpaper(&mut self, (image, personal): (Option<Vec<u8>>, bool)) {
         self.wallpaper_personal = personal;
         if let Some(rgba) = image.as_deref() {
             self.wallpaper_top_luma = Some(slot_ui::top_line_luma(rgba, slot_ui::native_w()));
@@ -6412,7 +6514,6 @@ impl Engine {
         }
         // None deliberately leaves the texture allocated for quick reactivation
         // but never draws it, avoiding repeated GL allocations on toggling.
-        self.reload_shelf_wallpapers(root);
     }
 
     fn refresh_wallpaper_name(&mut self) {
@@ -6623,15 +6724,71 @@ impl Engine {
     }
     /// Settings > Interface's rows.
     fn general_rows(&self) -> Vec<usize> { INTERFACE_PAGE_ROWS.to_vec() }
-    /// Interface > Wallpaper's rows shown but idle, so the list never jumps
-    /// (Siham 2026-11-09): Wallpaper Tint with no image anywhere, Delete
-    /// Wallpaper with nothing to delete.
+    /// Interface > Wallpaper's rows shown but idle (Siham 2026-11-09):
+    /// Blur over None, a shelf's looks while it shows General's (they are
+    /// General's), Delete Wallpaper with nothing to delete.
     fn general_row_dimmed(&self, item: usize) -> bool {
         match item {
-            84 => !self.show_general_tint(),
+            BLUR_ROW | HALO_ROW | DARKEN_ROW => self.wallpaper_look_idle(item),
             45 => !self.removable_wallpaper(),
             _ => false,
         }
+    }
+    /// The wallpaper the page's shelf shows (General's for General).
+    fn edited_wallpaper(&self) -> &crate::settings::WallpaperPick {
+        match self.wallpaper_edit {
+            Some(shelf) => self.settings.wallpaper_on(shelf),
+            None => &self.settings.wallpaper,
+        }
+    }
+    /// The look the page's shelf shows.
+    fn edited_look(&self) -> crate::settings::WallpaperLook {
+        match self.wallpaper_edit {
+            Some(shelf) => self.settings.look_on(shelf),
+            None => self.settings.wallpaper_look,
+        }
+    }
+    fn wallpaper_look_idle(&self, row: usize) -> bool {
+        self.wallpaper_edit.is_some_and(|shelf| self.settings.shelf_wallpaper(shelf).is_none())
+            || (row == BLUR_ROW && *self.edited_wallpaper() == crate::settings::WallpaperPick::None)
+    }
+    /// Interface > Wallpaper's rows and their values' keys: Halo with
+    /// Default, Darken with an image (Random deals images), neither with
+    /// None or slot. (Siham 2026-11-19).
+    fn wallpaper_rows(&self) -> (Vec<usize>, Vec<usize>) {
+        use crate::settings::WallpaperPick;
+        let mut rows = vec![133, 83, BLUR_ROW];
+        let mut keys = vec![SHELF_PICK_KEY, WALLPAPER_PICK_KEY, BLUR_KEY];
+        let pick = self.edited_wallpaper();
+        if pick.is_mosaic() {
+            rows.push(HALO_ROW);
+            keys.push(HALO_KEY);
+        } else if matches!(pick, WallpaperPick::File(_) | WallpaperPick::Random) {
+            rows.push(DARKEN_ROW);
+            keys.push(DARKEN_KEY);
+        }
+        rows.extend([43, 45]);
+        keys.extend([usize::MAX, usize::MAX]);
+        (rows, keys)
+    }
+    /// Blur, Halo or Darken one step, on General or the page's shelf; a new
+    /// Blur or Halo remakes the wallpapers it shows on.
+    fn cycle_wallpaper_look(&mut self, row: usize, right: bool) {
+        use crate::settings::WallpaperLook;
+        let mut look = self.edited_look();
+        let value = match row { BLUR_ROW => &mut look.blur, HALO_ROW => &mut look.halo, _ => &mut look.darken };
+        let next = WallpaperLook::step(*value, right);
+        if next == *value { return; }
+        *value = next;
+        self.settings.set_look(self.wallpaper_edit, look);
+        if row != DARKEN_ROW {
+            let root = Self::recents_root();
+            match self.wallpaper_edit {
+                None => self.reload_wallpaper(root.as_deref()),
+                Some(_) => self.reload_shelf_wallpapers(root.as_deref()),
+            }
+        }
+        self.persist_settings();
     }
     /// Interface > Wallpaper > Shelf: General, then the shelves with carts
     /// (Recents while it is on, Favorites once a cart is in it).
@@ -6701,11 +6858,12 @@ impl Engine {
         }
     }
     fn cycle_wallpaper_row(&mut self, row: usize, right: bool, confirm: bool) {
-        let Some(which)=WALLPAPER_ROWS.get(row).copied() else {return};
+        let Some(which)=self.wallpaper_rows().0.get(row).copied() else {return};
         match which {
             133 => self.cycle_wallpaper_shelf(right),
             83 => self.cycle_edited_wallpaper(right),
-            84 if self.show_general_tint() => self.cycle_wallpaper_tint(right),
+            BLUR_ROW | HALO_ROW | DARKEN_ROW if !confirm && !self.wallpaper_look_idle(which) =>
+                self.cycle_wallpaper_look(which, right),
             43 if confirm => {
                 self.wallpaper_import = self.wallpaper_edit;
                 self.set_wallpaper_target();
@@ -6803,8 +6961,7 @@ impl Engine {
         });
         // A wallpaper stays under the cart as on the shelf, tinted the same:
         // no dark screen before it on insert or eject (Siham 2026-11-18).
-        if let Some((tex, personal, _)) = self.active_wallpaper() {
-            let tint = if personal { self.settings.wallpaper_tint.alpha() } else { 0.0 };
+        if let Some((tex, tint, _)) = self.active_wallpaper() {
             slot_ui::draw_ground_tinted(Some(tex), tint, commands);
         }
         if let Some(shelf) = self.shelves.get(self.active) {
@@ -7199,18 +7356,6 @@ impl Engine {
         self.selected_title_face=Printed::new(tex,image.w);
     }
 
-    /// Wallpaper Tint darkens images only: General's, or a shelf's own.
-    fn show_general_tint(&self) -> bool {
-        (self.wallpaper_personal && self.settings.wallpaper != crate::settings::WallpaperPick::None)
-            || self.settings.wallpaper_shelves.values()
-                .any(|pick| matches!(pick, crate::settings::WallpaperPick::File(_)))
-    }
-
-    fn cycle_wallpaper_tint(&mut self, right: bool) {
-        self.settings.wallpaper_tint=self.settings.wallpaper_tint.step(right);
-        self.persist_settings();
-    }
-
     fn cycle_appearance(&mut self, right: bool) {
         self.settings.appearance=self.settings.appearance.step(right);
         menu_style::set_oled(self.settings.appearance == crate::settings::Appearance::Oled);
@@ -7410,6 +7555,11 @@ impl Engine {
                         Some(WallpaperPick::SlotBlur) => self.setting_values[SLOT_BLUR_WALLPAPER_VALUE],
                         Some(_) => self.setting_values[19],
                     }
+                } else if matches!(key, BLUR_KEY | HALO_KEY | DARKEN_KEY) {
+                    let look = self.edited_look();
+                    self.setting_values[percent_value(match key {
+                        BLUR_KEY => look.blur, HALO_KEY => look.halo, _ => look.darken,
+                    })]
                 } else if key == 16 && matches!(self.settings.wallpaper,
                     crate::settings::WallpaperPick::File(_)) {
                     self.wallpaper_name_face.unwrap_or(self.setting_values[26])
@@ -7538,9 +7688,13 @@ impl Engine {
             };
             let y = top + dy + 8.0 + height as f32 * (0.79 - scale) / 2.0;
             let w = width as f32 * scale;
-            // Interface's Wallpaper Tint, idle over no personal image.
-            let idle = key == 17 && matches!(self.overlay, ShelfOverlay::WallpaperSettings { .. })
-                && !self.show_general_tint();
+            // Interface > Wallpaper's looks, idle over None or General's.
+            let idle = matches!(self.overlay, ShelfOverlay::WallpaperSettings { .. })
+                && match key {
+                    BLUR_KEY => self.wallpaper_look_idle(BLUR_ROW),
+                    HALO_KEY | DARKEN_KEY => self.wallpaper_look_idle(HALO_ROW),
+                    _ => false,
+                };
             let chosen = row == index && !idle;
             let end = right - if chosen { 22.0 } else { 0.0 };
             let alpha = shows * if chosen { 1.0 } else if idle { 0.3 } else { menu_look::ROW_REST };
@@ -8040,7 +8194,8 @@ impl Engine {
                 self.draw_settings_menu(82, &INTERFACE_PAGE_ROWS, row, &INTERFACE_PAGE_KEYS, out);
             }
             ShelfOverlay::WallpaperSettings { row } => {
-                self.draw_settings_menu(148, &WALLPAPER_ROWS, row, &WALLPAPER_KEYS, out);
+                let (rows, keys) = self.wallpaper_rows();
+                self.draw_settings_menu(148, &rows, row.min(rows.len() - 1), &keys, out);
             }
             ShelfOverlay::InterfaceSettings { row } => {
                 let (rows, keys) = interface_rows();
@@ -8444,7 +8599,8 @@ impl Engine {
         self.refresh_slot_copy_face();
         let missing_mix = self.advance_missing();
         let wallpaper_at = Instant::now();
-        self.poll_shelf_wallpapers();
+        // One wallpaper upload a frame.
+        if !self.poll_wallpaper() { self.poll_shelf_wallpapers(); }
         crate::frame_watch::part(crate::frame_watch::PART_WALLPAPER, wallpaper_at.elapsed());
         let before_at = Instant::now();
         // Poll the already-running achievement evaluator without blocking GL.
@@ -8691,7 +8847,7 @@ impl Engine {
             ShelfOverlay::About { row } => (17u8, row, 2usize),
             ShelfOverlay::InterfaceSettings { row } => (10u8, row, interface_rows().0.len()),
             ShelfOverlay::RotateSettings { row } => (18u8, row, ROTATE_ROWS.len()),
-            ShelfOverlay::WallpaperSettings { row } => (19u8, row, WALLPAPER_ROWS.len()),
+            ShelfOverlay::WallpaperSettings { row } => (19u8, row, self.wallpaper_rows().0.len()),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
             ShelfOverlay::PauseEmulationSettings { row } =>
                 (9u8, row, self.pause_emulation_rows().len()),
@@ -9424,12 +9580,10 @@ impl Engine {
             } else { menu_style::page_ground(menu_style::DARK_SHELF) },
         }];
         // Slot v1.7 carousel ground: None has no wallpaper; personal images
-        // receive only the selected Wallpaper Tint (never a fixed scrim).
+        // receive only their Darken (never a fixed scrim).
         // The shelf's own wallpaper, else General's (Interface > Wallpaper).
         // OLED blackens only the ground: a chosen wallpaper shows as in Dark.
-        let tint = if wallpaper.is_some_and(|(_, personal, _)| personal) {
-            self.settings.wallpaper_tint.alpha()
-        } else { 0.0 };
+        let tint = wallpaper.map_or(0.0, |(_, tint, _)| tint);
         slot_ui::draw_ground_tinted(wallpaper.map(|(tex, _, _)| tex), tint, &mut commands);
         if self.progress == 0.0 {
             if let Some(picker) = self.picker {

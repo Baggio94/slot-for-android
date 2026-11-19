@@ -52,9 +52,11 @@ const COLOURS: [[[[u8; 3]; 2]; 4]; 9] = [
     [[[216, 206, 231], [163, 151, 181]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
 ];
 
-/// How soft Default Blur is: the blur's spread as a share of the width.
-/// Softer than the wood's, so the drawings still read (Siham 2026-11-18).
+/// How soft Blur 30 % is (the Default Blur of 2.5's first betas): the
+/// blur's spread as a share of the width. Softer than the wood's, so the
+/// drawings still read (Siham 2026-11-18).
 const BLUR_SPREAD: f32 = 0.0025;
+const BLUR_SPREAD_AT: f32 = 30.0;
 
 /// Masks already cut to a size: a theme change only recolours them.
 static CUT: Mutex<Vec<(usize, u32, u32, Vec<u8>)>> = Mutex::new(Vec::new());
@@ -80,27 +82,33 @@ pub fn mosaic_ground(shelf: usize, theme: MosaicTheme) -> Option<[u8; 3]> {
     COLOURS.get(shelf).map(|c| c[theme as usize][0])
 }
 
-/// How a mosaic is drawn: Default, Default Blur or Default Halo.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MosaicLook { Sharp, Blur, Halo }
+/// How a mosaic is drawn: its Halo and Blur, in percent (0 to 100).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MosaicLook { pub halo: u8, pub blur: u8 }
+impl MosaicLook {
+    pub const SHARP: Self = Self { halo: 0, blur: 0 };
+}
 
-/// Default Halo: the lines kept sharp but faint, in a wide soft glow
-/// (Siham 2026-11-18). The glow's spread as a share of the width, and how
-/// much of the line and of the glow is drawn.
+/// Halo 70 % (2.5's first Default Halo): the lines kept sharp but faint, in
+/// a wide soft glow (Siham 2026-11-18). The glow's spread as a share of the
+/// width, and how much of the line and of the glow is drawn at 70 %.
 const HALO_SPREAD: f32 = 0.0052;
 const HALO_LINE: f32 = 0.45;
 const HALO_GLOW: f32 = 0.9;
+const HALO_AT: f32 = 70.0;
 
 /// Shelf `shelf`'s mosaic in `theme` at w x h, RGBA, as `look` draws it.
 pub fn mosaic(shelf: usize, theme: MosaicTheme, look: MosaicLook, w: u32, h: u32) -> Option<Vec<u8>> {
     let mut mask = mask(shelf, w, h)?;
     let [ground, line] = COLOURS.get(shelf)?[theme as usize];
-    if look == MosaicLook::Halo {
+    if look.halo > 0 {
+        let k = look.halo.min(100) as f32 / HALO_AT;
+        let (line_part, glow_part) = (1.0 - (1.0 - HALO_LINE) * k, HALO_GLOW * k);
         let mut glow: Vec<u8> = mask.iter().flat_map(|m| [*m, *m, *m, 255]).collect();
         soften(&mut glow, w as usize, h as usize, (w as f32 * HALO_SPREAD).round().max(1.0) as usize);
         for (m, g) in mask.iter_mut().zip(glow.chunks_exact(4)) {
-            let v = HALO_LINE * *m as f32 + HALO_GLOW * g[0] as f32;
-            *m = v.round().min(255.0) as u8;
+            let v = line_part * *m as f32 + glow_part * g[0] as f32;
+            *m = v.round().clamp(0.0, 255.0) as u8;
         }
     }
     let mut rgba = vec![255u8; mask.len() * 4];
@@ -110,10 +118,23 @@ pub fn mosaic(shelf: usize, theme: MosaicTheme, look: MosaicLook, w: u32, h: u32
             px[c] = (ground[c] as f32 + m * (line[c] as f32 - ground[c] as f32)).round() as u8;
         }
     }
-    if look == MosaicLook::Blur {
-        soften(&mut rgba, w as usize, h as usize, (w as f32 * BLUR_SPREAD).round().max(1.0) as usize);
-    }
+    blur_wallpaper(&mut rgba, w, h, look.blur);
     Some(rgba)
+}
+
+/// Any wallpaper (a mosaic, the wood, an image) softened by Blur
+/// `percent`: 0 leaves it sharp, 30 is 2.5's first Default Blur, and the
+/// spread grows faster than the percentage so 100 is a real blur.
+pub fn blur_wallpaper(rgba: &mut [u8], w: u32, h: u32, percent: u8) {
+    let Some(r) = blur_radius(w, percent) else { return };
+    if rgba.len() < (w as usize) * (h as usize) * 4 { return; }
+    soften(rgba, w as usize, h as usize, r);
+}
+
+fn blur_radius(w: u32, percent: u8) -> Option<usize> {
+    if percent == 0 { return None; }
+    let k = percent.min(100) as f32 / BLUR_SPREAD_AT;
+    Some((w as f32 * BLUR_SPREAD * k.powf(1.5)).round().max(1.0) as usize)
 }
 
 /// At the panel's own size, for the carousel.
@@ -165,7 +186,7 @@ mod tests {
     fn every_shelf_has_its_mosaic_in_every_theme() {
         for shelf in 0..MOSAIC_KEYS.len() {
             for theme in [MosaicTheme::Original, MosaicTheme::Light, MosaicTheme::Dark, MosaicTheme::Oled] {
-                let image = mosaic(shelf, theme, MosaicLook::Sharp, 480, 320).expect("mask decodes");
+                let image = mosaic(shelf, theme, MosaicLook::SHARP, 480, 320).expect("mask decodes");
                 assert_eq!(image.len(), 480 * 320 * 4);
                 let [ground, line] = COLOURS[shelf][theme as usize];
                 // Mostly ground, with some line drawn over it.
@@ -180,8 +201,8 @@ mod tests {
 
     #[test]
     fn the_blur_softens_and_keeps_the_colours() {
-        let sharp = mosaic(3, MosaicTheme::Light, MosaicLook::Sharp, 480, 320).unwrap();
-        let soft = mosaic(3, MosaicTheme::Light, MosaicLook::Blur, 480, 320).unwrap();
+        let sharp = mosaic(3, MosaicTheme::Light, MosaicLook::SHARP, 480, 320).unwrap();
+        let soft = mosaic(3, MosaicTheme::Light, MosaicLook { halo: 0, blur: 30 }, 480, 320).unwrap();
         let edges = |img: &[u8]| img.chunks_exact(4).collect::<Vec<_>>().windows(2)
             .map(|p| p[0][1].abs_diff(p[1][1]) as u64).sum::<u64>();
         assert!(edges(&soft) * 3 < edges(&sharp) * 2);
@@ -191,8 +212,8 @@ mod tests {
 
     #[test]
     fn the_halo_keeps_the_lines_and_glows_around_them() {
-        let sharp = mosaic(3, MosaicTheme::Dark, MosaicLook::Sharp, 480, 320).unwrap();
-        let halo = mosaic(3, MosaicTheme::Dark, MosaicLook::Halo, 480, 320).unwrap();
+        let sharp = mosaic(3, MosaicTheme::Dark, MosaicLook::SHARP, 480, 320).unwrap();
+        let halo = mosaic(3, MosaicTheme::Dark, MosaicLook { halo: 70, blur: 0 }, 480, 320).unwrap();
         let ground = COLOURS[3][MosaicTheme::Dark as usize][0];
         let lit = |img: &[u8]| img.chunks_exact(4).filter(|p| p[1].abs_diff(ground[1]) > 2).count();
         // The glow reaches past the lines...
@@ -205,8 +226,29 @@ mod tests {
     #[test]
     fn any_screen_shape_is_filled() {
         for (w, h) in [(720, 720), (960, 640), (1024, 768), (1920, 1080), (1080, 1920), (2560, 1600)] {
-            let image = mosaic(0, MosaicTheme::Dark, MosaicLook::Sharp, w, h).unwrap();
+            let image = mosaic(0, MosaicTheme::Dark, MosaicLook::SHARP, w, h).unwrap();
             assert_eq!(image.len(), (w * h * 4) as usize);
         }
+    }
+
+    #[test]
+    fn blur_and_halo_grow_with_their_percentage() {
+        // 30 % is 2.5's first Default Blur at its width; 10 % stays gentle.
+        assert_eq!(blur_radius(720, 30), Some(2));
+        assert_eq!(blur_radius(720, 0), None);
+        assert!(blur_radius(720, 100).unwrap() >= 10);
+        assert!(blur_radius(720, 10).unwrap() <= blur_radius(720, 30).unwrap());
+        let edges = |img: &[u8]| img.chunks_exact(4).collect::<Vec<_>>().windows(2)
+            .map(|p| p[0][1].abs_diff(p[1][1]) as u64).sum::<u64>();
+        let at = |blur| mosaic(3, MosaicTheme::Light, MosaicLook { halo: 0, blur }, 480, 320).unwrap();
+        assert!(edges(&at(100)) < edges(&at(50)) && edges(&at(50)) < edges(&at(10)));
+        let ground = COLOURS[3][MosaicTheme::Dark as usize][0];
+        let lit = |halo| mosaic(3, MosaicTheme::Dark, MosaicLook { halo, blur: 0 }, 480, 320).unwrap()
+            .chunks_exact(4).filter(|p| p[1].abs_diff(ground[1]) > 2).count();
+        assert!(lit(100) > lit(40) && lit(40) > lit(0));
+        // Any wallpaper: a flat image keeps its colour.
+        let mut flat = vec![90u8; 64 * 48 * 4];
+        blur_wallpaper(&mut flat, 64, 48, 100);
+        assert!(flat.iter().all(|v| *v == 90));
     }
 }

@@ -15,21 +15,23 @@ pub enum WallpaperPick {
     /// load turns it into each shelf's own wallpaper (wallpaper_shelves).
     Shelf,
     /// 2.5: Siham's mosaic for the shelf on screen, in the theme's colours
-    /// (slot_ui::mosaic); Blur is the same softened.
+    /// (slot_ui::mosaic), softened by its Blur and lit by its Halo.
     #[default]
     Default,
+    /// Read only, from 2.5's first betas: load turns Default Blur, Default
+    /// Halo and slot. Blur into Default or slot. with a Blur or a Halo
+    /// (WallpaperLook, Siham 2026-11-19).
     Blur,
-    /// The mosaic's lines faint in a soft glow (2.5, to compare with Blur).
     Halo,
-    /// The wood with stickers that was Default until 2.5, and its blur.
+    /// The wood with stickers that was Default until 2.5.
     Slot,
     SlotBlur,
     File(String),
 }
 impl WallpaperPick {
+    /// None, Default, slot., Random, then the images (Siham 2026-11-19).
     pub fn choices(root: &Path) -> Vec<Self> {
-        let mut choices=vec![Self::None, Self::Random, Self::Default, Self::Blur, Self::Halo,
-            Self::Slot, Self::SlotBlur];
+        let mut choices=vec![Self::None, Self::Default, Self::Slot, Self::Random];
         choices.extend(crate::wallpaper::list(root).into_iter().map(Self::File));
         choices
     }
@@ -39,8 +41,7 @@ impl WallpaperPick {
     /// Wallpapers/<shelf>.png (upstream's name) when there is one. No Random:
     /// General deals it.
     pub fn shelf_choices(root: &Path, shelf: usize) -> Vec<Option<Self>> {
-        let mut choices=vec![None, Some(Self::None), Some(Self::Default), Some(Self::Blur),
-            Some(Self::Halo), Some(Self::Slot), Some(Self::SlotBlur)];
+        let mut choices=vec![None, Some(Self::None), Some(Self::Default), Some(Self::Slot)];
         choices.extend(crate::wallpaper::list(root).into_iter().map(|f| Some(Self::File(f))));
         if let Some(own)=crate::wallpaper::for_shelf(root, shelf) {
             choices.push(Some(Self::File(own)));
@@ -56,11 +57,12 @@ impl WallpaperPick {
     pub fn step(&self, root: &Path, right: bool) -> Self {
         let choices=Self::choices(root);
         // An unknown or retired pick (Shelf, a deleted image) steps from Default.
-        let at=choices.iter().position(|v| v==self).unwrap_or(2);
+        let at=choices.iter().position(|v| v==self).unwrap_or(1);
         let n=choices.len();
         choices[if right {(at+1)%n}else{(at+n-1)%n}].clone()
     }
-    /// Default, Default Blur and Default Halo: each shelf shows its own mosaic.
+    /// Default (and the retired Default Blur and Halo): each shelf shows its
+    /// own mosaic.
     pub fn is_mosaic(&self) -> bool {
         matches!(self, Self::Default | Self::Blur | Self::Halo)
     }
@@ -96,6 +98,33 @@ impl WallpaperTint {
     pub fn alpha(self)->f32 {
         // Exact Slot v1.7.0 app.rs tint_alpha().
         match self { Self::Off=>0.0, Self::Low=>0.25, Self::Medium=>0.45, Self::High=>0.65 }
+    }
+    /// The Darken that keeps a tinted image as dark as it was.
+    pub fn darken(self)->u8 {
+        match self { Self::Off=>0, Self::Low=>30, Self::Medium=>50, Self::High=>70 }
+    }
+}
+
+/// Interface > Wallpaper's Blur, Halo and Darken for General or a shelf, in
+/// percent, 0 (OFF) to 100 by tens (Siham 2026-11-19). Blur softens every
+/// wallpaper, Halo lights Default's lines, Darken shades an image.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WallpaperLook { pub blur: u8, pub halo: u8, pub darken: u8 }
+impl WallpaperLook {
+    /// Default Blur and slot. Blur as they were, and Default Halo.
+    pub const OLD_DEFAULT_BLUR: u8 = 30;
+    pub const OLD_SLOT_BLUR: u8 = 60;
+    pub const OLD_HALO: u8 = 70;
+    /// Right adds 10 %, left takes 10 % away; they stop at 100 % and OFF.
+    pub fn step(value: u8, right: bool) -> u8 {
+        let value = value.min(100) / 10 * 10;
+        if right { (value + 10).min(100) } else { value.saturating_sub(10) }
+    }
+    /// How much black covers the image: 100 % leaves a trace of it.
+    pub fn darken_alpha(self) -> f32 { self.darken.min(100) as f32 * 0.009 }
+    pub fn mosaic(self) -> slot_ui::MosaicLook {
+        slot_ui::MosaicLook { halo: self.halo, blur: self.blur }
     }
 }
 
@@ -617,6 +646,14 @@ pub struct Settings {
     /// A key of its own, so a version without it keeps every other setting.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub wallpaper_shelves: std::collections::BTreeMap<String, WallpaperPick>,
+    /// General's Blur, Halo and Darken (2.5).
+    pub wallpaper_look: WallpaperLook,
+    /// A shelf's own, by the same names as wallpaper_shelves; a shelf showing
+    /// General's wallpaper shows General's look.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub wallpaper_shelf_looks: std::collections::BTreeMap<String, WallpaperLook>,
+    /// Read only: Wallpaper Tint became Darken (wallpaper_look) in 2.5.
+    #[serde(skip_serializing)]
     pub wallpaper_tint: WallpaperTint,
     pub appearance: Appearance,
     /// Slot v1.7 GENERAL: Recents is off by default; persist its list regardless.
@@ -702,6 +739,8 @@ impl Default for Settings {
             cart_studio_size: 0,
             status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
             wallpaper_shelves: Default::default(),
+            wallpaper_look: WallpaperLook::default(),
+            wallpaper_shelf_looks: Default::default(),
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
             show_recents: false, show_titles: false, touchscreen: true, home_bezel_three_two: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
@@ -811,6 +850,7 @@ impl Settings {
                         s.wallpaper=WallpaperPick::File("user.png".into());
                     }
                     s.adopt_shelf_wallpapers(dir);
+                    s.adopt_wallpaper_looks();
                     s
                 })
             })
@@ -897,6 +937,49 @@ impl Settings {
             }
         }
         self.wallpaper = WallpaperPick::Default;
+    }
+    /// Default Blur, Default Halo and slot. Blur become Default or slot. with
+    /// that Blur or Halo, and Wallpaper Tint each image's Darken, for General
+    /// and every shelf (2.5, Siham 2026-11-19).
+    fn adopt_wallpaper_looks(&mut self) {
+        fn retire(pick: &mut WallpaperPick, look: &mut WallpaperLook) {
+            let (to, blur, halo) = match pick {
+                WallpaperPick::Blur => (WallpaperPick::Default, WallpaperLook::OLD_DEFAULT_BLUR, 0),
+                WallpaperPick::Halo => (WallpaperPick::Default, 0, WallpaperLook::OLD_HALO),
+                WallpaperPick::SlotBlur => (WallpaperPick::Slot, WallpaperLook::OLD_SLOT_BLUR, 0),
+                _ => return,
+            };
+            *pick = to;
+            if look.blur == 0 { look.blur = blur; }
+            if look.halo == 0 { look.halo = halo; }
+        }
+        let darken = self.wallpaper_tint.darken();
+        self.wallpaper_tint = WallpaperTint::Off;
+        retire(&mut self.wallpaper, &mut self.wallpaper_look);
+        if darken > 0 && self.wallpaper_look.darken == 0 { self.wallpaper_look.darken = darken; }
+        let Self { wallpaper_shelves, wallpaper_shelf_looks, .. } = self;
+        for (key, pick) in wallpaper_shelves.iter_mut() {
+            let look = wallpaper_shelf_looks.entry(key.clone()).or_default();
+            retire(pick, look);
+            if darken > 0 && look.darken == 0 && matches!(pick, WallpaperPick::File(_)) {
+                look.darken = darken;
+            }
+        }
+        wallpaper_shelf_looks.retain(|_, look| *look != WallpaperLook::default());
+    }
+    /// The look shelf `shelf` shows: its own with a wallpaper of its own,
+    /// else General's.
+    pub fn look_on(&self, shelf: usize) -> WallpaperLook {
+        if self.shelf_wallpaper(shelf).is_none() { return self.wallpaper_look; }
+        crate::wallpaper::SHELF_KEYS.get(shelf)
+            .and_then(|key| self.wallpaper_shelf_looks.get(*key)).copied().unwrap_or_default()
+    }
+    /// General's look (None) or a shelf's own, to change.
+    pub fn set_look(&mut self, shelf: Option<usize>, look: WallpaperLook) {
+        let Some(shelf) = shelf else { self.wallpaper_look = look; return };
+        let Some(key) = crate::wallpaper::SHELF_KEYS.get(shelf) else { return };
+        if look == WallpaperLook::default() { self.wallpaper_shelf_looks.remove(*key); }
+        else { self.wallpaper_shelf_looks.insert((*key).to_string(), look); }
     }
     /// A shelf's own wallpaper, None when it shows General's.
     pub fn shelf_wallpaper(&self, shelf: usize) -> Option<&WallpaperPick> {
@@ -1369,24 +1452,23 @@ mod tests {
         std::fs::write(dir.join("GBA.png"), b"placeholder").unwrap();
         let choices=WallpaperPick::choices(&root);
         // Shelf is gone from General: each shelf picks its own (2.4).
-        assert_eq!(choices, vec![None,Random,Default,Blur,Halo,Slot,SlotBlur,
+        // None, Default, slot., Random, the images (Siham 2026-11-19).
+        assert_eq!(choices, vec![None,Default,Slot,Random,
             File("another.png".into()),File("user.png".into())]);
-        assert_eq!(None.step(&root,true), Random);
-        assert_eq!(Random.step(&root,true), Default);
-        assert_eq!(Shelf.step(&root,true), Blur);
+        assert_eq!(None.step(&root,true), Default);
+        assert_eq!(Default.step(&root,true), Slot);
+        assert_eq!(Slot.step(&root,true), Random);
+        assert_eq!(Random.step(&root,true), File("another.png".into()));
+        assert_eq!(Shelf.step(&root,true), Slot);
         assert_eq!(None.step(&root,false), File("user.png".into()));
-        assert_eq!(Default.step(&root,true), Blur);
-        assert_eq!(Blur.step(&root,true), Halo);
-        assert_eq!(Halo.step(&root,true), Slot);
-        assert_eq!(Halo.label(), "Default Halo");
+        assert_eq!(File("user.png".into()).step(&root,true), None);
         assert_eq!(serde_json::to_string(&Halo).unwrap(), r#""halo""#);
-        assert_eq!(SlotBlur.step(&root,true), File("another.png".into()));
         // The wood that was Default until 2.5 keeps its own pick.
         assert_eq!(serde_json::to_string(&Slot).unwrap(), r#""slot""#);
         assert_eq!(serde_json::to_string(&SlotBlur).unwrap(), r#""slot_blur""#);
         assert_eq!(Slot.label(), "slot.");
         assert_eq!(SlotBlur.label(), "slot. Blur");
-        assert_eq!(File("missing.png".into()).step(&root,true), Blur);
+        assert_eq!(File("missing.png".into()).step(&root,true), Slot);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1401,10 +1483,10 @@ mod tests {
         std::fs::write(dir.join("NES.png"), b"placeholder").unwrap();
         // NES (3): General first, no Random, its own NES.png last.
         assert_eq!(WallpaperPick::shelf_choices(&root, 3), vec![
-            Option::None, Some(None), Some(Default), Some(Blur), Some(Halo), Some(Slot), Some(SlotBlur),
+            Option::None, Some(None), Some(Default), Some(Slot),
             Some(File("user.png".into())), Some(File("NES.png".into()))]);
         // GB (1) has no file of its own.
-        assert_eq!(WallpaperPick::shelf_choices(&root, 1).len(), 8);
+        assert_eq!(WallpaperPick::shelf_choices(&root, 1).len(), 5);
         assert_eq!(WallpaperPick::shelf_step(Option::None, &root, 3, true), Some(None));
         assert_eq!(WallpaperPick::shelf_step(Option::None, &root, 3, false),
             Some(File("NES.png".into())));
@@ -1422,6 +1504,39 @@ mod tests {
         s.set_shelf_wallpaper(3, Option::None);
         assert_eq!(s.wallpaper_on(3), &Default);
         assert!(!serde_json::to_string(&s).unwrap().contains("wallpaper_shelves"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn blur_halo_and_tint_become_each_wallpapers_look() {
+        use WallpaperPick::*;
+        let root=std::env::temp_dir().join(format!(
+            "slot-wallpaper-looks-test-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("Wallpapers")).unwrap();
+        std::fs::write(root.join("Wallpapers/user.png"), b"placeholder").unwrap();
+        std::fs::write(root.join(NAME), r#"{"wallpaper":"blur","wallpaper_tint":"high",
+            "wallpaper_shelves":{"NES":"halo","GBA":"slot_blur","GB":{"file":"user.png"},"SNES":"default"},
+            "status_opt_in_v2":true}"#).unwrap();
+        let s=Settings::load(&root);
+        assert_eq!(s.wallpaper, Default);
+        assert_eq!(s.wallpaper_look, WallpaperLook { blur: 30, halo: 0, darken: 70 });
+        let shelf = |key: &str| crate::wallpaper::SHELF_KEYS.iter().position(|k| *k == key).unwrap();
+        assert_eq!(s.wallpaper_on(shelf("NES")), &Default);
+        assert_eq!(s.look_on(shelf("NES")), WallpaperLook { blur: 0, halo: 70, darken: 0 });
+        assert_eq!(s.wallpaper_on(shelf("GBA")), &Slot);
+        assert_eq!(s.look_on(shelf("GBA")).blur, WallpaperLook::OLD_SLOT_BLUR);
+        // An image keeps its tint as Darken; a plain Default shelf has no look.
+        assert_eq!(s.look_on(shelf("GB")).darken, 70);
+        assert_eq!(s.look_on(shelf("SNES")), WallpaperLook::default());
+        // A shelf showing General's shows General's look.
+        assert_eq!(s.look_on(shelf("GBC")), s.wallpaper_look);
+        // Saved and read again, nothing moves.
+        s.save(&root).unwrap();
+        assert_eq!(Settings::load(&root), s);
+        assert_eq!(WallpaperLook::step(0, true), 10);
+        assert_eq!(WallpaperLook::step(100, true), 100);
+        assert_eq!(WallpaperLook::step(0, false), 0);
+        assert_eq!(WallpaperLook::step(35, false), 20);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1445,7 +1560,10 @@ mod tests {
         assert!(s.show_wifi && s.show_recents && s.show_titles && s.status_opt_in_v2);
         assert_eq!(s.appearance, Appearance::Original);
         assert_eq!(s.wallpaper, WallpaperPick::None);
-        assert_eq!(s.wallpaper_tint, WallpaperTint::Medium);
+        // Wallpaper Tint Medium is Darken 50 % now, as dark as it was.
+        assert_eq!(s.wallpaper_tint, WallpaperTint::Off);
+        assert_eq!(s.wallpaper_look.darken, 50);
+        assert!((s.wallpaper_look.darken_alpha() - WallpaperTint::Medium.alpha()).abs() < 0.01);
         assert_eq!(s.cart_studio_size, 2);
         // 2.4's own: no shelf wallpapers yet, Game Info off, animations on.
         assert!(s.wallpaper_shelves.is_empty());
@@ -1484,12 +1602,13 @@ mod tests {
         assert_eq!(settings.appearance, Appearance::Dark);
         assert_eq!(settings.wallpaper_tint, WallpaperTint::Off);
         settings.wallpaper=WallpaperPick::None;
-        settings.wallpaper_tint=WallpaperTint::High;
+        settings.wallpaper_look.darken=70;
         settings.appearance=Appearance::Light;
         let saved=serde_json::to_string(&settings).unwrap();
+        assert!(!saved.contains("wallpaper_tint"), "{saved}");
         let restored:Settings=serde_json::from_str(&saved).unwrap();
         assert_eq!(restored.wallpaper,WallpaperPick::None);
-        assert_eq!(restored.wallpaper_tint.alpha(),0.65);
+        assert_eq!(restored.wallpaper_look.darken,70);
         assert_eq!(restored.appearance,Appearance::Light);
         assert_eq!(restored.run_ahead_frames,2);
         assert!(restored.show_wifi && restored.status_opt_in_v2);
