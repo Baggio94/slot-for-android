@@ -376,6 +376,8 @@ class MainActivity : Activity() {
     /** Only retries left (a server that timed out): the visible pass ends,
      *  they go on unseen (it stayed on LABELS 12/13: Siham 2026-11-17). */
     @Volatile private var autoLabelsQuiet = false
+    /** The network was validated at its last change (onCapabilitiesChanged). */
+    @Volatile private var labelsNetworkValidated = false
     @Volatile private var autoLabelsLastProgress = -1L
     /** Last pulse's game state: leaving a game resumes the label passes. */
     private var autoLabelsWasPlaying = false
@@ -1055,14 +1057,18 @@ class MainActivity : Activity() {
         }
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
             if (!isDestroyed) {
-                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                    startRaSmartCache()
-                    startAutoCartLabels()
-                }
+                val validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                if (validated) startRaSmartCache()
+                // Android repeats this callback (signal, link speed...): a
+                // label pass only when the network has just been validated,
+                // not one every few seconds (beta41).
+                if (validated && !labelsNetworkValidated) startAutoCartLabels()
+                labelsNetworkValidated = validated
                 refreshRaConnectivityOnScreen()
             }
         }
         override fun onLost(network: Network) {
+            labelsNetworkValidated = false
             if (!isDestroyed) refreshRaConnectivityOnScreen()
         }
     }
@@ -1126,7 +1132,7 @@ class MainActivity : Activity() {
                     // The scanner only writes one immutable, lock-free
                     // snapshot. No Handler post or UI work per cartridge.
                     val progress = AutoCartLabelDiagnostics.snapshot()
-                    if (progress.total > 0) {
+                    if (progress.total > 0 && AutoCartLabelDiagnostics.passLooked) {
                         autoLabelIndicator.progress(
                             progress.checked, progress.total, progress.saved)
                     }
@@ -3173,6 +3179,10 @@ class MainActivity : Activity() {
         try {
             autoLabelsWorker.execute {
                 var anotherBatch = false
+                // Only a pass that has carts to look at shows or reports
+                // anything: one that finds nothing to do stays silent, not
+                // "LABELS 2/2" again from the last pass's count (beta41).
+                AutoCartLabelDiagnostics.passBegins()
                 if (autoLabelsChainBase < 0) {
                     autoLabelsChainBase = AutoCartLabelDiagnostics.snapshot().saved
                 }
@@ -3221,7 +3231,8 @@ class MainActivity : Activity() {
                         autoLabelsLastProgress = -1L
                         autoLabelsQuiet = false
                     }
-                    if (!anotherBatch && !recheck && report.total > 0) {
+                    if (!anotherBatch && !recheck && report.total > 0
+                            && AutoCartLabelDiagnostics.passLooked) {
                         Log.i("SlotAutoLabels",
                             "ART_SUMMARY examined=${report.checked}/${report.total} " +
                                 "saved=${report.saved} not_found=${report.notFound} " +
@@ -3235,7 +3246,7 @@ class MainActivity : Activity() {
                                 else autoLabelIndicator.hide()
                             }
                         }
-                    } else if (!anotherBatch && !recheck && report.total == 0) {
+                    } else if (!anotherBatch && !recheck) {
                         // No indexed ROMs or network yet: never leave an
                         // old spinner visible while the worker is stopped.
                         uiHandler.post {
