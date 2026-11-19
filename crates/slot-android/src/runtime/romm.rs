@@ -892,13 +892,11 @@ fn info_lines(title: &str, entry: &RommEntry, on_shelf: bool, room: u32,
     lines
 }
 
-/// A game's name under its cart, at one size whatever its length: by words
-/// on up to `most` lines `room` canvas pixels wide at `scale` (Siham
-/// 2026-11-19: names shrunk to one line were unreadable on the Rotate). A
-/// name a little too long for one line gives way a little (to 85 %) rather
-/// than break. Past `most` lines the last ends with "…", or, `whole`, keeps
-/// the rest whole to scroll. With the scale drawn at. Kept: the same names
-/// are asked every frame.
+/// A game's name under its cart (Siham 2026-11-19): one line, else two cut
+/// between words, never inside one; too long for two, the text gives way a
+/// little (to 80 %), then the second line ends with "…" (or, `whole`, keeps
+/// the rest to scroll: the chosen game's). `most` is 1 or 2. With the scale
+/// drawn at. Kept: the same names are asked every frame.
 pub(super) fn caption_lines(text: &str, room: f32, scale: f32, most: usize, whole: bool) -> (Vec<String>, f32) {
     type Key = (String, u32, u32, usize, bool);
     thread_local! {
@@ -906,43 +904,79 @@ pub(super) fn caption_lines(text: &str, room: f32, scale: f32, most: usize, whol
     }
     let key = (text.to_owned(), room.to_bits(), scale.to_bits(), most, whole);
     if let Some(kept) = CAPTIONS.with(|c| c.borrow().get(&key).cloned()) { return kept; }
-    let width = |t: &str| slot_ui::quick_value_width(t);
-    let text = text.trim();
-    let one = width(text) as f32;
-    // A little slack: the drawn face can come out a few pixels wider.
-    let room_fit = room * 0.96;
-    let made = if one * scale <= room_fit {
-        (vec![text.to_owned()], scale)
-    } else if one * scale * 0.85 <= room_fit {
-        (vec![text.to_owned()], room_fit / one)
-    } else {
-        // A word wider than the room (ADVENTURES on the Rotate) makes the
-        // whole name give way a little rather than break inside it.
-        let longest = text.split(' ').map(|w| width(w) as f32).fold(0.0, f32::max);
-        let scale = if longest * scale > room_fit { (room_fit / longest).max(scale * 0.75) } else { scale };
-        let room_face = (room_fit / scale.max(0.01)).max(1.0) as u32;
-        let mut lines = wrap(text, room_face, width);
-        if most > 0 && lines.len() > most {
-            let rest = lines.split_off(most - 1).join(" ");
-            if whole {
-                lines.push(rest);
-            } else {
-                let mut kept: Vec<char> = rest.chars().collect();
-                loop {
-                    let line = format!("{}\u{2026}", kept.iter().collect::<String>().trim_end());
-                    if width(&line) <= room_face || kept.len() <= 1 { lines.push(line); break; }
-                    kept.pop();
-                }
-            }
-        }
-        (lines, scale)
-    };
+    let made = caption_lines_now(text.trim(), room, scale, most.clamp(1, 2), whole);
     CAPTIONS.with(|c| {
         let mut c = c.borrow_mut();
         if c.len() > 600 { c.clear(); }
         c.insert(key, made.clone());
     });
     made
+}
+
+fn caption_lines_now(text: &str, room: f32, scale: f32, most: usize, whole: bool) -> (Vec<String>, f32) {
+    let width = |t: &str| slot_ui::quick_value_width(t) as f32;
+    // A little slack: the drawn face can come out a few pixels wider.
+    let room = room * 0.96;
+    let smallest = scale * 0.8;
+    // Words to lines of `room / s`, none cut: None when a word is too wide.
+    let lines_at = |s: f32| -> Option<Vec<String>> {
+        let room_face = room / s;
+        let mut lines: Vec<String> = Vec::new();
+        let mut line = String::new();
+        for word in text.split_whitespace() {
+            if width(word) > room_face { return None; }
+            let tried = if line.is_empty() { word.to_owned() } else { format!("{line} {word}") };
+            if width(&tried) <= room_face { line = tried; } else { lines.push(std::mem::replace(&mut line, word.to_owned())); }
+        }
+        if !line.is_empty() { lines.push(line); }
+        Some(lines)
+    };
+    // As large as it fits on `most` lines, down to 80 %.
+    let mut s = scale;
+    while s >= smallest - 1e-4 {
+        if let Some(lines) = lines_at(s) {
+            if lines.len() <= most { return (lines, s); }
+        }
+        s -= 0.02;
+    }
+    // Still too long: at 80 %, the first line(s) whole, the last with "…".
+    let s = smallest;
+    let room_face = room / s;
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut i = 0;
+    // Every line but the last: whole words that fit.
+    while lines.len() + 1 < most && i < words.len() {
+        let mut line = String::new();
+        while i < words.len() {
+            let tried = if line.is_empty() { words[i].to_owned() } else { format!("{line} {}", words[i]) };
+            if width(&tried) <= room_face { line = tried; i += 1; } else { break; }
+        }
+        // A word too wide for a whole line goes to the last, with "…".
+        if line.is_empty() { break; }
+        lines.push(line);
+    }
+    let rest = words[i.min(words.len())..].join(" ");
+    if whole || rest.is_empty() {
+        if !rest.is_empty() { lines.push(rest); }
+        return (lines, s);
+    }
+    // Whole words then "…"; only a first word too wide on its own is cut.
+    let rest_words: Vec<&str> = rest.split(' ').collect();
+    for n in (1..=rest_words.len()).rev() {
+        let line = format!("{}\u{2026}", rest_words[..n].join(" ").trim_end_matches([',', ';', ':', '-', ' ']));
+        if width(&line) <= room_face {
+            lines.push(line);
+            return (lines, s);
+        }
+    }
+    let mut kept: Vec<char> = rest_words[0].chars().collect();
+    loop {
+        let line = format!("{}\u{2026}", kept.iter().collect::<String>());
+        if width(&line) <= room_face || kept.len() <= 1 { lines.push(line); break; }
+        kept.pop();
+    }
+    (lines, s)
 }
 
 impl Engine {

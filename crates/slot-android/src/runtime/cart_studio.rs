@@ -1027,7 +1027,7 @@ impl Engine {
         }
     }
 
-    /// The game's name under the cart: up to four lines, fewer when a tall
+    /// The game's name under the cart: up to two lines, one when a tall
     /// cart (a shape changed in this page) leaves less room above the
     /// legend (Siham 2026-11-19). The same lines for prepare and draw.
     pub(super) fn studio_name_lines(&self, studio: &Studio) -> (Vec<String>, f32) {
@@ -1035,7 +1035,7 @@ impl Engine {
         let below = layout.cart_y + layout.cart_h + 12.0;
         let line_h = self.controls_faces.get(&Self::face_key("CART STUDIO", true))
             .map(|&(_, _, h)| super::romm::caption_line_h(h, STUDIO_NAME_SCALE));
-        let most = line_h.map_or(4, |line_h| (((self.legend_y() - 10.0 - below) / line_h).floor() as usize).clamp(1, 4));
+        let most = line_h.map_or(2, |line_h| (((self.legend_y() - 10.0 - below) / line_h).floor() as usize).clamp(1, 2));
         super::romm::caption_lines(&slot_ui::label_text(&studio.original), layout.cart_room,
             STUDIO_NAME_SCALE, most, false)
     }
@@ -1173,7 +1173,7 @@ impl Engine {
             below = y + dh + 12.0;
         }
         let centre = (left + right_edge) / 2.0;
-        // The game's name at one size, on up to four lines (Siham
+        // The game's name on up to two lines (Siham
         // 2026-11-19: shrunk to one line, it was unreadable on the Rotate).
         let (lines, scale) = self.studio_name_lines(studio);
         let tall = self.draw_caption(out, &lines, centre, right_edge - left, below, scale,
