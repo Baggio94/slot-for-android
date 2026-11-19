@@ -951,7 +951,9 @@ impl Engine {
                 let vw = w as f32 * scale;
                 let shown = vw.min(window);
                 let x = right - shown - if carets { 22.0 } else { 0.0 };
-                label_room = (x - 37.0 - 12.0 - if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 }).max(80.0);
+                // The faces' clear margins (MENU_PAD) need no room.
+                label_room = (x - 37.0 - 12.0 + 2.0 * slot_ui::MENU_PAD as f32 * 0.79
+                    - if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 }).max(80.0);
                 let vy = y + h as f32 * (0.79 - scale) / 2.0;
                 let alpha = fade * shows * rest;
                 if vw <= window {
