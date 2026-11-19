@@ -28,6 +28,13 @@ const ROW_FINISH: usize = 3;
 const ROW_SHAPE: usize = 4;
 /// The rows start higher than a settings page's: the finish strip goes under.
 const ROWS_TOP: f32 = 84.0;
+/// The page's middle line: the cart's and the rows' centre, as low as the
+/// rows and the finish strip under them allow above the legend (Siham
+/// 2026-11-19).
+const STUDIO_MID: f32 = 222.0;
+/// Every row's words, chosen or not (Siham 2026-11-19: Finish grew when
+/// its value was short).
+const STUDIO_TEXT: f32 = 0.72;
 
 /// The cart's flight between the shelf and Cart Studio, X or a long press
 /// (Siham 2026-11-17).
@@ -89,7 +96,7 @@ fn studio_cart_rect(size: (u32, u32)) -> [f32; 4] {
 }
 const STRIP_BOTTOM: f32 = 414.0;
 /// The finish strip's height under the rows.
-const FINISH_STRIP_H: f32 = 70.0;
+const FINISH_STRIP_H: f32 = 68.0;
 /// Search game's keyboard, QWERTY: ten keys a row; "<" deletes, "_" is a space.
 const KEYS: [char; 40] = [
     '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
@@ -1232,8 +1239,10 @@ impl Engine {
             // as low as the finish strip under them allows (kept as it was,
             // Siham 2026-11-19).
             let rows = studio.rows();
-            let lowest = STRIP_BOTTOM - FINISH_STRIP_H - rows.len() as f32 * QUICK_PITCH;
-            let rows_top = (cart_top - 8.0).clamp(ROWS_TOP, lowest.max(ROWS_TOP));
+            // The rows centred on the page's middle line, with the cart.
+            let block = (rows.len() as f32 - 1.0) * QUICK_PITCH + 44.0;
+            let rows_top = (STUDIO_MID - 4.0 - block / 2.0).round().max(ROWS_TOP);
+            let _ = cart_top;
             self.draw_menu_pill(x0 - 8.0, x1 + 8.0,
                 rows_top + studio.row as f32 * QUICK_PITCH + 4.0, fade, out);
             for (slot, &row) in rows.iter().enumerate() {
@@ -1244,20 +1253,22 @@ impl Engine {
                 let label_lit = lit || row != ROW_BACKGROUND;
                 let label = face(ROWS[row], label_lit);
                 let value_face = face(&value, lit);
-                // A label and its value at one size (beta41, Siham
-                // 2026-11-19): both give way together on a narrow page, in
-                // steps of 0.02, never under 0.5; a value still too long
-                // then scrolls in its own room while chosen.
-                let caret_room = self.setting_carets[0].1 as f32 + 8.0 + 22.0;
-                let room = x1 - x0 - 12.0 - caret_room;
-                let both = label.map_or(0, |l| l.1) as f32 + value_face.map_or(0, |v| v.1) as f32;
-                let scale = if both * 0.72 <= room || both <= 0.0 { 0.72 }
-                    else { (((room / both) * 50.0).floor() / 50.0).clamp(0.5, 0.72) };
+                // Every label at one size; a value a little too long up to
+                // 10 % smaller, longer it scrolls in its room while chosen
+                // (the menus' rule, Siham 2026-11-19).
+                let scale = STUDIO_TEXT;
                 let label_w = label.map_or(0.0, |l| l.1 as f32 * scale);
                 if let Some((tex, w, h)) = value_face {
-                    let vw = w as f32 * scale;
                     let end = x1 - if carets { 22.0 } else { 0.0 };
-                    let from = x0 + label_w + 12.0 + if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
+                    let from = x0 + label_w + 18.0 - slot_ui::MENU_PAD as f32 * scale
+                        + if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
+                    let room = end - from;
+                    let vscale = match w as f32 * scale {
+                        full if full > room && full * 0.9 <= room => room / w as f32,
+                        _ => scale,
+                    };
+                    let vw = w as f32 * vscale;
+                    let (y, scale) = (y + h as f32 * (scale - vscale) / 2.0, vscale);
                     let alpha = if chosen { fade } else { 0.62 * fade };
                     let x = if end - vw >= from {
                         out.push(Draw::Tex { x: end - vw, y, w: vw, h: h as f32 * scale, tex, alpha });
@@ -1277,18 +1288,20 @@ impl Engine {
                     if carets {
                         let (lt, lw, lh) = self.setting_carets[0];
                         let (rt, rw, rh) = self.setting_carets[1];
-                        let y = self.caret_y(y, scale);
+                        let y = self.caret_y(y - h as f32 * (STUDIO_TEXT - scale) / 2.0, STUDIO_TEXT);
                         out.push(Draw::Tex { x: x - lw as f32 - 8.0, y, w: lw as f32, h: lh as f32, tex: lt, alpha: fade });
                         out.push(Draw::Tex { x: x1 - rw as f32, y, w: rw as f32, h: rh as f32, tex: rt, alpha: fade });
                     }
                 }
                 if let Some((tex, w, h)) = label {
+                    let scale = STUDIO_TEXT;
                     out.push(Draw::Tex { x: x0, y, w: w as f32 * scale, h: h as f32 * scale, tex,
                         alpha: if label_lit { fade } else { 0.45 * fade } });
                 }
             }
             if studio.row_id() == ROW_FINISH {
-                let top = rows_top + rows.len() as f32 * QUICK_PITCH + 6.0;
+                // Just under the last row's bar, its own height.
+                let top = rows_top + 4.0 + block + 4.0;
                 self.draw_finish_strip(studio, x0, x1, top, fade, out);
             }
             let a = match (studio.row_id(), studio.label) {
@@ -1388,16 +1401,18 @@ impl Engine {
         let n = FINISHES.len();
         let cell = (x1 - x0) / n as f32;
         let name_h = 18.0;
-        let box_h = (STRIP_BOTTOM - top - name_h - 6.0).max(20.0);
+        let bottom = top + FINISH_STRIP_H;
+        let box_h = (bottom - top - name_h - 6.0).max(20.0);
         for i in 0..n {
             let cx = x0 + i as f32 * cell;
             if i == studio.finish {
-                out.push(Draw::Rect { x: cx + 1.0, y: top, w: cell - 2.0, h: STRIP_BOTTOM - top,
+                out.push(Draw::Rect { x: cx + 1.0, y: top, w: cell - 2.0, h: bottom - top,
                     colour: { let mut c = menu_style::highlight(); c[3] *= 0.8 * fade; c } });
             }
             self.draw_mini(studio, i, cx + 4.0, top + 3.0, cell - 8.0, box_h, fade, out);
             if let Some((tex, w, h)) = face(FINISHES[i], i == studio.finish) {
-                let s = 0.4f32.min((cell - 6.0) / w.max(1) as f32);
+                // Readable names (Siham 2026-11-19), as wide as the cell allows.
+                let s = 0.5f32.min((cell - 6.0) / w.max(1) as f32);
                 let dw = w as f32 * s;
                 out.push(Draw::Tex { x: cx + (cell - dw) / 2.0, y: top + box_h + 6.0, w: dw, h: h as f32 * s, tex,
                     alpha: if i == studio.finish { fade } else { 0.6 * fade } });
@@ -1524,7 +1539,7 @@ fn studio_layout_in(width: f32, cart: Option<(u32, u32)>) -> StudioLayout {
     StudioLayout {
         cart_x: cart_left + (cart_w - room) / 2.0,
         cart_room: room,
-        cart_y: 84.0 + (250.0 - cart_h) / 2.0,
+        cart_y: STUDIO_MID - cart_h / 2.0,
         cart_w,
         cart_h,
         x0,
