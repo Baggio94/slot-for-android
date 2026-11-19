@@ -274,8 +274,9 @@ vec3 simpletex(vec3 c, vec2 f, float bias) {
     // Rotate x3, the KPA x4) simpletex_lcd's thin grid; between two (the
     // Game Boy on the Rotate x4.5, the KPA x4.44, the Retroid Pocket
     // Classic x7.5) its lines fell one pixel here, two there: jdgleaver's
-    // simpletex_lcd_720p grid instead, a soft wave made for such scales,
-    // at its own Grid Width and Intensity 0.9 (Siham 2026-11-19).
+    // simpletex_lcd_720p grid instead, a soft wave made for such scales:
+    // Grid Width 0.95 and Intensity 1.0, as strong as the thin grid's
+    // lines at a whole scale (upstream's 0.9 and 0.9 nearly vanished).
     vec2 scale = (u_rect.zw * u_fbo) / (u_uv.zw * u_src);
     vec2 off = abs(scale - floor(scale + 0.5));
     float w;
@@ -289,9 +290,9 @@ vec3 simpletex(vec3 c, vec2 f, float bias) {
     } else {
         // Grid lines between pixels: the 0.25 offset, as upstream.
         vec2 angle = 6.283185307 * (f - 0.25);
-        float wf = 1.0 + 31.0 * (1.0 - 0.9);
+        float wf = 1.0 + 31.0 * (1.0 - 0.95);
         vec2 k = (vec2(wf) + sin(angle)) / (wf + 1.0);
-        w = (1.0 - k.x * k.y) * 0.9;
+        w = 1.0 - k.x * k.y;
     }
     float luma = dot(c, luma_coeff);
     w = w * (luma + (1.0 - luma) * (1.0 - bias));

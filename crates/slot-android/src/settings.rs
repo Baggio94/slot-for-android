@@ -114,7 +114,7 @@ pub struct WallpaperLook { pub blur: u8, pub halo: u8, pub darken: u8 }
 impl WallpaperLook {
     /// Default Blur and slot. Blur as they were, and Default Halo.
     pub const OLD_DEFAULT_BLUR: u8 = 30;
-    pub const OLD_SLOT_BLUR: u8 = 60;
+    pub const OLD_SLOT_BLUR: u8 = 40;
     pub const OLD_HALO: u8 = 70;
     /// Right adds 10 %, left takes 10 % away; they stop at 100 % and OFF.
     pub fn step(value: u8, right: bool) -> u8 {
