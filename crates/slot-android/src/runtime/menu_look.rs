@@ -874,7 +874,7 @@ mod render {
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries)).unwrap();
         let shelf = &mut engine.shelves[engine.active];
-        if let Some(at) = shelf.carts.iter().position(|c| slot_ui::label_text(c).contains("BATMAN")) { shelf.select(at); }
+        if let Some(at) = shelf.carts.iter().position(|c| slot_ui::label_text(c).to_uppercase().contains("BATMAN")) { shelf.select(at); }
         engine.open_cart_studio();
         for _ in 0..60 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
         shoot(&mut engine, &dir, "studio.png");

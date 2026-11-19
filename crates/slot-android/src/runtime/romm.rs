@@ -26,7 +26,7 @@ const CHOSEN: f32 = 1.05;
 const RESTING: f32 = 0.9;
 const NAME_GAP: f32 = 8.0;
 /// A game's name under its cart: one size, never shrunk to fit.
-const NAME_SCALE: f32 = 0.5;
+const NAME_SCALE: f32 = 0.42;
 const GROW_S: f32 = 0.12;
 /// Statuses come from Android: short, plain text only on the GL thread.
 const MAX_TEXT: usize = 120;
@@ -704,7 +704,7 @@ impl Engine {
         if let Some(system) = page.systems.get(page.system) {
             let room = grid().cell_w - 14.0;
             for &i in &cells {
-                for line in caption_lines(&slot_ui::label_text(&system.carts[i]), room, NAME_SCALE, 2, i == page.cursor) {
+                for line in caption_lines(&slot_ui::label_text(&system.carts[i]), room, NAME_SCALE, 2, i == page.cursor).0 {
                     texts.push((line, true));
                 }
             }
@@ -788,8 +788,8 @@ impl Engine {
                 });
             }
             let chosen = i == page.cursor;
-            let lines = caption_lines(&slot_ui::label_text(cart), g.cell_w - 14.0, NAME_SCALE, 2, chosen);
-            self.draw_caption(out, &lines, cx + g.cell_w / 2.0, g.cell_w - 14.0, name_y, NAME_SCALE,
+            let (lines, scale) = caption_lines(&slot_ui::label_text(cart), g.cell_w - 14.0, NAME_SCALE, 2, chosen);
+            self.draw_caption(out, &lines, cx + g.cell_w / 2.0, g.cell_w - 14.0, name_y, scale,
                 if chosen { fade } else { 0.7 * fade }, (usize::MAX - 2, i));
         }
         // The letter L2/R2 jumped to, as the shelf shows it.
@@ -894,38 +894,49 @@ fn info_lines(title: &str, entry: &RommEntry, on_shelf: bool, room: u32,
 
 /// A game's name under its cart, at one size whatever its length: by words
 /// on up to `most` lines `room` canvas pixels wide at `scale` (Siham
-/// 2026-11-19: names shrunk to one line were unreadable on the Rotate).
-/// Past them the last line ends with "…", or, `whole`, keeps the rest
-/// whole to scroll. Kept: the same names are asked every frame.
-pub(super) fn caption_lines(text: &str, room: f32, scale: f32, most: usize, whole: bool) -> Vec<String> {
-    type Key = (String, u32, usize, bool);
+/// 2026-11-19: names shrunk to one line were unreadable on the Rotate). A
+/// name a little too long for one line gives way a little (to 85 %) rather
+/// than break. Past `most` lines the last ends with "…", or, `whole`, keeps
+/// the rest whole to scroll. With the scale drawn at. Kept: the same names
+/// are asked every frame.
+pub(super) fn caption_lines(text: &str, room: f32, scale: f32, most: usize, whole: bool) -> (Vec<String>, f32) {
+    type Key = (String, u32, u32, usize, bool);
     thread_local! {
-        static CAPTIONS: std::cell::RefCell<HashMap<Key, Vec<String>>> = std::cell::RefCell::new(HashMap::new());
+        static CAPTIONS: std::cell::RefCell<HashMap<Key, (Vec<String>, f32)>> = std::cell::RefCell::new(HashMap::new());
     }
-    let room_face = (room / scale.max(0.01)).max(1.0) as u32;
-    let key = (text.to_owned(), room_face, most, whole);
-    if let Some(lines) = CAPTIONS.with(|c| c.borrow().get(&key).cloned()) { return lines; }
+    let key = (text.to_owned(), room.to_bits(), scale.to_bits(), most, whole);
+    if let Some(kept) = CAPTIONS.with(|c| c.borrow().get(&key).cloned()) { return kept; }
     let width = |t: &str| slot_ui::quick_value_width(t);
-    let mut lines = wrap(text.trim(), room_face, width);
-    if most > 0 && lines.len() > most {
-        let rest = lines.split_off(most - 1).join(" ");
-        if whole {
-            lines.push(rest);
-        } else {
-            let mut kept: Vec<char> = rest.chars().collect();
-            loop {
-                let line = format!("{}\u{2026}", kept.iter().collect::<String>().trim_end());
-                if width(&line) <= room_face || kept.len() <= 1 { lines.push(line); break; }
-                kept.pop();
+    let text = text.trim();
+    let one = width(text) as f32;
+    let made = if one * scale <= room {
+        (vec![text.to_owned()], scale)
+    } else if one * scale * 0.85 <= room {
+        (vec![text.to_owned()], room / one)
+    } else {
+        let room_face = (room / scale.max(0.01)).max(1.0) as u32;
+        let mut lines = wrap(text, room_face, width);
+        if most > 0 && lines.len() > most {
+            let rest = lines.split_off(most - 1).join(" ");
+            if whole {
+                lines.push(rest);
+            } else {
+                let mut kept: Vec<char> = rest.chars().collect();
+                loop {
+                    let line = format!("{}\u{2026}", kept.iter().collect::<String>().trim_end());
+                    if width(&line) <= room_face || kept.len() <= 1 { lines.push(line); break; }
+                    kept.pop();
+                }
             }
         }
-    }
+        (lines, scale)
+    };
     CAPTIONS.with(|c| {
         let mut c = c.borrow_mut();
         if c.len() > 600 { c.clear(); }
-        c.insert(key, lines.clone());
+        c.insert(key, made.clone());
     });
-    lines
+    made
 }
 
 impl Engine {
