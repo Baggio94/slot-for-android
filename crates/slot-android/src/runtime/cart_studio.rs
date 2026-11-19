@@ -1035,7 +1035,7 @@ impl Engine {
         {
             let layout = studio_layout(None);
             let room = layout.cart_room;
-            for line in super::romm::caption_lines(&slot_ui::label_text(&studio.original), room, STUDIO_NAME_SCALE, 3, false).0 {
+            for line in super::romm::caption_lines(&slot_ui::label_text(&studio.original), room, STUDIO_NAME_SCALE, 4, false).0 {
                 texts.push((line, true));
             }
         }
@@ -1166,10 +1166,10 @@ impl Engine {
             below = y + dh + 12.0;
         }
         let centre = (left + right_edge) / 2.0;
-        // The game's name at one size, on up to three lines (Siham
+        // The game's name at one size, on up to four lines (Siham
         // 2026-11-19: shrunk to one line, it was unreadable on the Rotate).
         let (lines, scale) = super::romm::caption_lines(&slot_ui::label_text(&studio.original),
-            right_edge - left, STUDIO_NAME_SCALE, 3, false);
+            right_edge - left, STUDIO_NAME_SCALE, 4, false);
         let tall = self.draw_caption(out, &lines, centre, right_edge - left, below, scale,
             0.85 * fade, (usize::MAX - 3, 0));
         let cart = studio.draft_cart();

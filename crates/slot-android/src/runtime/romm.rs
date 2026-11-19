@@ -909,12 +909,14 @@ pub(super) fn caption_lines(text: &str, room: f32, scale: f32, most: usize, whol
     let width = |t: &str| slot_ui::quick_value_width(t);
     let text = text.trim();
     let one = width(text) as f32;
-    let made = if one * scale <= room {
+    // A little slack: the drawn face can come out a few pixels wider.
+    let room_fit = room * 0.96;
+    let made = if one * scale <= room_fit {
         (vec![text.to_owned()], scale)
-    } else if one * scale * 0.85 <= room {
-        (vec![text.to_owned()], room / one)
+    } else if one * scale * 0.85 <= room_fit {
+        (vec![text.to_owned()], room_fit / one)
     } else {
-        let room_face = (room / scale.max(0.01)).max(1.0) as u32;
+        let room_face = (room_fit / scale.max(0.01)).max(1.0) as u32;
         let mut lines = wrap(text, room_face, width);
         if most > 0 && lines.len() > most {
             let rest = lines.split_off(most - 1).join(" ");
@@ -949,8 +951,13 @@ impl Engine {
         for line in lines {
             let Some(&(tex, w, h)) = self.controls_faces.get(&Self::face_key(line, true)) else { continue };
             let (dw, dh) = (w as f32 * scale, h as f32 * scale);
-            if dw <= room + 0.5 {
-                out.push(Draw::Tex { x: centre - dw / 2.0, y: at, w: dw, h: dh, tex, alpha });
+            // A line a little wider than measured gives way; a long one
+            // (the chosen game's rest) scrolls.
+            let squeeze = room / dw;
+            if dw <= room + 0.5 || squeeze >= 0.85 {
+                let k = squeeze.min(1.0);
+                let (dw, dh2) = (dw * k, dh * k);
+                out.push(Draw::Tex { x: centre - dw / 2.0, y: at + (dh - dh2) / 2.0, w: dw, h: dh2, tex, alpha });
             } else {
                 let (from, to) = (centre - room / 2.0, centre + room / 2.0);
                 let travel = dw - room;
