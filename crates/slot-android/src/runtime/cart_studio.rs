@@ -761,7 +761,7 @@ impl Engine {
         let mut ground = menu_ground();
         ground[3] *= 1.0 - flight.eased();
         out.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32, colour: ground });
-        self.without_ink(out, |out| flight.draw(flight.at(), out));
+        self.with_cart_ink(out, |out| flight.draw(flight.at(), out));
     }
 
     /// Cart Studio on `cart`; `pending` is a label the library session chose
@@ -1148,7 +1148,7 @@ impl Engine {
         if let Some(flight) = opening.filter(|_| flying.is_some() || studio.preview.is_none()) {
             // In flight, then in its place until the page's preview is ready.
             let rect = flight.at();
-            self.without_ink(out, |out| flight.draw(rect, out));
+            self.with_cart_ink(out, |out| flight.draw(rect, out));
             cart_top = rect[1];
             below = rect[1] + rect[3] + 12.0;
         } else if let Some((tex, _, _)) = studio.preview {

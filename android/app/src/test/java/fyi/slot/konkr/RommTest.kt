@@ -186,4 +186,25 @@ class RommTest {
         assertTrue(Romm.sameName("Pokemon Emerald (USA)", "Pokemon Emerald (USA)"))
         assertFalse(Romm.sameName("Pokemon Ruby (USA)", "Pokemon Emerald (USA)"))
     }
+
+    private fun gba(core: String, shared: Boolean): RetroArchStorage.Target {
+        val f = java.io.File("x")
+        return RetroArchStorage.Target("content://roms/gba/Emerald.gba", "Emerald", core, f, f, f, f, f, f,
+            null, null, true, "id", shared)
+    }
+
+    @Test
+    fun withShareCoreSavesTheNewestOfBothCoresWins() {
+        val saves = listOf(
+            Romm.ServerSave(1, "Emerald.srm", "2026-11-18T10:00:00", "mgba", ""),
+            Romm.ServerSave(2, "Emerald.srm", "2026-11-18T12:00:00", "gpsp", ""),
+            Romm.ServerSave(3, "Emerald.rtc", "2026-11-18T13:00:00", "gpsp", ""),
+        )
+        // Shared: gpSP's newer save, never the clock.
+        assertEquals(2L, RommSaves.newest(saves, gba("mGBA", true))?.id)
+        // Not shared: mGBA's own, as before.
+        assertEquals(1L, RommSaves.newest(saves, gba("mGBA", false))?.id)
+        assertEquals(setOf("mgba", "gpsp"), RommSaves.emulators(gba("gpSP", true)))
+        assertEquals(setOf("gpsp"), RommSaves.emulators(gba("gpSP", false)))
+    }
 }

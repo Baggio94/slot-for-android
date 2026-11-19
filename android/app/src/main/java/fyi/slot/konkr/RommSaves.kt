@@ -46,7 +46,8 @@ internal object RommSaves {
     }
 
     /** What the server's save was at the last exchange, and ours then. */
-    internal data class Record(val romId: Long, val saveId: Long, val serverStamp: String, val sha1: String)
+    internal data class Record(val romId: Long, val saveId: Long, val serverStamp: String, val sha1: String,
+                               val rtcSha1: String = "")
 
     private fun recordFile(context: Context, target: RetroArchStorage.Target): File =
         File(File(context.filesDir, "RommSync"),
@@ -60,7 +61,8 @@ internal object RommSaves {
 
     private fun record(context: Context, target: RetroArchStorage.Target): Record? = try {
         val json = JSONObject(recordFile(context, target).readText(Charsets.UTF_8))
-        Record(json.getLong("rom"), json.getLong("save"), json.getString("stamp"), json.getString("sha1"))
+        Record(json.getLong("rom"), json.getLong("save"), json.getString("stamp"), json.getString("sha1"),
+            json.optString("rtc"))
     } catch (_: Exception) { null }
 
     private fun keep(context: Context, target: RetroArchStorage.Target, record: Record) {
@@ -68,7 +70,8 @@ internal object RommSaves {
         file.parentFile?.mkdirs()
         val temp = File(file.parentFile, file.name + ".tmp")
         temp.writeText(JSONObject().put("rom", record.romId).put("save", record.saveId)
-            .put("stamp", record.serverStamp).put("sha1", record.sha1).toString(), Charsets.UTF_8)
+            .put("stamp", record.serverStamp).put("sha1", record.sha1).put("rtc", record.rtcSha1)
+            .toString(), Charsets.UTF_8)
         if (!temp.renameTo(file)) temp.delete()
     }
 
@@ -77,6 +80,19 @@ internal object RommSaves {
 
     /** The core's name on the server, as RetroArch-core clients use it. */
     private fun emulator(target: RetroArchStorage.Target): String = RetroArchStorage.coreLower(target.core)
+
+    /** The cores whose saves are this game's on the server: with Share Core
+     *  Saves, a GBA game's mGBA and gpSP saves are one save (beta39: the
+     *  other core's newer one was passed over, and stayed after DELETE IT). */
+    internal fun emulators(target: RetroArchStorage.Target): Set<String> =
+        if (target.isGba && target.shareGbaSaves) setOf("mgba", "gpsp") else setOf(emulator(target))
+
+    private fun isOurs(save: Romm.ServerSave, target: RetroArchStorage.Target): Boolean =
+        save.emulator.lowercase(Locale.ROOT) in emulators(target)
+
+    /** The game's clock (Pokémon Ruby, Sapphire, Emerald, Crystal), beside
+     *  its save: sent and brought in with it (beta39). */
+    private fun rtcOf(target: RetroArchStorage.Target): File = target.rtcLocal
 
     /** The cart's system, from its portable name (`gba/…`). */
     private fun platformOf(target: RetroArchStorage.Target): String? {
@@ -89,20 +105,23 @@ internal object RommSaves {
     /** What to do when both the server and the handheld changed. */
     enum class Choice { KEEP_HANDHELD, USE_SERVER }
 
-    /** What the launch should know: a message to show, if any. */
-    class Outcome(val message: String?)
+    /** What the launch should know: a message to show, if any; [deleteHere]:
+     *  another handheld deleted this save and the player chose to delete it
+     *  here too (beta39). */
+    class Outcome(val message: String?, val deleteHere: Boolean = false)
 
     /**
      * Before a game starts: brings the server's save in when it is the
      * newer one. [ask] is called (on this worker thread, blocking) when both
      * sides changed since the last exchange.
      */
-    fun beforeLaunch(context: Context, target: RetroArchStorage.Target, ask: () -> Choice): Outcome {
+    fun beforeLaunch(context: Context, target: RetroArchStorage.Target, ask: () -> Choice,
+                     askDeletedElsewhere: () -> Boolean = { false }): Outcome {
         if (!enabled(context) || !Romm.signedIn(context)) return Outcome(null)
         val platform = platformOf(target) ?: return Outcome(null)
         val started = System.nanoTime()
         return try {
-            Romm.within(LAUNCH_BUDGET_MS) { checkServer(context, target, platform, ask) }.also {
+            Romm.within(LAUNCH_BUDGET_MS) { checkServer(context, target, platform, ask, askDeletedElsewhere) }.also {
                 uncheckedFile(context, target).delete()
             }
         } catch (error: Romm.SignedOut) {
@@ -111,6 +130,7 @@ internal object RommSaves {
             if (error is java.net.SocketTimeoutException || error is java.net.ConnectException ||
                 error is java.net.UnknownHostException || error is java.net.NoRouteToHostException) {
                 try { uncheckedFile(context, target).apply { parentFile?.mkdirs() }.writeText("1") } catch (_: Exception) {}
+                TaskPill.problem("ROMM OFFLINE")
             }
             SlotLog.w(TAG, "RomM save check skipped after ${(System.nanoTime() - started) / 1_000_000}ms: " +
                 "the handheld's save", error)
@@ -119,7 +139,7 @@ internal object RommSaves {
     }
 
     private fun checkServer(context: Context, target: RetroArchStorage.Target, platform: String,
-                      ask: () -> Choice): Outcome {
+                      ask: () -> Choice, askDeletedElsewhere: () -> Boolean): Outcome {
         return run {
             // A deletion the server didn't take yet (offline): again now;
             // until it does, nothing comes back from the server.
@@ -130,8 +150,22 @@ internal object RommSaves {
             val kept = record(context, target)
             val romId = kept?.romId?.takeIf { it > 0 } ?: Romm.romIdFor(context, platform, target.stem)
                 ?: return Outcome(null)
-            val server = newest(Romm.saves(context, romId), target) ?: return Outcome(null)
+            val saves = Romm.saves(context, romId)
+            val server = newest(saves, target)
             val local = target.saveLocal.takeIf { it.isFile }?.readBytes()
+            if (server == null) {
+                // The server had this game's save and has none now: another
+                // handheld deleted it (DELETE IT). This one asks (Siham
+                // 2026-11-19); kept, it goes up again after the game.
+                if (kept != null && kept.saveId > 0 && local != null) {
+                    val delete = askDeletedElsewhere()
+                    keep(context, target, Record(romId, DELETED, "", ""))
+                    SlotLog.i(TAG, "RomM: ${target.stem}'s save was deleted on another handheld; " +
+                        if (delete) "deleted here too" else "kept here")
+                    return Outcome(null, deleteHere = delete)
+                }
+                return Outcome(null)
+            }
             val localSha = local?.let(::sha1)
             if (kept != null && kept.serverStamp == server.updatedAt) return Outcome(null) // Server unchanged.
             val bytes = Romm.downloadSave(context, server)
@@ -148,6 +182,7 @@ internal object RommSaves {
                     File(target.saveLocal.parentFile, target.saveLocal.name + ".before-romm").writeBytes(local)
                 }
                 RetroArchStorage.stage(target.saveLocal, bytes)
+                bringRtc(context, target, saves)
                 // The game starts from this save, not from slot.'s older
                 // save state (the same guard as Keep Folder Saves).
                 RetroArchStorage.markFolderSave(context.filesDir, target.core, target.stem)
@@ -182,11 +217,12 @@ internal object RommSaves {
             val romId = kept?.romId?.takeIf { it > 0 } ?: Romm.romIdFor(context, platform, target.stem) ?: return
             val saves = Romm.saves(context, romId)
             val ours = saves.filter {
-                it.fileName.endsWith(".srm", ignoreCase = true) && it.emulator.equals(emulator(target), ignoreCase = true)
+                (it.fileName.endsWith(".srm", ignoreCase = true) || it.fileName.endsWith(".rtc", ignoreCase = true)) &&
+                    isOurs(it, target)
             }
             Romm.deleteSaves(context, ours.map { it.id })
             // What stays on the server (another client's) is "unchanged".
-            val left = newest(saves - ours.toSet(), target)
+            val left = newest(saves - ours.toSet(), target)?.takeUnless { isOurs(it, target) }
             keep(context, target, Record(romId, DELETED, left?.updatedAt.orEmpty(), ""))
             SlotLog.i(TAG, "RomM: ${ours.size} save(s) of ${target.stem} deleted")
         } catch (error: Exception) {
@@ -224,14 +260,41 @@ internal object RommSaves {
                 unchecked.delete()
             }
             val sent = Romm.uploadSave(context, romId, emulator(target), target.stem + ".srm", local)
-            keep(context, target, Record(romId, sent.id, sent.updatedAt, localSha))
+            keep(context, target, Record(romId, sent.id, sent.updatedAt, localSha, sendRtc(context, target, romId, kept)))
             null
         } catch (error: Romm.SignedOut) {
             "Signed out of RomM: this save wasn't sent."
         } catch (error: Exception) {
             SlotLog.w(TAG, "RomM save upload skipped", error)
+            TaskPill.problem("SAVE NOT SENT")
             if (error.message?.contains("can't keep saves") == true) "This RomM account can't keep saves."
             else null
+        }
+    }
+
+    /** The game's clock after its save, when it changed; its fingerprint. */
+    private fun sendRtc(context: Context, target: RetroArchStorage.Target, romId: Long, kept: Record?): String {
+        val rtc = rtcOf(target).takeIf { it.isFile }?.readBytes() ?: return ""
+        val sha = sha1(rtc)
+        if (kept?.rtcSha1 == sha) return sha
+        return try {
+            Romm.uploadSave(context, romId, emulator(target), target.stem + ".rtc", rtc)
+            sha
+        } catch (error: Exception) {
+            SlotLog.w(TAG, "RomM: ${target.stem}'s clock not sent", error)
+            ""
+        }
+    }
+
+    /** With a save brought in, its clock too, when the server has one. */
+    private fun bringRtc(context: Context, target: RetroArchStorage.Target, saves: List<Romm.ServerSave>) {
+        val server = saves.filter { it.fileName.endsWith(".rtc", ignoreCase = true) && isOurs(it, target) }
+            .maxByOrNull { it.updatedAt } ?: return
+        try {
+            val bytes = Romm.downloadSave(context, server)
+            if (bytes.isNotEmpty()) RetroArchStorage.stage(rtcOf(target), bytes)
+        } catch (error: Exception) {
+            SlotLog.w(TAG, "RomM: ${target.stem}'s clock not brought in", error)
         }
     }
 
@@ -239,7 +302,7 @@ internal object RommSaves {
      *  .srm (a save another client sent for the same game). */
     internal fun newest(saves: List<Romm.ServerSave>, target: RetroArchStorage.Target): Romm.ServerSave? {
         val srm = saves.filter { it.fileName.endsWith(".srm", ignoreCase = true) }
-        val ours = srm.filter { it.emulator.equals(emulator(target), ignoreCase = true) }
+        val ours = srm.filter { isOurs(it, target) }
         return (ours.ifEmpty { srm }).maxByOrNull { it.updatedAt }
     }
 }

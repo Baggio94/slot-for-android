@@ -19,6 +19,13 @@ class FolderSyncTest {
             return FolderSync.Meta(f.length(), f.lastModified())
         }
         override fun delete(path: String) { File(root, path).delete() }
+        /** As the card's side: what the folder should no longer hold goes. */
+        override fun dropStale(): Int {
+            val stale = root.walkTopDown().filter { it.isFile }
+                .filter { FolderSync.stale(it.relativeTo(root).path.replace('\\', '/')) }.toList()
+            stale.forEach { it.delete() }
+            return stale.size
+        }
     }
 
     private fun dirs(): Pair<File, File> =
@@ -36,11 +43,14 @@ class FolderSyncTest {
         put(mine, "Config/retroachievements.toml", "token")
         put(mine, "Saves/abc.mgba.skip-resume.once", "1")
         put(mine, "Labels/old.png.carried", "x")
+        put(mine, "Saves/RetroAchievements/0cc175b9/auth.json", "token")
+        put(mine, "Saves/RetroAchievements/0cc175b9/badges/1234.png", "badge")
         val report = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), FolderSync.Base(), FolderSync.Start.MERGE)
         assertEquals(2, report.toFolder)
         assertTrue(File(card, "Saves/mGBA/Emerald.srm").isFile)
         assertFalse("secrets never travel", File(card, "Config/romm.json").exists())
         assertFalse(File(card, "Config/retroachievements.toml").exists())
+        assertFalse("RetroAchievements' sign-in stays", File(card, "Saves/RetroAchievements").exists())
         assertFalse("one-shot markers stay", File(card, "Saves/abc.mgba.skip-resume.once").exists())
         assertFalse(File(card, "Labels/old.png.carried").exists())
         assertFalse("this handheld's own", FolderSync.travels("Saves/abc.mgba.retroarch-import.state.auto"))
@@ -247,5 +257,62 @@ class FolderSyncTest {
         // PUT IT BACK: the newer one.
         FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, restore = setOf("Saves/mGBA/Emerald.srm"))
         assertEquals("played on", File(card, "Saves/mGBA/Emerald.srm").readText())
+    }
+
+    @Test fun theRetroAchievementsCacheLeavesTheFolderWithoutDeletingAnything() {
+        val (mine, card) = dirs()
+        put(mine, "Saves/mGBA/Emerald.srm", "save")
+        put(mine, "Saves/RetroAchievements/0cc175b9/auth.json", "token")
+        val base = FolderSync.Base()
+        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, FolderSync.Start.MERGE)
+        // What a beta38 handheld left on the card, and in its base.
+        put(card, "Saves/RetroAchievements/0cc175b9/auth.json", "token")
+        put(card, "Saves/RetroAchievements/0cc175b9/badges/1234.png", "badge")
+        put(card, "Saves/abc.mgba.retroarch-export.state.auto", "state")
+        base.entries["Saves/RetroAchievements/0cc175b9/auth.json"] =
+            FolderSync.Entry(5, 1_000_000L, 5, 1_000_000L, FolderSync.sha1("token".toByteArray()))
+        val tombs = HashMap<String, FolderSync.Tomb>()
+        val report = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base, tombs = tombs)
+        assertEquals(3, report.stale)
+        assertFalse(File(card, "Saves/RetroAchievements/0cc175b9/auth.json").exists())
+        assertFalse(File(card, "Saves/abc.mgba.retroarch-export.state.auto").exists())
+        assertTrue("the handheld keeps its own", File(mine, "Saves/RetroAchievements/0cc175b9/auth.json").isFile)
+        assertTrue(File(card, "Saves/mGBA/Emerald.srm").isFile)
+        assertTrue("no deletion noted for other handhelds", tombs.isEmpty())
+        assertTrue(base.entries.keys.none { it.startsWith("Saves/RetroAchievements/") })
+        assertEquals(0, report.removed)
+    }
+
+    @Test fun aGamesFilesComeInBeforeTheLabels() {
+        val (mine, card) = dirs()
+        put(card, "Labels/GBA/Emerald.png", "label")
+        put(card, "Saves/mGBA/Emerald.srm", "save")
+        put(card, "States/mGBA/Emerald.state.auto", "state")
+        var seen: Pair<Boolean, Boolean>? = null
+        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), FolderSync.Base(), FolderSync.Start.MERGE,
+            launchFilesDone = {
+                seen = (File(mine, "Saves/mGBA/Emerald.srm").isFile && File(mine, "States/mGBA/Emerald.state.auto").isFile) to
+                    File(mine, "Labels/GBA/Emerald.png").isFile
+            })
+        assertEquals("saves and states in, labels not yet" , true to false, seen)
+        assertTrue(File(mine, "Labels/GBA/Emerald.png").isFile)
+    }
+
+    @Test fun twoDifferentSavesAreKeptForTheChoice() {
+        val (mine, card) = dirs()
+        put(mine, "Saves/mGBA/Emerald.srm", "handheld", modified = 2_000_000L)
+        put(card, "Saves/mGBA/Emerald.srm", "folder", modified = 3_000_000L)
+        put(mine, "Labels/GBA/Emerald.png", "one", modified = 2_000_000L)
+        put(card, "Labels/GBA/Emerald.png", "two", modified = 3_000_000L)
+        val report = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), FolderSync.Base(), FolderSync.Start.MERGE)
+        // The newer save in place; the handheld's set aside for the choice.
+        assertEquals("folder", File(mine, "Saves/mGBA/Emerald.srm").readText())
+        assertEquals(1, report.twoSaves.size)
+        val two = report.twoSaves.single()
+        assertEquals("Saves/mGBA/Emerald.srm", two.path)
+        assertTrue(two.handheldSetAside)
+        assertEquals("handheld", String(two.other))
+        // Not for labels: the newer one, as before.
+        assertEquals(2, report.conflicts)
     }
 }

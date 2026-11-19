@@ -98,6 +98,9 @@ struct Cart {
     core_ms: Option<u128>,
     save_ms: Option<u128>,
     longest_ms: f32,
+    /// Time the player spent in a window before the game (DELETED, TWO
+    /// SAVES, ROMM SAVE...): not slot.'s, left out of the line (beta39).
+    asked_ms: u128,
 }
 
 static CART: Mutex<Option<Cart>> = Mutex::new(None);
@@ -108,7 +111,7 @@ fn cart() -> std::sync::MutexGuard<'static, Option<Cart>> {
 
 fn new_cart(eject: bool, save_ms: Option<u128>) -> Cart {
     Cart { eject, started: Instant::now(), sound_ms: None, rom_ms: None, core_ms: None,
-        save_ms, longest_ms: 0.0 }
+        save_ms, longest_ms: 0.0, asked_ms: 0 }
 }
 
 /// A pressed: the cart starts going in.
@@ -126,6 +129,11 @@ pub(crate) fn sound() {
     if let Some(c) = cart().as_mut() { c.sound_ms.get_or_insert(c.started.elapsed().as_millis()); }
 }
 
+/// The player answered a window before the game, after [ms].
+pub(crate) fn asked(ms: u128) {
+    if let Some(c) = cart().as_mut() { if !c.eject { c.asked_ms += ms; } }
+}
+
 /// Android prepared the ROM and its saves (MainActivity.loadGameFromSaf).
 pub(crate) fn rom_ready() {
     if let Some(c) = cart().as_mut() { c.rom_ms.get_or_insert(c.started.elapsed().as_millis()); }
@@ -141,11 +149,14 @@ pub(crate) fn insert_done() {
     let Some(c) = cart().take() else { return };
     if c.eject { return; }
     let ms = |v: Option<u128>| v.map_or("-".to_string(), |v| format!("+{v}ms"));
+    let asked = c.asked_ms;
+    let window = if asked > 0 { format!(", a window answered in {asked}ms (left out)") } else { String::new() };
     crate::game::log_launch_timing(&format!(
         "Insert timeline: click {}, ROM and saves ready {}, core {}, screen on +{}ms \
-         (original Slot: 730ms), longest frame {:.0}ms",
-        ms(c.sound_ms), ms(c.rom_ms), c.core_ms.map_or("-".to_string(), |v| format!("{v}ms")),
-        c.started.elapsed().as_millis(), c.longest_ms));
+         (original Slot: 730ms), longest frame {:.0}ms{window}",
+        ms(c.sound_ms), ms(c.rom_ms.map(|v| v.saturating_sub(asked))),
+        c.core_ms.map_or("-".to_string(), |v| format!("{v}ms")),
+        c.started.elapsed().as_millis().saturating_sub(asked), c.longest_ms));
 }
 
 /// The cart is all the way out: the ejection's line. An insertion cancelled

@@ -778,14 +778,24 @@ const LIBRARY_VALUE_NAMES: [&str; 3] = ["INTERNAL", "SD CARD", "NEEDS ROMM"];
 static SLOT_FOLDER: AtomicU8 = AtomicU8::new(0);
 /// The slot. folder's first copy under way: its percent, -1 none.
 static SLOT_FOLDER_COPY: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+/// The task pill (beta39): Android's long tasks, most important first, a
+/// line each, "kind<TAB>progress<TAB>words" (progress -1 for none); its
+/// revision changes with it.
+static TASK_PILL: Mutex<String> = Mutex::new(String::new());
+static TASK_PILL_REV: AtomicU64 = AtomicU64::new(0);
+const TASK_PROBLEM: u8 = 0;
+const TASK_COPY: u8 = 1;
+const TASK_DOWNLOADS: u8 = 3;
+const TASK_SCAN: u8 = 5;
 /// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
 static ROMM_SYNC: AtomicU8 = AtomicU8::new(0);
 /// The ROM folder's SD card isn't in this handheld.
 static ROMS_MISSING: AtomicBool = AtomicBool::new(false);
-/// How bright the carts are while their card is out.
-/// Carts whose SD card is out: grey and dark, as a handheld switched off,
-/// opaque (Siham 2026-11-18, "B"; they were 45% see-through before).
-const MISSING_INK: slot_gfx::InkMap = slot_gfx::InkMap { paper: [0.05, 0.05, 0.06], ink: [0.50, 0.50, 0.52] };
+/// Carts whose SD card is out: grey, as a handheld switched off, opaque
+/// (Siham 2026-11-18). Lighter than beta38's (Siham 2026-11-19, beta39):
+/// "D" over a light ground, "C" over a dark one, which look alike there.
+const MISSING_INK_LIGHT: slot_gfx::InkMap = slot_gfx::InkMap { paper: [0.36, 0.36, 0.37], ink: [0.80, 0.80, 0.82] };
+const MISSING_INK_DARK: slot_gfx::InkMap = slot_gfx::InkMap { paper: [0.22, 0.22, 0.23], ink: [0.68, 0.68, 0.70] };
 const MISSING_FADE_S: f32 = 0.3;
 /// Settings > Interface > RG Rotate: its rows and their keys (85, Sleep
 /// When Closed, is Android's "Lock the screen" right, not a setting).
@@ -1465,6 +1475,11 @@ struct Engine {
     /// Library's slot. folder row while the first copy runs: COPYING n%.
     slot_copy_face: (slot_gfx::TexId, u32, u32),
     slot_copy_shown: i32,
+    /// The task pill: the tasks as last read, and its face (beta39).
+    task_pill_rev: u64,
+    task_pill: Vec<(u8, f32, String)>,
+    task_pill_face: Option<(slot_gfx::TexId, u32, u32)>,
+    task_pill_key: String,
     /// How grey the carts are without their SD card (0 normal, 1 grey) and
     /// when it was last moved: a 0.3 s fade (beta38).
     missing_mix: f32,
@@ -2236,6 +2251,10 @@ impl Engine {
             library_values,
             slot_copy_face,
             slot_copy_shown: -1,
+            task_pill_rev: 0,
+            task_pill: Vec::new(),
+            task_pill_face: None,
+            task_pill_key: String::new(),
             missing_mix: if ROMS_MISSING.load(Ordering::Acquire) { 1.0 } else { 0.0 },
             missing_at: Instant::now(),
             menu_paths: Default::default(),
@@ -2465,6 +2484,109 @@ impl Engine {
             .map(|v| v as f32 / 255.0);
         let light = 0.299 * ground[0] + 0.587 * ground[1] + 0.114 * ground[2] > 0.5;
         light.then_some(slot_gfx::InkMap { paper: ground, ink })
+    }
+
+    fn refresh_task_pill(&mut self) {
+        let rev = TASK_PILL_REV.load(Ordering::Acquire);
+        if rev == self.task_pill_rev { return; }
+        self.task_pill_rev = rev;
+        let spec = TASK_PILL.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.task_pill = spec.lines().filter_map(|line| {
+            let mut parts = line.splitn(3, '\t');
+            let kind = parts.next()?.parse::<u8>().ok()?;
+            let progress = parts.next()?.parse::<f32>().ok()?;
+            let words = parts.next()?.trim();
+            (!words.is_empty()).then(|| (kind, progress, words.to_string()))
+        }).collect();
+    }
+
+    /// The task the pill shows here: the first its own page doesn't show
+    /// already (the copy and the scan on Library, the downloads on RomM's),
+    /// with how many others run.
+    fn task_pill_now(&self) -> Option<(u8, f32, String, usize)> {
+        let hidden = |kind: u8| match self.overlay {
+            ShelfOverlay::Library { .. } => kind == TASK_COPY || kind == TASK_SCAN,
+            ShelfOverlay::Romm => kind == TASK_DOWNLOADS,
+            _ => false,
+        };
+        let shown: Vec<&(u8, f32, String)> = self.task_pill.iter().filter(|t| !hidden(t.0)).collect();
+        let first = shown.first()?;
+        Some((first.0, first.1, first.2.clone(), shown.len() - 1))
+    }
+
+    /// The pill's texture now, made again only when what it says changes
+    /// (its ring in 40 steps); its logical size.
+    fn task_pill_tex(&mut self) -> Option<(u8, slot_gfx::TexId, f32, f32)> {
+        self.refresh_task_pill();
+        let (kind, progress, words, more) = self.task_pill_now()?;
+        let filled = (progress >= 0.0).then(|| (progress.min(1.0) * 40.0).round() / 40.0);
+        let key = format!("{kind}|{words}|{more}|{filled:?}");
+        if key != self.task_pill_key || self.task_pill_face.is_none() {
+            let face = slot_ui::task_pill_face(&words, more, filled, kind == TASK_PROBLEM);
+            let tex = match self.task_pill_face {
+                Some((tex, _, _)) => { self.gpu.update_face(tex, &face); tex }
+                None => self.gpu.create_face(&face),
+            };
+            self.task_pill_face = Some((tex, face.w, face.h));
+            self.task_pill_key = key;
+        }
+        self.task_pill_face.map(|(tex, w, h)| (kind, tex, w as f32, h as f32))
+    }
+
+    /// The pill at `x`, `y`, white or inked as `ink` (a problem stays red).
+    fn push_task_pill(kind: u8, tex: slot_gfx::TexId, x: f32, y: f32, w: f32, h: f32,
+                      ink: Option<slot_gfx::InkMap>, out: &mut Vec<Draw>) {
+        let ink = ink.filter(|_| kind != TASK_PROBLEM);
+        out.push(Draw::Ink(ink));
+        out.push(Draw::Tex { x: x.round(), y, w, h, tex, alpha: 1.0 });
+        out.push(Draw::Ink(None));
+    }
+
+    /// On the shelf: by the battery when they share the top line, else at
+    /// the top right (below the icons when they hold that corner). The room
+    /// it takes beside the battery, for the icons Android places there.
+    fn draw_shelf_task_pill(&mut self, clock_top: bool, icons_top: bool, battery_w: f32,
+                            dark_ink: bool, out: &mut Vec<Draw>) -> f32 {
+        let Some((kind, tex, w, h)) = self.task_pill_tex() else { return 0.0 };
+        let margin = if out_w() < 640 { 12.0 } else { 24.0 };
+        let (x, y, room) = if clock_top {
+            (out_w() as f32 - margin - battery_w - 12.0 - w, 14.0, w + 12.0)
+        } else if icons_top {
+            (out_w() as f32 - margin - w, 40.0, 0.0)
+        } else {
+            (out_w() as f32 - margin - w, 14.0, 0.0)
+        };
+        let ink = dark_ink.then_some(slot_gfx::InkMap { paper: [0.0; 3], ink: [0.0; 3] });
+        Self::push_task_pill(kind, tex, x, y, w, h, ink, out);
+        room
+    }
+
+    /// Over a menu page: at the top right, in the page's colours.
+    fn draw_menu_task_pill(&mut self, out: &mut Vec<Draw>) {
+        if self.game.is_some() || self.progress > 0.0
+            || matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::CartStudio) { return; }
+        let Some((kind, tex, w, h)) = self.task_pill_tex() else { return };
+        let margin = if out_w() < 640 { 12.0 } else { 24.0 };
+        let ink = self.menu_ink();
+        Self::push_task_pill(kind, tex, out_w() as f32 - margin - w, 14.0, w, h, ink, out);
+    }
+
+    /// The grey of carts whose card is out, for the ground behind them: the
+    /// shelf's own colour or mosaic as its words see it (the Mega Drive's
+    /// dark Original mosaic takes the dark ground's grey), else the image's
+    /// brightness, as the clock's ink.
+    fn missing_ink(&self) -> slot_gfx::InkMap {
+        let light = if self.wallpaper_none() || self.settings.wallpaper_on(self.active).is_mosaic() {
+            self.shelf_ink().is_some()
+        } else { self.top_line_dark_ink() };
+        if light { MISSING_INK_LIGHT } else { MISSING_INK_DARK }
+    }
+
+    /// The carts' ink while their card is out (most of the fade), for the
+    /// paths that draw carts outside the shelf's own row: the core picker's
+    /// neighbours and Cart Studio's flight (beta39: they showed in colour).
+    pub(super) fn cart_ink(&self) -> Option<slot_gfx::InkMap> {
+        (self.missing_mix > 0.5).then(|| self.missing_ink())
     }
 
     /// Whether Delete Wallpaper has a file to remove: the edited shelf's own
@@ -7124,41 +7246,69 @@ impl Engine {
     }
 
     /// Library's values: the slot. folder's place (nothing without one);
-    /// COPYING n% while its first copy runs.
-    fn draw_library_values(&self, row: usize, out: &mut Vec<Draw>) {
+    /// COPYING n% while its first copy runs. (row, face, toggle)
+    fn library_value_faces(&self) -> Vec<(usize, (slot_gfx::TexId, u32, u32), bool)> {
         if SLOT_FOLDER_COPY.load(Ordering::Acquire) >= 0 {
-            self.draw_row_value(LIBRARY_SLOT_ROW, LIBRARY_ROWS.len(), row, self.slot_copy_face, false, out);
-            return;
+            return vec![(LIBRARY_SLOT_ROW, self.slot_copy_face, false)];
         }
         let place = SLOT_FOLDER.load(Ordering::Acquire);
         if (1..=2).contains(&place) {
-            let face = self.library_values[usize::from(place) - 1];
-            self.draw_row_value(LIBRARY_SLOT_ROW, LIBRARY_ROWS.len(), row, face, false, out);
-        }
+            vec![(LIBRARY_SLOT_ROW, self.library_values[usize::from(place) - 1], false)]
+        } else { Vec::new() }
     }
 
     /// Saves & States' values: Share Core Saves and Sync Saves with RomM,
     /// with the exact Settings ON/OFF textures and carets.
-    fn draw_saves_values(&self, row: usize, out: &mut Vec<Draw>) {
+    fn saves_value_faces(&self) -> Vec<(usize, (slot_gfx::TexId, u32, u32), bool)> {
         let share = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
-        self.draw_row_value(SAVES_SHARE_ROW, SAVES_ROWS.len(), row, self.setting_values[share], true, out);
         let romm = match ROMM_SYNC.load(Ordering::Acquire) {
             0 => self.library_values[2],
             2 => self.setting_values[4],
             _ => self.setting_values[5],
         };
-        self.draw_row_value(SAVES_ROMM_ROW, SAVES_ROWS.len(), row, romm, true, out);
+        vec![(SAVES_SHARE_ROW, self.setting_values[share], true), (SAVES_ROMM_ROW, romm, true)]
+    }
+
+    fn draw_page_values(&self, rows: usize, row: usize,
+                        values: &[(usize, (slot_gfx::TexId, u32, u32), bool)],
+                        scales: &[(f32, f32)], out: &mut Vec<Draw>) {
+        for &(at, face, toggle) in values {
+            let scale = scales.get(at).map_or(0.79, |s| s.1);
+            self.draw_row_value(at, rows, row, face, toggle, scale, out);
+        }
+    }
+
+    /// A label beside its value gives way to it (beta39: on the RG Rotate's
+    /// square screen, SD CARD and ON / OFF lay over their labels): the room
+    /// the value and its carets leave, the same selected or not. Rows
+    /// without a value fit as before (0.0).
+    fn value_row_scales(&self, items: &[usize],
+                        values: &[(usize, (slot_gfx::TexId, u32, u32), bool)]) -> Vec<(f32, f32)> {
+        let caret = self.setting_carets[0].1 as f32 + 8.0;
+        items.iter().enumerate().map(|(i, &label)| {
+            let Some(&(_, (_, value_w, _), toggle)) = values.iter().find(|v| v.0 == i) else {
+                return (0.0, 0.79);
+            };
+            let label_w = self.menu_textures.get(label).map_or(0, |t| t.1) as f32;
+            if label_w <= 0.0 { return (0.79, 0.79); }
+            // Both give way together, so they keep one size (Siham's eye,
+            // beta39 preview): the label and its value at the same scale.
+            let room = out_w() as f32 - 37.0 - 34.0 - 16.0 - if toggle { 22.0 + caret } else { 0.0 };
+            let scale = (room / (label_w + value_w as f32)).clamp(0.5, 0.79);
+            (scale, scale)
+        }).collect()
     }
 
     /// A value at the right of a menu row; a toggle shows its carets when
     /// selected.
+    #[allow(clippy::too_many_arguments)]
     fn draw_row_value(&self, at: usize, rows: usize, row: usize,
                       (tex, width, height): (slot_gfx::TexId, u32, u32), toggle: bool,
-                      out: &mut Vec<Draw>) {
+                      scale: f32, out: &mut Vec<Draw>) {
         // Its row among the six shown while the page scrolls.
         let Some((dy, shows)) = self.menu_row_place(at, rows) else { return };
-        let y = self.menu_rows_top(rows.min(self.visible_rows())) + dy + 8.0;
-        let scale = 0.79f32;
+        let y = self.menu_rows_top(rows.min(self.visible_rows())) + dy + 8.0
+            + height as f32 * (0.79 - scale) / 2.0;
         let w = width as f32 * scale;
         let right = out_w() as f32 - 34.0;
         let selected = row == at;
@@ -7515,8 +7665,8 @@ impl Engine {
             let alpha = fade * shows * if idle { 0.4 } else if chosen { 1.0 } else { menu_look::ROW_REST };
             let opens = self.menu_row_opens(heading, index);
             match scales.get(i) {
-                Some(&(scale, _)) => self.text_scaled(index, x, y, scale, alpha, out),
-                None => self.text_fit(index, x, y, x1 - x - if opens { 36.0 } else { 14.0 }, alpha, out),
+                Some(&(scale, _)) if scale > 0.0 => self.text_scaled(index, x, y, scale, alpha, out),
+                _ => self.text_fit(index, x, y, x1 - x - if opens { 36.0 } else { 14.0 }, alpha, out),
             }
             if opens {
                 let (tex, w, h) = self.menu_opens;
@@ -7816,13 +7966,17 @@ impl Engine {
                 }
             }
             ShelfOverlay::Library { row } => {
-                self.draw_menu_rows(5, &LIBRARY_ROWS, row, &[], out);
-                self.draw_library_values(row, out);
+                let values = self.library_value_faces();
+                let scales = self.value_row_scales(&LIBRARY_ROWS, &values);
+                self.draw_menu_rows(5, &LIBRARY_ROWS, row, &scales, out);
+                self.draw_page_values(LIBRARY_ROWS.len(), row, &values, &scales, out);
                 self.draw_menu_chrome(5, LIBRARY_ROWS.len(), row, false, out);
             }
             ShelfOverlay::SavesStates { row } => {
-                self.draw_menu_rows(151, &SAVES_ROWS, row, &[], out);
-                self.draw_saves_values(row, out);
+                let values = self.saves_value_faces();
+                let scales = self.value_row_scales(&SAVES_ROWS, &values);
+                self.draw_menu_rows(151, &SAVES_ROWS, row, &scales, out);
+                self.draw_page_values(SAVES_ROWS.len(), row, &values, &scales, out);
                 self.draw_menu_chrome(151, SAVES_ROWS.len(), row, false, out);
             }
             ShelfOverlay::Settings { row } => {
@@ -9140,6 +9294,9 @@ impl Engine {
         let lifted = self.shelves[self.active].selected_rect().map(|(x, y, w, h)| self.lifted([x, y, w, h]));
         let mut studio_return = Vec::new();
         self.draw_studio_return(&mut studio_return);
+        // The grey of carts whose card is out (beta39), read before the
+        // shelf is borrowed.
+        let (missing_ink, cart_ink) = (self.missing_ink(), self.cart_ink());
         let shelf = &mut self.shelves[self.active];
 
         // Original Slot: 450ms seating + 280ms hold. Start the original
@@ -9193,7 +9350,10 @@ impl Engine {
                 let span = Some(picker_span(shelf, openness));
                 let selected = shelf.carts.get(shelf.index).map(|c| c.stem.as_str());
                 let row_from = commands.len();
+                let grey = cart_ink;
+                if grey.is_some() { commands.push(Draw::Ink(grey)); }
                 shelf.draw_row_clear_of(selected, 0.0, 0.26 * t, dim, span, &mut commands);
+                if grey.is_some() { commands.push(Draw::Ink(None)); }
                 lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),
@@ -9217,7 +9377,7 @@ impl Engine {
                     }
                 }
                 if grey > 0.0 {
-                    commands.push(Draw::Ink(Some(MISSING_INK)));
+                    commands.push(Draw::Ink(Some(missing_ink)));
                     shelf.draw_row(hidden, shake, 0.0, grey, &mut commands);
                     if let Some([x, y, w, h]) = lifted.filter(|_| press_lift > 0.0 && !flight_hides) {
                         shelf.draw_selected_at(x, y, w, h, grey, &mut commands);
@@ -9362,6 +9522,7 @@ impl Engine {
             }
         }
         self.draw_overlay(&mut commands);
+        self.draw_menu_task_pill(&mut commands);
         if cover_with_hold {
             let mut hold = Vec::with_capacity(commands.len() + 8);
             self.push_hold_scene(&mut hold);
@@ -9421,6 +9582,12 @@ impl Engine {
                     self.battery, self.battery_face,
                     Some(if dark_ink {self.bolt_light_texture} else {self.bolt_texture}),
                     self.clock_face, slot_ui::footer_ink(dark_ink), &mut commands)
+            };
+            // The task pill (beta39), by the battery: Android's icons go
+            // before it.
+            let battery_w = if lid { battery_w } else {
+                let icons_top = icons && !icons_bottom;
+                battery_w + self.draw_shelf_task_pill(clock_top, icons_top, battery_w, top_dark, &mut commands)
             };
             // Sharing the line, the icons sit after the clock and before the
             // battery: Android places them from these widths (8 bits each).

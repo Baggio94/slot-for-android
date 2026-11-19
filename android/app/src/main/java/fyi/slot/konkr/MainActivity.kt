@@ -140,6 +140,8 @@ class MainActivity : Activity() {
     external fun nativeSetSlotFolder(place: Int)
     /** Library's slot. folder row while the first copy runs: 0-100, -1 done. */
     external fun nativeSetSlotFolderCopy(percent: Int)
+    external fun nativeSetTaskPill(spec: String)
+    external fun nativeLaunchAsked(ms: Long)
     external fun nativeFrameWatchFlush()
     external fun nativeJournal(): String
     external fun nativeReloadAll()
@@ -292,6 +294,27 @@ class MainActivity : Activity() {
     private val rommQueued = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     private fun rommKey(target: RetroArchStorage.Target) = target.romIdentity + "." + target.core
+
+    /** The task pill's tasks (beta39), sent to the engine when they change. */
+    private fun publishTaskPill() {
+        if (!::taskIndicators.isInitialized) return
+        val tasks = ArrayList<TaskPill.Task>()
+        slotFolder.copyPercent()?.let { tasks.add(TaskPill.Task(TaskPill.COPY, "COPYING $it%", it / 100f)) }
+        slotFolder.syncProgress()?.let { (done, total) ->
+            tasks.add(TaskPill.Task(TaskPill.SYNC, "SYNCING $done/$total", done.toFloat() / total))
+        }
+        taskIndicators.downloads.pillWords?.let {
+            tasks.add(TaskPill.Task(TaskPill.DOWNLOADS, it, taskIndicators.downloads.pillProgress))
+        }
+        if (rommBusy.isNotEmpty()) tasks.add(TaskPill.Task(TaskPill.ROMM_SAVE, "ROMM SAVE", -1f))
+        taskIndicators.library.pillWords?.let {
+            tasks.add(TaskPill.Task(TaskPill.SCAN, it, taskIndicators.library.pillProgress))
+        }
+        taskIndicators.labels.pillWords?.let {
+            tasks.add(TaskPill.Task(TaskPill.LABELS, it, taskIndicators.labels.pillProgress))
+        }
+        TaskPill.spec(tasks, nativeIsPlaying())?.let { nativeSetTaskPill(it) }
+    }
 
     private fun rommLater(target: RetroArchStorage.Target, upload: Boolean, work: () -> String?) {
         val key = rommKey(target)
@@ -1093,6 +1116,7 @@ class MainActivity : Activity() {
                     autoLabelIndicator.tick()
                 }
             }
+            publishTaskPill()
             updateRomWarmCandidate()
             val playing = resumed && nativeIsPlaying() && !(::lidCover.isInitialized && lidCover.closed)
             if (playing) {
@@ -2168,6 +2192,7 @@ class MainActivity : Activity() {
      *  player picks one, the other is kept beside it. Keeping this handheld's
      *  is the default, so an accidental A never replaces a save. */
     private fun askRommConflict(): RommSaves.Choice {
+        val askedAt = SystemClock.elapsedRealtime()
         val ready = CountDownLatch(1)
         val selected = java.util.concurrent.atomic.AtomicReference(RommSaves.Choice.KEEP_HANDHELD)
         runOnUiThread {
@@ -2188,8 +2213,10 @@ class MainActivity : Activity() {
                 ready.countDown()
             }
         }
-        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
+        val answer = if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
             else RommSaves.Choice.KEEP_HANDHELD
+        nativeLaunchAsked(SystemClock.elapsedRealtime() - askedAt)
+        return answer
     }
 
     /**
@@ -2235,8 +2262,72 @@ class MainActivity : Activity() {
         return true
     }
 
+    /** Which of a game's two saves to play (beta39): true for this
+     *  handheld's, false for the folder's; null when cancelled (B). */
+    private fun askTwoSaves(title: String, two: SlotFolder.TwoSavesFound): Boolean? {
+        val askedAt = SystemClock.elapsedRealtime()
+        val ready = CountDownLatch(1)
+        val selected = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
+        val day = java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.ENGLISH)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "TWO SAVES",
+                    "Two saves for $title: one from this handheld (${day.format(java.util.Date(two.handheldModified))}), " +
+                        "one from your slot. folder (${day.format(java.util.Date(two.folderModified))}). " +
+                        "Which one should slot. use? The other one is kept.",
+                    onDismiss = { ready.countDown() })
+                dialog.addButton("THIS HANDHELD'S") {
+                    selected.set(true)
+                    dialog.dismiss()
+                }
+                dialog.addButton("THE FOLDER'S") {
+                    selected.set(false)
+                    dialog.dismiss()
+                }
+                dialog.show()
+            } catch (error: Exception) {
+                SlotLog.e(TAG, "Cannot open the two saves choice", error)
+                ready.countDown()
+            }
+        }
+        val answer = if (ready.await(120L, TimeUnit.SECONDS)) selected.get() else null
+        nativeLaunchAsked(SystemClock.elapsedRealtime() - askedAt)
+        return answer
+    }
+
+    /** A save another handheld deleted, seen through RomM (beta39): true
+     *  to delete it here too; B or no answer keeps it. */
+    private fun askDeletedElsewhere(title: String): Boolean {
+        val askedAt = SystemClock.elapsedRealtime()
+        val ready = CountDownLatch(1)
+        val delete = java.util.concurrent.atomic.AtomicBoolean(false)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "DELETED",
+                    "The save of $title was deleted on another handheld. Delete it here too, " +
+                        "or keep this handheld's?",
+                    onDismiss = { ready.countDown() })
+                dialog.addButton("DELETE IT") {
+                    delete.set(true)
+                    dialog.dismiss()
+                }
+                dialog.addButton("KEEP IT") { dialog.dismiss() }
+                dialog.show()
+            } catch (error: Exception) {
+                SlotLog.e(TAG, "Cannot open the deleted elsewhere choice", error)
+                ready.countDown()
+            }
+        }
+        val answer = ready.await(120L, TimeUnit.SECONDS) && delete.get()
+        nativeLaunchAsked(SystemClock.elapsedRealtime() - askedAt)
+        return answer
+    }
+
     /** The window of [settleDeletedOutside]. Null: cancelled (B). */
     private fun askDeleted(message: String): SaveDeletes.Choice? {
+        val askedAt = SystemClock.elapsedRealtime()
         val ready = CountDownLatch(1)
         val selected = java.util.concurrent.atomic.AtomicReference<SaveDeletes.Choice?>(null)
         runOnUiThread {
@@ -2257,11 +2348,14 @@ class MainActivity : Activity() {
                 ready.countDown()
             }
         }
-        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get() else null
+        val answer = if (ready.await(120L, TimeUnit.SECONDS)) selected.get() else null
+        nativeLaunchAsked(SystemClock.elapsedRealtime() - askedAt)
+        return answer
     }
 
     /** Issue #116. Null: cancelled (B), the game doesn't start. */
     private fun askFolderSave(): RetroArchStorage.FolderSaveChoice? {
+        val askedAt = SystemClock.elapsedRealtime()
         val ready = CountDownLatch(1)
         val selected = java.util.concurrent.atomic.AtomicReference<RetroArchStorage.FolderSaveChoice?>(null)
         runOnUiThread {
@@ -2284,7 +2378,9 @@ class MainActivity : Activity() {
                 ready.countDown()
             }
         }
-        return if (ready.await(120L, TimeUnit.SECONDS)) selected.get() else null
+        val answer = if (ready.await(120L, TimeUnit.SECONDS)) selected.get() else null
+        nativeLaunchAsked(SystemClock.elapsedRealtime() - askedAt)
+        return answer
     }
 
     private enum class CoreStateChoice { EXISTING, SHARED, CANCEL }
@@ -2425,7 +2521,9 @@ class MainActivity : Activity() {
                     return@execute
                 }
                 val folderWaitAt = SystemClock.elapsedRealtime()
-                if (slotFolder.pulling() && !slotFolder.awaitIdle(15_000L))
+                // Only saves, states, cheats and game settings are waited for
+                // (beta39): a long copy of labels never holds up a game.
+                if (slotFolder.launchFilesPending() && !slotFolder.awaitLaunchFiles(15_000L))
                     SlotLog.w(TAG, "Slot folder copy still running; launching anyway")
                 (SystemClock.elapsedRealtime() - folderWaitAt).takeIf { it > 20 }?.let {
                     SlotLog.i(TAG, "Slot launch waited ${it}ms for the slot. folder")
@@ -2433,6 +2531,22 @@ class MainActivity : Activity() {
                 if (!settleDeletedOutside(shared)) {
                     nativeGameError(rawUri, "quiet:Deleted save choice cancelled")
                     return@execute
+                }
+                // Two different saves met in the slot. folder (beta39): the
+                // player says which one this game starts from.
+                slotFolder.twoSavesFor(shared)?.let { two ->
+                    val handheldWanted = askTwoSaves(shared.stem, two) ?: run {
+                        nativeGameError(rawUri, "quiet:Two saves choice cancelled")
+                        return@execute
+                    }
+                    val useSetAside = handheldWanted == two.handheldSetAside
+                    slotFolder.settleTwoSaves(two, useSetAside)
+                    if (useSetAside) {
+                        RetroArchStorage.markFolderSave(filesDir, shared.core, shared.stem)
+                        RetroArchStorage.applyFolderSaveMark(filesDir, shared.core, shared.stem, shared.romIdentity)
+                    }
+                    SlotLog.i(TAG, "Two saves of ${shared.stem}: " +
+                        (if (handheldWanted) "this handheld's" else "the folder's") + " chosen")
                 }
                 var folderChoice: RetroArchStorage.FolderSaveChoice? = null
                 val folderFailed = try {
@@ -2487,9 +2601,20 @@ class MainActivity : Activity() {
                 // Not while this game's save is still going up: it's the newest.
                 if (rommBusy.containsKey(rommKey(shared))) {
                     SlotLog.i(TAG, "RomM: ${shared.stem}'s save is still being sent; launching with it")
-                } else RommSaves.beforeLaunch(this@MainActivity, shared) { askRommConflict() }.message?.let { note ->
-                    runOnUiThread {
-                        if (!isDestroyed) SlotToast.makeText(this@MainActivity, note, Toast.LENGTH_SHORT).show()
+                } else {
+                    val romm = RommSaves.beforeLaunch(this@MainActivity, shared, { askRommConflict() },
+                        { askDeletedElsewhere(shared.stem) })
+                    if (romm.deleteHere) {
+                        // Another handheld deleted it (DELETE IT): gone here
+                        // too, with its state, which holds it as well.
+                        val kinds = if (RetroArchStorage.hasOwnState(this@MainActivity, shared))
+                            setOf(SaveDeletes.Kind.SAVE, SaveDeletes.Kind.STATE) else setOf(SaveDeletes.Kind.SAVE)
+                        RetroArchStorage.deleteEverywhere(this@MainActivity, shared, kinds)
+                    }
+                    romm.message?.let { note ->
+                        runOnUiThread {
+                            if (!isDestroyed) SlotToast.makeText(this@MainActivity, note, Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
                 step = "core"

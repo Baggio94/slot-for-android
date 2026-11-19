@@ -121,6 +121,16 @@ impl Engine {
         if ink.is_some() { out.push(Draw::Ink(ink)); }
     }
 
+    /// A cart drawn over a menu page: its own colours, or grey while its
+    /// card is out (beta39), then the page's ink again.
+    pub(super) fn with_cart_ink(&self, out: &mut Vec<Draw>, draw: impl FnOnce(&mut Vec<Draw>)) {
+        let (menu, cart) = (self.menu_ink(), self.cart_ink());
+        let switch = menu.is_some() || cart.is_some();
+        if switch { out.push(Draw::Ink(cart)); }
+        draw(out);
+        if switch { out.push(Draw::Ink(menu)); }
+    }
+
     /// Light, Original (the console of the cart on the slot) or Dark's
     /// theme colours; the bar redrawn when they change.
     pub(super) fn update_menu_palette(&mut self) {

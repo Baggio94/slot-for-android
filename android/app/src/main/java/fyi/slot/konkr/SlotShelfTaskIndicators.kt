@@ -25,7 +25,9 @@ internal class SlotShelfTaskIndicators(context: Context, frame: FrameLayout) {
         isFocusable = false
         clipChildren = false
         clipToPadding = false
-        visibility = View.VISIBLE
+        // beta39: the engine draws the task pill from these indicators'
+        // words; the Android rail stays out of sight.
+        visibility = View.GONE
         // Transparent: no opaque status panel on either Slot theme.
     }
 

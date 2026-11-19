@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.util.Log
@@ -88,14 +89,39 @@ internal class SlotFolder(private val activity: MainActivity) {
     fun volume(): String? = prefs.getString(ROOT, null)?.substringBefore(':', "")?.takeIf { it.isNotEmpty() }
     private fun rootDoc(): String? = prefs.getString(ROOT, null)
 
-    /** Copies that bring files in (pulls), queued or running: only those
-     *  are waited for at a launch (beta38). */
-    private val pulls = java.util.concurrent.atomic.AtomicInteger()
+    /** The copy queued and not started yet: 0 none, 1 sending only, 2 both
+     *  ways. Asking again while it waits only makes it do more (beta39: on
+     *  the KPA, three passes of 10 s each ran one after the other for
+     *  nothing after a long one). */
+    private val queued = java.util.concurrent.atomic.AtomicInteger(0)
+    /** Copies that bring files in, queued or running, whose saves, states,
+     *  cheats and game settings aren't settled yet: a launch waits for those
+     *  only (beta39), never for labels and pictures behind them. */
+    private val launchPending = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var pullRunning = false
     /** The whole copy into a folder just chosen, in percent; -1 when none. */
     @Volatile private var copyAt = -1
 
-    fun pulling(): Boolean = pulls.get() > 0
+    fun pulling(): Boolean = queued.get() == 2 || pullRunning
     fun copyPercent(): Int? = copyAt.takeIf { it >= 0 }
+
+    /** Waits, at most [millis], until what a game reads at its launch has
+     *  come in. True when it has. */
+    fun awaitLaunchFiles(millis: Long): Boolean {
+        val until = SystemClock.elapsedRealtime() + millis
+        while (launchPending.get() > 0) {
+            if (SystemClock.elapsedRealtime() >= until) return false
+            Thread.sleep(50)
+        }
+        return true
+    }
+    fun launchFilesPending(): Boolean = launchPending.get() > 0
+
+    /** A copy bringing files in, as the task pill shows it: files done, of
+     *  all; null when none runs (beta39). */
+    @Volatile private var syncDone = 0
+    @Volatile private var syncTotal = 0
+    fun syncProgress(): IntArray? = if (pullRunning && syncTotal > 0) intArrayOf(syncDone, syncTotal) else null
 
     /** Runs [block] once no game is on (a window, the ROM picker, a reload
      *  never land on a game, beta38). */
@@ -229,6 +255,7 @@ internal class SlotFolder(private val activity: MainActivity) {
 
     /** What the chosen folder holds decides what happens (scenarios A2-A6). */
     private fun look(tree: Uri, doc: String) {
+        val lookedAt = SystemClock.elapsedRealtime()
         val side = SafSide(activity, tree, doc)
         val children = try { side.children(doc) } catch (error: Exception) {
             SlotLog.w(TAG, "Slot folder unreadable", error)
@@ -238,6 +265,10 @@ internal class SlotFolder(private val activity: MainActivity) {
         val json = children.firstOrNull { it.name == JSON }?.let { side.readDoc(it.id) }
             ?.let { try { JSONObject(String(it, Charsets.UTF_8)) } catch (_: Exception) { null } }
         val folderName = side.name(doc)
+        // The Rotate took about a minute here once, on a card it had just
+        // mounted (beta38): the time it takes, for the next time.
+        SlotLog.i(TAG, "Slot folder chosen: read in ${SystemClock.elapsedRealtime() - lookedAt} ms, " +
+            "${children.size} entries, ${if (json != null) "a slot folder" else "no slot.json"}")
         when {
             json != null -> {
                 if (json.optInt("format", 1) > FORMAT) {
@@ -252,10 +283,11 @@ internal class SlotFolder(private val activity: MainActivity) {
                         // Scenario A5: this handheld has its own too.
                         val dialog = SlotModalDialog(activity, "SLOT. FOLDER",
                             "This slot folder comes from another handheld, and this one has its own saves " +
-                                "and settings. Use the folder's, or merge both? The handheld's are backed up first.",
+                                "and settings. Keep only the folder's, or merge both? This handheld's are " +
+                                "backed up first.",
                             onDismiss = { if (!chosen) activity.nativeExternalReturn() })
                         dialog.addButton("CANCEL") { dialog.dismiss() }
-                        dialog.addButton("USE THE FOLDER'S") {
+                        dialog.addButton("FOLDER ONLY") {
                             chosen = true; dialog.dismiss()
                             worker.execute { use(tree, doc, json, FolderSync.Start.FOLDER_WINS, backup = true) }
                         }
@@ -321,6 +353,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                 tombs = tombs, restore = paths(restoreFile), progress = progress()).also {
                 if (it.tombsChanged) writeTombs(side, tombs)
                 keepGone(it)
+                keepTwoSaves(it)
                 side.makeCheatFolders()
             }
         } catch (error: Exception) {
@@ -336,6 +369,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         // Scenario A13: the folder only counts once the copy is complete.
         if (report.failures.isNotEmpty()) {
             SlotLog.w(TAG, "Slot folder copy: " + report.failures.joinToString(" | "))
+            ui { TaskPill.problem(if (report.failures.any { full(it) }) "CARD FULL" else "COPY FAILED") }
             ui { activity.nativeExternalReturn(); toast("Some files couldn't be copied. Check the card's space and try again.") }
             return
         }
@@ -423,18 +457,32 @@ internal class SlotFolder(private val activity: MainActivity) {
      */
     fun sync(pull: Boolean) {
         if (tree() == null) return
-        if (pull) pulls.incrementAndGet()
+        val want = if (pull) 2 else 1
+        while (true) {
+            val was = queued.get()
+            if (was >= want) return
+            if (!queued.compareAndSet(was, want)) continue
+            if (pull) launchPending.incrementAndGet()
+            // One is queued already: it now does this too.
+            if (was != 0) return
+            break
+        }
         try {
             worker.execute {
-                try { runSync(pull) } finally { if (pull) pulls.decrementAndGet() }
+                val asPull = queued.getAndSet(0) == 2
+                if (asPull) pullRunning = true
+                val settled = java.util.concurrent.atomic.AtomicBoolean(!asPull)
+                val settle = { if (settled.compareAndSet(false, true)) launchPending.decrementAndGet() }
+                syncDone = 0; syncTotal = 0
+                try { runSync(asPull, settle) } finally { pullRunning = false; settle() }
             }
         } catch (error: Exception) {
-            if (pull) pulls.decrementAndGet()
+            if (queued.getAndSet(0) == 2) launchPending.decrementAndGet()
             SlotLog.w(TAG, "Slot folder copy not queued", error)
         }
     }
 
-    private fun runSync(pull: Boolean) {
+    private fun runSync(pull: Boolean, launchFilesDone: () -> Unit = {}) {
         run {
             // Which folder, read when the copy runs: one asked for just
             // before the player chose another went to the old one with the
@@ -457,20 +505,26 @@ internal class SlotFolder(private val activity: MainActivity) {
                 SlotLog.w(TAG, "Another slot folder is in place: nothing written")
                 return@run
             }
+            val started = SystemClock.elapsedRealtime()
             val base = FolderSync.Base.parse(baseFile.takeIf { it.isFile }?.readText())
             val report = try {
                 val tombs = readTombs(side)
                 FolderSync.sync(privateSide(), side, base, pull = pull, tombs = tombs,
-                    restore = paths(restoreFile)).also {
+                    restore = paths(restoreFile), launchFilesDone = launchFilesDone,
+                    progress = { done, total -> if (pull) { syncDone = done; syncTotal = total } }).also {
                     if (it.tombsChanged) writeTombs(side, tombs)
                     keepGone(it)
+                    keepTwoSaves(it)
                     if (pull) side.makeCheatFolders()
                 }
             } catch (error: Exception) {
                 SlotLog.w(TAG, "Slot folder sync failed", error)
                 return@run
             }
-            if (report.failures.isNotEmpty()) SlotLog.w(TAG, "Slot folder: " + report.failures.joinToString(" | "))
+            if (report.failures.isNotEmpty()) {
+                SlotLog.w(TAG, "Slot folder: " + report.failures.joinToString(" | "))
+                ui { TaskPill.problem(if (report.failures.any { full(it) }) "CARD FULL" else "COPY FAILED") }
+            }
             saveBase(base)
             if (report.toFolder > 0 || report.toPrivate > 0) {
                 try { writeJson(side, doc, prefs.getString(ENV, null) ?: return@run, side.readJson()) }
@@ -479,7 +533,9 @@ internal class SlotFolder(private val activity: MainActivity) {
             if (report.changedShelf) ui { whenFree { if (activity.nativeCanRefreshLibrary()) activity.nativeReloadAll() } }
             SlotLog.i(TAG, "Slot folder: ${report.toFolder} out, ${report.toPrivate} in, " +
                 "${report.conflicts} conflicts, ${report.removed} removed, " +
-                "${report.deletedHere.size} deleted here, ${report.gone.size} held back")
+                "${report.deletedHere.size} deleted here, ${report.gone.size} held back" +
+                (if (report.stale > 0) ", ${report.stale} old files cleared" else "") +
+                " in ${SystemClock.elapsedRealtime() - started} ms")
         }
     }
 
@@ -534,6 +590,62 @@ internal class SlotFolder(private val activity: MainActivity) {
         writePaths(restoreFile, paths(restoreFile).filter { it in report.gone })
     }
 
+    // -----------------------------------------------------------------
+    // Two different saves of a game (beta39): the newer one is in place,
+    // the player chooses at the game's launch.
+
+    private val twoDir get() = File(File(activity.filesDir, "SlotFolder"), "TwoSaves")
+
+    class TwoSavesFound(val path: String, val key: String, val handheldSetAside: Boolean,
+                        val handheldModified: Long, val folderModified: Long)
+
+    private fun keepTwoSaves(report: FolderSync.Report) {
+        for (two in report.twoSaves) {
+            try {
+                twoDir.mkdirs()
+                val key = FolderSync.sha1(two.path.toByteArray(Charsets.UTF_8))
+                File(twoDir, "$key.srm").writeBytes(two.other)
+                File(twoDir, "$key.json").writeText(JSONObject().put("path", two.path)
+                    .put("handheldSetAside", two.handheldSetAside).put("handheld", two.handheldModified)
+                    .put("folder", two.folderModified).toString(), Charsets.UTF_8)
+                SlotLog.i(TAG, "Two saves of ${two.path}: the " +
+                    (if (two.handheldSetAside) "folder's" else "handheld's") + " is in place, asked at launch")
+            } catch (error: Exception) {
+                SlotLog.w(TAG, "Two saves of ${two.path} not kept for the choice", error)
+            }
+        }
+    }
+
+    /** This game's two saves, if a copy met them. */
+    fun twoSavesFor(target: RetroArchStorage.Target): TwoSavesFound? {
+        if (!twoDir.isDirectory) return null
+        val cores = if (target.isGba && target.shareGbaSaves) listOf("mGBA", "gpSP") else listOf(target.core)
+        for (core in cores) {
+            val path = "Saves/$core/${target.stem}.srm"
+            val key = FolderSync.sha1(path.toByteArray(Charsets.UTF_8))
+            val json = File(twoDir, "$key.json").takeIf { it.isFile } ?: continue
+            return try {
+                val j = JSONObject(json.readText(Charsets.UTF_8))
+                TwoSavesFound(path, key, j.getBoolean("handheldSetAside"), j.getLong("handheld"), j.getLong("folder"))
+            } catch (_: Exception) { null }
+        }
+        return null
+    }
+
+    /** The player's choice: [useSetAside] puts the other save in place, the
+     *  one in place kept beside it; the folder follows. */
+    fun settleTwoSaves(found: TwoSavesFound, useSetAside: Boolean) {
+        val other = File(twoDir, "${found.key}.srm")
+        if (useSetAside && other.isFile) {
+            val file = File(activity.filesDir, found.path)
+            file.takeIf { it.isFile }?.let { File(it.parentFile, it.name + ".before-choice").writeBytes(it.readBytes()) }
+            RetroArchStorage.stage(file, other.readBytes())
+        }
+        other.delete()
+        File(twoDir, "${found.key}.json").delete()
+        if (useSetAside) sync(pull = false)
+    }
+
     /** Saves and states removed from the folder by hand, still held back. */
     fun gonePaths(): Set<String> = if (tree() == null) emptySet() else paths(goneFile)
 
@@ -567,6 +679,10 @@ internal class SlotFolder(private val activity: MainActivity) {
     }
 
     private fun ui(block: () -> Unit) = activity.runOnUiThread { if (!activity.isDestroyed) block() }
+
+    /** A copy that failed for want of room on the card. */
+    private fun full(failure: String): Boolean =
+        failure.contains("ENOSPC") || failure.contains("No space", ignoreCase = true)
     private fun toast(text: String) = SlotToast.makeText(activity, text, Toast.LENGTH_LONG).show()
 
     // -----------------------------------------------------------------
@@ -623,7 +739,9 @@ internal class SlotFolder(private val activity: MainActivity) {
             fun walk(doc: String, prefix: String) {
                 for (child in children(doc)) {
                     val path = prefix + child.name
+                    if (child.dir && path in FolderSync.UNWALKED_DIRS) { staleIds.add(child.id); continue }
                     if (child.dir) { dirs[path] = child.id; walk(child.id, "$path/") }
+                    else if (FolderSync.stale(path)) staleIds.add(child.id)
                     else if (!child.name.endsWith(".slot-tmp")) {
                         // Every file's id, slot.json's too: written again,
                         // it replaces the old one rather than making
@@ -633,12 +751,27 @@ internal class SlotFolder(private val activity: MainActivity) {
                     }
                 }
             }
-            dirs.clear(); files.clear()
+            dirs.clear(); files.clear(); staleIds.clear()
             walk(root, "")
             listed = true
             return out
         }
         private val files = HashMap<String, String>()
+        /** What the last listing found that the folder should no longer hold. */
+        private val staleIds = ArrayList<String>()
+
+        override fun dropStale(): Int {
+            var dropped = 0
+            for (id in staleIds) {
+                try {
+                    if (DocumentsContract.deleteDocument(resolver, DocumentsContract.buildDocumentUriUsingTree(tree, id))) dropped++
+                } catch (error: Exception) {
+                    SlotLog.w(TAG, "An old file stays in the slot folder", error)
+                }
+            }
+            staleIds.clear()
+            return dropped
+        }
         private var listed = false
         /** Pictures, written straight when new (see write). */
         private val DIRECT = listOf("Labels/", "ArtNames/", "Studio/", "Wallpapers/")

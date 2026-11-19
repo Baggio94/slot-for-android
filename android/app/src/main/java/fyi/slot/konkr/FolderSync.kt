@@ -37,6 +37,11 @@ internal object FolderSync {
     /** A file's size and last change, in ms. */
     data class Meta(val size: Long, val modified: Long)
 
+    /** Two different saves of a game, met in a copy: [other] is the one set
+     *  aside, the handheld's when [handheldSetAside]. */
+    class TwoSaves(val path: String, val other: ByteArray, val handheldSetAside: Boolean,
+                   val handheldModified: Long, val folderModified: Long)
+
     /** One side: the private files or the folder. Paths are relative,
      *  with '/' (`Saves/mGBA/Pokemon.srm`). */
     interface Side {
@@ -45,6 +50,10 @@ internal object FolderSync {
         /** Writes through a temporary file; returns the file's new meta. */
         fun write(path: String, bytes: ByteArray): Meta
         fun delete(path: String)
+        /** Removes what the folder should no longer hold (beta39: the
+         *  RetroAchievements cache and slot.'s old RetroArch copies); how
+         *  many it removed. Never anything that travels. */
+        fun dropStale(): Int = 0
     }
 
     /** What a file was on both sides at the last copy. */
@@ -126,6 +135,11 @@ internal object FolderSync {
         var tombsChanged = false
         /** What came in from the folder. */
         val pulled = ArrayList<String>()
+        /** Old leftovers removed from the folder ([Side.dropStale]). */
+        var stale = 0
+        /** A game's two different saves: the newer one is in place, the
+         *  player chooses at the game's launch (beta39). */
+        val twoSaves = ArrayList<TwoSaves>()
         val changedPrivate: Boolean get() = toPrivate > 0 || deletedHere.isNotEmpty()
         /** Whether the shelf must be rebuilt: not for saves, states, cheats or
          *  a game's settings, read when a game starts (beta38: a rebuild
@@ -144,12 +158,22 @@ internal object FolderSync {
     fun sync(private: Side, folder: Side, base: Base, start: Start = Start.SYNC,
              pull: Boolean = true, now: Long = System.currentTimeMillis(),
              tombs: MutableMap<String, Tomb> = HashMap(), restore: Set<String> = emptySet(),
-             progress: (Int, Int) -> Unit = { _, _ -> }): Report {
+             progress: (Int, Int) -> Unit = { _, _ -> },
+             launchFilesDone: () -> Unit = {}): Report {
         val report = Report()
+        // What no longer travels is forgotten, never taken for a deletion
+        // (beta39: the RetroAchievements cache left the folder).
+        base.entries.keys.removeAll { !travels(it) }
+        if (tombs.keys.removeAll { !travels(it) }) report.tombsChanged = true
         val mine = private.list()
         val theirs = folder.list().filterKeys { travels(it) }
-        val paths = (mine.keys + theirs.keys).sorted()
+        if (pull) report.stale = folder.dropStale()
+        // What a game reads at its launch first (beta39): a launch waits for
+        // those only, never for the labels behind them.
+        val paths = (mine.keys + theirs.keys).sortedWith(compareBy({ !forLaunch(it) }, { it }))
+        var launchDone = false
         for ((done, path) in paths.withIndex()) {
+            if (!launchDone && !forLaunch(path)) { launchDone = true; launchFilesDone() }
             progress(done, paths.size)
             if (path.startsWith("Conflicts/")) continue
             try {
@@ -159,6 +183,7 @@ internal object FolderSync {
                 report.failures.add("$path: ${error.message}")
             }
         }
+        if (!launchDone) launchFilesDone()
         progress(paths.size, paths.size)
         // Gone from both since the last copy: deleted here on purpose (DELETE
         // IT, at a game's launch). Other handhelds follow it.
@@ -270,6 +295,10 @@ internal object FolderSync {
                     }
                     // "Use the folder's": the handheld's copy is in its backup.
                     if (start != Start.FOLDER_WINS) report.conflicts++
+                    if (start != Start.FOLDER_WINS && path.endsWith(".srm") && SaveDeletes.kindOf(path) != null) {
+                        report.twoSaves.add(TwoSaves(path, if (folderWins) mineBytes else theirBytes,
+                            folderWins, p.modified, f.modified))
+                    }
                     val stamp = stamp(now)
                     if (folderWins) {
                         if (start != Start.FOLDER_WINS) folder.write("Conflicts/$path.$stamp", mineBytes)
@@ -324,10 +353,24 @@ internal object FolderSync {
     // Not Config/video_mode.ini: Screen Size depends on each screen's shape,
     // so every handheld keeps its own (Siham 2026-11-16).
 
+    /** Read when a game starts: its save, state, cheats and settings. */
+    fun forLaunch(path: String): Boolean = LAUNCH_ONLY.any { path.startsWith(it) }
+
+    /** Folders that are never walked on either side: RetroAchievements'
+     *  cache (thousands of badges) and its sign-in (beta39: they went to the
+     *  card, a full copy took minutes and the token left the handheld). */
+    val UNWALKED_DIRS = setOf("Saves/RetroAchievements")
+
+    /** A folder path the folder should no longer hold (dropped once, beta39). */
+    fun stale(path: String): Boolean = UNWALKED_DIRS.any { path == it || path.startsWith("$it/") } ||
+        path.endsWith(".retroarch-export.state.auto") || path.endsWith(".retroarch-import.state.auto") ||
+        path.endsWith(".state-export-protected")
+
     /** Whether a private file travels: never secrets (RomM, RetroAchievements),
      *  device links, caches, nor slot.'s own one-shot markers and copies. */
     fun travels(path: String): Boolean {
         if (path in TRAVELLING_FILES) return true
+        if (UNWALKED_DIRS.any { path.startsWith("$it/") }) return false
         val top = path.substringBefore('/')
         if (top !in TRAVELLING_DIRS || !path.contains('/')) return false
         val name = path.substringAfterLast('/')
@@ -354,7 +397,7 @@ internal object FolderSync {
             fun walk(dir: File, prefix: String) {
                 for (file in dir.listFiles() ?: return) {
                     val path = prefix + file.name
-                    if (file.isDirectory) walk(file, "$path/")
+                    if (file.isDirectory) { if (path !in UNWALKED_DIRS) walk(file, "$path/") }
                     else if (travels(path)) out[path] = Meta(file.length(), file.lastModified())
                 }
             }

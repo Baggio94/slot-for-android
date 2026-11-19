@@ -1248,6 +1248,27 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetSlotFolderCopy(
     SLOT_FOLDER_COPY.store(percent.clamp(-1, 100), Ordering::Release);
 }
 
+/// The player answered a window before the game, after `ms` (beta39): the
+/// insertion's line leaves it out.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLaunchAsked(
+    _env: *mut c_void, _this: *mut c_void, ms: i64,
+) {
+    crate::frame_watch::asked(ms.max(0) as u128);
+}
+
+/// The task pill's tasks (beta39), most important first: a line each,
+/// "kind<TAB>progress<TAB>words"; empty when nothing runs. Sent only when
+/// it changes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetTaskPill(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, spec: JString<'_>,
+) {
+    let Ok(spec) = env.get_string(&spec) else { return };
+    *TASK_PILL.lock().unwrap_or_else(|e| e.into_inner()) = spec.to_string_lossy().into_owned();
+    TASK_PILL_REV.fetch_add(1, Ordering::AcqRel);
+}
+
 /// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetRommSync(

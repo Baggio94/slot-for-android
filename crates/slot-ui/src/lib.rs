@@ -43,6 +43,7 @@ pub mod text;
 pub mod menu_style;
 mod button_art;
 mod hold_ring;
+mod task_pill;
 mod toast;
 
 pub use backdrop::{bezel_face, blur_background, blur_background_native, default_background, default_background_native, draw_backdrop, draw_ground_tinted, top_line_luma, wallpaper_face, wallpaper_face_native, LIGHT_WALLPAPER};
@@ -116,4 +117,5 @@ pub use sticker::{
 };
 pub use button_art::{key_art, BUTTON_H};
 pub use hold_ring::{hold_ring_face, HOLD_RING};
+pub use task_pill::{task_pill_face, TASK_PILL_H};
 pub use toast::{toast_box, toast_face, toast_rect, Toast};

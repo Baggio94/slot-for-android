@@ -70,7 +70,14 @@ internal class SlotAutoLabelIndicator(context: Context, rail: LinearLayout) {
         }
     }
 
+    /** What the task pill says for it (beta39), -1 without a count. */
+    @Volatile var pillWords: String? = null
+        private set
+    @Volatile var pillProgress = -1f
+        private set
+
     fun begin() {
+        pillWords = "LABELS"; pillProgress = -1f
         finishAt = 0L
         spinner.visibility = View.VISIBLE
         caption.text = "0 LABELS SAVED"
@@ -89,6 +96,10 @@ internal class SlotAutoLabelIndicator(context: Context, rail: LinearLayout) {
             if (now - pendingSince < SHOW_AFTER_MS) return
             begin()
         }
+        if (total > 0) {
+            pillWords = String.format(Locale.ROOT, "LABELS %d/%d", checked.coerceIn(0, total), total)
+            pillProgress = checked.coerceIn(0, total).toFloat() / total
+        }
         caption.text = if (total > 0) {
             String.format(Locale.ROOT, "LABELS %d/%d · %d SAVED",
                 checked.coerceIn(0, total), total, saved.coerceAtLeast(0))
@@ -105,6 +116,8 @@ internal class SlotAutoLabelIndicator(context: Context, rail: LinearLayout) {
         }
         if (root.visibility != View.VISIBLE) return
         spinner.visibility = View.GONE
+        pillWords = String.format(Locale.ROOT, "%d LABELS ADDED", saved.coerceAtLeast(0))
+        pillProgress = 1f
         caption.text = String.format(Locale.ROOT, "%d LABELS ADDED",
             saved.coerceAtLeast(0))
         finishAt = SystemClock.uptimeMillis() + 1600L
@@ -115,6 +128,7 @@ internal class SlotAutoLabelIndicator(context: Context, rail: LinearLayout) {
     }
 
     fun hide() {
+        pillWords = null
         finishAt = 0L
         pendingSince = 0L
         root.visibility = View.GONE
