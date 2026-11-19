@@ -916,6 +916,10 @@ pub(super) fn caption_lines(text: &str, room: f32, scale: f32, most: usize, whol
     } else if one * scale * 0.85 <= room_fit {
         (vec![text.to_owned()], room_fit / one)
     } else {
+        // A word wider than the room (ADVENTURES on the Rotate) makes the
+        // whole name give way a little rather than break inside it.
+        let longest = text.split(' ').map(|w| width(w) as f32).fold(0.0, f32::max);
+        let scale = if longest * scale > room_fit { (room_fit / longest).max(scale * 0.75) } else { scale };
         let room_face = (room_fit / scale.max(0.01)).max(1.0) as u32;
         let mut lines = wrap(text, room_face, width);
         if most > 0 && lines.len() > most {
