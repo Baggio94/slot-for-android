@@ -2505,7 +2505,12 @@ impl Engine {
     /// Upload at most one decoded shelf wallpaper per frame.
     fn poll_shelf_wallpapers(&mut self) {
         let Some(rx) = self.shelf_wallpaper_rx.as_ref() else { return };
-        let Ok((index, rgba, luma, personal)) = rx.try_recv() else { return };
+        let (index, rgba, luma, personal) = match rx.try_recv() {
+            Ok(made) => made,
+            // Every shelf done: nothing more to wait for.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.shelf_wallpaper_rx = None; return; }
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        };
         if rgba.is_empty() {
             // Its image is gone: General's shows.
             if let Some(ready) = self.shelf_wallpaper_ready.get_mut(index) { *ready = false; }
