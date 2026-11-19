@@ -902,6 +902,13 @@ mod render {
             run(&mut engine, "cart right", 6);
         }
         run(&mut engine, "still", 60);
+        // Three labels arrive for carts on the shelf.
+        let shelf = &engine.shelves[engine.active];
+        let uris: Vec<String> = (0..3).map(|k| shelf.carts[(shelf.index + k) % shelf.carts.len()]
+            .rom.to_string_lossy().into_owned()).collect();
+        for uri in uris { engine.relabel.push_back(uri); }
+        engine.last_cart_navigation = Instant::now() - std::time::Duration::from_secs(1);
+        run(&mut engine, "label", 30);
         engine.handle(Input::Key(108, true)); engine.handle(Input::Key(108, false));
         run(&mut engine, "menu", 20);
         engine.overlay = ShelfOverlay::Settings { row: 1 };

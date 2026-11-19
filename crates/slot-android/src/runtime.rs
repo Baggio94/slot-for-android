@@ -1251,6 +1251,9 @@ struct Engine {
     /// cart one per frame when the shelf isn't moving: no wait for a still
     /// carousel or a closed menu (RetroPup's video, 2026-11-16).
     relabel: VecDeque<String>,
+    /// Carts whose new label is being drawn by the raster workers: their
+    /// old face stays on the shelf until the new one replaces it (beta41).
+    relabelled: Vec<(usize, usize)>,
     last_cart_navigation: Instant,
     cart_render: CartRender,
     clear_material: Option<ClearMaterial>,
@@ -2098,6 +2101,7 @@ impl Engine {
             has_library: library.is_some(),
             texture_cache: VecDeque::new(),
             relabel: VecDeque::new(),
+            relabelled: Vec::new(),
             last_cart_navigation: now,
             cart_render: CartRender::start(visuals_root.as_deref())?,
             clear_material: None,
@@ -5236,9 +5240,12 @@ impl Engine {
                 if cart.rom.to_string_lossy() == uri {
                     // A face rendered before the label came is never shown.
                     self.cart_render.invalidate((sid, index));
-                    if let Some(tex) = shelf.face(index) {
-                        let face = cart_face_with_material(cart, None);
-                        self.gpu.update_face(tex, &face);
+                    // A face on the shelf is drawn again by the raster
+                    // workers, not here: drawing it on this thread held the
+                    // shelf up to 250ms per label on the KONKR (beta41).
+                    if shelf.face(index).is_some() {
+                        if !self.relabelled.contains(&(sid, index)) { self.relabelled.push((sid, index)); }
+                        self.cart_render.request((sid, index), cart, false);
                     }
                 }
             }
@@ -5268,7 +5275,14 @@ impl Engine {
                     self.upload_clear_material((shelf_id,index),layers);
                 }
             }
-            if self.shelves[shelf_id].face(index).is_some() {continue}
+            if let Some(tex) = self.shelves[shelf_id].face(index) {
+                // A new label's face over the old one.
+                if let Some(at) = self.relabelled.iter().position(|k| *k == (shelf_id, index)) {
+                    self.relabelled.swap_remove(at);
+                    self.gpu.update_face(tex, &face);
+                }
+                continue
+            }
             let texture = if self.texture_cache.len() >= CART_TEXTURE_CACHE_CAPACITY {
                 // Pin selected +/- one cart from each nonempty shelf (up to
                 // 15 across GBA/GB/GBC/Recents/Favorites). Preserve warm art
@@ -5378,7 +5392,7 @@ impl Engine {
                         self.texture_cache.push_back(entry);
                     }
                 }
-                if !wants_material {continue;}
+                if !wants_material && !self.relabelled.contains(&(sid, index)) {continue;}
             }
             // A freshly configured AVD has no ROMs yet. Skip the empty
             // shelf instead of indexing carts[0] and aborting the GL thread.
