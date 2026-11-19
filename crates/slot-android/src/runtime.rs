@@ -1540,8 +1540,6 @@ struct Engine {
     menu_scroll_y: f32,
     /// The selected row's bar: left end, strip, right end.
     menu_pill: [(slot_gfx::TexId, u32, u32); 3],
-    /// The pill behind the shelf's name and the game's title (2.5).
-    label_pill: [(slot_gfx::TexId, u32, u32); 3],
     /// Where the selection bar was last drawn (x0, x1, y, h): the in-game
     /// Screen page writes what sits on it in the theme's ink.
     pill_band: std::cell::Cell<Option<[f32; 4]>>,
@@ -2085,7 +2083,6 @@ impl Engine {
             (gpu.create_face(&face), face.w, face.h)
         });
         let menu_pill = menu_style::pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
-        let label_pill = menu_style::label_pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
         let menu_opens = {
             let face = menu_style::menu_opens_face();
             (gpu.create_face(&face), face.w, face.h)
@@ -2367,7 +2364,6 @@ impl Engine {
             menu_scroll_top: 0,
             menu_scroll_y: 0.0,
             menu_pill,
-            label_pill,
             pill_band: std::cell::Cell::new(None),
             menu_opens,
             update_badge,
@@ -9709,32 +9705,26 @@ impl Engine {
                         None
                     }
                 } else {None};
-                // The shelf's name and the game's title each on a pill in
-                // the theme's colours, the menus' ink on it, fading with its
-                // words (Siham 2026-11-19): readable on any wallpaper.
+                // The shelf's name and the game's title in the menus' ink on
+                // a soft halo of the theme's bar colour, no edge to touch
+                // the tall carts (Siham 2026-11-19): readable on any
+                // wallpaper.
                 let name_alpha = name.map_or(0.0, |(_, elapsed, _)| slot_name_alpha(elapsed));
                 let title_shown = self.settings.show_titles && self.triggers.hold.is_none()
-                    && self.triggers.ejecting.is_none() && self.selected_title_face.w > 0;
+                    && self.triggers.ejecting.is_none();
                 let title_alpha = name.map_or(1.0, |(_, elapsed, _)| slot_title_alpha(elapsed));
-                if let Some((face, _, is_platform)) = name.filter(|_| name_alpha > 0.0) {
-                    self.draw_label_pill(slot_ui::slot_name_box(face, is_platform), name_alpha, &mut commands);
-                }
-                if title_shown && title_alpha > 0.0 {
-                    self.draw_label_pill(slot_ui::slot_title_box(self.selected_title_face), title_alpha, &mut commands);
-                }
-                let ink = menu_style::ink_map();
-                if ink.is_some() { commands.push(Draw::Ink(ink)); }
+                let mut words = Vec::new();
                 if let Some((face,_,is_platform))=name {
                     if name_alpha>0.0 {
-                        if is_platform {draw_platform_name(face,name_alpha,&mut commands);}
-                        else {draw_slot_name(face,name_alpha,&mut commands);}
+                        if is_platform {draw_platform_name(face,name_alpha,&mut words);}
+                        else {draw_slot_name(face,name_alpha,&mut words);}
                     }
                 }
                 // HOLD TO DELETE takes the title's place while L2 + R2 are held.
                 if title_shown {
-                    slot_ui::draw_slot_title_scrolled(self.selected_title_face,title_alpha,title_shift,&mut commands);
+                    slot_ui::draw_slot_title_scrolled(self.selected_title_face,title_alpha,title_shift,&mut words);
                 }
-                if ink.is_some() { commands.push(Draw::Ink(None)); }
+                menu_look::push_with_halo(&words, &mut commands);
                 commands.append(&mut studio_return);
             }
         } else {

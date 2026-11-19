@@ -68,6 +68,31 @@ pub(super) struct InkHint {
     spec: HintSpec,
 }
 
+/// `words` (the shelf's name, the game's title) in the menus' ink over a
+/// soft halo of the theme's bar colour: the same faces, coloured and
+/// faint, around them (Siham 2026-11-19).
+pub(super) fn push_with_halo(words: &[Draw], out: &mut Vec<Draw>) {
+    if words.is_empty() { return; }
+    let rgb = menu_style::pill_rgb().map(|c| c as f32 / 255.0);
+    out.push(Draw::Ink(Some(slot_gfx::InkMap { paper: rgb, ink: rgb })));
+    for (radius, alpha) in [(2.5f32, 0.16f32), (1.25, 0.22)] {
+        for step in 0..12 {
+            let a = step as f32 * std::f32::consts::TAU / 12.0;
+            let (dx, dy) = (radius * a.cos(), radius * a.sin());
+            for draw in words {
+                out.push(match *draw {
+                    Draw::Tex { x, y, w, h, tex, alpha: seen } =>
+                        Draw::Tex { x: x + dx, y: y + dy, w, h, tex, alpha: seen * alpha },
+                    ref other => other.clone(),
+                });
+            }
+        }
+    }
+    out.push(Draw::Ink(menu_style::ink_map()));
+    out.extend_from_slice(words);
+    out.push(Draw::Ink(None));
+}
+
 impl Engine {
     /// How far the shown page's list is scrolled, and how far it can go.
     pub(super) fn menu_scroll(&self, count: usize) -> (f32, f32) {
@@ -221,30 +246,6 @@ impl Engine {
         for (face, (tex, _, _)) in menu_style::pill_faces().iter().zip(self.menu_pill) {
             self.gpu.update_face(tex, face);
         }
-        for (face, (tex, _, _)) in menu_style::label_pill_faces().iter().zip(self.label_pill) {
-            self.gpu.update_face(tex, face);
-        }
-    }
-
-    /// The pill behind the shelf's name or the game's title, `bx` the
-    /// words' box (slot_ui::slot_name_box): a little wider, centred on it.
-    pub(super) fn draw_label_pill(&self, bx: [f32; 4], alpha: f32, out: &mut Vec<Draw>) {
-        let [(left, lw, h), (middle, _, _), (right, rw, _)] = self.label_pill;
-        let [x, y, w, bh] = bx;
-        if w <= 0.0 { return; }
-        let (lw, rw, h) = (lw as f32, rw as f32, h as f32);
-        let x0 = (x - 14.0).round();
-        let x1 = (x + w + 14.0).round().max(x0 + lw + rw);
-        let top = (y + bh / 2.0 - h / 2.0).round();
-        let grid = panel_size().0 as f32 / out_w() as f32;
-        let middle_x0 = ((x0 * grid).round() + slot_ui::density::px(lw as u32) as f32) / grid;
-        let middle_x1 = ((x1 - rw) * grid).round() / grid;
-        // A little of the wallpaper shows through (Siham 2026-11-19).
-        let alpha = alpha * 0.8;
-        out.push(Draw::Ink(None));
-        out.push(Draw::Tex { x: x0, y: top, w: lw, h, tex: left, alpha });
-        out.push(Draw::Tex { x: middle_x0, y: top, w: middle_x1 - middle_x0, h, tex: middle, alpha });
-        out.push(Draw::Tex { x: x1 - rw, y: top, w: rw, h, tex: right, alpha });
     }
 
     /// The selected row's bar on a page of `count` rows whose first row is

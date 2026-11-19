@@ -107,7 +107,7 @@ pub use net_switch::{
     NET_KNOB_Y, NET_SWITCH_H, NET_SWITCH_W,
 };
 pub use slot_chrome::{
-    draw_empty_slot, draw_empty_slot_closed, draw_empty_slot_with, draw_slot_name, draw_slot_title, draw_slot_title_scrolled, slot_title_travel, slot_name_box, slot_title_box, draw_platform_name, ease, edge, housing, opening, recess,
+    draw_empty_slot, draw_empty_slot_closed, draw_empty_slot_with, draw_slot_name, draw_slot_title, draw_slot_title_scrolled, slot_title_travel, draw_platform_name, ease, edge, housing, opening, recess,
     set_theme, CloserKind, SlotChrome, SlotCloser,
     ALERT_PX, LIP_H, MOUTH_H, MOUTH_W,
 };

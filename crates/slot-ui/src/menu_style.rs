@@ -205,38 +205,6 @@ pub fn pill_faces() -> [UndoFace; 3] {
     [end(false), middle.into_undo(), end(true)]
 }
 
-/// The pill behind the shelf's name and the game's title on the carousel
-/// (2.5, Siham 2026-11-19): the bar's colour, round ends; its height,
-/// little more than the words', clear of the tallest cart (NES) above and
-/// of the mouth below.
-pub const LABEL_PILL_H: u32 = 24;
-pub fn label_pill_faces() -> [UndoFace; 3] {
-    let colour = pill_rgb();
-    let r = LABEL_PILL_H / 2;
-    let end = |right: bool| {
-        let mut face = Canvas::new(r, LABEL_PILL_H);
-        let (tw, th) = (face.tw as f32, face.th as f32);
-        let radius = th / 2.0;
-        for y in 0..face.th {
-            for x in 0..face.tw {
-                let px = if right { x as f32 + 0.5 } else { tw - (x as f32 + 0.5) };
-                let dy = y as f32 + 0.5 - radius;
-                let cover = (radius - (px * px + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
-                let at = ((y * face.tw + x) * 4) as usize;
-                face.rgba[at..at + 3].copy_from_slice(&colour);
-                face.rgba[at + 3] = (cover * 255.0).round() as u8;
-            }
-        }
-        face.into_undo()
-    };
-    let mut middle = Canvas::new(4, LABEL_PILL_H);
-    for p in middle.rgba.chunks_exact_mut(4) {
-        p[..3].copy_from_slice(&colour);
-        p[3] = 255;
-    }
-    [end(false), middle.into_undo(), end(true)]
-}
-
 /// A page's path line ("SETTINGS > SYSTEMS"): small, widely spaced capitals.
 pub fn menu_path_face(label: &str) -> UndoFace {
     let Some(font) = text::label_font() else {
