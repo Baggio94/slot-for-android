@@ -7548,7 +7548,7 @@ impl Engine {
         // draw_values).
         // Faces carry clear margins (MENU_PAD): the label's right one needs
         // no room of its own.
-        let from = 37.0 + label_w + 12.0 + caret - slot_ui::MENU_PAD as f32 * 0.79;
+        let from = 37.0 + label_w + 18.0 + caret - slot_ui::MENU_PAD as f32 * 0.79;
         let end = right - if toggle { 22.0 } else { 0.0 };
         let (tex, width, height) = self.value_within((tex, width, height), scale, end - from);
         let scale = match width as f32 * scale {
@@ -7723,7 +7723,7 @@ impl Engine {
                 .map_or(0, |t| t.1) as f32 * label_scale;
             // Faces carry clear margins (MENU_PAD): the label's right one
             // needs no room of its own.
-            let from = 37.0 + label_w + 12.0 + caret - slot_ui::MENU_PAD as f32 * 0.79;
+            let from = 37.0 + label_w + 18.0 + caret - slot_ui::MENU_PAD as f32 * 0.79;
             // A little too long beside the carets: up to 10 % smaller, the
             // same chosen or not, rather than a scroll (Last Played, Siham
             // 2026-11-15; 10 %, 2026-11-19).
