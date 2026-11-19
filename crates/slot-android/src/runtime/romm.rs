@@ -964,7 +964,7 @@ fn caption_lines_now(text: &str, room: f32, scale: f32, most: usize, whole: bool
     // Whole words then "…"; only a first word too wide on its own is cut.
     let rest_words: Vec<&str> = rest.split(' ').collect();
     for n in (1..=rest_words.len()).rev() {
-        let line = format!("{}\u{2026}", rest_words[..n].join(" ").trim_end_matches([',', ';', ':', '-', ' ']));
+        let line = format!("{}\u{2026}", rest_words[..n].join(" ").trim_end_matches([',', ';', ':', '-', '&', '+', ' ']));
         if width(&line) <= room_face {
             lines.push(line);
             return (lines, s);
