@@ -437,6 +437,15 @@ fn save_profile_later(profile: EmulationProfile, uri: &str, core: Core) -> bool 
     true
 }
 
+/// Android's SystemClock.uptimeMillis(), to set native moments against the
+/// Kotlin side's in the journal.
+pub(crate) fn uptime_ms() -> i64 {
+    let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: a valid out pointer for clock_gettime.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    now.tv_sec as i64 * 1000 + now.tv_nsec as i64 / 1_000_000
+}
+
 fn set_error_message(message: &str, detail: &dyn std::fmt::Display) {
     crate::game::log_launch_timing(&format!("{message} ({detail})"));
     set_message(message.into());
@@ -800,6 +809,12 @@ static TASK_PILL_REV: AtomicU64 = AtomicU64::new(0);
 /// Android saw a touchscreen among the input devices (beta41): Controls
 /// shows Touchscreen only then. True until known.
 static HAS_TOUCHSCREEN: AtomicBool = AtomicBool::new(true);
+/// When the GL surface was last made (uptime ms), until its first frame is
+/// drawn and timed: after sleep, how long the screen stays black (beta43).
+static FIRST_FRAME_SINCE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// The last frame drawn (uptime ms): a frame after a long gap (sleep, the
+/// screen off) is written down with its gap.
+static LAST_FRAME_AT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 const TASK_PROBLEM: u8 = 0;
 const TASK_COPY: u8 = 1;
 const TASK_DOWNLOADS: u8 = 3;
@@ -8479,6 +8494,12 @@ impl Engine {
             // step is one display frame; after that real time, so a slow
             // frame does not stretch the animation.
             let at_rest = self.lid_t == 0.0 || self.lid_t == 1.0;
+            // The lid's first animated frame, timed on Android's uptime, to
+            // set against the lid's key and the display's turn (beta43).
+            if at_rest && self.lid_t != goal {
+                crate::game::log_launch_timing(&format!("Rotate: [{}] lid animation starts ({})",
+                    uptime_ms(), if self.lid_covered { "closing" } else { "opening" }));
+            }
             let lid_dt = if at_rest { 1.0 / 60.0 } else { elapsed.min(0.1) };
             let step = lid_dt / LID_ANIMATION_S;
             self.lid_t = if goal > self.lid_t { (self.lid_t + step).min(goal) } else { (self.lid_t - step).max(goal) };
@@ -8618,11 +8639,24 @@ impl Engine {
             }
         }
         let menus_at = Instant::now();
-        self.prepare_controls();
-        self.prepare_menu_look();
-        self.prepare_cart_studio();
-        self.prepare_cart_library();
-        self.prepare_romm();
+        {
+            use crate::frame_watch::{span, SPAN_MENU_CONTROLS, SPAN_MENU_LIBRARY, SPAN_MENU_LOOK, SPAN_MENU_ROMM, SPAN_MENU_STUDIO};
+            let at = Instant::now();
+            self.prepare_controls();
+            span(SPAN_MENU_CONTROLS, at.elapsed());
+            let at = Instant::now();
+            self.prepare_menu_look();
+            span(SPAN_MENU_LOOK, at.elapsed());
+            let at = Instant::now();
+            self.prepare_cart_studio();
+            span(SPAN_MENU_STUDIO, at.elapsed());
+            let at = Instant::now();
+            self.prepare_cart_library();
+            span(SPAN_MENU_LIBRARY, at.elapsed());
+            let at = Instant::now();
+            self.prepare_romm();
+            span(SPAN_MENU_ROMM, at.elapsed());
+        }
         crate::frame_watch::span(crate::frame_watch::SPAN_MENUS, menus_at.elapsed());
         // Update full-screen menus and spring-smooth the selection bar.
         // Keep animation entirely in rendering: never delay controller input.
@@ -10132,11 +10166,20 @@ impl StartJob {
     /// Its cache name: what it is drawn from and at what size. Only the
     /// pictures decoded from a PNG are kept (the shadows are quick).
     fn cache_key(&self, scale: f32) -> Option<String> {
+        // The shadows are drawn by code, not from a PNG: kept per build (the
+        // CI's commit), so a changed shadow is never read from an old cache.
+        let build = option_env!("GITHUB_SHA").unwrap_or("dev");
+        let shadow = match *self {
+            StartJob::Shadow(shell) => format!("shadow {shell:?} {build}"),
+            StartJob::HomeShadow(mould) => format!("home shadow {mould:?} {build}"),
+            _ => String::new(),
+        };
         let (png, what): (&[u8], &str) = match *self {
             StartJob::Band(png) => (png, "band"),
             StartJob::Bezel(gbc) => (slot_ui::bitmaps::bezel_master(gbc), "bezel"),
-            _ => return None,
+            StartJob::Shadow(_) | StartJob::HomeShadow(_) => (&[], shadow.as_str()),
         };
+        if build == "dev" && png.is_empty() { return None; }
         let mut input = format!("slot-start-v1:{what}:{}:{}:", scale.to_bits(), out_w()).into_bytes();
         input.extend_from_slice(png);
         let hash = ring::digest::digest(&ring::digest::SHA256, &input);
@@ -10147,14 +10190,20 @@ impl StartJob {
     /// KONKR spent 2.2 s on these on every start), else made and kept.
     fn make_cached(&self, cache: Option<&crate::cart_disk_cache::DiskCache>, scale: f32) -> StartPicture {
         let key = cache.and(self.cache_key(scale));
+        let face_kind = matches!(self, StartJob::Shadow(_) | StartJob::HomeShadow(_));
         if let (Some(cache), Some(key)) = (cache, key.as_deref()) {
             if let Some(face) = cache.read(key) {
-                return StartPicture::Texture(face.rgba, face.w, face.h);
+                return if face_kind { StartPicture::Face(face) }
+                    else { StartPicture::Texture(face.rgba, face.w, face.h) };
             }
         }
         let picture = self.make();
-        if let (Some(cache), Some(key), StartPicture::Texture(rgba, w, h)) = (cache, key.as_deref(), &picture) {
-            let _ = cache.write(key, &slot_ui::CartFace { rgba: rgba.clone(), w: *w, h: *h });
+        if let (Some(cache), Some(key)) = (cache, key.as_deref()) {
+            let _ = match &picture {
+                StartPicture::Texture(rgba, w, h) =>
+                    cache.write(key, &slot_ui::CartFace { rgba: rgba.clone(), w: *w, h: *h }),
+                StartPicture::Face(face) => cache.write(key, face),
+            };
         }
         picture
     }

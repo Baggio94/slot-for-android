@@ -106,6 +106,8 @@ internal class LidCover(
         /** Opened this soon after the screen came on from sleep: the lid's
          *  own opening woke it, straight back with no cover animation. */
         private const val WOKEN_OPEN_MS = 2_000L
+        private const val SHUT_ROTATION = "rotate_shut_rotation"
+        private const val OPEN_ROTATION = "rotate_open_rotation"
     }
 
     var closed = false
@@ -125,10 +127,64 @@ internal class LidCover(
     private var screenReceiver: BroadcastReceiver? = null
     private var displayListener: DisplayManager.DisplayListener? = null
     private var displayOn = true
+    /** The display's rotation with the lid open, and shut (learned from the
+     *  lid's own key, kept): Android turns the display before it hands slot.
+     *  the lid's key, held while it turns (videos, Siham 2026-11-19). */
+    private var rotationWatcher: DisplayManager.DisplayListener? = null
+    private var lastRotation = -1
     private val admin = ComponentName(activity, SlotDeviceAdmin::class.java)
     private val policy get() = activity.getSystemService(DevicePolicyManager::class.java)
 
-    init { restoreOldTimeout() }
+    init {
+        restoreOldTimeout()
+        watchRotation()
+    }
+
+    private fun rotationNow(): Int =
+        activity.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)?.rotation ?: -1
+
+    /** Every turn of the display, timed; a turn to the shut rotation closes
+     *  at once, before the lid's key comes (beta43). */
+    private fun watchRotation() {
+        if (!RgRotate.device || rotationWatcher != null) return
+        val displays = activity.getSystemService(DisplayManager::class.java) ?: return
+        lastRotation = rotationNow()
+        val watcher = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != Display.DEFAULT_DISPLAY) return
+                val rotation = rotationNow()
+                if (rotation == lastRotation || rotation < 0) return
+                lastRotation = rotation
+                val shut = prefs().getInt(SHUT_ROTATION, -1)
+                val open = prefs().getInt(OPEN_ROTATION, -1)
+                SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] display turned to $rotation (shut $shut, open $open); lidClosed=$closed")
+                if (!closed && shut >= 0 && shut != open && rotation == shut) {
+                    SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] closing on the display's turn, before the lid's key")
+                    close()
+                }
+            }
+        }
+        runCatching { displays.registerDisplayListener(watcher, handler) }
+            .onSuccess { rotationWatcher = watcher }
+            .onFailure { SlotLog.w("SlotKonkr", "Rotate: rotation watcher refused", it) }
+    }
+
+    /** The lid's key said where it is: the display's rotation then is the
+     *  shut (or open) one, read once the turn is done. */
+    fun learnRotation(shut: Boolean) {
+        handler.postDelayed({
+            if (closed != shut) return@postDelayed
+            val rotation = rotationNow()
+            if (rotation < 0) return@postDelayed
+            val key = if (shut) SHUT_ROTATION else OPEN_ROTATION
+            if (prefs().getInt(key, -1) != rotation) {
+                prefs().edit().putInt(key, rotation).apply()
+                SlotLog.i("SlotKonkr", "Rotate: ${if (shut) "shut" else "open"} rotation is $rotation")
+            }
+        }, 1_500L)
+    }
 
     val canSleep: Boolean get() = policy?.isAdminActive(admin) == true
     private val noLock: Boolean get() = prefs().getBoolean(NO_LOCK, false)
@@ -145,7 +201,7 @@ internal class LidCover(
     /** Half a second after lockNow, a lock screen should be up. */
     private val checkLocked: Runnable = Runnable {
         if (!closed || keyguard?.isKeyguardLocked != false) return@Runnable
-        Log.w("SlotKonkr", "Rotate: no lock screen after lockNow; waking, dim only from now on")
+        SlotLog.w("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] no lock screen after lockNow; waking, dim only from now on")
         prefs().edit().putBoolean(NO_LOCK, true).remove(ASKED_LOCK).apply()
         sleepRequested = false
         handler.removeCallbacks(retrySleep)
@@ -157,7 +213,7 @@ internal class LidCover(
                 ?.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK or
                     PowerManager.ACQUIRE_CAUSES_WAKEUP, "slot:rotate-no-lock")
                 ?.acquire(1_000L)
-        }.onFailure { Log.w("SlotKonkr", "Rotate: could not wake", it) }
+        }.onFailure { SlotLog.w("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] could not wake", it) }
         fade(0f)
     }
 
@@ -171,21 +227,21 @@ internal class LidCover(
         // Anbernic lifts the lock screen only when the lid opens: then the
         // lid's release went to the lock screen, not to slot.
         if (keyguard?.isKeyguardLocked == false) {
-            Log.i("SlotKonkr", "Rotate: lock screen lifted by the lid opening")
+            SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] lock screen lifted by the lid opening")
             open()
             return@Runnable
         }
         if (relockAttempts >= MAX_RELOCKS) {
-            Log.w("SlotKonkr", "Rotate: display keeps waking after lockNow; retries exhausted")
+            SlotLog.w("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] display keeps waking after lockNow; retries exhausted")
             fade(0f)
             return@Runnable
         }
         relockAttempts++
-        Log.i("SlotKonkr", "Rotate: screen woke with lid closed; lock retry $relockAttempts")
+        SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] screen woke with lid closed; lock retry $relockAttempts")
         activity.setShowWhenLocked(false)
         activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         runCatching { policy?.lockNow() }
-            .onFailure { Log.w("SlotKonkr", "Rotate: repeated lockNow refused", it) }
+            .onFailure { SlotLog.w("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] repeated lockNow refused", it) }
         handler.removeCallbacks(checkLocked)
         handler.postDelayed(checkLocked, 500L)
     }
@@ -213,7 +269,7 @@ internal class LidCover(
      *  (bg ANR, 455, Siham 2026-11-15). */
     private fun asleepShut() {
         if (!closed || sleepRequested || noLock) return
-        Log.i("SlotKonkr", "Rotate: screen off shut; the lock screen takes over")
+        SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] screen off shut; the lock screen takes over")
         sleepRequested = true
         sleptShut = true
         relockAttempts = 0
@@ -238,7 +294,7 @@ internal class LidCover(
         if (!closed || !sleptShut) return@Runnable
         if (activity.getSystemService(PowerManager::class.java)?.isInteractive != true) return@Runnable
         if (keyguard?.isKeyguardLocked == false) {
-            Log.i("SlotKonkr", "Rotate: woke with the lock screen lifted: lid opened")
+            SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] woke with the lock screen lifted: lid opened")
             open()
         }
     }
@@ -269,11 +325,11 @@ internal class LidCover(
             relockAttempts = 0
             activity.setShowWhenLocked(false)
             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            Log.i("SlotKonkr", "Rotate: lockNow requested; lid remains closed")
+            SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] lockNow requested; lid remains closed")
             runCatching { policy?.lockNow() }
                 .onFailure {
                     sleepRequested = false
-                    Log.w("SlotKonkr", "Rotate: lockNow refused", it)
+                    SlotLog.w("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] lockNow refused", it)
                 }
             handler.postDelayed(checkLocked, 500L)
         } else {
@@ -293,7 +349,7 @@ internal class LidCover(
         // and keeps the focus (the lid's repeats come to slot.); it hands
         // over to the lock screen only right before lockNow.
         showOverLockScreen()
-        Log.i("SlotKonkr", "Rotate: lid closed; cover and sleep timer active")
+        SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] lid closed; cover and sleep timer active")
         activity.nativeLidCover(true)
         icons()?.fadeForLid(true, animations())
         activity.wakeCarouselFor(1_500L)
@@ -316,7 +372,7 @@ internal class LidCover(
         relockAttempts = 0
         handler.removeCallbacks(retrySleep)
         handler.removeCallbacks(openedCheck)
-        Log.i("SlotKonkr", "Rotate: lid opened; restore previous session (woken=$woken)")
+        SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] lid opened; restore previous session (woken=$woken)")
         handler.removeCallbacks(step)
         handler.removeCallbacks(dim)
         handler.removeCallbacks(sleep)
@@ -352,14 +408,14 @@ internal class LidCover(
         val guard = keyguard ?: return
         if (!guard.isKeyguardLocked || guard.isDeviceSecure) return
         runCatching { guard.requestDismissKeyguard(activity, null) }
-            .onFailure { Log.w("SlotKonkr", "Rotate: lock screen not lifted", it) }
+            .onFailure { SlotLog.w("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] lock screen not lifted", it) }
     }
 
     /** Settings > Security, to set Swipe; the next sleep checks again. */
     fun openLockSettings() {
         prefs().edit().remove(NO_LOCK).apply()
         runCatching { activity.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
-            .onFailure { Log.w("SlotKonkr", "Rotate: security settings refused", it) }
+            .onFailure { SlotLog.w("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] security settings refused", it) }
         handler.postDelayed({ activity.nativeRotateSleepState(sleepState()) }, 300L)
     }
 
@@ -399,6 +455,7 @@ internal class LidCover(
     private fun animations() = activity.nativeRotateDelays().getOrElse(3) { 1 } != 0
 
     fun onResume() {
+        SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] resumed; lidClosed=$closed sleeping=$sleepRequested")
         activity.nativeRotateSleepState(sleepState())
         if (closed) {
             // lockNow can invoke onResume between pause and display OFF.
@@ -410,7 +467,7 @@ internal class LidCover(
             // on the lock screen while shut is not an opening (445 resumed
             // the game then).
             if (sleepRequested && interactive() && keyguard?.isKeyguardLocked == false) {
-                Log.i("SlotKonkr", "Rotate: resumed with the lock screen lifted: lid opened")
+                SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] resumed with the lock screen lifted: lid opened")
                 open()
                 return
             }
@@ -420,7 +477,7 @@ internal class LidCover(
                 noLock -> fade(0f)
                 else -> awake()
             }
-            Log.i("SlotKonkr", "Rotate: resumed with lid closed; sleeping=$sleepRequested noLock=$noLock")
+            SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] resumed with lid closed; sleeping=$sleepRequested noLock=$noLock")
         } else {
             leaveLockScreen()
         }
@@ -442,7 +499,7 @@ internal class LidCover(
                 .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION,
                     "Lets slot. turn the screen off once your closed RG Rotate has dimmed. " +
                         "You can turn it off again in Settings > Handheld."))
-        }.onFailure { Log.w("SlotKonkr", "Rotate: device admin page refused", it) }
+        }.onFailure { SlotLog.w("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] device admin page refused", it) }
     }
 
     /** Settings > Handheld > Sleep When Closed, on to off: asked first, so a
@@ -505,7 +562,7 @@ internal class LidCover(
                 if (intent.action == Intent.ACTION_USER_PRESENT) {
                     // The lock screen went away: asleep shut, that is
                     // Anbernic lifting it as the lid opens.
-                    Log.i("SlotKonkr", "Rotate: lock screen lifted; lidClosed=$closed sleeping=$sleepRequested")
+                    SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] lock screen lifted; lidClosed=$closed sleeping=$sleepRequested")
                     if (closed && sleptShut) open()
                 } else if (intent.action == Intent.ACTION_SCREEN_OFF) {
                     // Should the display listener miss it.
@@ -520,7 +577,7 @@ internal class LidCover(
                     else if (sleepRequested) wakeShut()
                     else if (noLock) fade(0f)
                     else { showOverLockScreen(); awake() }
-                    Log.i("SlotKonkr", "Rotate: screen on; lidClosed=$closed sleeping=$sleepRequested noLock=$noLock")
+                    SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] screen on; lidClosed=$closed sleeping=$sleepRequested noLock=$noLock")
                 }
             }
         }
@@ -548,7 +605,7 @@ internal class LidCover(
                 val turnedOff = !on && displayOn
                 displayOn = on
                 if (turnedOn && closed && sleepRequested) {
-                    Log.i("SlotKonkr", "Rotate: display on while asleep shut")
+                    SlotLog.i("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] display on while asleep shut")
                     wakeShut()
                 } else if (turnedOff) {
                     asleepShut()
@@ -557,7 +614,7 @@ internal class LidCover(
         }
         runCatching { displays.registerDisplayListener(listener, handler) }
             .onSuccess { displayListener = listener }
-            .onFailure { Log.w("SlotKonkr", "Rotate: display listener refused", it) }
+            .onFailure { SlotLog.w("SlotKonkr", "Rotate: [${SystemClock.uptimeMillis()}] display listener refused", it) }
     }
 
     private fun stopListeningScreen() {

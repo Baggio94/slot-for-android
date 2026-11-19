@@ -27,6 +27,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
 ) -> u8 {
     ENGINE.with(|holder| {
         let started = Instant::now();
+        FIRST_FRAME_SINCE.store(uptime_ms(), Ordering::Release);
         LIBRARY_UPDATE_SAFE.store(false, Ordering::Release);
         if let Some(engine) = holder.borrow_mut().as_mut() {
             // GLSurfaceView calls this on its existing owner thread after EGL
@@ -314,6 +315,17 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 ejecting: engine.exiting_screen || (!engine.inserted && engine.progress > 0.0),
             };
             crate::frame_watch::frame(frame_at.elapsed(), moment);
+            let now = uptime_ms();
+            let since = FIRST_FRAME_SINCE.swap(0, Ordering::AcqRel);
+            if since != 0 {
+                crate::game::log_launch_timing(&format!(
+                    "[{now}] first frame {} ms after the surface came", now - since));
+            }
+            let last = LAST_FRAME_AT.swap(now, Ordering::AcqRel);
+            if last != 0 && now - last > 1_500 {
+                crate::game::log_launch_timing(&format!(
+                    "[{now}] a frame again after {} ms without any", now - last));
+            }
         }
         let now_safe = holder.borrow().as_ref().is_some_and(|e|
             may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game)

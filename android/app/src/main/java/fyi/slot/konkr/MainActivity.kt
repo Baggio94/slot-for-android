@@ -1824,6 +1824,12 @@ class MainActivity : Activity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (RgRotate.lidKey(keyCode, event) && ::lidCover.isInitialized) {
+            if (event.repeatCount == 0) {
+                // How late Android hands slot. the lid's key (beta43).
+                val now = SystemClock.uptimeMillis()
+                SlotLog.i(TAG, "Rotate: [$now] lid key down, ${now - event.eventTime} ms after the sensor; lidClosed=${lidCover.closed}")
+                lidCover.learnRotation(true)
+            }
             // Repeats too: a held lid is shut, even if a release was misread.
             lidCover.close()
             return true
@@ -2112,7 +2118,10 @@ class MainActivity : Activity() {
                 SlotLog.i(TAG, "Rotate: canceled lid release ignored, still closed")
                 return true
             }
+            val now = SystemClock.uptimeMillis()
+            SlotLog.i(TAG, "Rotate: [$now] lid key up, ${now - event.eventTime} ms after the sensor")
             lidCover.open()
+            lidCover.learnRotation(false)
             return true
         }
         if (lidSwallowed.remove(keyCode)) return true
