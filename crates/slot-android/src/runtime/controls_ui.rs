@@ -57,8 +57,12 @@ impl Engine {
         fp == BUILTIN || self.pad_devices.iter().any(|d| d.fp == fp)
     }
 
+    /// Built-in on a narrow screen, where Controller and its value share
+    /// the row (the RG Rotate, Siham 2026-11-19).
     fn builtin_name() -> &'static str {
-        if is_konkr() { "KONKR Controls" } else { "Built-in Controls" }
+        if is_konkr() { "KONKR Controls" }
+        else if slot_gfx::out_w() < 600 { "Built-in" }
+        else { "Built-in Controls" }
     }
 
     /// A controller's name as the Controls pages show it.
@@ -940,12 +944,21 @@ impl Engine {
             // Every row at one size (Siham 2026-11-19: rows of different
             // sizes looked wrong): a few pixels too long gives way a touch
             // (6 % at most), longer scrolls while chosen, cut with a fade
-            // otherwise. A value takes at most 55 % of the width.
+            // otherwise. A label of a few words (Port 1, Save and Eject)
+            // stays whole and its value scrolls, as on the settings pages;
+            // a long one (a cheat's name) scrolls beside a value taking at
+            // most 55 % of the width (Siham 2026-11-19).
             let fit_by = |w: f32, room: f32, most: f32| if w * 0.79 > room && w * 0.79 * most <= room { room / w } else { 0.79 };
             let fit = |w: f32, room: f32| fit_by(w, room, 0.94);
+            let pad = slot_ui::MENU_PAD as f32 * 0.79;
+            let label_w = label_face.map_or(0.0, |(_, w, _)| w as f32 * 0.79);
+            let short_label = label_w <= width * 0.6;
             if let Some((tex, w, h)) = value_face {
                 let carets = chosen && line.cycles;
-                let window = width * 0.55;
+                let caret = if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
+                let window = if short_label {
+                    (right - if carets { 22.0 } else { 0.0 } - (37.0 + label_w - pad + 18.0 + caret)).max(60.0)
+                } else { width * 0.55 };
                 // A value up to 10 % smaller (Siham 2026-11-19).
                 let scale = fit_by(w as f32, window, 0.9);
                 let vw = w as f32 * scale;
