@@ -5,6 +5,8 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.system.Os
 import android.util.AtomicFile
+import android.util.JsonReader
+import android.util.JsonToken
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
@@ -434,38 +436,149 @@ internal object Romm {
     }
 
     /** Every game of one system, page by page; [counted] hears how many so
-     *  far after each page. */
+     *  far after each page. Each page is read as it arrives, keeping only
+     *  what slot. uses: a page held whole (up to 15 MB of JSON, three
+     *  systems at once) ran the RG Rotate out of memory (beta42, 2026-11-19). */
     fun games(context: Context, system: Console, counted: (Int) -> Unit = {}): List<Game> {
         val games = ArrayList<Game>()
         var offset = 0
         while (true) {
             // platform_ids for RomM 4.4 and later, platform_id before: an
             // unknown parameter is ignored either way.
-            val reply = authorized(context, "/api/roms?platform_ids=${system.id}&platform_id=${system.id}" +
+            val page = authorizedJson(context, "/api/roms?platform_ids=${system.id}&platform_id=${system.id}" +
                 "&limit=$PAGE&offset=$offset&order_by=name&order_dir=asc" +
                 "&with_char_index=false&with_filter_values=false&with_rom_id_index=false" +
-                "&with_provider_metadata=false")
-            if (reply.code != 200) throw IOException("RomM roms HTTP ${reply.code}")
-            val text = String(reply.body, Charsets.UTF_8).trim()
-            // A page ({items, total}) since RomM 3.x, a plain list before.
-            val (items, total) = if (text.startsWith("[")) JSONArray(text) to -1
-                else JSONObject(text).let { it.optJSONArray("items") to it.optInt("total", -1) }
-            if (items == null) break
-            for (i in 0 until items.length()) {
-                val rom = items.optJSONObject(i) ?: continue
-                if (rom.optBoolean("missing_from_fs", false)) continue
-                val file = rom.optString("fs_name")
-                if (file.isBlank() || file.contains('/')) continue
-                val title = rom.optString("fs_name_no_ext").ifBlank { file.substringBeforeLast('.') }
-                games.add(Game(rom.optLong("id"), system.platform, system.slug, file, title.trim(),
-                    rom.optLong("fs_size_bytes", -1), crcOf(rom), joined(rom.optJSONArray("regions")),
-                    rom.optString("revision").takeIf { it != "null" }.orEmpty().trim()))
-            }
-            offset += items.length()
+                "&with_provider_metadata=false") { reader -> readGamesPage(reader, system, games) }
+            offset += page.items
             counted(games.size)
-            if (text.startsWith("[") || items.length() < PAGE || (total in 0..offset)) break
+            if (page.plainList || page.items < PAGE || (page.total in 0..offset)) break
         }
         return games
+    }
+
+    private class GamesPage(val items: Int, val total: Int, val plainList: Boolean)
+
+    /** One page of /api/roms: {items, total} since RomM 3.x, a plain list
+     *  before. Games go into [into]. */
+    private fun readGamesPage(reader: JsonReader, system: Console, into: MutableList<Game>): GamesPage {
+        var items = 0
+        var total = -1
+        fun list() {
+            reader.beginArray()
+            while (reader.hasNext()) {
+                items++
+                readGame(reader, system)?.let { into.add(it) }
+            }
+            reader.endArray()
+        }
+        if (reader.peek() == JsonToken.BEGIN_ARRAY) {
+            list()
+            return GamesPage(items, -1, true)
+        }
+        reader.beginObject()
+        while (reader.hasNext()) {
+            when (reader.nextName()) {
+                "items" -> if (reader.peek() == JsonToken.BEGIN_ARRAY) list() else reader.skipValue()
+                "total" -> total = if (reader.peek() == JsonToken.NUMBER) reader.nextInt() else { reader.skipValue(); -1 }
+                else -> reader.skipValue()
+            }
+        }
+        reader.endObject()
+        return GamesPage(items, total, false)
+    }
+
+    /** One game of a page, with only the fields slot. keeps; null when it
+     *  is missing from the server's disk or has no plain file name. */
+    private fun readGame(reader: JsonReader, system: Console): Game? {
+        if (reader.peek() != JsonToken.BEGIN_OBJECT) { reader.skipValue(); return null }
+        var id = 0L
+        var missing = false
+        var file = ""
+        var stem = ""
+        var size = -1L
+        var crc = ""
+        val fileCrcs = ArrayList<String>()
+        var fileCount = 0
+        val regions = ArrayList<String>()
+        var revision = ""
+        fun string(): String = when (reader.peek()) {
+            JsonToken.STRING, JsonToken.NUMBER -> reader.nextString()
+            JsonToken.BOOLEAN -> reader.nextBoolean().toString()
+            JsonToken.NULL -> { reader.nextNull(); "null" }
+            else -> { reader.skipValue(); "" }
+        }
+        reader.beginObject()
+        while (reader.hasNext()) {
+            when (reader.nextName()) {
+                "id" -> id = string().toLongOrNull() ?: 0L
+                "missing_from_fs" -> missing = if (reader.peek() == JsonToken.BOOLEAN) reader.nextBoolean() else { reader.skipValue(); false }
+                "fs_name" -> file = string()
+                "fs_name_no_ext" -> stem = string()
+                "fs_size_bytes" -> size = string().toLongOrNull() ?: -1L
+                "crc_hash" -> crc = string()
+                "revision" -> revision = string()
+                "regions" -> if (reader.peek() == JsonToken.BEGIN_ARRAY) {
+                    reader.beginArray()
+                    while (reader.hasNext()) string().takeIf { it.isNotBlank() && it != "null" }?.let { regions.add(it) }
+                    reader.endArray()
+                } else reader.skipValue()
+                "files" -> if (reader.peek() == JsonToken.BEGIN_ARRAY) {
+                    reader.beginArray()
+                    while (reader.hasNext()) {
+                        fileCount++
+                        if (reader.peek() != JsonToken.BEGIN_OBJECT) { reader.skipValue(); continue }
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            if (reader.nextName() == "crc_hash") fileCrcs.add(string()) else reader.skipValue()
+                        }
+                        reader.endObject()
+                    }
+                    reader.endArray()
+                } else reader.skipValue()
+                else -> reader.skipValue()
+            }
+        }
+        reader.endObject()
+        if (missing) return null
+        if (file.isBlank() || file == "null" || file.contains('/')) return null
+        val title = stem.takeIf { it.isNotBlank() && it != "null" } ?: file.substringBeforeLast('.')
+        val crcHash = crc.takeIf { it.length == 8 }
+            ?: fileCrcs.singleOrNull()?.takeIf { fileCount == 1 && it.length == 8 }
+        return Game(id, system.platform, system.slug, file, title.trim(), size,
+            crcHash?.uppercase(Locale.ROOT).orEmpty(), regions.joinToString(", "),
+            revision.takeIf { it != "null" }.orEmpty().trim())
+    }
+
+    /** An authorized GET whose JSON reply is read as it arrives by [parse]
+     *  (no copy of it held whole). */
+    private fun <T> authorizedJson(context: Context, path: String, parse: (JsonReader) -> T): T {
+        val account = account(context) ?: throw SignedOut()
+        fun attempt(): Pair<Int, T?> {
+            val connection = open(account.server + path, "GET", authorization(context, account))
+            try {
+                val code = connection.responseCode
+                if (code != 200) {
+                    runCatching { connection.errorStream?.close() }
+                    return code to null
+                }
+                return code to JsonReader(connection.inputStream.bufferedReader(Charsets.UTF_8)).use { reader ->
+                    try { parse(reader) } catch (error: IllegalStateException) { throw IOException("RomM reply unreadable", error) }
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
+        var (code, result) = attempt()
+        if (code == 401) {
+            if (account.kind == "client") { signOut(context); throw SignedOut() }
+            synchronized(this) { access = null }
+            val again = attempt()
+            code = again.first
+            result = again.second
+            if (code == 401) { signOut(context); throw SignedOut() }
+        }
+        if (code != 200 || result == null) throw IOException("RomM roms HTTP $code")
+        return result
     }
 
     // ---------------------------------------------------------------------
@@ -705,10 +818,6 @@ internal object Romm {
         null
     }
 
-    private fun joined(array: JSONArray?): String =
-        if (array == null) "" else (0 until array.length()).mapNotNull { array.optString(it).takeIf { s -> s.isNotBlank() } }
-            .joinToString(", ")
-
     /**
      * The games in the account's RomM favourites (its "Favourites"
      * collection), or null when the server won't say (an older RomM, or a
@@ -726,15 +835,6 @@ internal object Romm {
             for (k in 0 until roms.length()) ids.add(roms.optLong(k))
         }
         return ids
-    }
-
-    /** The game file's CRC32: the ROM's own, else its single file's. */
-    private fun crcOf(rom: JSONObject): String {
-        rom.optString("crc_hash").takeIf { it.length == 8 }?.let { return it.uppercase(Locale.ROOT) }
-        val files = rom.optJSONArray("files") ?: return ""
-        if (files.length() != 1) return ""
-        return files.optJSONObject(0)?.optString("crc_hash")?.takeIf { it.length == 8 }
-            ?.uppercase(Locale.ROOT).orEmpty()
     }
 
     // ---------------------------------------------------------------------
