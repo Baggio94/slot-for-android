@@ -914,7 +914,7 @@ pub(super) fn caption_lines(text: &str, room: f32, scale: f32, most: usize, whol
 }
 
 fn caption_lines_now(text: &str, room: f32, scale: f32, most: usize, whole: bool) -> (Vec<String>, f32) {
-    let width = |t: &str| slot_ui::quick_value_width(t) as f32;
+    let width = |t: &str| slot_ui::quick_face_width(t) as f32;
     // A little slack: the drawn face can come out a few pixels wider.
     let room = room * 0.96;
     let smallest = scale * 0.8;
