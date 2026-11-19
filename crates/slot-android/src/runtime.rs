@@ -1732,11 +1732,11 @@ impl Engine {
             .is_some_and(|root| root.join("Config/theme.txt").exists());
         let mut pixels = start_pixels.join().unwrap_or_else(|_| {
             crate::log_warn("start pictures decoded on the GL thread (a worker failed)");
-            StartJob::all().iter().map(StartJob::decode).collect()
+            StartJob::all().iter().map(StartJob::make).collect()
         }).into_iter();
-        let mut upload = |gpu: &mut Compositor| {
-            let (rgba, w, h) = pixels.next().expect("every start picture decoded");
-            gpu.create_texture(w, h, &rgba)
+        let mut upload = |gpu: &mut Compositor| match pixels.next().expect("every start picture decoded") {
+            StartPicture::Texture(rgba, w, h) => gpu.create_texture(w, h, &rgba),
+            StartPicture::Face(face) => gpu.create_face(&face),
         };
         // Both official themes are cached once. Toggling doesn't allocate
         // textures on the GL thread or shift the original Slot animation.
@@ -1810,14 +1810,10 @@ impl Engine {
         let video_platform_face=Printed::new(gpu.create_face(&video_label), video_label.w);
 
         steps.mark("platform names");
-        let shadow = cart_shadow();
-        let gba = gpu.create_face(&shadow);
-        let shadow = gb_cart_shadow(GbShell::Notched);
-        let gb = gpu.create_face(&shadow);
-        let shadow = gb_cart_shadow(GbShell::Rounded);
-        let gbc = gpu.create_face(&shadow);
-        let home_shadows = slot_ui::HomeMould::ALL
-            .map(|m| (m, gpu.create_face(&slot_ui::home_cart_shadow(m))));
+        let gba = upload(&mut gpu);
+        let gb = upload(&mut gpu);
+        let gbc = upload(&mut gpu);
+        let home_shadows = slot_ui::HomeMould::ALL.map(|m| (m, upload(&mut gpu)));
         // The exact original Slot 9x9 pixel star, bright yellow with dark rim.
         steps.mark("shadows");
         let star=slot_ui::star_face(2, [0xf6,0xc3,0x2c]);
@@ -10050,10 +10046,14 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 const GBA_SLOT: usize = 6;
 
 
-/// A picture the cold renderer needs from its first frame, decoded off the
-/// GL thread (beta41): the slot bars in both themes, every console's bars
-/// in the three bar themes, the GB and GBC bezels. In upload order.
-enum StartJob { Band(&'static [u8]), Bezel(bool) }
+/// A picture the cold renderer needs from its first frame, made off the GL
+/// thread (beta41): the slot bars in both themes, every console's bars in
+/// the three bar themes, the GB and GBC bezels, the carts' shadows. In
+/// upload order.
+enum StartJob { Band(&'static [u8]), Bezel(bool), Shadow(Option<GbShell>), HomeShadow(slot_ui::HomeMould) }
+
+/// A StartJob's result, ready for the GPU.
+enum StartPicture { Texture(Vec<u8>, u32, u32), Face(slot_ui::CartFace) }
 
 impl StartJob {
     fn all() -> Vec<StartJob> {
@@ -10070,44 +10070,52 @@ impl StartJob {
             }
         }
         jobs.extend([StartJob::Bezel(false), StartJob::Bezel(true)]);
+        jobs.extend([StartJob::Shadow(None), StartJob::Shadow(Some(GbShell::Notched)),
+            StartJob::Shadow(Some(GbShell::Rounded))]);
+        jobs.extend(slot_ui::HomeMould::ALL.map(StartJob::HomeShadow));
         jobs
     }
 
-    /// Its pixels, width and height, ready for create_texture.
-    fn decode(&self) -> (Vec<u8>, u32, u32) {
+    fn make(&self) -> StartPicture {
         match *self {
             StartJob::Band(png) => {
                 let (rgba, w, h) = slot_ui::native_png(
                     png, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
                 let wide = (w as f32 * out_w() as f32 / slot_ui::bitmaps::SLOT_W as f32)
                     .round() as u32;
-                (slot_ui::refit_band(&rgba, w, h, wide), wide, h)
+                StartPicture::Texture(slot_ui::refit_band(&rgba, w, h, wide), wide, h)
             }
-            StartJob::Bezel(gbc) => slot_ui::native_png(slot_ui::bitmaps::bezel_master(gbc), 720, 480),
+            StartJob::Bezel(gbc) => {
+                let (rgba, w, h) = slot_ui::native_png(slot_ui::bitmaps::bezel_master(gbc), 720, 480);
+                StartPicture::Texture(rgba, w, h)
+            }
+            StartJob::Shadow(None) => StartPicture::Face(cart_shadow()),
+            StartJob::Shadow(Some(shell)) => StartPicture::Face(gb_cart_shadow(shell)),
+            StartJob::HomeShadow(mould) => StartPicture::Face(slot_ui::home_cart_shadow(mould)),
         }
     }
 }
 
-/// Decodes StartJob::all() on up to four threads; joined once GL is up.
-fn start_pixels() -> std::thread::JoinHandle<Vec<(Vec<u8>, u32, u32)>> {
+/// Makes StartJob::all() on up to four threads; joined once GL is up.
+fn start_pixels() -> std::thread::JoinHandle<Vec<StartPicture>> {
     let scale = slot_ui::density::scale();
     std::thread::spawn(move || {
         let jobs = StartJob::all();
         let n = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 4);
-        let mut out: Vec<Option<(Vec<u8>, u32, u32)>> = (0..jobs.len()).map(|_| None).collect();
+        let mut out: Vec<Option<StartPicture>> = (0..jobs.len()).map(|_| None).collect();
         std::thread::scope(|scope| {
             let workers: Vec<_> = (0..n).map(|k| {
                 let jobs = &jobs;
                 scope.spawn(move || slot_ui::density::with_scale(scale, || {
                     jobs.iter().enumerate().skip(k).step_by(n)
-                        .map(|(i, job)| (i, job.decode())).collect::<Vec<_>>()
+                        .map(|(i, job)| (i, job.make())).collect::<Vec<_>>()
                 }))
             }).collect();
             for worker in workers {
-                for (i, pixels) in worker.join().expect("a start picture worker") { out[i] = Some(pixels); }
+                for (i, picture) in worker.join().expect("a start picture worker") { out[i] = Some(picture); }
             }
         });
-        out.into_iter().map(|p| p.expect("every start picture decoded")).collect()
+        out.into_iter().map(|p| p.expect("every start picture made")).collect()
     })
 }
 
