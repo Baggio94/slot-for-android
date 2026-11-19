@@ -1522,6 +1522,8 @@ struct Engine {
     menu_scroll_y: f32,
     /// The selected row's bar: left end, strip, right end.
     menu_pill: [(slot_gfx::TexId, u32, u32); 3],
+    /// The pill behind the shelf's name and the game's title (2.5).
+    label_pill: [(slot_gfx::TexId, u32, u32); 3],
     /// Where the selection bar was last drawn (x0, x1, y, h): the in-game
     /// Screen page writes what sits on it in the theme's ink.
     pill_band: std::cell::Cell<Option<[f32; 4]>>,
@@ -2056,6 +2058,7 @@ impl Engine {
             (gpu.create_face(&face), face.w, face.h)
         });
         let menu_pill = menu_style::pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
+        let label_pill = menu_style::label_pill_faces().map(|face| (gpu.create_face(&face), face.w, face.h));
         let menu_opens = {
             let face = menu_style::menu_opens_face();
             (gpu.create_face(&face), face.w, face.h)
@@ -2337,6 +2340,7 @@ impl Engine {
             menu_scroll_top: 0,
             menu_scroll_y: 0.0,
             menu_pill,
+            label_pill,
             pill_band: std::cell::Cell::new(None),
             menu_opens,
             update_badge,
@@ -7469,12 +7473,13 @@ impl Engine {
         vec![(SAVES_SHARE_ROW, self.setting_values[share], true), (SAVES_ROMM_ROW, romm, true)]
     }
 
-    fn draw_page_values(&self, rows: usize, row: usize,
+    fn draw_page_values(&self, heading: usize, items: &[usize], row: usize,
                         values: &[(usize, (slot_gfx::TexId, u32, u32), bool)],
                         scales: &[(f32, f32)], out: &mut Vec<Draw>) {
         for &(at, face, toggle) in values {
             let scale = scales.get(at).map_or(0.79, |s| s.1);
-            self.draw_row_value(at, rows, row, face, toggle, scale, out);
+            let label_w = items.get(at).and_then(|&l| self.menu_textures.get(l)).map_or(0, |t| t.1) as f32;
+            self.draw_row_value((heading, at), items.len(), row, face, toggle, scale, label_w * 0.79, out);
         }
     }
 
@@ -7484,38 +7489,51 @@ impl Engine {
     /// without a value fit as before (0.0).
     fn value_row_scales(&self, items: &[usize],
                         values: &[(usize, (slot_gfx::TexId, u32, u32), bool)]) -> Vec<(f32, f32)> {
-        let caret = self.setting_carets[0].1 as f32 + 8.0;
-        items.iter().enumerate().map(|(i, &label)| {
-            let Some(&(_, (_, value_w, _), toggle)) = values.iter().find(|v| v.0 == i) else {
-                return (0.0, 0.79);
-            };
-            let label_w = self.menu_textures.get(label).map_or(0, |t| t.1) as f32;
-            if label_w <= 0.0 { return (0.79, 0.79); }
-            // Both give way together, so they keep one size (Siham's eye,
-            // beta39 preview): the label and its value at the same scale.
-            let room = out_w() as f32 - 37.0 - 34.0 - 16.0 - if toggle { 22.0 + caret } else { 0.0 };
-            let scale = (room / (label_w + value_w as f32)).clamp(0.5, 0.79);
-            (scale, scale)
-        }).collect()
+        // Every label at one size, as on every value page (Siham
+        // 2026-11-19): a value too long for its room scrolls instead.
+        (0..items.len()).map(|i| if values.iter().any(|v| v.0 == i) { (0.79, 0.79) } else { (0.0, 0.79) })
+            .collect()
     }
 
     /// A value at the right of a menu row; a toggle shows its carets when
     /// selected.
     #[allow(clippy::too_many_arguments)]
-    fn draw_row_value(&self, at: usize, rows: usize, row: usize,
+    fn draw_row_value(&self, (heading, at): (usize, usize), rows: usize, row: usize,
                       (tex, width, height): (slot_gfx::TexId, u32, u32), toggle: bool,
-                      scale: f32, out: &mut Vec<Draw>) {
+                      scale: f32, label_w: f32, out: &mut Vec<Draw>) {
         // Its row among the six shown while the page scrolls.
         let Some((dy, shows)) = self.menu_row_place(at, rows) else { return };
-        let y = self.menu_rows_top(rows.min(self.visible_rows())) + dy + 8.0
-            + height as f32 * (0.79 - scale) / 2.0;
-        let w = width as f32 * scale;
         let right = out_w() as f32 - 34.0;
         let selected = row == at;
         let carets = toggle && selected;
-        let x = right - w - if carets { 22.0 } else { 0.0 };
-        out.push(Draw::Tex { x, y, w, h: height as f32 * scale, tex,
-            alpha: shows * if selected { 1.0 } else { menu_look::ROW_REST } });
+        let caret = if toggle { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
+        // Past its label, a gap and the left caret: a few pixels too long,
+        // a touch smaller; longer, it scrolls (as draw_values).
+        let from = 37.0 + label_w + 12.0 + caret;
+        let end = right - if toggle { 22.0 } else { 0.0 };
+        let scale = match width as f32 * scale {
+            w if w > end - from && w * 0.94 <= end - from => scale * (end - from) / w,
+            _ => scale,
+        };
+        let y = self.menu_rows_top(rows.min(self.visible_rows())) + dy + 8.0
+            + height as f32 * (0.79 - scale) / 2.0;
+        let w = width as f32 * scale;
+        let end = right - if carets { 22.0 } else { 0.0 };
+        let alpha = shows * if selected { 1.0 } else { menu_look::ROW_REST };
+        let x = if end - w >= from {
+            out.push(Draw::Tex { x: end - w, y, w, h: height as f32 * scale, tex, alpha });
+            end - w
+        } else {
+            let travel = w - (end - from);
+            let shift = if selected { self.marquee_offset((heading, at), travel) } else { 0.0 };
+            out.push(Draw::Span(Some(slot_gfx::Span {
+                left: from, right: end,
+                feather_left: shift.min(18.0), feather_right: (travel - shift).min(18.0),
+            })));
+            out.push(Draw::Tex { x: from - shift, y, w, h: height as f32 * scale, tex, alpha });
+            out.push(Draw::Span(None));
+            from
+        };
         if carets {
             let (left, lw, lh) = self.setting_carets[0];
             let (right_tex, rw, rh) = self.setting_carets[1];
@@ -7576,30 +7594,11 @@ impl Engine {
                 } else { return None })
     }
 
-    /// The room a row's value has, from the label's x to the value's right
-    /// edge, less the carets and a 12 px gap: the same selected or not, so
-    /// nothing moves as the selection does.
-    fn value_room(&self) -> f32 {
-        let caret = self.setting_carets[0].1 as f32 + 8.0;
-        out_w() as f32 - 34.0 - 22.0 - caret - 12.0 - 37.0
-    }
-
-    /// Each row's label and value scales (beta41, Siham 2026-11-19): when
-    /// a label and its value don't fit side by side (the RG Rotate's and
-    /// the RPC's squarer screens), both give way together, at one size, in
-    /// steps of 0.02 so a value changing barely moves its label; at the
-    /// smallest, a value still too long scrolls (draw_values).
-    fn fit_scales(&self, items: &[usize], keys: &[usize]) -> Vec<(f32, f32)> {
-        let room = self.value_room();
-        items.iter().enumerate().map(|(i, &label)| {
-            let lw = self.menu_textures.get(label).map_or(0, |t| t.1) as f32;
-            let Some((_, vw, _)) = keys.get(i).and_then(|&k| self.value_face(k)) else { return (0.79, 0.79) };
-            let both = lw + vw as f32;
-            if both * 0.79 <= room || both <= 0.0 { return (0.79, 0.79); }
-            let scale = ((room / both) * 50.0).floor() / 50.0;
-            let scale = scale.clamp(0.6, 0.79);
-            (scale, scale)
-        }).collect()
+    /// Every label and value at one size (Siham 2026-11-19: rows of
+    /// different sizes looked wrong); a value too long scrolls
+    /// (draw_values).
+    fn fit_scales(&self, items: &[usize], _keys: &[usize]) -> Vec<(f32, f32)> {
+        vec![(0.79, 0.79); items.len()]
     }
 
     /// A settings page: its rows, then their values, fitted together.
@@ -8182,14 +8181,14 @@ impl Engine {
                 let values = self.library_value_faces();
                 let scales = self.value_row_scales(&LIBRARY_ROWS, &values);
                 self.draw_menu_rows(5, &LIBRARY_ROWS, row, &scales, out);
-                self.draw_page_values(LIBRARY_ROWS.len(), row, &values, &scales, out);
+                self.draw_page_values(5, &LIBRARY_ROWS, row, &values, &scales, out);
                 self.draw_menu_chrome(5, LIBRARY_ROWS.len(), row, false, out);
             }
             ShelfOverlay::SavesStates { row } => {
                 let values = self.saves_value_faces();
                 let scales = self.value_row_scales(&SAVES_ROWS, &values);
                 self.draw_menu_rows(151, &SAVES_ROWS, row, &scales, out);
-                self.draw_page_values(SAVES_ROWS.len(), row, &values, &scales, out);
+                self.draw_page_values(151, &SAVES_ROWS, row, &values, &scales, out);
                 self.draw_menu_chrome(151, SAVES_ROWS.len(), row, false, out);
             }
             ShelfOverlay::Settings { row } => {
@@ -9665,22 +9664,32 @@ impl Engine {
                         None
                     }
                 } else {None};
-                // The words over a light Theme wallpaper turn dark.
-                let shelf_ink = self.shelf_ink();
-                if shelf_ink.is_some() { commands.push(Draw::Ink(shelf_ink)); }
-                if let Some((face,elapsed,is_platform))=name {
-                    let alpha=slot_name_alpha(elapsed);
-                    if alpha>0.0 {
-                        if is_platform {draw_platform_name(face,alpha,&mut commands);}
-                        else {draw_slot_name(face,alpha,&mut commands);}
+                // The shelf's name and the game's title each on a pill in
+                // the theme's colours, the menus' ink on it, fading with its
+                // words (Siham 2026-11-19): readable on any wallpaper.
+                let name_alpha = name.map_or(0.0, |(_, elapsed, _)| slot_name_alpha(elapsed));
+                let title_shown = self.settings.show_titles && self.triggers.hold.is_none()
+                    && self.triggers.ejecting.is_none() && self.selected_title_face.w > 0;
+                let title_alpha = name.map_or(1.0, |(_, elapsed, _)| slot_title_alpha(elapsed));
+                if let Some((face, _, is_platform)) = name.filter(|_| name_alpha > 0.0) {
+                    self.draw_label_pill(slot_ui::slot_name_box(face, is_platform), name_alpha, &mut commands);
+                }
+                if title_shown && title_alpha > 0.0 {
+                    self.draw_label_pill(slot_ui::slot_title_box(self.selected_title_face), title_alpha, &mut commands);
+                }
+                let ink = menu_style::ink_map();
+                if ink.is_some() { commands.push(Draw::Ink(ink)); }
+                if let Some((face,_,is_platform))=name {
+                    if name_alpha>0.0 {
+                        if is_platform {draw_platform_name(face,name_alpha,&mut commands);}
+                        else {draw_slot_name(face,name_alpha,&mut commands);}
                     }
                 }
                 // HOLD TO DELETE takes the title's place while L2 + R2 are held.
-                if self.settings.show_titles && self.triggers.hold.is_none() && self.triggers.ejecting.is_none() {
-                    let alpha=name.map_or(1.0,|(_,elapsed,_)|slot_title_alpha(elapsed));
-                    slot_ui::draw_slot_title_scrolled(self.selected_title_face,alpha,title_shift,&mut commands);
+                if title_shown {
+                    slot_ui::draw_slot_title_scrolled(self.selected_title_face,title_alpha,title_shift,&mut commands);
                 }
-                if shelf_ink.is_some() { commands.push(Draw::Ink(None)); }
+                if ink.is_some() { commands.push(Draw::Ink(None)); }
                 commands.append(&mut studio_return);
             }
         } else {

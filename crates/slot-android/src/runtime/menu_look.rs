@@ -221,6 +221,29 @@ impl Engine {
         for (face, (tex, _, _)) in menu_style::pill_faces().iter().zip(self.menu_pill) {
             self.gpu.update_face(tex, face);
         }
+        for (face, (tex, _, _)) in menu_style::label_pill_faces().iter().zip(self.label_pill) {
+            self.gpu.update_face(tex, face);
+        }
+    }
+
+    /// The pill behind the shelf's name or the game's title, `bx` the
+    /// words' box (slot_ui::slot_name_box): a little wider, centred on it.
+    pub(super) fn draw_label_pill(&self, bx: [f32; 4], alpha: f32, out: &mut Vec<Draw>) {
+        let [(left, lw, h), (middle, _, _), (right, rw, _)] = self.label_pill;
+        let [x, y, w, bh] = bx;
+        if w <= 0.0 { return; }
+        let (lw, rw, h) = (lw as f32, rw as f32, h as f32);
+        let x0 = (x - 14.0).round();
+        let x1 = (x + w + 14.0).round().max(x0 + lw + rw);
+        let top = (y + bh / 2.0 - h / 2.0).round();
+        let grid = panel_size().0 as f32 / out_w() as f32;
+        let middle_x0 = ((x0 * grid).round() + slot_ui::density::px(lw as u32) as f32) / grid;
+        let middle_x1 = ((x1 - rw) * grid).round() / grid;
+        let alpha = alpha * 0.92;
+        out.push(Draw::Ink(None));
+        out.push(Draw::Tex { x: x0, y: top, w: lw, h, tex: left, alpha });
+        out.push(Draw::Tex { x: middle_x0, y: top, w: middle_x1 - middle_x0, h, tex: middle, alpha });
+        out.push(Draw::Tex { x: x1 - rw, y: top, w: rw, h, tex: right, alpha });
     }
 
     /// The selected row's bar on a page of `count` rows whose first row is

@@ -937,30 +937,33 @@ impl Engine {
             let right = width - 34.0;
             let value_face = face(&line.value, line.lit);
             let label_face = face(&line.label, true);
-            // A label and its value at one size, as the settings pages
-            // (beta41, Siham 2026-11-19): both give way together, in steps
-            // of 0.02, never under 0.6; a label still too long then scrolls
-            // in its room while chosen (a cheat's name).
-            let k = match (label_face, value_face) {
-                (Some((_, lw, _)), Some((_, vw, _))) => {
-                    // Carets only where the value cycles (Port 1's opens a page).
-                    let room = self.value_room() + if line.cycles { 0.0 }
-                        else { self.setting_carets[0].1 as f32 + 8.0 + 22.0 };
-                    let both = (lw + vw) as f32;
-                    if both * 0.79 <= room { 0.79 }
-                    else { (((room / both) * 50.0).floor() / 50.0).clamp(0.6, 0.79) }
-                }
-                _ => 0.79,
-            };
+            // Every row at one size (Siham 2026-11-19: rows of different
+            // sizes looked wrong): a few pixels too long gives way a touch
+            // (6 % at most), longer scrolls while chosen, cut with a fade
+            // otherwise. A value takes at most 55 % of the width.
+            let fit = |w: f32, room: f32| if w * 0.79 > room && w * 0.79 * 0.94 <= room { room / w } else { 0.79 };
             if let Some((tex, w, h)) = value_face {
                 let carets = chosen && line.cycles;
-                let scale = k.min((width * 0.55) / w.max(1) as f32);
+                let window = width * 0.55;
+                let scale = fit(w as f32, window);
                 let vw = w as f32 * scale;
-                let x = right - vw - if carets { 22.0 } else { 0.0 };
+                let shown = vw.min(window);
+                let x = right - shown - if carets { 22.0 } else { 0.0 };
                 label_room = (x - 37.0 - 12.0 - if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 }).max(80.0);
                 let vy = y + h as f32 * (0.79 - scale) / 2.0;
-                out.push(Draw::Tex { x, y: vy, w: vw, h: h as f32 * scale, tex,
-                    alpha: fade * shows * rest });
+                let alpha = fade * shows * rest;
+                if vw <= window {
+                    out.push(Draw::Tex { x, y: vy, w: vw, h: h as f32 * scale, tex, alpha });
+                } else {
+                    let travel = vw - window;
+                    let shift = if chosen { self.marquee_offset((page + 500, i), travel) } else { 0.0 };
+                    out.push(Draw::Span(Some(slot_gfx::Span {
+                        left: x, right: x + window,
+                        feather_left: shift.min(18.0), feather_right: (travel - shift).min(18.0),
+                    })));
+                    out.push(Draw::Tex { x: x - shift, y: vy, w: vw, h: h as f32 * scale, tex, alpha });
+                    out.push(Draw::Span(None));
+                }
                 if carets {
                     let (left, lw, lh) = self.setting_carets[0];
                     let (right_tex, rw, rh) = self.setting_carets[1];
@@ -972,6 +975,7 @@ impl Engine {
                 }
             }
             if let Some((tex, w, h)) = label_face {
+                let k = fit(w as f32, label_room);
                 let (lw, lh) = (w as f32 * k, h as f32 * k);
                 let y = y + h as f32 * (0.79 - k) / 2.0;
                 let alpha = fade * shows * rest;

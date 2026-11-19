@@ -457,6 +457,21 @@ fn draw_slot_name_at_scale(name: Printed, alpha: f32, scale: f32, out: &mut Vec<
     });
 }
 
+/// Where the shelf's (`platform`) or the letter's name is drawn: x, y,
+/// w, h, for the pill behind it (2.5, Siham 2026-11-19).
+pub fn slot_name_box(name: Printed, platform: bool) -> [f32; 4] {
+    let scale = if platform { crate::plate::PLATFORM_NAME_SCALE as f32 } else { 1.0 };
+    let w = name.w as f32 / scale;
+    [cx() - w / 2.0, SLOT_NAME_Y, w, HINT_H as f32]
+}
+
+/// Where the game's title is drawn (its window when it scrolls).
+pub fn slot_title_box(title: Printed) -> [f32; 4] {
+    let w = (title.w as f32).min(crate::plate::title_line_window());
+    let h = crate::plate::TITLE_LINE_H as f32;
+    [cx() - w / 2.0, SLOT_NAME_Y + HINT_H as f32 - h, w, h]
+}
+
 pub fn draw_slot_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
     draw_slot_name_at_scale(name, alpha, 1.0, out);
 }
