@@ -221,7 +221,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             }
         }
         try {
-            SlotToast.makeText(activity, "Open your slot folder, or create one named slot, then tap Use this folder.",
+            SlotToast.makeText(activity, "Open your slot. folder, or create one named slot, then tap Use this folder.",
                 Toast.LENGTH_LONG).show()
             @Suppress("DEPRECATION")
             activity.startActivityForResult(intent, REQUEST)
@@ -236,7 +236,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         prefs.edit().remove(TREE).remove(ROOT).apply()
         activity.nativeSetSlotFolder(0)
         activity.nativeExternalReturn()
-        SlotToast.makeText(activity, "slot. keeps everything on this handheld only. Your slot folder is untouched.",
+        SlotToast.makeText(activity, "slot. keeps everything on this handheld only. Your slot. folder is untouched.",
             Toast.LENGTH_LONG).show()
     }
 
@@ -286,7 +286,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             json != null -> {
                 if (json.optInt("format", 1) > FORMAT) {
                     // Scenario A8: written by a newer slot.
-                    ui { activity.nativeExternalReturn(); toast("This slot folder comes from a newer slot. Update slot. first.") }
+                    ui { activity.nativeExternalReturn(); toast("This slot. folder comes from a newer slot. Update slot. first.") }
                     return
                 }
                 val ours = prefs.getString(ENV, null) == json.optString("env")
@@ -295,7 +295,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                     else -> ui {
                         // Scenario A5: this handheld has its own too.
                         val dialog = SlotModalDialog(activity, "SLOT. FOLDER",
-                            "This slot folder comes from another handheld, and this one has its own saves " +
+                            "This slot. folder comes from another handheld, and this one has its own saves " +
                                 "and settings. Keep only the folder's, or merge both? This handheld's are " +
                                 "backed up first.",
                             onDismiss = { if (!chosen) activity.nativeExternalReturn() })
@@ -330,7 +330,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                             look(tree, child)
                         } catch (error: Exception) {
                             SlotLog.w(TAG, "Couldn't create the slot folder", error)
-                            ui { activity.nativeExternalReturn(); toast("Couldn't create the slot folder.") }
+                            ui { activity.nativeExternalReturn(); toast("Couldn't create the slot. folder.") }
                         }
                     }
                 }
@@ -437,7 +437,7 @@ internal class SlotFolder(private val activity: MainActivity) {
 
     private fun offerToClear(tree: Uri, doc: String) {
         val dialog = SlotModalDialog(activity, "OLD SLOT FOLDER",
-            "Everything is now in the new slot folder. Delete the old one's files?")
+            "Everything is now in the new slot. folder. Delete the old one's files?")
         dialog.addButton("KEEP IT") { dialog.dismiss() }
         dialog.addButton("DELETE") {
             dialog.dismiss()
@@ -446,7 +446,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                     SafSide(activity, tree, doc).clear()
                 } catch (error: Exception) {
                     SlotLog.w(TAG, "Old slot folder not cleared", error)
-                    ui { toast("Couldn't delete the old slot folder.") }
+                    ui { toast("Couldn't delete the old slot. folder.") }
                 }
             }
         }

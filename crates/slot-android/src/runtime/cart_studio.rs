@@ -203,6 +203,9 @@ pub(super) struct Studio {
     /// The colour chart is open; the colour it was opened on.
     chart: Option<usize>,
     preview: Option<(slot_gfx::TexId, u32, u32)>,
+    /// The cart as it stands, being drawn on a worker (50 to 110 ms on the
+    /// RG Rotate): the preview on screen stays until it is ready.
+    preview_rx: Option<std::sync::mpsc::Receiver<(slot_ui::CartFace, (u32, u32))>>,
     minis: Minis,
     stale: bool,
     /// Opened from the library page: B and A go back there.
@@ -447,7 +450,7 @@ impl Studio {
             uri, original: cart, auto, stored, row: 0, label: 0, background: 0,
             colour: start.0, finish: start.1, outline: start.2, start, colours, fun_start, pending_label,
             real_png: None, real: None, logo: None, waiting: true, alt: None, picture: None, search: None,
-            chart: None, preview: None, minis: Minis::default(), stale: true, from_library,
+            chart: None, preview: None, preview_rx: None, minis: Minis::default(), stale: true, from_library,
         }
     }
 
@@ -1090,15 +1093,42 @@ impl Engine {
         // (Siham 2026-11-17). The flying cart stands in meanwhile.
         if self.studio_flight.is_some_and(|f| f.opening && f.flying()) { return; }
         self.prepare_minis(wanted);
-        if !stale { return; }
-        let face = slot_ui::cart_face_with_material(&cart, art.map(|(rgba, _, _)| rgba));
-        let (w, h) = slot_ui::cart_box_for(&cart);
+        let art = art.map(|(rgba, _, _)| rgba);
         let studio = self.studio.as_mut().expect("checked above");
+        if stale {
+            studio.stale = false;
+            // The first one at once: the page never opens without its cart.
+            // Then each change on a worker, the newest winning.
+            let first = studio.preview.is_none() || cfg!(test);
+            let make = move || (slot_ui::cart_face_with_material(&cart, art), slot_ui::cart_box_for(&cart));
+            if first {
+                studio.preview_rx = None;
+                let made = make();
+                self.show_studio_preview(made);
+                return;
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            match std::thread::Builder::new().name("slot-studio-cart".into())
+                .spawn(move || { let _ = tx.send(make()); }) {
+                Ok(_) => studio.preview_rx = Some(rx),
+                Err(error) => {
+                    crate::log_warn(&format!("cart studio worker failed: {error}"));
+                    studio.stale = true;
+                    return;
+                }
+            }
+        }
+        let Some(made) = studio.preview_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else { return };
+        studio.preview_rx = None;
+        self.show_studio_preview(made);
+    }
+
+    fn show_studio_preview(&mut self, (face, (w, h)): (slot_ui::CartFace, (u32, u32))) {
+        let Some(studio) = self.studio.as_mut() else { return };
         studio.preview = Some(match studio.preview {
             Some((tex, _, _)) => { self.gpu.update_face(tex, &face); (tex, w, h) }
             None => (self.gpu.create_face(&face), w, h),
         });
-        studio.stale = false;
     }
 
     /// The tiles: keep the ones still right, draw the missing ones.

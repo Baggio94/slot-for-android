@@ -731,7 +731,7 @@ const MENU_TEXT: [&str; 156] = [
     "HANDHELD \u{b7} RG ROTATE",            // 147
     "WALLPAPER",                          // 148, Interface > Wallpaper
     // 149-152: Library in 2.5 (Siham 2026-11-16)
-    "Choose slot. Folder",                // 149
+    "slot. Folder",                       // 149, its place at right (Siham 2026-11-19)
     "Saves & States",                     // 150, Library's page
     "SAVES & STATES",                     // 151
     "Sync Saves with RomM",               // 152
@@ -804,7 +804,7 @@ const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF
 const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
 /// Library's values (2.5): where the slot. folder is, and RomM's sync
 /// before RomM is connected.
-const LIBRARY_VALUE_NAMES: [&str; 3] = ["INTERNAL", "SD CARD", "NEEDS ROMM"];
+const LIBRARY_VALUE_NAMES: [&str; 3] = ["INTERNAL STORAGE", "SD CARD", "NEEDS ROMM"];
 /// The slot. folder's place: 0 none, 1 internal storage, 2 SD card.
 static SLOT_FOLDER: AtomicU8 = AtomicU8::new(0);
 /// The slot. folder's first copy under way: its percent, -1 none.

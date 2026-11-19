@@ -13,6 +13,10 @@ simpletex_lcd by jdgleaver, using the line weighting of zfast_lcd_standard.
 GNU General Public License version 2 or later.
 Changes: the grid bias is 1.0, so black pixels carry no grid.
 
+simpletex_lcd_720p by jdgleaver, using the grid effect of lcd3x (Gigaherz,
+public domain). GNU General Public License version 2 or later. Its grid is
+used at scales that are not whole; the rest is simpletex_lcd's, as above.
+
 Additional GBA shader presets (QA code101):
 LCD Grid V2 by cgwg (libretro GPL-compatible shaders).
 GBA Color by hunterk, modified by Pokefan531. Public domain.

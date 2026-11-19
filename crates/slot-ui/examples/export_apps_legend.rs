@@ -55,6 +55,19 @@ fn export(destination: &std::path::Path) -> Result<(), Box<dyn std::error::Error
         ("heading-sign-out.png", heading("SIGN OUT")),
         ("heading-link-consent.png", heading("LINK — SHARE CARTRIDGE")),
         ("heading-direct-join.png", heading("MULTIPLAYER — DIRECT JOIN")),
+        // Every other Android window's title, named after it (SlotUi's
+        // headingAsset), so none falls back to Android's text (2.5).
+        ("heading-romm.png", heading("ROMM")),
+        ("heading-filter.png", heading("FILTER")),
+        ("heading-romm-save.png", heading("ROMM SAVE")),
+        ("heading-two-saves.png", heading("TWO SAVES")),
+        ("heading-deleted.png", heading("DELETED")),
+        ("heading-save-folder.png", heading("SAVE FOLDER")),
+        ("heading-slot-folder.png", heading("SLOT. FOLDER")),
+        ("heading-old-slot-folder.png", heading("OLD SLOT FOLDER")),
+        ("heading-sleep-when-closed.png", heading("SLEEP WHEN CLOSED")),
+        ("heading-saves-already-in-this-folder.png", heading("SAVES ALREADY IN THIS FOLDER")),
+        ("heading-states-already-in-this-folder.png", heading("STATES ALREADY IN THIS FOLDER")),
     ] {
         let expected_height = if filename.starts_with("heading-") { 40 } else { 24 };
         assert!(face.w > 20 && face.h == expected_height,
