@@ -206,6 +206,9 @@ pub(super) struct Studio {
     /// The cart as it stands, being drawn on a worker (50 to 110 ms on the
     /// RG Rotate): the preview on screen stays until it is ready.
     preview_rx: Option<std::sync::mpsc::Receiver<(slot_ui::CartFace, (u32, u32))>>,
+    /// The last page's preview texture, reused for this cart's first one:
+    /// never shown with the other cart on it (a flash of its label).
+    spare: Option<slot_gfx::TexId>,
     minis: Minis,
     stale: bool,
     /// Opened from the library page: B and A go back there.
@@ -450,7 +453,7 @@ impl Studio {
             uri, original: cart, auto, stored, row: 0, label: 0, background: 0,
             colour: start.0, finish: start.1, outline: start.2, start, colours, fun_start, pending_label,
             real_png: None, real: None, logo: None, waiting: true, alt: None, picture: None, search: None,
-            chart: None, preview: None, preview_rx: None, minis: Minis::default(), stale: true, from_library,
+            chart: None, preview: None, preview_rx: None, spare: None, minis: Minis::default(), stale: true, from_library,
         }
     }
 
@@ -773,7 +776,7 @@ impl Engine {
         let uri = cart.rom.to_string_lossy().into_owned();
         let mut studio = Studio::new(cart, pending, from_library);
         if let Some(old) = self.studio.take() {
-            studio.preview = old.preview;
+            studio.spare = old.preview.map(|(tex, _, _)| tex).or(old.spare);
             self.studio_pool.extend(old.minis.tex.into_iter().flatten().map(|(tex, _, _)| tex));
         }
         self.studio = Some(studio);
@@ -1125,8 +1128,8 @@ impl Engine {
 
     fn show_studio_preview(&mut self, (face, (w, h)): (slot_ui::CartFace, (u32, u32))) {
         let Some(studio) = self.studio.as_mut() else { return };
-        studio.preview = Some(match studio.preview {
-            Some((tex, _, _)) => { self.gpu.update_face(tex, &face); (tex, w, h) }
+        studio.preview = Some(match studio.preview.map(|(tex, _, _)| tex).or(studio.spare.take()) {
+            Some(tex) => { self.gpu.update_face(tex, &face); (tex, w, h) }
             None => (self.gpu.create_face(&face), w, h),
         });
     }
