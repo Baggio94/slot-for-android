@@ -1027,18 +1027,25 @@ impl Engine {
         }
     }
 
+    /// The game's name under the cart: up to four lines, fewer when a tall
+    /// cart (a shape changed in this page) leaves less room above the
+    /// legend (Siham 2026-11-19). The same lines for prepare and draw.
+    pub(super) fn studio_name_lines(&self, studio: &Studio) -> (Vec<String>, f32) {
+        let layout = studio_layout(studio.preview.map(|(_, w, h)| (w, h)));
+        let below = layout.cart_y + layout.cart_h + 12.0;
+        let line_h = self.controls_faces.get(&Self::face_key("CART STUDIO", true))
+            .map(|&(_, _, h)| super::romm::caption_line_h(h, STUDIO_NAME_SCALE));
+        let most = line_h.map_or(4, |line_h| (((self.legend_y() - 10.0 - below) / line_h).floor() as usize).clamp(1, 4));
+        super::romm::caption_lines(&slot_ui::label_text(&studio.original), layout.cart_room,
+            STUDIO_NAME_SCALE, most, false)
+    }
+
     /// Before drawing: the faces of the page and the cart as it stands.
     pub(super) fn prepare_cart_studio(&mut self) {
         if !matches!(self.overlay, ShelfOverlay::CartStudio) { return; }
         let Some(studio) = self.studio.as_ref() else { return };
         let mut texts = vec![("CART STUDIO".to_owned(), true)];
-        {
-            let layout = studio_layout(None);
-            let room = layout.cart_room;
-            for line in super::romm::caption_lines(&slot_ui::label_text(&studio.original), room, STUDIO_NAME_SCALE, 4, false).0 {
-                texts.push((line, true));
-            }
-        }
+        for line in self.studio_name_lines(studio).0 { texts.push((line, true)); }
         for row in studio.rows() {
             let (value, lit) = studio.value(row);
             texts.push((ROWS[row].to_owned(), lit || row != ROW_BACKGROUND));
@@ -1168,8 +1175,7 @@ impl Engine {
         let centre = (left + right_edge) / 2.0;
         // The game's name at one size, on up to four lines (Siham
         // 2026-11-19: shrunk to one line, it was unreadable on the Rotate).
-        let (lines, scale) = super::romm::caption_lines(&slot_ui::label_text(&studio.original),
-            right_edge - left, STUDIO_NAME_SCALE, 4, false);
+        let (lines, scale) = self.studio_name_lines(studio);
         let tall = self.draw_caption(out, &lines, centre, right_edge - left, below, scale,
             0.85 * fade, (usize::MAX - 3, 0));
         let cart = studio.draft_cart();

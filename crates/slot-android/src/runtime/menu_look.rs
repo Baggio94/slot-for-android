@@ -868,8 +868,10 @@ mod render {
             "2 Games in 1 - Dr. Mario + Puzzle League", "3 Games in 1! - SpongeBob SquarePants - Battle for Bikini Bottom + The Movie",
             "3 Game Pack! - The Game of Life + Payday + Yahtzee", "3 Games in One! - Yars' Revenge + Asteroids + Pong",
             "Pokemon Emerald"];
-        let json: Vec<String> = names.iter().enumerate().map(|(i, n)| format!(
+        let mut json: Vec<String> = names.iter().enumerate().map(|(i, n)| format!(
             r#"{{"title":"{n}","platform":"GBA","uri":"content://roms/g{i}.gba","code":"AXXE"}}"#)).collect();
+        // A tall cart (NES) with a long name: less room under it.
+        json.push(r#"{"title":"Teenage Mutant Ninja Turtles II - The Arcade Game","platform":"NES","uri":"content://roms/tmnt2.nes"}"#.into());
         let entries: Vec<RomEntry> = serde_json::from_str(&format!("[{}]", json.join(","))).unwrap();
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries)).unwrap();
@@ -880,6 +882,16 @@ mod render {
         shoot(&mut engine, &dir, "studio.png");
         engine.studio = None;
         engine.overlay = ShelfOverlay::None;
+        if let Some(nes) = engine.shelves.iter().position(|s| s.carts.iter().any(|c| slot_ui::label_text(c).to_uppercase().contains("TURTLES"))) {
+            engine.active = nes;
+            let at = engine.shelves[nes].carts.iter().position(|c| slot_ui::label_text(c).to_uppercase().contains("TURTLES")).unwrap();
+            engine.shelves[nes].select(at);
+            engine.open_cart_studio();
+            for _ in 0..60 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+            shoot(&mut engine, &dir, "studio_tall.png");
+            engine.studio = None;
+            engine.overlay = ShelfOverlay::None;
+        }
         engine.open_romm();
         let romm: Vec<String> = names.iter().enumerate().map(|(i, n)| format!(
             r#"{{"id":{},"platform":"GBA","title":"{n} (USA)","label":""}}"#, i + 1)).collect();
