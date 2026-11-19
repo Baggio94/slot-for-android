@@ -783,6 +783,9 @@ static SLOT_FOLDER_COPY: std::sync::atomic::AtomicI32 = std::sync::atomic::Atomi
 /// revision changes with it.
 static TASK_PILL: Mutex<String> = Mutex::new(String::new());
 static TASK_PILL_REV: AtomicU64 = AtomicU64::new(0);
+/// Android saw a touchscreen among the input devices (beta41): Controls
+/// shows Touchscreen only then. True until known.
+static HAS_TOUCHSCREEN: AtomicBool = AtomicBool::new(true);
 const TASK_PROBLEM: u8 = 0;
 const TASK_COPY: u8 = 1;
 const TASK_DOWNLOADS: u8 = 3;

@@ -473,13 +473,14 @@ impl Engine {
         match self.overlay {
             ShelfOverlay::ControlsSettings { row } => match code {
                 19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::ControlsSettings {
-                    row: move_menu_row(row, code, 5, self.menu_repeat_dispatch),
+                    row: move_menu_row(row, code, controls_rows(), self.menu_repeat_dispatch),
                 },
                 96 if row < PORTS => self.overlay = ShelfOverlay::ControlsPort { port: row, row: 0 },
                 96 if row == PORTS => self.overlay = ShelfOverlay::Hotkeys { row: 0 },
                 // Touchscreen: swipe the shelf, tap or pull down the middle
-                // cart (Siham 2026-11-16, off by default).
-                21 | 22 | 96 if row == PORTS + 1 => {
+                // cart (Siham 2026-11-16, off by default); only on a
+                // handheld with a touchscreen (beta41).
+                21 | 22 | 96 if row == PORTS + 1 && has_touchscreen() => {
                     self.settings.touchscreen = !self.settings.touchscreen;
                     self.persist_settings();
                 }
@@ -657,13 +658,14 @@ impl Engine {
         };
         let dim = |mut line: ControlsLine, lit: bool| { line.lit = lit; line };
         match self.overlay {
-            ShelfOverlay::ControlsSettings { row } => Some(("CONTROLS".into(), vec![
+            ShelfOverlay::ControlsSettings { row } => Some(("CONTROLS".into(), [
                 line("Port 1", self.pad_name(self.controls.on_port(0)), false),
                 line("Port 2", self.pad_name(self.controls.on_port(1)), false),
                 line("Hotkeys", String::new(), false),
-                line("Touchscreen", if self.settings.touchscreen { "On" } else { "Off" }.into(), true),
-                line("Reset to Default", String::new(), false),
-            ], row, vec![("A", "Select"), ("B", "Back")])),
+            ].into_iter().chain(has_touchscreen().then(||
+                line("Touchscreen", if self.settings.touchscreen { "On" } else { "Off" }.into(), true)))
+            .chain([line("Reset to Default", String::new(), false)]).collect(),
+            row, vec![("A", "Select"), ("B", "Back")])),
             ShelfOverlay::ControlsPort { port, row } => {
                 let fp = self.controls.on_port(port);
                 let pad = fp.map(|fp| self.controls.pad(fp)).unwrap_or_default();
@@ -988,3 +990,15 @@ impl Engine {
 
 /// A slot. button's bit in a joypad mask (the same buttons as Port 1).
 fn controls_mask(slot: i32) -> u16 { super::controls(slot) }
+
+/// Whether the handheld has a touchscreen (Android's input devices, read
+/// at start; true until known, so the option never hides by mistake).
+pub(super) fn has_touchscreen() -> bool {
+    super::HAS_TOUCHSCREEN.load(Ordering::Acquire)
+}
+
+/// Rows of Settings > Controls: two ports, Hotkeys, Touchscreen on a
+/// touchscreen handheld, Reset to Default.
+fn controls_rows() -> usize {
+    if has_touchscreen() { 5 } else { 4 }
+}

@@ -1248,6 +1248,14 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetSlotFolderCopy(
     SLOT_FOLDER_COPY.store(percent.clamp(-1, 100), Ordering::Release);
 }
 
+/// Whether the handheld has a touchscreen (beta41).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetHasTouchscreen(
+    _env: *mut c_void, _this: *mut c_void, has: u8,
+) {
+    HAS_TOUCHSCREEN.store(has != 0, Ordering::Release);
+}
+
 /// The player answered a window before the game, after `ms` (beta39): the
 /// insertion's line leaves it out.
 #[unsafe(no_mangle)]

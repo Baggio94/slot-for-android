@@ -19,16 +19,25 @@ internal object TaskPill {
     const val ROMM_SAVE = 4
     const val SCAN = 5
     const val LABELS = 6
+    /** Something done the player wants to know about (beta41). */
+    const val DONE = 7
 
     /** Before a task earns the pill. */
     private const val SHOW_AFTER_MS = 1_000L
     /** How long a problem shows. */
     private const val PROBLEM_MS = 4_000L
+    /** How long a confirmation shows, however quick its task (beta41,
+     *  Siham 2026-11-19), and how soon the same one may come back. */
+    private const val DONE_MS = 1_500L
+    private const val DONE_AGAIN_MS = 10_000L
 
     class Task(val kind: Int, val words: String, val progress: Float)
 
     @Volatile private var problem: String? = null
     @Volatile private var problemUntil = 0L
+    @Volatile private var done: String? = null
+    @Volatile private var doneUntil = 0L
+    private val doneLast = HashMap<String, Long>()
     private val since = HashMap<Int, Long>()
     private var sent: String? = null
 
@@ -38,15 +47,31 @@ internal object TaskPill {
         problemUntil = SystemClock.uptimeMillis() + PROBLEM_MS
     }
 
+    /** Something done the player is glad to see ("SAVED TO ROMM"), even
+     *  when it took no time: 1.5 s, not twice in 10 s. */
+    @Synchronized
+    fun confirm(words: String) {
+        val now = SystemClock.uptimeMillis()
+        val key = words.uppercase(Locale.ROOT)
+        if (now - (doneLast[key] ?: Long.MIN_VALUE / 2) < DONE_AGAIN_MS) return
+        doneLast[key] = now
+        done = key
+        doneUntil = now + DONE_MS
+    }
+
     /** The pill's lines for [running] (any order), or null when unchanged
      *  since the last call. Called on the UI thread only. During a game
      *  ([playing]) a problem waits: it shows once the shelf is back. */
     fun spec(running: List<Task>, playing: Boolean): String? {
         val now = SystemClock.uptimeMillis()
         if (playing && problem != null) problemUntil = maxOf(problemUntil, now + PROBLEM_MS)
+        if (playing && done != null) doneUntil = maxOf(doneUntil, now + DONE_MS)
         val shown = ArrayList<Task>()
         problem?.let { words ->
             if (now < problemUntil) shown.add(Task(PROBLEM, words, -1f)) else problem = null
+        }
+        done?.let { words ->
+            if (now < doneUntil) shown.add(Task(DONE, words, 1f)) else done = null
         }
         val kinds = running.map { it.kind }.toSet()
         since.keys.retainAll(kinds)

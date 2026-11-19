@@ -261,6 +261,7 @@ internal object RommSaves {
             }
             val sent = Romm.uploadSave(context, romId, emulator(target), target.stem + ".srm", local)
             keep(context, target, Record(romId, sent.id, sent.updatedAt, localSha, sendRtc(context, target, romId, kept)))
+            TaskPill.confirm("SAVED TO ROMM")
             null
         } catch (error: Romm.SignedOut) {
             "Signed out of RomM: this save wasn't sent."

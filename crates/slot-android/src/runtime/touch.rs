@@ -283,9 +283,19 @@ impl Engine {
         let Some(picker) = self.picker else { return };
         let shelf = &self.shelves[self.active];
         let Some(cart) = shelf.carts.get(shelf.index) else { return };
-        let board = slot_ui::board_layout_body(slot_ui::body_of(cart)).rest;
+        let layout = slot_ui::board_layout_body(slot_ui::body_of(cart));
+        let board = layout.rest;
         let on_board = (board.x..=board.x + board.w).contains(&x) && (board.y..=board.y + board.h).contains(&y);
-        let left = x < board.x + board.w / 2.0;
+        // The core whose chip is nearer the finger (beta41: the board's
+        // halves sent a tap on the GBA's left chip to the right one), for
+        // every board, from where its chips are drawn.
+        let zoom = layout.zoom(board);
+        let centre = |i: usize| {
+            let (cx, cy) = layout.at(board, layout.chip_u[i], layout.chip_v);
+            (cx + layout.chip.0 * zoom / 2.0, cy + layout.chip.1 * zoom / 2.0)
+        };
+        let distance = |(cx, cy): (f32, f32)| (x - cx).hypot(y - cy);
+        let left = distance(centre(0)) <= distance(centre(1));
         let core = if left { picker.left() } else { picker.right() };
         let Some(picker) = self.picker.as_mut() else { return };
         if !on_board || core == picker.seat() {

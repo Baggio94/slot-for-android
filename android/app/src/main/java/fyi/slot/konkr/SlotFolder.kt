@@ -47,6 +47,23 @@ internal fun folderFor(path: String, root: String, known: MutableMap<String, Str
 
 internal class SlotFolder(private val activity: MainActivity) {
     companion object {
+        /** Whether the storage a folder chosen through Android lives on is
+         *  there: internal always, a card only while mounted. */
+        fun volumeMounted(context: android.content.Context, volume: String?): Boolean {
+            volume ?: return false
+            if (volume == "primary") return true
+            return try {
+                context.getSystemService(StorageManager::class.java).storageVolumes.any {
+                    it.uuid.equals(volume, ignoreCase = true) && it.state == android.os.Environment.MEDIA_MOUNTED
+                }
+            } catch (_: Exception) { false }
+        }
+
+        /** The storage of a folder chosen through Android ("primary", or a card's id). */
+        fun volumeOf(tree: Uri): String? = try {
+            DocumentsContract.getTreeDocumentId(tree).substringBefore(':', "")
+        } catch (_: Exception) { null }
+
         private const val TAG = "SlotFolder"
         private const val PREFS = "slot-folder"
         private const val TREE = "tree"
@@ -99,6 +116,8 @@ internal class SlotFolder(private val activity: MainActivity) {
      *  only (beta39), never for labels and pictures behind them. */
     private val launchPending = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile private var pullRunning = false
+    /** The next copy follows the card's return: it says so when done (beta41). */
+    @Volatile private var confirmNextPull = false
     /** The whole copy into a folder just chosen, in percent; -1 when none. */
     @Volatile private var copyAt = -1
 
@@ -139,15 +158,8 @@ internal class SlotFolder(private val activity: MainActivity) {
     } catch (_: Exception) { false }
 
     /** Whether the folder's storage is in (Android's volumes only: cheap). */
-    private fun mounted(): Boolean {
-        val volume = volume() ?: return false
-        if (volume == "primary") return true
-        return try {
-            activity.getSystemService(StorageManager::class.java).storageVolumes.any {
-                it.uuid.equals(volume, ignoreCase = true) && it.state == android.os.Environment.MEDIA_MOUNTED
-            }
-        } catch (_: Exception) { false }
-    }
+    private fun mounted(): Boolean = volumeMounted(activity, volume())
+
     private var wasMounted: Boolean? = null
     private var pullWhenFree = false
 
@@ -163,6 +175,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         wasMounted = now
         if (pullWhenFree && now && canPull) {
             pullWhenFree = false
+            confirmNextPull = true
             sync(pull = true)
         }
     }
@@ -524,7 +537,8 @@ internal class SlotFolder(private val activity: MainActivity) {
             if (report.failures.isNotEmpty()) {
                 SlotLog.w(TAG, "Slot folder: " + report.failures.joinToString(" | "))
                 ui { TaskPill.problem(if (report.failures.any { full(it) }) "CARD FULL" else "COPY FAILED") }
-            }
+            } else if (pull && confirmNextPull) TaskPill.confirm("FOLDER UP TO DATE")
+            if (pull) confirmNextPull = false
             saveBase(base)
             if (report.toFolder > 0 || report.toPrivate > 0) {
                 try { writeJson(side, doc, prefs.getString(ENV, null) ?: return@run, side.readJson()) }

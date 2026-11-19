@@ -141,6 +141,7 @@ class MainActivity : Activity() {
     /** Library's slot. folder row while the first copy runs: 0-100, -1 done. */
     external fun nativeSetSlotFolderCopy(percent: Int)
     external fun nativeSetTaskPill(spec: String)
+    external fun nativeSetHasTouchscreen(has: Boolean)
     external fun nativeLaunchAsked(ms: Long)
     external fun nativeFrameWatchFlush()
     external fun nativeJournal(): String
@@ -294,6 +295,21 @@ class MainActivity : Activity() {
     private val rommQueued = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     private fun rommKey(target: RetroArchStorage.Target) = target.romIdentity + "." + target.core
+
+    /** Whether a touchscreen is among Android's input devices (beta41):
+     *  Controls shows Touchscreen only then. Unknown counts as one. */
+    private fun reportTouchscreen() {
+        val has = try {
+            InputDevice.getDeviceIds().any { id ->
+                val device = InputDevice.getDevice(id) ?: return@any false
+                !device.isVirtual && device.supportsSource(InputDevice.SOURCE_TOUCHSCREEN)
+            }
+        } catch (error: Exception) {
+            SlotLog.w(TAG, "Touchscreen unknown; Controls keeps it", error)
+            true
+        }
+        try { nativeSetHasTouchscreen(has) } catch (_: UnsatisfiedLinkError) {}
+    }
 
     /** The task pill's tasks (beta39), sent to the engine when they change. */
     private fun publishTaskPill() {
@@ -3626,6 +3642,12 @@ class MainActivity : Activity() {
 
     /** Runs sequentially with ROM materialization, never on the UI/GL thread. */
     private fun importBiosFolder(uri: Uri, persistSelection: Boolean, quietRetries: Int = 3) {
+        // The BIOS folder's card is out (beta41): the staged copy is used,
+        // nothing is read, no retries filling the log.
+        if (!persistSelection && !SlotFolder.volumeMounted(this, SlotFolder.volumeOf(uri))) {
+            SlotLog.i(TAG, "BIOS folder's card is out: the copy already in slot. is used")
+            return
+        }
         gameLoader.execute {
             try {
                 BiosLibrary.importFrom(this, uri)
@@ -4557,6 +4579,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        reportTouchscreen()
         if (updateAfterPermission) {
             updateAfterPermission = false
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
