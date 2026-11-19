@@ -57,11 +57,11 @@ impl Engine {
         fp == BUILTIN || self.pad_devices.iter().any(|d| d.fp == fp)
     }
 
-    /// Built-in on a narrow screen, where Controller and its value share
-    /// the row (the RG Rotate, Siham 2026-11-19).
+    /// Built-in on a square screen, where Controller and its value share
+    /// too narrow a row (the RG Rotate, Siham 2026-11-19).
     fn builtin_name() -> &'static str {
         if is_konkr() { "KONKR Controls" }
-        else if slot_gfx::out_w() < 600 { "Built-in" }
+        else if slot_gfx::out_w() < 520 { "Built-in" }
         else { "Built-in Controls" }
     }
 
