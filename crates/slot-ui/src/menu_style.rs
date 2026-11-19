@@ -206,8 +206,10 @@ pub fn pill_faces() -> [UndoFace; 3] {
 }
 
 /// The pill behind the shelf's name and the game's title on the carousel
-/// (2.5, Siham 2026-11-19): the bar's colour, round ends; its height.
-pub const LABEL_PILL_H: u32 = 30;
+/// (2.5, Siham 2026-11-19): the bar's colour, round ends; its height,
+/// little more than the words', clear of the tallest cart (NES) above and
+/// of the mouth below.
+pub const LABEL_PILL_H: u32 = 24;
 pub fn label_pill_faces() -> [UndoFace; 3] {
     let colour = pill_rgb();
     let r = LABEL_PILL_H / 2;
