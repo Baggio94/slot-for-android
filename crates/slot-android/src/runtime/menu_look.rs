@@ -239,7 +239,8 @@ impl Engine {
         let grid = panel_size().0 as f32 / out_w() as f32;
         let middle_x0 = ((x0 * grid).round() + slot_ui::density::px(lw as u32) as f32) / grid;
         let middle_x1 = ((x1 - rw) * grid).round() / grid;
-        let alpha = alpha * 0.92;
+        // A little of the wallpaper shows through (Siham 2026-11-19).
+        let alpha = alpha * 0.8;
         out.push(Draw::Ink(None));
         out.push(Draw::Tex { x: x0, y: top, w: lw, h, tex: left, alpha });
         out.push(Draw::Tex { x: middle_x0, y: top, w: middle_x1 - middle_x0, h, tex: middle, alpha });

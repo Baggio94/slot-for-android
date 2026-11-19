@@ -1188,17 +1188,19 @@ impl Engine {
         let layout = studio_layout(studio.preview.map(|(_, w, h)| (w, h)));
         let (left, right_edge) = (layout.cart_x, layout.cart_x + layout.cart_room);
         let mut below = 300.0;
-        let mut cart_top = ROWS_TOP;
+        // The cart's middle, for the rows beside it: the room's middle
+        // until it shows.
+        let mut cart_mid = ROWS_TOP + 125.0;
         if let Some(flight) = opening.filter(|_| flying.is_some() || studio.preview.is_none()) {
             // In flight, then in its place until the page's preview is ready.
             let rect = flight.at();
             self.with_cart_ink(out, |out| flight.draw(rect, out));
-            cart_top = rect[1];
+            cart_mid = rect[1] + rect[3] / 2.0;
             below = rect[1] + rect[3] + 12.0;
         } else if let Some((tex, _, _)) = studio.preview {
             let (dw, dh) = (layout.cart_w, layout.cart_h);
             let (x, y) = (left + (layout.cart_room - dw) / 2.0, layout.cart_y);
-            cart_top = y;
+            cart_mid = y + dh / 2.0;
             self.without_ink(out, |out| out.push(Draw::Tex { x, y, w: dw, h: dh, tex, alpha: fade }));
             below = y + dh + 12.0;
         }
@@ -1225,11 +1227,13 @@ impl Engine {
             self.draw_chart(studio, x0, x1, fade, out);
             vec![("B", "BACK"), ("SWAP", "MOVE"), ("A", "CHOOSE")]
         } else {
-            // The rows, on the right half: Label level with the cart's top,
-            // as low as the finish strip under them allows.
+            // The rows, on the right half, centred on the cart (Siham
+            // 2026-11-19): their pills from the first's top to the last's
+            // bottom. The finish strip, under them while Finish is chosen,
+            // keeps its size and may reach into the bottom margin.
             let rows = studio.rows();
-            let lowest = STRIP_BOTTOM - FINISH_STRIP_H - rows.len() as f32 * QUICK_PITCH;
-            let rows_top = (cart_top - 8.0).clamp(ROWS_TOP, lowest.max(ROWS_TOP));
+            let block = rows.len() as f32 * QUICK_PITCH - (QUICK_PITCH - 44.0);
+            let rows_top = (cart_mid - block / 2.0 - 4.0).max(ROWS_TOP).round();
             self.draw_menu_pill(x0 - 8.0, x1 + 8.0,
                 rows_top + studio.row as f32 * QUICK_PITCH + 4.0, fade, out);
             for (slot, &row) in rows.iter().enumerate() {
@@ -1384,11 +1388,12 @@ impl Engine {
         let n = FINISHES.len();
         let cell = (x1 - x0) / n as f32;
         let name_h = 18.0;
-        let box_h = (STRIP_BOTTOM - top - name_h - 6.0).max(20.0);
+        let bottom = STRIP_BOTTOM.max(top + FINISH_STRIP_H);
+        let box_h = (bottom - top - name_h - 6.0).max(20.0);
         for i in 0..n {
             let cx = x0 + i as f32 * cell;
             if i == studio.finish {
-                out.push(Draw::Rect { x: cx + 1.0, y: top, w: cell - 2.0, h: STRIP_BOTTOM - top,
+                out.push(Draw::Rect { x: cx + 1.0, y: top, w: cell - 2.0, h: bottom - top,
                     colour: { let mut c = menu_style::highlight(); c[3] *= 0.8 * fade; c } });
             }
             self.draw_mini(studio, i, cx + 4.0, top + 3.0, cell - 8.0, box_h, fade, out);

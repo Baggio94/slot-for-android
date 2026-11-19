@@ -941,11 +941,13 @@ impl Engine {
             // sizes looked wrong): a few pixels too long gives way a touch
             // (6 % at most), longer scrolls while chosen, cut with a fade
             // otherwise. A value takes at most 55 % of the width.
-            let fit = |w: f32, room: f32| if w * 0.79 > room && w * 0.79 * 0.94 <= room { room / w } else { 0.79 };
+            let fit_by = |w: f32, room: f32, most: f32| if w * 0.79 > room && w * 0.79 * most <= room { room / w } else { 0.79 };
+            let fit = |w: f32, room: f32| fit_by(w, room, 0.94);
             if let Some((tex, w, h)) = value_face {
                 let carets = chosen && line.cycles;
                 let window = width * 0.55;
-                let scale = fit(w as f32, window);
+                // A value up to 10 % smaller (Siham 2026-11-19).
+                let scale = fit_by(w as f32, window, 0.9);
                 let vw = w as f32 * scale;
                 let shown = vw.min(window);
                 let x = right - shown - if carets { 22.0 } else { 0.0 };

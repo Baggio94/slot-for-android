@@ -7507,12 +7507,13 @@ impl Engine {
         let selected = row == at;
         let carets = toggle && selected;
         let caret = if toggle { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
-        // Past its label, a gap and the left caret: a few pixels too long,
-        // a touch smaller; longer, it scrolls (as draw_values).
+        // Past its label, a gap and the left caret: a little too long, up
+        // to 10 % smaller (Siham 2026-11-19); longer, it scrolls (as
+        // draw_values).
         let from = 37.0 + label_w + 12.0 + caret;
         let end = right - if toggle { 22.0 } else { 0.0 };
         let scale = match width as f32 * scale {
-            w if w > end - from && w * 0.94 <= end - from => scale * (end - from) / w,
+            w if w > end - from && w * 0.9 <= end - from => scale * (end - from) / w,
             _ => scale,
         };
         let y = self.menu_rows_top(rows.min(self.visible_rows())) + dy + 8.0
@@ -7682,12 +7683,12 @@ impl Engine {
             let label_w = items.get(index).and_then(|&l| self.menu_textures.get(l))
                 .map_or(0, |t| t.1) as f32 * label_scale;
             let from = 37.0 + label_w + 12.0 + caret;
-            // A few pixels too long beside the carets: a touch smaller, the
-            // same chosen or not, rather than a scroll of a few pixels
-            // (Last Played, Siham 2026-11-15).
+            // A little too long beside the carets: up to 10 % smaller, the
+            // same chosen or not, rather than a scroll (Last Played, Siham
+            // 2026-11-15; 10 %, 2026-11-19).
             let room = right - 22.0 - from;
             let scale = match width as f32 * scale {
-                w if w > room && w * 0.94 <= room => scale * room / w,
+                w if w > room && w * 0.9 <= room => scale * room / w,
                 _ => scale,
             };
             let y = top + dy + 8.0 + height as f32 * (0.79 - scale) / 2.0;
