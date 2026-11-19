@@ -145,6 +145,9 @@ internal class SlotStatusIndicators(
             leftMargin = margin
             topMargin = statusTop
         })
+        // How wide Wi-Fi and Bluetooth stand, for the task pill to sit
+        // before them, not between them and the battery (Siham 2026-11-19).
+        right.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> reportIconsWidth() }
         frame.addView(right, FrameLayout.LayoutParams(-2, iconSize, Gravity.TOP or Gravity.END).apply {
             rightMargin = margin - spacing
             topMargin = statusTop
@@ -156,6 +159,17 @@ internal class SlotStatusIndicators(
      * phone's: the apps after the clock on the left, Wi-Fi and Bluetooth
      * before the battery on the right; the renderer gives both widths. */
     private var placed = -1L
+    private var iconsWidthSent = -1
+
+    private fun reportIconsWidth() {
+        val shown = right.visibility == View.VISIBLE && (0 until right.childCount).any {
+            right.getChildAt(it).visibility == View.VISIBLE }
+        val width = if (!shown || right.width <= 0) 0 else ((right.width - spacing) / scale).roundToInt().coerceAtLeast(0)
+        if (width == iconsWidthSent) return
+        iconsWidthSent = width
+        (host as? MainActivity)?.nativeSetStatusIconsWidth(width)
+    }
+
     private fun place(bottom: Boolean, grouped: Boolean, clockW: Int, batteryW: Int) {
         val key = (if (bottom) 2L else 0L) or (if (grouped) 1L else 0L) or
             (clockW.toLong() shl 2) or (batteryW.toLong() shl 12)
@@ -285,7 +299,7 @@ internal class SlotStatusIndicators(
         }
         sleepStatusObserver = null
         left.visibility = View.GONE
-        right.visibility = View.GONE
+        right.visibility = View.GONE; reportIconsWidth()
         if (subscribed) {
             runCatching { host.unregisterReceiver(basicReceiver) }
             subscribed = false
@@ -430,7 +444,7 @@ internal class SlotStatusIndicators(
         val visible = flags and 1 != 0
         if (!visible) {
             left.visibility = View.GONE
-            right.visibility = View.GONE
+            right.visibility = View.GONE; reportIconsWidth()
             return
         }
         val integrations = flags and 8 != 0
@@ -497,6 +511,7 @@ internal class SlotStatusIndicators(
             group.visibility = if ((0 until group.childCount)
                     .any { group.getChildAt(it).visibility == View.VISIBLE }) View.VISIBLE else View.GONE
         }
+        reportIconsWidth()
     }
 
     private companion object {

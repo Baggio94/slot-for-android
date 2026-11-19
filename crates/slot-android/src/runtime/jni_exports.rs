@@ -1333,3 +1333,10 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeJournal(
 ) -> jstring {
     env.new_string(crate::journal_text()).map_or(std::ptr::null_mut(), |s| s.into_raw())
 }
+
+/// Wi-Fi and Bluetooth's width on the status line (canvas pixels): the task
+/// pill sits before them (Siham 2026-11-19).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetStatusIconsWidth(
+    _env: *mut c_void, _this: *mut c_void, width: jint,
+) { STATUS_ICONS_W.store(width.clamp(0, 400) as u32, Ordering::Release); }

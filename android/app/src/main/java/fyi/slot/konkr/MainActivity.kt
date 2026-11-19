@@ -142,6 +142,8 @@ class MainActivity : Activity() {
     external fun nativeSetSlotFolderCopy(percent: Int)
     external fun nativeSetTaskPill(spec: String)
     external fun nativeSetHasTouchscreen(has: Boolean)
+    /** Wi-Fi and Bluetooth's width on the status line, in canvas pixels. */
+    external fun nativeSetStatusIconsWidth(width: Int)
     external fun nativeLaunchAsked(ms: Long)
     external fun nativeFrameWatchFlush()
     external fun nativeJournal(): String

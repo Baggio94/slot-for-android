@@ -809,6 +809,8 @@ static TASK_PILL_REV: AtomicU64 = AtomicU64::new(0);
 /// Android saw a touchscreen among the input devices (beta41): Controls
 /// shows Touchscreen only then. True until known.
 static HAS_TOUCHSCREEN: AtomicBool = AtomicBool::new(true);
+/// Wi-Fi and Bluetooth's width on the status line, from Android.
+static STATUS_ICONS_W: AtomicU32 = AtomicU32::new(0);
 /// When the GL surface was last made (uptime ms), until its first frame is
 /// drawn and timed: after sleep, how long the screen stays black (beta43).
 static FIRST_FRAME_SINCE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
@@ -2581,7 +2583,14 @@ impl Engine {
         let Some((kind, tex, w, h)) = self.task_pill_tex() else { return 0.0 };
         let margin = if out_w() < 640 { 12.0 } else { 24.0 };
         let (x, y, room) = if clock_top {
-            (out_w() as f32 - margin - battery_w - 12.0 - w, 14.0, w + 12.0)
+            // Before Wi-Fi and Bluetooth when they show (Android places them
+            // 10.75 before the battery), else by the battery.
+            let icons = STATUS_ICONS_W.load(Ordering::Acquire) as f32;
+            if icons > 0.0 {
+                (out_w() as f32 - margin - battery_w - 10.75 - icons - 12.0 - w, 14.0, 0.0)
+            } else {
+                (out_w() as f32 - margin - battery_w - 12.0 - w, 14.0, w + 12.0)
+            }
         } else if icons_top {
             (out_w() as f32 - margin - w, 40.0, 0.0)
         } else {
