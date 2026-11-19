@@ -805,6 +805,23 @@ const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
 /// Library's values (2.5): where the slot. folder is, and RomM's sync
 /// before RomM is connected.
 const LIBRARY_VALUE_NAMES: [&str; 3] = ["INTERNAL STORAGE", "SD CARD", "NEEDS ROMM"];
+/// Values' short forms, shown only where the whole one has no room even
+/// 10 % smaller (the RG Rotate, Siham 2026-11-19); others scroll.
+const SHORT_VALUES: [(&str, &str); 3] = [
+    ("ORIGINAL RATIO", "ORIG. RATIO"),
+    ("INTERNAL STORAGE", "INT. STORAGE"),
+    ("Genesis Plus GX", "GPGX"),
+];
+/// Labels too long for their value on a narrow screen (the RG Rotate's
+/// square one, Siham 2026-11-19).
+fn narrow_label(label: &str) -> &str {
+    if out_w() >= 600 { return label; }
+    match label {
+        "Fast Forward Sound" => "FF Sound",
+        "Sync Saves with RomM" => "Sync with RomM",
+        _ => label,
+    }
+}
 /// The slot. folder's place: 0 none, 1 internal storage, 2 SD card.
 static SLOT_FOLDER: AtomicU8 = AtomicU8::new(0);
 /// The slot. folder's first copy under way: its percent, -1 none.
@@ -1551,6 +1568,8 @@ struct Engine {
     /// and system lines.
     menu_side: Option<(String, [(slot_gfx::TexId, u32, u32); 2])>,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
+    /// Values' short forms where the whole word has no room (SHORT_VALUES).
+    short_values: Vec<(slot_gfx::TexId, (slot_gfx::TexId, u32, u32))>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
     /// About's third legend, X Logs: saves slot.'s logs to a file (#107).
     about_logs_hint: (slot_gfx::TexId, u32),
@@ -1935,7 +1954,7 @@ impl Engine {
             arrow_right: sprite(art.arrow_right),
         };
         let menu_textures = MENU_TEXT.iter().map(|label| {
-            let face = quick_value_face(label, true);
+            let face = quick_value_face(narrow_label(label), true);
             let tex = gpu.create_face(&face);
             (tex, face.w, face.h)
         }).collect();
@@ -2026,12 +2045,19 @@ impl Engine {
                 let face = quick_value_face(value, true);
                 let tex = gpu.create_face(&face);
                 (tex, face.w, face.h)
-            }).collect();
+            }).collect::<Vec<_>>();
         // Library's own values (2.5): the slot. folder's place, RomM's sync.
         let library_values = LIBRARY_VALUE_NAMES.map(|value| {
             let face = quick_value_face(value, true);
             (gpu.create_face(&face), face.w, face.h)
         });
+        let short_values = SHORT_VALUES.iter().filter_map(|&(whole, short)| {
+            let full = SETTING_VALUE_NAMES.iter().position(|v| *v == whole)
+                .and_then(|at| setting_values.get(at))
+                .or_else(|| LIBRARY_VALUE_NAMES.iter().position(|v| *v == whole).map(|at| &library_values[at]))?;
+            let face = quick_value_face(short, true);
+            Some((full.0, (gpu.create_face(&face), face.w, face.h)))
+        }).collect::<Vec<_>>();
         let slot_copy_face = {
             let face = quick_value_face("COPYING...", true);
             (gpu.create_face(&face), face.w, face.h)
@@ -2356,6 +2382,7 @@ impl Engine {
             menu_paths: Default::default(),
             menu_side: None,
             menu_textures,
+            short_values,
             menu_hints,
             about_logs_hint,
             first_run_hint,
@@ -7465,12 +7492,21 @@ impl Engine {
     /// with the exact Settings ON/OFF textures and carets.
     fn saves_value_faces(&self) -> Vec<(usize, (slot_gfx::TexId, u32, u32), bool)> {
         let share = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
+        // Without RomM it reads OFF; turning it on says where to connect
+        // (Siham 2026-11-19).
         let romm = match ROMM_SYNC.load(Ordering::Acquire) {
-            0 => self.library_values[2],
             2 => self.setting_values[4],
             _ => self.setting_values[5],
         };
         vec![(SAVES_SHARE_ROW, self.setting_values[share], true), (SAVES_ROMM_ROW, romm, true)]
+    }
+
+    /// A value's short form when the whole one has no room at `scale`,
+    /// even 10 % smaller, and the short one has more.
+    fn value_within(&self, value: (slot_gfx::TexId, u32, u32), scale: f32, room: f32)
+        -> (slot_gfx::TexId, u32, u32) {
+        if value.1 as f32 * scale * 0.9 <= room { return value; }
+        self.short_values.iter().find(|(whole, _)| *whole == value.0).map_or(value, |&(_, short)| short)
     }
 
     fn draw_page_values(&self, heading: usize, items: &[usize], row: usize,
@@ -7514,6 +7550,7 @@ impl Engine {
         // no room of its own.
         let from = 37.0 + label_w + 12.0 + caret - slot_ui::MENU_PAD as f32 * 0.79;
         let end = right - if toggle { 22.0 } else { 0.0 };
+        let (tex, width, height) = self.value_within((tex, width, height), scale, end - from);
         let scale = match width as f32 * scale {
             w if w > end - from && w * 0.9 <= end - from => scale * (end - from) / w,
             _ => scale,
@@ -7691,6 +7728,8 @@ impl Engine {
             // same chosen or not, rather than a scroll (Last Played, Siham
             // 2026-11-15; 10 %, 2026-11-19).
             let room = right - 22.0 - from;
+            // Too long even so: its short form, if it has one (ORIG. RATIO).
+            let (tex, width, height) = self.value_within((tex, width, height), scale, room);
             let scale = match width as f32 * scale {
                 w if w > room && w * 0.9 <= room => scale * room / w,
                 _ => scale,
