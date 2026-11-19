@@ -1686,6 +1686,8 @@ impl Engine {
         // panel, not stretched. Set both before the first face is built.
         slot_gfx::set_canvas_for_panel(size);
         slot_ui::density::set_scale(size.1 as f32 / OUT_H as f32);
+        // The slot bars and bezels decode on worker threads while GL starts.
+        let start_pixels = start_pixels();
         let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
         steps.mark("gl");
         let device = crate::settings::Device {
@@ -1728,38 +1730,21 @@ impl Engine {
         steps.mark("wallpaper upload");
         let custom_colours = visuals_root.as_deref()
             .is_some_and(|root| root.join("Config/theme.txt").exists());
-        let mut make_slot = |light: bool| {
-            let (back, front) = slot_ui::bitmaps::slot_bar_png(light);
-            // The 720-wide band is refitted to the canvas: same mouth and
-            // ends, longer or shorter housing on either side. Its 3x master
-            // is filtered straight to the panel's density.
-            let mut band = |png: &[u8]| {
-                let (rgba, w, h) = slot_ui::native_png(
-                    png, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
-                let wide = (w as f32 * out_w() as f32 / slot_ui::bitmaps::SLOT_W as f32)
-                    .round() as u32;
-                gpu.create_texture(wide, h, &slot_ui::refit_band(&rgba, w, h, wide))
-            };
-            let rear = band(back);
-            let front = band(front);
-            (rear, front)
+        let mut pixels = start_pixels.join().unwrap_or_else(|_| {
+            crate::log_warn("start pictures decoded on the GL thread (a worker failed)");
+            StartJob::all().iter().map(StartJob::decode).collect()
+        }).into_iter();
+        let mut upload = |gpu: &mut Compositor| {
+            let (rgba, w, h) = pixels.next().expect("every start picture decoded");
+            gpu.create_texture(w, h, &rgba)
         };
         // Both official themes are cached once. Toggling doesn't allocate
         // textures on the GL thread or shift the original Slot animation.
-        let slot_dark_faces=make_slot(false);
-        let slot_light_faces=make_slot(true);
+        let slot_dark_faces = (upload(&mut gpu), upload(&mut gpu));
+        let slot_light_faces = (upload(&mut gpu), upload(&mut gpu));
         let footer_inked_dark_at_start = settings.appearance == crate::settings::Appearance::Light;
-        let home_slot_themes=[0usize, 1, 2].map(|theme| [0usize, 1, 2, 3, 4, 5, 6].map(|family| {
-            let (back, front) = slot_ui::bitmaps::home_slot_png(family, theme);
-            let mut band = |png: &[u8]| {
-                let (rgba, w, h) = slot_ui::native_png(
-                    png, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
-                let wide = (w as f32 * out_w() as f32 / slot_ui::bitmaps::SLOT_W as f32)
-                    .round() as u32;
-                gpu.create_texture(wide, h, &slot_ui::refit_band(&rgba, w, h, wide))
-            };
-            (band(back), band(front))
-        }));
+        let home_slot_themes = [0usize, 1, 2].map(|_| [0usize, 1, 2, 3, 4, 5, 6]
+            .map(|_| (upload(&mut gpu), upload(&mut gpu))));
         steps.mark("slot bars");
         let home_slot_faces = home_slot_themes[settings.appearance.bar_theme()];
         // The home consoles' bars are open recesses like the GB/GBA bar
@@ -1770,10 +1755,8 @@ impl Engine {
                 Some(slot_light_faces)
             } else { Some(slot_dark_faces) };
         // Official 720x480 GB/GBC screen bezels, sampled once for KONKR.
-        let (gb, w, h)=slot_ui::native_png(slot_ui::bitmaps::bezel_master(false),720,480);
-        let gb_bezel_tex=gpu.create_texture(w,h,&gb);
-        let (gbc,w,h)=slot_ui::native_png(slot_ui::bitmaps::bezel_master(true),720,480);
-        let gbc_bezel_tex=gpu.create_texture(w,h,&gbc);
+        let gb_bezel_tex = upload(&mut gpu);
+        let gbc_bezel_tex = upload(&mut gpu);
 
         steps.mark("bezels");
         let mut shelves = Vec::new();
@@ -1826,6 +1809,7 @@ impl Engine {
         let video_label=platform_name_face("Game Boy Advance Video");
         let video_platform_face=Printed::new(gpu.create_face(&video_label), video_label.w);
 
+        steps.mark("platform names");
         let shadow = cart_shadow();
         let gba = gpu.create_face(&shadow);
         let shadow = gb_cart_shadow(GbShell::Notched);
@@ -1835,6 +1819,7 @@ impl Engine {
         let home_shadows = slot_ui::HomeMould::ALL
             .map(|m| (m, gpu.create_face(&slot_ui::home_cart_shadow(m))));
         // The exact original Slot 9x9 pixel star, bright yellow with dark rim.
+        steps.mark("shadows");
         let star=slot_ui::star_face(2, [0xf6,0xc3,0x2c]);
         let star_tex=gpu.create_face(&star);
         for shelf in &mut shelves {
@@ -8858,7 +8843,10 @@ impl Engine {
             self.buttons |= ButtonMask::SELECT;
         }
         let profile = self.current_emulation();
-        let bezel=self.game_bezel(); // resolved before mutably borrowing GameSession
+        // Only a game draws its bezel: fitting one on the shelf, each time
+        // the selected cart's system changed, held a shelf switch ~200ms on
+        // the KONKR (beta41 bench); the game's first frame fits it.
+        let bezel = if self.game.is_some() { self.game_bezel() } else { None }; // resolved before mutably borrowing GameSession
         let cart_platform=self.current_cart_platform();
         let live=self.live_game_options(); // Copy, zero allocations on 60/120Hz callback
         FF_AUDIO_ENABLED.store(live.ff_sound,Ordering::Release);
@@ -10060,6 +10048,68 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 /// for every system.
 /// The GBA's bar in `home_slot`'s order.
 const GBA_SLOT: usize = 6;
+
+
+/// A picture the cold renderer needs from its first frame, decoded off the
+/// GL thread (beta41): the slot bars in both themes, every console's bars
+/// in the three bar themes, the GB and GBC bezels. In upload order.
+enum StartJob { Band(&'static [u8]), Bezel(bool) }
+
+impl StartJob {
+    fn all() -> Vec<StartJob> {
+        use slot_ui::bitmaps::{home_slot_png, slot_bar_png};
+        let mut jobs = Vec::new();
+        for light in [false, true] {
+            let (back, front) = slot_bar_png(light);
+            jobs.extend([StartJob::Band(back), StartJob::Band(front)]);
+        }
+        for theme in 0..3 {
+            for family in 0..7 {
+                let (back, front) = home_slot_png(family, theme);
+                jobs.extend([StartJob::Band(back), StartJob::Band(front)]);
+            }
+        }
+        jobs.extend([StartJob::Bezel(false), StartJob::Bezel(true)]);
+        jobs
+    }
+
+    /// Its pixels, width and height, ready for create_texture.
+    fn decode(&self) -> (Vec<u8>, u32, u32) {
+        match *self {
+            StartJob::Band(png) => {
+                let (rgba, w, h) = slot_ui::native_png(
+                    png, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
+                let wide = (w as f32 * out_w() as f32 / slot_ui::bitmaps::SLOT_W as f32)
+                    .round() as u32;
+                (slot_ui::refit_band(&rgba, w, h, wide), wide, h)
+            }
+            StartJob::Bezel(gbc) => slot_ui::native_png(slot_ui::bitmaps::bezel_master(gbc), 720, 480),
+        }
+    }
+}
+
+/// Decodes StartJob::all() on up to four threads; joined once GL is up.
+fn start_pixels() -> std::thread::JoinHandle<Vec<(Vec<u8>, u32, u32)>> {
+    let scale = slot_ui::density::scale();
+    std::thread::spawn(move || {
+        let jobs = StartJob::all();
+        let n = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 4);
+        let mut out: Vec<Option<(Vec<u8>, u32, u32)>> = (0..jobs.len()).map(|_| None).collect();
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..n).map(|k| {
+                let jobs = &jobs;
+                scope.spawn(move || slot_ui::density::with_scale(scale, || {
+                    jobs.iter().enumerate().skip(k).step_by(n)
+                        .map(|(i, job)| (i, job.decode())).collect::<Vec<_>>()
+                }))
+            }).collect();
+            for worker in workers {
+                for (i, pixels) in worker.join().expect("a start picture worker") { out[i] = Some(pixels); }
+            }
+        });
+        out.into_iter().map(|p| p.expect("every start picture decoded")).collect()
+    })
+}
 
 fn pick_slot_faces(
     faces: Option<(slot_gfx::TexId, slot_gfx::TexId)>,
