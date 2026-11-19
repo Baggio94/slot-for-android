@@ -1679,6 +1679,7 @@ fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperP
 
 impl Engine {
     fn new(library_version: u64, library: Option<&[RomEntry]>) -> Result<Self, String> {
+        let mut steps = crate::frame_watch::Steps::new();
         let size = panel_size();
         // The canvas stays 480 high and takes the panel's shape (720 wide on
         // the KONKR's 3:2). Text, glyphs and vector art are drawn for the
@@ -1686,6 +1687,7 @@ impl Engine {
         slot_gfx::set_canvas_for_panel(size);
         slot_ui::density::set_scale(size.1 as f32 / OUT_H as f32);
         let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
+        steps.mark("gl");
         let device = crate::settings::Device {
             konkr: is_konkr(),
             retroid_pocket_classic: RPC_DEFAULT_RESPONSIVE.load(Ordering::Acquire),
@@ -1717,11 +1719,13 @@ impl Engine {
         // made once the engine is (with_shelf_wallpapers).
         let (wallpaper_pixels, wallpaper_personal) = wallpaper_pixels(visuals_root.as_deref(),
             &settings.wallpaper, None, settings.appearance.mosaic_theme());
+        steps.mark("settings and wallpaper read");
         let wallpaper_top_luma = wallpaper_pixels.as_deref()
             .map(|rgba| slot_ui::top_line_luma(rgba, slot_ui::native_w()));
         let wallpaper_texture = wallpaper_pixels.map(|rgba|
             gpu.create_texture(slot_ui::native_w(), slot_ui::native_h(), &rgba));
         // Preserve existing Config/theme.txt custom colours as an opt-out.
+        steps.mark("wallpaper upload");
         let custom_colours = visuals_root.as_deref()
             .is_some_and(|root| root.join("Config/theme.txt").exists());
         let mut make_slot = |light: bool| {
@@ -1756,6 +1760,7 @@ impl Engine {
             };
             (band(back), band(front))
         }));
+        steps.mark("slot bars");
         let home_slot_faces = home_slot_themes[settings.appearance.bar_theme()];
         // The home consoles' bars are open recesses like the GB/GBA bar
         // (Siham 2026-11-02): no flap or doors close them any more.
@@ -1770,6 +1775,7 @@ impl Engine {
         let (gbc,w,h)=slot_ui::native_png(slot_ui::bitmaps::bezel_master(true),720,480);
         let gbc_bezel_tex=gpu.create_texture(w,h,&gbc);
 
+        steps.mark("bezels");
         let mut shelves = Vec::new();
 
         // First-run empty shelf: never synthesize fake demo cartridges.
@@ -1802,6 +1808,7 @@ impl Engine {
         // Game Boy, Game Boy Color. Keep the existing 3x antialiased 16px
         // font, centered placement and official 200/1200/800ms fade.
         // Cache textures once rather than rebuilding on every L1/R1.
+        steps.mark("library");
         let platform_faces = Platform::ALL.map(|platform| {
             let face = platform_name_face(platform.name());
             let tex = gpu.create_face(&face);
@@ -1840,6 +1847,7 @@ impl Engine {
                 cart.rom.to_string_lossy().as_ref()));
         }
 
+        steps.mark("shelf faces");
         let art = slot_ui::link_marks();
         let mut sprite = |face: slot_ui::CartFace| Sprite {
             tex: gpu.create_face(&face), w: face.w, h: face.h,
@@ -1937,6 +1945,7 @@ impl Engine {
             let face = slot_ui::arrows_hint_face_ink("", ink);
             (gpu.create_face(&face), face.w)
         });
+        steps.mark("link faces");
         let setting_values = SETTING_VALUE_NAMES
             .into_iter().map(|value| {
                 let face = quick_value_face(value, true);
@@ -2001,6 +2010,7 @@ impl Engine {
             .map(|face| (gpu.create_face(&face), face.w));
         // Rasterize the detailed barcode About label only when opened.
         // Creating SVG / fonts during every cold boot needlessly delays shelf.
+        steps.mark("menu faces");
         let about_texture = None;
         let chip = chip_face(Some(Core::Mgba));
         let chip_texture = gpu.create_face(&chip);
@@ -2044,6 +2054,7 @@ impl Engine {
         });
 
         // Use the original Slot toast faces and HUD, not Android text banners.
+        steps.mark("chips");
         let mut hud = Hud::new();
         let toasts = Toast::all().into_iter().map(|toast| {
             let face = toast_face(toast);
@@ -2073,12 +2084,15 @@ impl Engine {
         let bolt_light_texture = gpu.create_face(&bolt);
 
         // On a GBA-only library do not begin on an empty GB or GBC shelf.
+        steps.mark("hud");
         let saved_focus=visuals_root.as_deref().and_then(crate::selection::load);
         let active=saved_focus.as_ref().and_then(|focus|restore_saved_focus(&mut shelves,focus))
             .unwrap_or_else(||shelves.iter().position(|s|!s.carts.is_empty()).unwrap_or(0));
         let active = gba_before_video(&shelves, active);
         let now = Instant::now();
         let has_multiple_systems = shelves.iter().filter(|s| !s.carts.is_empty()).count() > 1;
+        steps.mark("rest");
+        crate::game::log_launch_timing(&steps.line());
         Ok(Self {
             gpu,
             size,
@@ -8589,11 +8603,13 @@ impl Engine {
                 self.net_switch_t = wan;
             }
         }
+        let menus_at = Instant::now();
         self.prepare_controls();
         self.prepare_menu_look();
         self.prepare_cart_studio();
         self.prepare_cart_library();
         self.prepare_romm();
+        crate::frame_watch::span(crate::frame_watch::SPAN_MENUS, menus_at.elapsed());
         // Update full-screen menus and spring-smooth the selection bar.
         // Keep animation entirely in rendering: never delay controller input.
         let (kind, selected, count) = match self.overlay {
@@ -9252,8 +9268,10 @@ impl Engine {
             false
         };
         if repeated_letter { self.show_selected_letter(); }
+        let tick_at = Instant::now();
         self.shelves[self.active].update(dt);
         self.tick_triggers();
+        crate::frame_watch::span(crate::frame_watch::SPAN_TICK, tick_at.elapsed());
         let upload_at = Instant::now();
         self.relabel_one();
         self.prepare_visible();
@@ -9275,8 +9293,12 @@ impl Engine {
         let mut last = WARM_ROM_URI.lock().unwrap_or_else(|e|e.into_inner());
         if *last != candidate { *last = candidate; }
         drop(last);
+        let title_at = Instant::now();
         self.refresh_selected_title();
+        crate::frame_watch::span(crate::frame_watch::SPAN_TITLE, title_at.elapsed());
+        let focus_at = Instant::now();
         self.persist_focus_if_idle();
+        crate::frame_watch::span(crate::frame_watch::SPAN_FOCUS, focus_at.elapsed());
         // Resolve the optional transparent material before mutably borrowing
         // the selected rack, otherwise Rust rejects the overlapping borrows.
         let (selected_clear_back, selected_clear_front) = self.clear_layers();
@@ -9524,7 +9546,9 @@ impl Engine {
                 });
             }
         }
+        let overlay_at = Instant::now();
         self.draw_overlay(&mut commands);
+        crate::frame_watch::span(crate::frame_watch::SPAN_OVERLAY, overlay_at.elapsed());
         self.draw_menu_task_pill(&mut commands);
         if cover_with_hold {
             let mut hold = Vec::with_capacity(commands.len() + 8);

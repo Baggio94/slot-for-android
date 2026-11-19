@@ -862,4 +862,50 @@ mod render {
         engine.lid_covered = false;
         engine.lid_t = 0.0;
     }
+
+    /// Times slot.'s own work without a handheld (beta41): the cold
+    /// renderer's steps, then every frame of a shelf switch, a scroll and
+    /// the menu opening, with the build part's spans. Software GL makes the
+    /// gpu part meaningless here; the CPU parts compare. $SCRATCH_BENCH on.
+    #[test]
+    fn bench_shelf() {
+        if std::env::var("SCRATCH_BENCH").is_err() { return; }
+        let json: Vec<String> = (0..250).map(|i| {
+            let (platform, ext) = [("GBA", "gba"), ("GB", "gb"), ("GBC", "gbc")][i % 3];
+            format!(r#"{{"title":"Game number {i} of the bench","platform":"{platform}","uri":"content://roms/g{i}.{ext}","code":"AXXE"}}"#)
+        }).collect();
+        let entries: Vec<RomEntry> = serde_json::from_str(&format!("[{}]", json.join(","))).unwrap();
+        let _surface = slot_gfx::TestEgl::new();
+        let started = std::time::Instant::now();
+        let mut engine = Engine::new(1, Some(&entries)).unwrap();
+        eprintln!("BENCH cold renderer {}ms", started.elapsed().as_millis());
+        crate::frame_watch::set_hitch_ms(0.0);
+        let run = |engine: &mut Engine, what: &str, frames: usize| {
+            for i in 0..frames {
+                let at = std::time::Instant::now();
+                engine.draw(0, || {});
+                let took = at.elapsed();
+                eprint!("BENCH {what} #{i} ");
+                crate::frame_watch::frame(took, crate::frame_watch::Moment::default());
+                std::thread::sleep(std::time::Duration::from_millis(4));
+            }
+        };
+        run(&mut engine, "settle", 30);
+        for _ in 0..2 {
+            engine.handle(Input::Key(103, true)); engine.handle(Input::Key(103, false));
+            run(&mut engine, "shelf R1", 20);
+        }
+        engine.handle(Input::Key(102, true)); engine.handle(Input::Key(102, false));
+        run(&mut engine, "shelf L1", 20);
+        for _ in 0..6 {
+            engine.handle(Input::Key(22, true)); engine.handle(Input::Key(22, false));
+            run(&mut engine, "cart right", 6);
+        }
+        run(&mut engine, "still", 60);
+        engine.handle(Input::Key(108, true)); engine.handle(Input::Key(108, false));
+        run(&mut engine, "menu", 20);
+        engine.overlay = ShelfOverlay::Settings { row: 1 };
+        run(&mut engine, "settings", 20);
+        crate::frame_watch::set_hitch_ms(50.0);
+    }
 }

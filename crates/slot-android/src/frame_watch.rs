@@ -25,6 +25,74 @@ pub(crate) const PART_GPU: usize = 2;
 const PART_NAMES: [&str; 4] = ["wallpaper", "upload", "gpu", "build"];
 static PARTS: Mutex<[u32; 3]> = Mutex::new([0; 3]);
 
+/// Pieces of the build part timed on their own (beta41), for the line a
+/// very slow frame writes: the menus' preparing, the selected title, the
+/// last selection written to disk, the shelf's own tick, the overlay's
+/// commands.
+pub(crate) const SPAN_MENUS: usize = 0;
+pub(crate) const SPAN_TITLE: usize = 1;
+pub(crate) const SPAN_FOCUS: usize = 2;
+pub(crate) const SPAN_TICK: usize = 3;
+pub(crate) const SPAN_OVERLAY: usize = 4;
+const SPAN_NAMES: [&str; 5] = ["menus", "title", "focus", "tick", "overlay"];
+static SPANS: Mutex<[u32; 5]> = Mutex::new([0; 5]);
+
+/// A frame slower than this writes its own line, with every part (bits of
+/// an f32, so the bench can lower it).
+static HITCH_MS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x4248_0000);
+
+#[cfg(test)]
+pub(crate) fn set_hitch_ms(ms: f32) { HITCH_MS.store(ms.to_bits(), Ordering::Relaxed); }
+
+/// [span] of the build part took [took] this frame.
+pub(crate) fn span(span: usize, took: Duration) {
+    let mut spans = SPANS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(slot) = spans.get_mut(span) {
+        *slot = slot.saturating_add(took.as_micros().min(u128::from(u32::MAX)) as u32);
+    }
+}
+
+/// The line of one very slow frame: every part and span, in ms.
+fn hitch_line(ms: f32, parts: &[u32; 3], spans: &[u32; 5], moment: Moment, work: u8) -> String {
+    let at = |us: u32| format!("{:.1}", us as f32 / 1000.0);
+    let total_us = (ms * 1000.0) as u32;
+    let build = total_us.saturating_sub(parts.iter().sum::<u32>());
+    let spans = SPAN_NAMES.iter().zip(spans)
+        .filter(|(_, us)| **us >= 500)
+        .map(|(name, us)| format!("{name} {}", at(*us)))
+        .collect::<Vec<_>>().join(", ");
+    let mut during = Vec::new();
+    if moment.scrolling { during.push("scroll"); }
+    if moment.menu { during.push("menu"); }
+    if moment.inserting { during.push("insert"); }
+    if moment.ejecting { during.push("eject"); }
+    if work & WORK_LABEL != 0 { during.push("label"); }
+    if work & WORK_WALLPAPER != 0 { during.push("wallpaper"); }
+    if work & WORK_LIBRARY != 0 { during.push("library"); }
+    if work & WORK_CORE != 0 { during.push("core"); }
+    format!("Slow frame {ms:.0}ms: wallpaper {}, upload {}, gpu {}, build {}{}; during: {}",
+        at(parts[0]), at(parts[1]), at(parts[2]), at(build),
+        if spans.is_empty() { String::new() } else { format!(" ({spans})") },
+        if during.is_empty() { "-".into() } else { during.join(" ") })
+}
+
+/// The cold renderer's steps, timed once at start (beta41): one line.
+pub(crate) struct Steps { last: Instant, done: Vec<(&'static str, u128)> }
+
+impl Steps {
+    pub(crate) fn new() -> Self { Self { last: Instant::now(), done: Vec::new() } }
+    /// The step called [name] ends here.
+    pub(crate) fn mark(&mut self, name: &'static str) {
+        let now = Instant::now();
+        self.done.push((name, now.duration_since(self.last).as_millis()));
+        self.last = now;
+    }
+    pub(crate) fn line(&self) -> String {
+        let steps = self.done.iter().map(|(name, ms)| format!("{name} {ms}")).collect::<Vec<_>>();
+        format!("Cold renderer steps (ms): {}", steps.join(", "))
+    }
+}
+
 /// [part] took [took] this frame (microseconds kept).
 pub(crate) fn part(part: usize, took: Duration) {
     let mut parts = PARTS.lock().unwrap_or_else(|e| e.into_inner());
@@ -181,7 +249,11 @@ pub(crate) fn cancel() {
 pub(crate) fn frame(took: Duration, moment: Moment) {
     let work = WORK.swap(0, Ordering::Relaxed);
     let parts = std::mem::take(&mut *PARTS.lock().unwrap_or_else(|e| e.into_inner()));
+    let spans = std::mem::take(&mut *SPANS.lock().unwrap_or_else(|e| e.into_inner()));
     let ms = took.as_secs_f32() * 1000.0;
+    if ms > f32::from_bits(HITCH_MS.load(Ordering::Relaxed)) && !(moment.playing && !moment.ejecting) {
+        crate::game::log_launch_timing(&hitch_line(ms, &parts, &spans, moment, work));
+    }
     if let Some(c) = cart().as_mut() { c.longest_ms = c.longest_ms.max(ms); }
     if moment.playing && !moment.ejecting { return; }
     let mut window = SHELF.lock().unwrap_or_else(|e| e.into_inner());
@@ -236,6 +308,10 @@ mod tests {
             w.causes[0] = 1; w.causes[1] = 2;
             w.line("bench")
         };
+        assert_eq!(hitch_line(120.0, &[1000, 2000, 7000], &[0, 4000, 90000, 0, 0],
+            Moment { scrolling: false, ..Moment::default() }, WORK_LABEL),
+            "Slow frame 120ms: wallpaper 1.0, upload 2.0, gpu 7.0, build 110.0 \
+            (title 4.0, focus 90.0); during: label");
         assert_eq!(line, "Shelf frames (bench): 300 drawn, 2 over 17ms, 1 over 33ms, longest 41.5ms; \
             during: scroll=1 label=2");
     }
