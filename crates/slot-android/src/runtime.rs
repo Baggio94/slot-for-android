@@ -7510,9 +7510,9 @@ impl Engine {
         // Past its label, a gap and the left caret: a little too long, up
         // to 10 % smaller (Siham 2026-11-19); longer, it scrolls (as
         // draw_values).
-        // Faces carry clear margins (MENU_PAD) each side: the label's right
-        // one and the value's left one need no room of their own.
-        let from = 37.0 + label_w + 12.0 + caret - 2.0 * slot_ui::MENU_PAD as f32 * 0.79;
+        // Faces carry clear margins (MENU_PAD): the label's right one needs
+        // no room of its own.
+        let from = 37.0 + label_w + 12.0 + caret - slot_ui::MENU_PAD as f32 * 0.79;
         let end = right - if toggle { 22.0 } else { 0.0 };
         let scale = match width as f32 * scale {
             w if w > end - from && w * 0.9 <= end - from => scale * (end - from) / w,
@@ -7684,9 +7684,9 @@ impl Engine {
             // left caret.
             let label_w = items.get(index).and_then(|&l| self.menu_textures.get(l))
                 .map_or(0, |t| t.1) as f32 * label_scale;
-            // Faces carry clear margins (MENU_PAD) each side: the label's
-            // right one and the value's left one need no room of their own.
-            let from = 37.0 + label_w + 12.0 + caret - 2.0 * slot_ui::MENU_PAD as f32 * 0.79;
+            // Faces carry clear margins (MENU_PAD): the label's right one
+            // needs no room of its own.
+            let from = 37.0 + label_w + 12.0 + caret - slot_ui::MENU_PAD as f32 * 0.79;
             // A little too long beside the carets: up to 10 % smaller, the
             // same chosen or not, rather than a scroll (Last Played, Siham
             // 2026-11-15; 10 %, 2026-11-19).
