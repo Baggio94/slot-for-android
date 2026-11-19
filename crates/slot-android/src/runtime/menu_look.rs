@@ -68,31 +68,6 @@ pub(super) struct InkHint {
     spec: HintSpec,
 }
 
-/// `words` (the shelf's name, the game's title) in the menus' ink over a
-/// soft halo of the theme's bar colour: the same faces, coloured and
-/// faint, around them (Siham 2026-11-19).
-pub(super) fn push_with_halo(words: &[Draw], out: &mut Vec<Draw>) {
-    if words.is_empty() { return; }
-    let rgb = menu_style::pill_rgb().map(|c| c as f32 / 255.0);
-    out.push(Draw::Ink(Some(slot_gfx::InkMap { paper: rgb, ink: rgb })));
-    for (radius, alpha) in [(2.5f32, 0.16f32), (1.25, 0.22)] {
-        for step in 0..12 {
-            let a = step as f32 * std::f32::consts::TAU / 12.0;
-            let (dx, dy) = (radius * a.cos(), radius * a.sin());
-            for draw in words {
-                out.push(match *draw {
-                    Draw::Tex { x, y, w, h, tex, alpha: seen } =>
-                        Draw::Tex { x: x + dx, y: y + dy, w, h, tex, alpha: seen * alpha },
-                    ref other => other.clone(),
-                });
-            }
-        }
-    }
-    out.push(Draw::Ink(menu_style::ink_map()));
-    out.extend_from_slice(words);
-    out.push(Draw::Ink(None));
-}
-
 impl Engine {
     /// How far the shown page's list is scrolled, and how far it can go.
     pub(super) fn menu_scroll(&self, count: usize) -> (f32, f32) {

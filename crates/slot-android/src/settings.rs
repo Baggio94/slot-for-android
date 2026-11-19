@@ -105,9 +105,9 @@ impl WallpaperTint {
     }
 }
 
-/// Interface > Wallpaper's Blur, Halo and Darken for General or a shelf, in
+/// Interface > Wallpaper's Blur, Halo and Tint (`darken`) for General or a shelf, in
 /// percent, 0 (OFF) to 100 by tens (Siham 2026-11-19). Blur softens every
-/// wallpaper, Halo lights Default's lines, Darken shades an image.
+/// wallpaper, Halo lights Default's lines, Tint shades an image.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WallpaperLook { pub blur: u8, pub halo: u8, pub darken: u8 }
@@ -817,7 +817,7 @@ impl Settings {
                 let old_json=serde_json::from_slice::<serde_json::Value>(&b).ok();
                 let had_wallpaper_choice=old_json.as_ref()
                     .is_some_and(|v|v.get("wallpaper").is_some());
-                serde_json::from_slice::<Self>(&b).ok().map(|mut s| {
+                Self::lenient(&b).map(|mut s| {
                     // Critical: prior U1/RC1 stored a shared GB/GBC shader and
                     // shared color correction. Copy those values *once* into
                     // independent fields, never reset the user's preferences.
@@ -938,6 +938,24 @@ impl Settings {
         }
         self.wallpaper = WallpaperPick::Default;
     }
+    /// The settings in `bytes`, each on its own: a value this version does
+    /// not know (written by a newer one on a handheld sharing the slot.
+    /// folder) goes back to its default alone, every other value kept.
+    fn lenient(bytes: &[u8]) -> Option<Self> {
+        if let Ok(whole) = serde_json::from_slice::<Self>(bytes) { return Some(whole); }
+        let serde_json::Value::Object(fields) = serde_json::from_slice::<serde_json::Value>(bytes).ok()?
+            else { return None };
+        let mut kept = serde_json::Map::new();
+        let mut dropped = Vec::new();
+        for (key, value) in fields {
+            let alone = serde_json::Value::Object([(key.clone(), value.clone())].into_iter().collect());
+            if serde_json::from_value::<Self>(alone).is_ok() { kept.insert(key, value); }
+            else { dropped.push(key); }
+        }
+        crate::log_warn(&format!("Settings: unknown values back to their defaults: {}", dropped.join(", ")));
+        serde_json::from_value(serde_json::Value::Object(kept)).ok()
+    }
+
     /// Default Blur, Default Halo and slot. Blur become Default or slot. with
     /// that Blur or Halo, and Wallpaper Tint each image's Darken, for General
     /// and every shelf (2.5, Siham 2026-11-19).
@@ -1504,6 +1522,22 @@ mod tests {
         s.set_shelf_wallpaper(3, Option::None);
         assert_eq!(s.wallpaper_on(3), &Default);
         assert!(!serde_json::to_string(&s).unwrap().contains("wallpaper_shelves"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_value_from_a_newer_version_resets_alone() {
+        let root=std::env::temp_dir().join(format!(
+            "slot-lenient-settings-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(NAME), r#"{"wallpaper":"sparkles","appearance":"light",
+            "wallpaper_look":{"blur":40,"halo":0,"darken":0},"show_titles":true,
+            "status_opt_in_v2":true}"#).unwrap();
+        let s=Settings::load(&root);
+        assert_eq!(s.wallpaper, WallpaperPick::default());
+        assert_eq!(s.appearance, Appearance::Light);
+        assert_eq!(s.wallpaper_look.blur, 40);
+        assert!(s.show_titles);
         std::fs::remove_dir_all(root).unwrap();
     }
 

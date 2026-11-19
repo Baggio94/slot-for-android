@@ -738,7 +738,7 @@ const MENU_TEXT: [&str; 156] = [
     // 153-155: Interface > Wallpaper's looks (Siham 2026-11-19).
     "Blur",                               // 153
     "Halo",                               // 154
-    "Darken",                             // 155
+    "Tint",                               // 155, Darken in 2.5's first betas
 ];
 
 /// Settings > Systems, top to bottom.
@@ -790,7 +790,7 @@ const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                // 124: the mosaic in a soft glow.
                                "Default Halo",
                                // 125-134 (PERCENT_VALUES): Wallpaper's Blur,
-                               // Halo and Darken; 0 % shows OFF (5).
+                               // Halo and Tint; 0 % shows OFF (5).
                                "10%", "20%", "30%", "40%", "50%",
                                "60%", "70%", "80%", "90%", "100%",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
@@ -1219,7 +1219,7 @@ const INTERFACE_WALLPAPER_ROW: usize = 1;
 const INTERFACE_STATUS_ROW: usize = 4;
 /// Settings > Interface > Wallpaper (Engine::wallpaper_rows): Shelf
 /// (General or a shelf), its Wallpaper, Blur, then Halo with Default or
-/// Darken with an image (none with None and slot.), Import, Delete.
+/// Tint (idle but for an image), Import, Delete.
 const BLUR_ROW: usize = 153;
 const HALO_ROW: usize = 154;
 const DARKEN_ROW: usize = 155;
@@ -1464,7 +1464,7 @@ struct Engine {
     shelf_wallpaper_texs: Vec<Option<slot_gfx::TexId>>,
     shelf_wallpaper_ready: Vec<bool>,
     shelf_wallpaper_luma: Vec<Option<f32>>,
-    /// A shelf's own wallpaper is an image (its Darken shades it).
+    /// A shelf's own wallpaper is an image (its Tint shades it).
     shelf_wallpaper_personal: Vec<bool>,
     shelf_wallpaper_rx: Option<std::sync::mpsc::Receiver<(usize, Vec<u8>, f32, bool)>>,
     /// General's wallpaper being made (reload_wallpaper): the one on screen
@@ -2561,7 +2561,7 @@ impl Engine {
 
     /// The wallpaper the shelf on screen shows: its own once decoded (its
     /// own pick, or its mosaic for General's Default), else General's; with
-    /// how much its Darken shades it (an image only) and its top line's
+    /// how much its Tint shades it (an image only) and its top line's
     /// luma. None for Wallpaper None, the theme's ground.
     fn active_wallpaper(&self) -> Option<(slot_gfx::TexId, f32, Option<f32>)> {
         use crate::settings::WallpaperPick;
@@ -5000,8 +5000,8 @@ impl Engine {
                                 _ => {}
                             },
                             ShelfOverlay::WallpaperSettings { row } => {
-                                // Halo or Darken comes and goes with the
-                                // wallpaper: the cursor stays on the page.
+                                // Six rows; a row past the end (an older
+                                // page) comes back onto it.
                                 let count = self.wallpaper_rows().0.len();
                                 let row = row.min(count - 1);
                                 match code {
@@ -6782,29 +6782,22 @@ impl Engine {
         }
     }
     fn wallpaper_look_idle(&self, row: usize) -> bool {
-        self.wallpaper_edit.is_some_and(|shelf| self.settings.shelf_wallpaper(shelf).is_none())
-            || (row == BLUR_ROW && *self.edited_wallpaper() == crate::settings::WallpaperPick::None)
-    }
-    /// Interface > Wallpaper's rows and their values' keys: Halo with
-    /// Default, Darken with an image (Random deals images), neither with
-    /// None or slot. (Siham 2026-11-19).
-    fn wallpaper_rows(&self) -> (Vec<usize>, Vec<usize>) {
         use crate::settings::WallpaperPick;
-        let mut rows = vec![133, 83, BLUR_ROW];
-        let mut keys = vec![SHELF_PICK_KEY, WALLPAPER_PICK_KEY, BLUR_KEY];
         let pick = self.edited_wallpaper();
-        if pick.is_mosaic() {
-            rows.push(HALO_ROW);
-            keys.push(HALO_KEY);
-        } else if matches!(pick, WallpaperPick::File(_) | WallpaperPick::Random) {
-            rows.push(DARKEN_ROW);
-            keys.push(DARKEN_KEY);
-        }
-        rows.extend([43, 45]);
-        keys.extend([usize::MAX, usize::MAX]);
-        (rows, keys)
+        self.wallpaper_edit.is_some_and(|shelf| self.settings.shelf_wallpaper(shelf).is_none())
+            || (row == BLUR_ROW && *pick == WallpaperPick::None)
+            || (row == DARKEN_ROW && !matches!(pick, WallpaperPick::File(_) | WallpaperPick::Random))
     }
-    /// Blur, Halo or Darken one step, on General or the page's shelf; a new
+    /// Interface > Wallpaper's six rows, whatever the wallpaper, and their
+    /// values' keys: the third is Halo with Default, Tint otherwise, idle
+    /// but for an image (Random deals images) (Siham 2026-11-19).
+    fn wallpaper_rows(&self) -> (Vec<usize>, Vec<usize>) {
+        let (third, key) = if self.edited_wallpaper().is_mosaic() { (HALO_ROW, HALO_KEY) }
+            else { (DARKEN_ROW, DARKEN_KEY) };
+        (vec![133, 83, BLUR_ROW, third, 43, 45],
+         vec![SHELF_PICK_KEY, WALLPAPER_PICK_KEY, BLUR_KEY, key, usize::MAX, usize::MAX])
+    }
+    /// Blur, Halo or Tint one step, on General or the page's shelf; a new
     /// Blur or Halo remakes the wallpapers it shows on.
     fn cycle_wallpaper_look(&mut self, row: usize, right: bool) {
         use crate::settings::WallpaperLook;
@@ -7737,7 +7730,8 @@ impl Engine {
             let idle = matches!(self.overlay, ShelfOverlay::WallpaperSettings { .. })
                 && match key {
                     BLUR_KEY => self.wallpaper_look_idle(BLUR_ROW),
-                    HALO_KEY | DARKEN_KEY => self.wallpaper_look_idle(HALO_ROW),
+                    HALO_KEY => self.wallpaper_look_idle(HALO_ROW),
+                    DARKEN_KEY => self.wallpaper_look_idle(DARKEN_ROW),
                     _ => false,
                 };
             let chosen = row == index && !idle;
@@ -9625,7 +9619,7 @@ impl Engine {
             } else { menu_style::page_ground(menu_style::DARK_SHELF) },
         }];
         // Slot v1.7 carousel ground: None has no wallpaper; personal images
-        // receive only their Darken (never a fixed scrim).
+        // receive only their Tint (never a fixed scrim).
         // The shelf's own wallpaper, else General's (Interface > Wallpaper).
         // OLED blackens only the ground: a chosen wallpaper shows as in Dark.
         let tint = wallpaper.map_or(0.0, |(_, tint, _)| tint);
@@ -9705,26 +9699,22 @@ impl Engine {
                         None
                     }
                 } else {None};
-                // The shelf's name and the game's title in the menus' ink on
-                // a soft halo of the theme's bar colour, no edge to touch
-                // the tall carts (Siham 2026-11-19): readable on any
-                // wallpaper.
-                let name_alpha = name.map_or(0.0, |(_, elapsed, _)| slot_name_alpha(elapsed));
-                let title_shown = self.settings.show_titles && self.triggers.hold.is_none()
-                    && self.triggers.ejecting.is_none();
-                let title_alpha = name.map_or(1.0, |(_, elapsed, _)| slot_title_alpha(elapsed));
-                let mut words = Vec::new();
-                if let Some((face,_,is_platform))=name {
-                    if name_alpha>0.0 {
-                        if is_platform {draw_platform_name(face,name_alpha,&mut words);}
-                        else {draw_slot_name(face,name_alpha,&mut words);}
+                // The words over a light Theme wallpaper turn dark.
+                let shelf_ink = self.shelf_ink();
+                if shelf_ink.is_some() { commands.push(Draw::Ink(shelf_ink)); }
+                if let Some((face,elapsed,is_platform))=name {
+                    let alpha=slot_name_alpha(elapsed);
+                    if alpha>0.0 {
+                        if is_platform {draw_platform_name(face,alpha,&mut commands);}
+                        else {draw_slot_name(face,alpha,&mut commands);}
                     }
                 }
                 // HOLD TO DELETE takes the title's place while L2 + R2 are held.
-                if title_shown {
-                    slot_ui::draw_slot_title_scrolled(self.selected_title_face,title_alpha,title_shift,&mut words);
+                if self.settings.show_titles && self.triggers.hold.is_none() && self.triggers.ejecting.is_none() {
+                    let alpha=name.map_or(1.0,|(_,elapsed,_)|slot_title_alpha(elapsed));
+                    slot_ui::draw_slot_title_scrolled(self.selected_title_face,alpha,title_shift,&mut commands);
                 }
-                menu_look::push_with_halo(&words, &mut commands);
+                if shelf_ink.is_some() { commands.push(Draw::Ink(None)); }
                 commands.append(&mut studio_return);
             }
         } else {

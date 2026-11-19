@@ -13,10 +13,9 @@ pub const ALERT_PX: f32 = 44.0;
 
 pub const MOUTH_H: f32 = 58.0;
 const BAND_Y: f32 = OUT_H as f32 - MOUTH_H;
-// Upstream slot_chrome.rs: platform/letter names appear just ABOVE the
-// physical mouth, not inside its recess; 3 px lower than upstream's so a
-// title clears the tallest cart, the NES (Siham 2026-11-19).
-const SLOT_NAME_GAP: f32 = 3.0;
+// Exact upstream slot_chrome.rs: platform/letter names appear just ABOVE
+// the physical mouth, not inside its recess.
+const SLOT_NAME_GAP: f32 = 6.0;
 const SLOT_NAME_Y: f32 = OUT_H as f32 - MOUTH_H - HINT_H as f32 - SLOT_NAME_GAP;
 
 pub const MOUTH_W: f32 = SEATED_W as f32 + 14.0;
@@ -544,8 +543,8 @@ mod upstream_slot_name_geometry_tests {
     use super::*;
     #[test]
     fn title_and_platform_share_official_v17_name_baseline() {
-        assert_eq!(SLOT_NAME_Y, 395.0);
-        assert_eq!(SLOT_NAME_Y + HINT_H as f32 - crate::plate::TITLE_LINE_H as f32, 387.0);
+        assert_eq!(SLOT_NAME_Y, 392.0);
+        assert_eq!(SLOT_NAME_Y + HINT_H as f32 - crate::plate::TITLE_LINE_H as f32, 384.0);
     }
 }
 
