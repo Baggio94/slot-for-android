@@ -423,6 +423,20 @@ fn game_error_text(message: &str) -> &'static str {
 }
 
 /// Short user-facing sentence on screen; the technical cause goes to logcat.
+/// Writes a game's settings off the GL thread (beta42); false without a
+/// folder to write them in.
+fn save_profile_later(profile: EmulationProfile, uri: &str, core: Core) -> bool {
+    let Some(root) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(root, _)| root.clone())
+    else { return false };
+    let uri = uri.to_owned();
+    crate::later_write::write(root.join(format!("game settings\u{1f}{uri}\u{1f}{core:?}")), move || {
+        if let Err(error) = profile.save(&root, &uri, core) {
+            set_error_message("Couldn't save this game's settings.", &error);
+        }
+    });
+    true
+}
+
 fn set_error_message(message: &str, detail: &dyn std::fmt::Display) {
     crate::game::log_launch_timing(&format!("{message} ({detail})"));
     set_message(message.into());
@@ -6178,12 +6192,7 @@ impl Engine {
                 self.persist_settings();
             }
         }
-        if let Some((root,_))=PATHS.lock().unwrap_or_else(|e|e.into_inner()).as_ref() {
-            if let Err(error)=profile.save(root,&uri,core) {
-                set_error_message("Couldn't save this game's settings.", &error);
-                return;
-            }
-        } else { return; }
+        if !save_profile_later(profile, &uri, core) { return; }
         self.game_emulation=Some(profile);
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
@@ -6242,12 +6251,7 @@ impl Engine {
             .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
         profile.show_fps = profile.show_fps_override.unwrap_or(self.settings.show_fps);
         if !profile.change(key, right) { return; }
-        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = profile.save(root, &uri, core) {
-                set_error_message("Couldn't save this game's settings.", &error);
-                return;
-            }
-        } else { return; }
+        if !save_profile_later(profile, &uri, core) { return; }
         self.game_emulation = Some(profile);
         // Avoid reinterpreting a frame debt accumulated under the previous
         // timing policy, and discard any prior predictive video/audio frame.
@@ -6315,22 +6319,12 @@ impl Engine {
         self.save_game_motion(profile, &uri, core);
     }
     fn save_game_motion(&mut self, profile: EmulationProfile, uri: &str, core: Core) {
-        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = profile.save(root, uri, core) {
-                set_error_message("Couldn't save this game's settings.", &error);
-                return;
-            }
-        } else { return; }
+        if !save_profile_later(profile, uri, core) { return; }
         self.game_emulation = Some(profile);
         apply_motion(self.game.as_ref(), profile.motion());
     }
     fn save_game_sun(&mut self, profile: EmulationProfile, uri: &str, core: Core) {
-        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = profile.save(root, uri, core) {
-                set_error_message("Couldn't save this game's settings.", &error);
-                return;
-            }
-        } else { return; }
+        if !save_profile_later(profile, uri, core) { return; }
         self.game_emulation = Some(profile);
         if let Some(session) = self.game.as_mut() {
             session.set_sun(profile.sun(light_sensor(), session.sun_top()));
@@ -6368,9 +6362,12 @@ impl Engine {
     }
     fn persist_settings(&self) {
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = self.settings.save(root) {
-                set_error_message("Couldn't save settings.", &error);
-            }
+            let (root, settings) = (root.clone(), self.settings.clone());
+            crate::later_write::write(root.join("Settings.json"), move || {
+                if let Err(error) = settings.save(&root) {
+                    set_error_message("Couldn't save settings.", &error);
+                }
+            });
         }
     }
 
@@ -6436,9 +6433,11 @@ impl Engine {
             if let Some((rack,uri))=self.focus_seen.as_ref() {
                 if let Some(root)=Self::recents_root() {
                     let focus=crate::selection::Focus { rack:*rack,uri:uri.clone() };
-                    if let Err(err)=crate::selection::store(&root,&focus) {
-                        crate::log_warn(&format!("last selection could not persist: {err}"));
-                    }
+                    crate::later_write::write(root.join("selection"), move || {
+                        if let Err(err)=crate::selection::store(&root,&focus) {
+                            crate::log_warn(&format!("last selection could not persist: {err}"));
+                        }
+                    });
                 }
             }
         }
@@ -6856,7 +6855,7 @@ impl Engine {
             f.2.filter(|_| f.3 > 0).map_or(Printed::default(), |tex| Printed::new(tex, f.3));
         let (clock, percent) = (printed(&self.lid_faces[0]), printed(&self.lid_faces[1]));
         let bolt = Some(if dark { self.bolt_light_texture } else { self.bolt_texture });
-        slot_ui::draw_status_clock_grown(true, 1.0 + self.lid_t, self.battery, percent, bolt,
+        slot_ui::draw_status_clock_grown(true, 1.0 + self.lid_k(), self.battery, percent, bolt,
             clock, slot_ui::footer_ink(dark), alpha, commands);
     }
 
@@ -6989,8 +6988,15 @@ impl Engine {
 
     /// The closed Rotate in a game (Settings > Interface > RG Rotate > In
     /// Game): the screen switches off like a CRT, then the cover comes in.
+    /// How far the lid's animation is, eased: it starts and ends softly,
+    /// as the screen's own turn does (beta42).
+    fn lid_k(&self) -> f32 {
+        let t = self.lid_t.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
     fn draw_lid_game(&mut self) {
-        let t = self.lid_t;
+        let t = self.lid_k();
         let mode = self.settings.rotate_game_cover;
         let mut commands = Vec::new();
         if mode == 2 {
@@ -7003,9 +7009,17 @@ impl Engine {
         } else {
             let screen = (1.0 - t * 2.0).clamp(0.0, 1.0);
             let cover = ((t - 0.5) * 2.0).clamp(0.0, 1.0);
+            // First half: the game's screen switching off, alone. The cover
+            // drawn over it hid it under black (beta42: the first 225 ms
+            // were a black screen, then the cover all at once).
             if screen > 0.0 {
                 self.gpu.set_screen_power(screen);
                 commands.push(Draw::Game);
+                self.gpu.fit(self.size);
+                self.gpu.begin_frame();
+                self.gpu.draw_list(&commands);
+                self.gpu.end_frame(self.size);
+                return;
             }
             let mut scene = Vec::new();
             if mode == 0 {
@@ -7066,7 +7080,7 @@ impl Engine {
     /// `row`: the shelf's carts in `commands`, all Drifting Shelf shrinks
     /// (the slot bar keeps its size, Siham 2026-11-14).
     fn push_lid_shelf(&mut self, commands: &mut Vec<Draw>, row: std::ops::Range<usize>) {
-        let t = self.lid_t;
+        let t = self.lid_k();
         match self.settings.rotate_shelf_cover {
             0 => {
                 // Shrunk from its foot, the shelf leaves the top line free.
@@ -10114,10 +10128,45 @@ impl StartJob {
     }
 }
 
+impl StartJob {
+    /// Its cache name: what it is drawn from and at what size. Only the
+    /// pictures decoded from a PNG are kept (the shadows are quick).
+    fn cache_key(&self, scale: f32) -> Option<String> {
+        let (png, what): (&[u8], &str) = match *self {
+            StartJob::Band(png) => (png, "band"),
+            StartJob::Bezel(gbc) => (slot_ui::bitmaps::bezel_master(gbc), "bezel"),
+            _ => return None,
+        };
+        let mut input = format!("slot-start-v1:{what}:{}:{}:", scale.to_bits(), out_w()).into_bytes();
+        input.extend_from_slice(png);
+        let hash = ring::digest::digest(&ring::digest::SHA256, &input);
+        Some(hash.as_ref().iter().map(|b| format!("{b:02x}")).collect())
+    }
+
+    /// From the cache when drawn there before at this size (beta42: the
+    /// KONKR spent 2.2 s on these on every start), else made and kept.
+    fn make_cached(&self, cache: Option<&crate::cart_disk_cache::DiskCache>, scale: f32) -> StartPicture {
+        let key = cache.and(self.cache_key(scale));
+        if let (Some(cache), Some(key)) = (cache, key.as_deref()) {
+            if let Some(face) = cache.read(key) {
+                return StartPicture::Texture(face.rgba, face.w, face.h);
+            }
+        }
+        let picture = self.make();
+        if let (Some(cache), Some(key), StartPicture::Texture(rgba, w, h)) = (cache, key.as_deref(), &picture) {
+            let _ = cache.write(key, &slot_ui::CartFace { rgba: rgba.clone(), w: *w, h: *h });
+        }
+        picture
+    }
+}
+
 /// Makes StartJob::all() on up to four threads; joined once GL is up.
 fn start_pixels() -> std::thread::JoinHandle<Vec<StartPicture>> {
     let scale = slot_ui::density::scale();
+    let cache = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+        .map(|(root, _)| crate::cart_disk_cache::DiskCache::at(root.join("Cache").join("start-pictures")));
     std::thread::spawn(move || {
+        let cache = cache.as_ref();
         let jobs = StartJob::all();
         let n = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 4);
         let mut out: Vec<Option<StartPicture>> = (0..jobs.len()).map(|_| None).collect();
@@ -10126,7 +10175,7 @@ fn start_pixels() -> std::thread::JoinHandle<Vec<StartPicture>> {
                 let jobs = &jobs;
                 scope.spawn(move || slot_ui::density::with_scale(scale, || {
                     jobs.iter().enumerate().skip(k).step_by(n)
-                        .map(|(i, job)| (i, job.make())).collect::<Vec<_>>()
+                        .map(|(i, job)| (i, job.make_cached(cache, scale))).collect::<Vec<_>>()
                 }))
             }).collect();
             for worker in workers {

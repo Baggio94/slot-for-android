@@ -56,6 +56,7 @@ mod gambatte_state;
 mod recents;
 mod favorites;
 mod selection;
+mod later_write;
 mod emulation;
 // VSync-clock experiment: host-tested, Android-only active mode.
 mod ra_clock_lab;

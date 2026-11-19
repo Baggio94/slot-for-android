@@ -885,6 +885,46 @@ mod render {
         engine.lid_t = 0.0;
     }
 
+    /// The Rotate's lid closing over a game, frame by frame, for each game
+    /// cover, into $SCRATCH_LID (beta42 preview). A test picture stands for
+    /// the game.
+    #[test]
+    fn render_lid() {
+        let Ok(dir) = std::env::var("SCRATCH_LID") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some((w, h)) = std::env::var("SCRATCH_PANEL").ok().as_deref()
+            .and_then(|size| size.split_once('x'))
+            .and_then(|(w, h)| Some((w.parse::<u64>().ok()?, h.parse::<u64>().ok()?))) {
+            PANEL_SIZE.store(w << 32 | h, Ordering::Release);
+        }
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        let mut game = vec![0u8; 240 * 160 * 4];
+        for y in 0..160 {
+            for x in 0..240 {
+                let i = (y * 240 + x) * 4;
+                let tile = ((x / 20) + (y / 20)) % 2 == 0;
+                game[i] = (x * 255 / 240) as u8;
+                game[i + 1] = if tile { 200 } else { 90 };
+                game[i + 2] = (y * 255 / 160) as u8;
+                game[i + 3] = 255;
+            }
+        }
+        engine.gpu.upload_game(&game);
+        engine.lid_covered = true;
+        for (mode, name) in [(0, "inserted"), (1, "full_cart")] {
+            engine.settings.rotate_game_cover = mode;
+            for step in 0..=10 {
+                engine.lid_t = step as f32 / 10.0;
+                engine.draw_lid_game();
+                save(&engine, &dir, &format!("{name}_{step:02}.png"));
+            }
+        }
+        engine.lid_covered = false;
+        engine.lid_t = 0.0;
+    }
+
     /// Times slot.'s own work without a handheld (beta41): the cold
     /// renderer's steps, then every frame of a shelf switch, a scroll and
     /// the menu opening, with the build part's spans. Software GL makes the

@@ -31,9 +31,12 @@ impl Engine {
     pub(super) fn persist_controls(&mut self) {
         self.controls_rev = self.controls_rev.wrapping_add(1);
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = self.controls.save(root) {
-                set_error_message("Couldn't save controls.", &error);
-            }
+            let (root, controls) = (root.clone(), self.controls.clone());
+            crate::later_write::write(root.join("Controls.json"), move || {
+                if let Err(error) = controls.save(&root) {
+                    set_error_message("Couldn't save controls.", &error);
+                }
+            });
         }
     }
 
