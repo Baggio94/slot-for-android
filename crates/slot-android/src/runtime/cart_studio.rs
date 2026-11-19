@@ -36,21 +36,26 @@ const STUDIO_MID: f32 = 222.0;
 /// its value was short); smaller on a narrow page (studio_text).
 const STUDIO_TEXT: f32 = 0.72;
 /// Each row's usual longest value, which a narrow page's words are sized
-/// to hold beside the carets (the RG Rotate's, the RPC's).
+/// to hold, carets aside (the RG Rotate's, the RPC's): the chosen row's
+/// scrolls when its carets take the room (Siham 2026-11-19).
 const STUDIO_TYPICAL: [&str; 5] = ["CURRENT", "\u{2014}", "ORIGINAL", "ORIGINAL", "AUTOMATIC"];
 
-/// The size of every row's words on a page `room` wide: STUDIO_TEXT, or
-/// less where a row's label and its usual value would not fit, the same
-/// for every row. Measured once per page width.
-fn studio_text(room: f32, caret: f32) -> f32 {
+/// Values a little smaller than their labels (Siham 2026-11-19).
+const STUDIO_VALUE: f32 = 0.9;
+
+/// The size of every row's label on a page `room` wide (values are
+/// STUDIO_VALUE of it): STUDIO_TEXT, or less where a row's label and its
+/// usual value would not fit, the same for every row. Measured once per
+/// page width.
+fn studio_text(room: f32) -> f32 {
     thread_local! { static SIZED: std::cell::Cell<Option<(u32, f32)>> = const { std::cell::Cell::new(None) }; }
     let key = room.to_bits();
     if let Some((at, scale)) = SIZED.with(|c| c.get()) { if at == key { return scale; } }
     let pad = slot_ui::MENU_PAD as f32;
-    let free = room - 22.0 - 18.0 - caret;
+    let free = room - 18.0;
     let scale = ROWS.iter().zip(STUDIO_TYPICAL).map(|(label, value)| {
         let need = slot_ui::quick_face_width(&label.to_uppercase()) as f32 - pad
-            + slot_ui::quick_face_width(value) as f32;
+            + slot_ui::quick_face_width(value) as f32 * STUDIO_VALUE;
         free / need.max(1.0)
     }).fold(STUDIO_TEXT, f32::min);
     let scale = ((scale * 100.0).floor() / 100.0).clamp(0.5, STUDIO_TEXT);
@@ -1275,10 +1280,10 @@ impl Engine {
                 let label_lit = lit || row != ROW_BACKGROUND;
                 let label = face(ROWS[row], label_lit);
                 let value_face = face(&value, lit);
-                // Every label at one size; a value a little too long up to
-                // 10 % smaller, longer it scrolls in its room while chosen
-                // (the menus' rule, Siham 2026-11-19).
-                let text = studio_text(x1 - x0, self.setting_carets[0].1 as f32 + 8.0);
+                // Every label at one size, every value a little smaller; a
+                // value too long scrolls in its room while chosen (Siham
+                // 2026-11-19).
+                let text = studio_text(x1 - x0);
                 // Smaller words stay centred in their row.
                 let y = y + label.map_or(0.0, |l| l.2 as f32) * (STUDIO_TEXT - text) / 2.0;
                 let scale = text;
@@ -1287,11 +1292,7 @@ impl Engine {
                     let end = x1 - if carets { 22.0 } else { 0.0 };
                     let from = x0 + label_w + 18.0 - slot_ui::MENU_PAD as f32 * scale
                         + if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
-                    let room = end - from;
-                    let vscale = match w as f32 * scale {
-                        full if full > room && full * 0.9 <= room => room / w as f32,
-                        _ => scale,
-                    };
+                    let vscale = scale * STUDIO_VALUE;
                     let vw = w as f32 * vscale;
                     let (y, scale) = (y + h as f32 * (scale - vscale) / 2.0, vscale);
                     let alpha = if chosen { fade } else { 0.62 * fade };
