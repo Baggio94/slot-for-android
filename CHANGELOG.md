@@ -2,6 +2,30 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v2.5.0 — 20 November 2026
+
+- slot. folder (SlotFolder.kt, FolderSync.kt): Library → Choose slot. Folder (INTERNAL STORAGE, SD CARD, NONE); saves, states, labels, Studio, game settings, cheats, custom cheats, wallpapers, settings, controls, favorites, recents and Config/ travel; RomM, RetroAchievements (cache and token), trusted devices, caches and ROMs never do. First copy, A5 window (CANCEL / FOLDER ONLY / MERGE BOTH, this handheld backed up first), A6 (create slot inside), newer-format refusal, old folder offered for deletion. Copies after saves, at pause and on return; a launch waits only for its own game's files; the folder is read again when its card comes back. Conflicts: TWO SAVES at launch (THIS HANDHELD'S / THE FOLDER'S), the other kept in Conflicts/. Deletions kept in deleted.json.
+- Per-handheld settings (slot-konkr-device.json, GameEmulationLocal/): Screen Size, overlays, Frame Pacing, Run-Ahead, Handheld page, Touchscreen.
+- Portable game keys: system + file name (library::game_key, GameKeys.kt); favorites, recents, cores, game settings, controls, labels, shapes, saves, states and polaroids carried over from 2.4.
+- Library: Choose slot. Folder, Choose ROM Folder, Choose BIOS Folder, Saves & States › (Save Folder, Save State Folder, Share Core Saves, Sync Saves with RomM), RomM Server, Refresh Library.
+- RomM saves (RommSaves.kt): .srm and .rtc up after each save, newer one down before launch, ROMM SAVE window when both changed; DELETED window when another handheld deleted it; shared-core saves (mGBA / gpSP); at most 2 s wait on the server; uploads on their own queue. GB, GBC and GBA BIOS from RomM.
+- Saves deleted outside slot. (RetroArch folders, slot. folder): DELETED at launch, PUT IT BACK / DELETE IT; deletion reaches slot.'s files, the RetroArch folders, the slot. folder and RomM; backup in Saves/FolderBackups.
+- Custom cheats: slot/CustomCheats/<system>/<ROM name>.cht, first in Cheats as My Cheats.
+- ROM card out: carts grey (C/D by the ground's brightness), insertion refused with a toast; no BIOS read without its card.
+- Wallpapers: Default is a mosaic per shelf (2048x2048 4-bit masks, colours per theme); the wood becomes slot.; Wallpaper page: Shelf, Wallpaper, Blur (0–100 %), Halo (Default) or Tint (images, Random), Import, Delete, per shelf (WallpaperLook). Migration: Default Blur → Blur 30 %, Default Halo → Halo 70 %, slot. Blur → Blur 40 %, Tint Low/Medium/High → 30/50/70 %. Wallpapers prepared on a worker.
+- Touch: push the middle cart up for its core picker, tap a chip; hold a cart for Cart Studio (flight to and from the page, X lifts first). Touchscreen only on touch screens.
+- Task pill (slot_ui::task_pill_face, TaskPill.kt): long tasks after 1 s, before Wi-Fi / Bluetooth; SAVED TO ROMM and FOLDER UP TO DATE confirmations.
+- Menus: one text size on every row; values shrink up to 10 % then scroll; short forms on narrow screens (ORIG. RATIO, INT. STORAGE, GPGX, FF Sound, Sync with RomM, Wi-Fi & BT, Built-in); Controls keep short labels whole; Cart Studio's edit page centred on the cart, text sized per screen; names under carts on two lines, never cut inside a word. Android windows' titles drawn by slot. (Headings.kt).
+- Settings read key by key (Settings::lenient): an unknown value resets alone.
+- Low battery (#87), selected title fitted to narrow screens (#119), X Logs in About with slot.'s own journal (#107), RetroAchievements GB sets on colourised DX hacks (#117).
+- Performance: cold start pictures and shadows off the GL thread (KPA start 5.3 → 3.1 s), bezel fitted only in game (shelf change 46 → 5 ms), settings and selection written off the GL thread, labels drawn by the raster workers, menu paths prepared on a still shelf, Cart Studio's cart drawn on a worker.
+- RomM library read page by page as it arrives (OutOfMemoryError on large libraries, #121).
+- Wallpapers (mosaics and imported images): exact-coverage reductions and Mitchell enlargements (wallpaper_scale.rs); centred crop as before.
+- RG Rotate: closes on the display's turn.
+- Simpletex: 720p grid at non-integer scales.
+- Cores: Genesis Plus GX, Gambatte, Snes9x at libretro's latest.
+- Light / Original: console bars with a soft shadow; RomM game card over the whole page; Update available in a capsule; keys during a dialog's fade reach slot.
+
 ## v2.4.2 — 17 November 2026
 
 - Save and states folders (#116): a print of what slot. last read from or wrote to the folder (`FolderSync/<core>/<file>.seen`, SHA-256, per folder) tells a file changed outside slot.
