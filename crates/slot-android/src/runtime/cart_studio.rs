@@ -1031,7 +1031,14 @@ impl Engine {
     pub(super) fn prepare_cart_studio(&mut self) {
         if !matches!(self.overlay, ShelfOverlay::CartStudio) { return; }
         let Some(studio) = self.studio.as_ref() else { return };
-        let mut texts = vec![("CART STUDIO".to_owned(), true), (slot_ui::label_text(&studio.original), true)];
+        let mut texts = vec![("CART STUDIO".to_owned(), true)];
+        {
+            let layout = studio_layout(None);
+            let room = layout.cart_room;
+            for line in super::romm::caption_lines(&slot_ui::label_text(&studio.original), room, STUDIO_NAME_SCALE, 3, false) {
+                texts.push((line, true));
+            }
+        }
         for row in studio.rows() {
             let (value, lit) = studio.value(row);
             texts.push((ROWS[row].to_owned(), lit || row != ROW_BACKGROUND));
@@ -1159,17 +1166,18 @@ impl Engine {
             below = y + dh + 12.0;
         }
         let centre = (left + right_edge) / 2.0;
-        if let Some((tex, w, h)) = face(&slot_ui::label_text(&studio.original), true) {
-            let scale = 0.66f32.min((right_edge - left) / w.max(1) as f32);
-            let dw = w as f32 * scale;
-            out.push(Draw::Tex { x: centre - dw / 2.0, y: below, w: dw, h: h as f32 * scale, tex, alpha: 0.85 * fade });
-        }
+        // The game's name at one size, on up to three lines (Siham
+        // 2026-11-19: shrunk to one line, it was unreadable on the Rotate).
+        let lines = super::romm::caption_lines(&slot_ui::label_text(&studio.original),
+            right_edge - left, STUDIO_NAME_SCALE, 3, false);
+        let tall = self.draw_caption(out, &lines, centre, right_edge - left, below, STUDIO_NAME_SCALE,
+            0.85 * fade, (usize::MAX - 3, 0));
         let cart = studio.draft_cart();
         if let Some(note) = studio.label_art(&cart).1 {
             if let Some((tex, w, h)) = face(&note, false) {
                 let scale = 0.56f32.min((right_edge - left) / w.max(1) as f32);
                 let dw = w as f32 * scale;
-                out.push(Draw::Tex { x: centre - dw / 2.0, y: below + 30.0, w: dw, h: h as f32 * scale, tex, alpha: fade });
+                out.push(Draw::Tex { x: centre - dw / 2.0, y: below + tall.max(24.0) + 6.0, w: dw, h: h as f32 * scale, tex, alpha: fade });
             }
         }
         if let Some(search) = &studio.search {
@@ -1428,6 +1436,8 @@ fn studio_columns() -> (f32, f32) {
 
 /// Gap between the cart and the rows' highlight.
 const CART_GAP: f32 = 40.0;
+/// The game's name under the cart: one size, never shrunk to fit.
+const STUDIO_NAME_SCALE: f32 = 0.6;
 /// The same gap on a square screen's narrow canvas.
 const NARROW_CART_GAP: f32 = 24.0;
 /// The widest the cart is drawn, so a wide cart never crowds the rows.

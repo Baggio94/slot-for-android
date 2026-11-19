@@ -852,6 +852,46 @@ mod render {
         }
     }
 
+    /// $SCRATCH_CAPTIONS (preview): long game names under their carts, in
+    /// Cart Studio and on RomM's page, on the panel in $SCRATCH_PANEL.
+    #[test]
+    fn render_captions() {
+        let Ok(dir) = std::env::var("SCRATCH_CAPTIONS") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some((w, h)) = std::env::var("SCRATCH_PANEL").ok().as_deref()
+            .and_then(|size| size.split_once('x'))
+            .and_then(|(w, h)| Some((w.parse::<u64>().ok()?, h.parse::<u64>().ok()?))) {
+            PANEL_SIZE.store(w << 32 | h, Ordering::Release);
+        }
+        let names = ["Adventures of Batman & Robin, The", "007 - NightFire",
+            "2 Games in 1 - Dr. Mario + Puzzle League", "3 Games in 1! - SpongeBob SquarePants - Battle for Bikini Bottom + The Movie",
+            "3 Game Pack! - The Game of Life + Payday + Yahtzee", "3 Games in One! - Yars' Revenge + Asteroids + Pong",
+            "Pokemon Emerald"];
+        let json: Vec<String> = names.iter().enumerate().map(|(i, n)| format!(
+            r#"{{"title":"{n}","platform":"GBA","uri":"content://roms/g{i}.gba","code":"AXXE"}}"#)).collect();
+        let entries: Vec<RomEntry> = serde_json::from_str(&format!("[{}]", json.join(","))).unwrap();
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries)).unwrap();
+        let shelf = &mut engine.shelves[engine.active];
+        if let Some(at) = shelf.carts.iter().position(|c| slot_ui::label_text(c).contains("BATMAN")) { shelf.select(at); }
+        engine.open_cart_studio();
+        for _ in 0..60 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+        shoot(&mut engine, &dir, "studio.png");
+        engine.studio = None;
+        engine.overlay = ShelfOverlay::None;
+        engine.open_romm();
+        let romm: Vec<String> = names.iter().enumerate().map(|(i, n)| format!(
+            r#"{{"id":{},"platform":"GBA","title":"{n} (USA)","label":""}}"#, i + 1)).collect();
+        let catalog: Vec<super::romm::RommEntry> = serde_json::from_str(&format!("[{}]", romm.join(","))).unwrap();
+        engine.handle(Input::RommCatalog(catalog));
+        for _ in 0..60 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+        shoot(&mut engine, &dir, "romm.png");
+        if let Some(page) = engine.romm.as_mut() { page.cursor = 3; }
+        for _ in 0..90 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+        shoot(&mut engine, &dir, "romm_chosen.png");
+    }
+
     /// $SCRATCH_ROTATE: the RG Rotate's pages and its closed covers.
     #[test]
     fn render_rotate() {

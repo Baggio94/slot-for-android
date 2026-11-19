@@ -25,6 +25,8 @@ const NAME_H: f32 = 24.0;
 const CHOSEN: f32 = 1.05;
 const RESTING: f32 = 0.9;
 const NAME_GAP: f32 = 8.0;
+/// A game's name under its cart: one size, never shrunk to fit.
+const NAME_SCALE: f32 = 0.5;
 const GROW_S: f32 = 0.12;
 /// Statuses come from Android: short, plain text only on the GL thread.
 const MAX_TEXT: usize = 120;
@@ -202,7 +204,7 @@ pub(super) struct RommPage {
     info: Option<Vec<(String, bool)>>,
     systems: Vec<System>,
     system: usize,
-    cursor: usize,
+    pub(super) cursor: usize,
     first_row: usize,
     picked: HashSet<i64>,
     /// Loading, or why there is nothing to show.
@@ -700,7 +702,12 @@ impl Engine {
         if let Some(note) = corner_note(page) { texts.push((note, false)); }
         let info: Vec<(String, bool)> = page.info.clone().unwrap_or_default();
         if let Some(system) = page.systems.get(page.system) {
-            for &i in &cells { texts.push((slot_ui::label_text(&system.carts[i]), true)); }
+            let room = grid().cell_w - 14.0;
+            for &i in &cells {
+                for line in caption_lines(&slot_ui::label_text(&system.carts[i]), room, NAME_SCALE, 2, i == page.cursor) {
+                    texts.push((line, true));
+                }
+            }
         }
         for (text, lit) in texts { self.controls_face(&text, lit); }
         let wide = info_room(out_w()) + 2 * slot_ui::quick_value_width("");
@@ -752,7 +759,8 @@ impl Engine {
             let id = system.ids[i];
             let (col, row) = ((i - first) % g.cols, (i - first) / g.cols);
             let (cx, cy) = (g.x + col as f32 * g.cell_w, GRID_TOP + row as f32 * g.cell_h);
-            let name_y = cy + g.cell_h - NAME_H - 4.0;
+            // Room for a name on two lines (Siham 2026-11-19).
+            let name_y = cy + g.cell_h - 2.0 * NAME_H - 4.0;
             let (room_w, room_h) = (g.cell_w - 12.0, name_y - NAME_GAP - (cy + 4.0));
             let (bw, bh) = slot_ui::cart_box_for(cart);
             let s = (room_w / bw as f32).min(room_h / bh as f32) * cart_size(page, i);
@@ -779,12 +787,10 @@ impl Engine {
                     out.push(Draw::Tex { x: tx, y: ty, w: tw, h: th, tex, alpha: fade });
                 });
             }
-            if let Some((tex, w, h)) = face(&slot_ui::label_text(cart), true) {
-                let s = 0.5f32.min((g.cell_w - 14.0) / w.max(1) as f32);
-                let tw = w as f32 * s;
-                out.push(Draw::Tex { x: cx + (g.cell_w - tw) / 2.0, y: name_y,
-                    w: tw, h: h as f32 * s, tex, alpha: if i == page.cursor { fade } else { 0.7 * fade } });
-            }
+            let chosen = i == page.cursor;
+            let lines = caption_lines(&slot_ui::label_text(cart), g.cell_w - 14.0, NAME_SCALE, 2, chosen);
+            self.draw_caption(out, &lines, cx + g.cell_w / 2.0, g.cell_w - 14.0, name_y, NAME_SCALE,
+                if chosen { fade } else { 0.7 * fade }, (usize::MAX - 2, i));
         }
         // The letter L2/R2 jumped to, as the shelf shows it.
         if let (Some((tex, w, h)), Some(at)) = (page.letter, page.letter_at) {
@@ -884,6 +890,77 @@ fn info_lines(title: &str, entry: &RommEntry, on_shelf: bool, room: u32,
         lines.push((value, true));
     }
     lines
+}
+
+/// A game's name under its cart, at one size whatever its length: by words
+/// on up to `most` lines `room` canvas pixels wide at `scale` (Siham
+/// 2026-11-19: names shrunk to one line were unreadable on the Rotate).
+/// Past them the last line ends with "…", or, `whole`, keeps the rest
+/// whole to scroll. Kept: the same names are asked every frame.
+pub(super) fn caption_lines(text: &str, room: f32, scale: f32, most: usize, whole: bool) -> Vec<String> {
+    type Key = (String, u32, usize, bool);
+    thread_local! {
+        static CAPTIONS: std::cell::RefCell<HashMap<Key, Vec<String>>> = std::cell::RefCell::new(HashMap::new());
+    }
+    let room_face = (room / scale.max(0.01)).max(1.0) as u32;
+    let key = (text.to_owned(), room_face, most, whole);
+    if let Some(lines) = CAPTIONS.with(|c| c.borrow().get(&key).cloned()) { return lines; }
+    let width = |t: &str| slot_ui::quick_value_width(t);
+    let mut lines = wrap(text.trim(), room_face, width);
+    if most > 0 && lines.len() > most {
+        let rest = lines.split_off(most - 1).join(" ");
+        if whole {
+            lines.push(rest);
+        } else {
+            let mut kept: Vec<char> = rest.chars().collect();
+            loop {
+                let line = format!("{}\u{2026}", kept.iter().collect::<String>().trim_end());
+                if width(&line) <= room_face || kept.len() <= 1 { lines.push(line); break; }
+                kept.pop();
+            }
+        }
+    }
+    CAPTIONS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 600 { c.clear(); }
+        c.insert(key, lines.clone());
+    });
+    lines
+}
+
+impl Engine {
+    /// Lines of a caption (caption_lines), each centred on `centre` from
+    /// `y`; a line wider than `room` scrolls in it (the chosen game's).
+    /// Returns how tall they are.
+    pub(super) fn draw_caption(&self, out: &mut Vec<Draw>, lines: &[String], centre: f32, room: f32,
+                               y: f32, scale: f32, alpha: f32, scroll: (usize, usize)) -> f32 {
+        let mut at = y;
+        for line in lines {
+            let Some(&(tex, w, h)) = self.controls_faces.get(&Self::face_key(line, true)) else { continue };
+            let (dw, dh) = (w as f32 * scale, h as f32 * scale);
+            if dw <= room + 0.5 {
+                out.push(Draw::Tex { x: centre - dw / 2.0, y: at, w: dw, h: dh, tex, alpha });
+            } else {
+                let (from, to) = (centre - room / 2.0, centre + room / 2.0);
+                let travel = dw - room;
+                let shift = self.marquee_offset(scroll, travel);
+                const FEATHER: f32 = 14.0;
+                out.push(Draw::Span(Some(slot_gfx::Span {
+                    left: from, right: to,
+                    feather_left: shift.min(FEATHER), feather_right: (travel - shift).min(FEATHER),
+                })));
+                out.push(Draw::Tex { x: from - shift, y: at, w: dw, h: dh, tex, alpha });
+                out.push(Draw::Span(None));
+            }
+            at += caption_line_h(h, scale);
+        }
+        at - y
+    }
+}
+
+/// One caption line's height: its face's, less the face's own margins.
+pub(super) fn caption_line_h(face_h: u32, scale: f32) -> f32 {
+    face_h as f32 * scale * 0.8
 }
 
 /// Words to lines of at most `room` (as `width` measures them); a word too
