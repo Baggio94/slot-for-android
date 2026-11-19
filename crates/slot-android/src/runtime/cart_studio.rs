@@ -179,7 +179,7 @@ pub(super) struct Studio {
     /// The cart's automatic shell, and the Studio choice it had on opening.
     auto: Option<ShellChoice>,
     stored: Option<ShellChoice>,
-    row: usize,
+    pub(super) row: usize,
     label: usize,
     background: usize,
     colour: usize,
@@ -1193,14 +1193,39 @@ impl Engine {
                 let (value, lit) = studio.value(row);
                 let chosen = slot == studio.row;
                 let carets = chosen && lit;
-                let mut label_room = x1 - x0;
-                if let Some((tex, w, h)) = face(&value, lit) {
-                    let scale = 0.72f32.min(((x1 - x0) * 0.6) / w.max(1) as f32);
+                let label_lit = lit || row != ROW_BACKGROUND;
+                let label = face(ROWS[row], label_lit);
+                let value_face = face(&value, lit);
+                // A label and its value at one size (beta41, Siham
+                // 2026-11-19): both give way together on a narrow page, in
+                // steps of 0.02, never under 0.5; a value still too long
+                // then scrolls in its own room while chosen.
+                let caret_room = self.setting_carets[0].1 as f32 + 8.0 + 22.0;
+                let room = x1 - x0 - 12.0 - caret_room;
+                let both = label.map_or(0, |l| l.1) as f32 + value_face.map_or(0, |v| v.1) as f32;
+                let scale = if both * 0.72 <= room || both <= 0.0 { 0.72 }
+                    else { (((room / both) * 50.0).floor() / 50.0).clamp(0.5, 0.72) };
+                let label_w = label.map_or(0.0, |l| l.1 as f32 * scale);
+                if let Some((tex, w, h)) = value_face {
                     let vw = w as f32 * scale;
-                    let x = x1 - vw - if carets { 22.0 } else { 0.0 };
-                    label_room = (x - x0 - 12.0 - if carets { 20.0 } else { 0.0 }).max(50.0);
-                    out.push(Draw::Tex { x, y, w: vw, h: h as f32 * scale, tex,
-                        alpha: if chosen { fade } else { 0.62 * fade } });
+                    let end = x1 - if carets { 22.0 } else { 0.0 };
+                    let from = x0 + label_w + 12.0 + if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
+                    let alpha = if chosen { fade } else { 0.62 * fade };
+                    let x = if end - vw >= from {
+                        out.push(Draw::Tex { x: end - vw, y, w: vw, h: h as f32 * scale, tex, alpha });
+                        end - vw
+                    } else {
+                        let travel = vw - (end - from);
+                        let shift = if chosen { self.marquee_offset((usize::MAX - 1, row), travel) } else { 0.0 };
+                        const FEATHER: f32 = 18.0;
+                        out.push(Draw::Span(Some(slot_gfx::Span {
+                            left: from, right: end,
+                            feather_left: shift.min(FEATHER), feather_right: (travel - shift).min(FEATHER),
+                        })));
+                        out.push(Draw::Tex { x: from - shift, y, w: vw, h: h as f32 * scale, tex, alpha });
+                        out.push(Draw::Span(None));
+                        from
+                    };
                     if carets {
                         let (lt, lw, lh) = self.setting_carets[0];
                         let (rt, rw, rh) = self.setting_carets[1];
@@ -1209,9 +1234,7 @@ impl Engine {
                         out.push(Draw::Tex { x: x1 - rw as f32, y, w: rw as f32, h: rh as f32, tex: rt, alpha: fade });
                     }
                 }
-                let label_lit = lit || row != ROW_BACKGROUND;
-                if let Some((tex, w, h)) = face(ROWS[row], label_lit) {
-                    let scale = 0.72f32.min(label_room / w.max(1) as f32);
+                if let Some((tex, w, h)) = label {
                     out.push(Draw::Tex { x: x0, y, w: w as f32 * scale, h: h as f32 * scale, tex,
                         alpha: if label_lit { fade } else { 0.45 * fade } });
                 }
@@ -1405,6 +1428,8 @@ fn studio_columns() -> (f32, f32) {
 
 /// Gap between the cart and the rows' highlight.
 const CART_GAP: f32 = 40.0;
+/// The same gap on a square screen's narrow canvas.
+const NARROW_CART_GAP: f32 = 24.0;
 /// The widest the cart is drawn, so a wide cart never crowds the rows.
 const CART_MAX_W: f32 = 264.0;
 
@@ -1428,9 +1453,15 @@ fn studio_layout(cart: Option<(u32, u32)>) -> StudioLayout {
 }
 
 fn studio_layout_in(width: f32, cart: Option<(u32, u32)>) -> StudioLayout {
-    let rows_w = (width - 22.0) - ((width * 0.5).round() + 4.0);
+    // A square screen's canvas (480 wide, the RG Rotate's): the rows take a
+    // little more than half and the cart sits closer, so a label and its
+    // value fit side by side (beta41, Siham 2026-11-19).
+    let narrow = width < 600.0;
+    let gap = if narrow { NARROW_CART_GAP } else { CART_GAP };
+    let rows_w = if narrow { (width * 0.52).round() }
+        else { (width - 22.0) - ((width * 0.5).round() + 4.0) };
     let box_w = rows_w + 16.0;
-    let room = CART_MAX_W.min(width - 32.0 - CART_GAP - box_w).max(80.0);
+    let room = CART_MAX_W.min(width - 32.0 - gap - box_w).max(80.0);
     let (cart_w, cart_h) = match cart {
         Some((cw, ch)) => {
             let scale = (room / cw.max(1) as f32).min(250.0 / ch.max(1) as f32).min(1.7);
@@ -1438,8 +1469,8 @@ fn studio_layout_in(width: f32, cart: Option<(u32, u32)>) -> StudioLayout {
         }
         None => (room, 250.0),
     };
-    let cart_left = ((width - (cart_w + CART_GAP + box_w)) / 2.0).max(16.0).round();
-    let x0 = cart_left + cart_w + CART_GAP + 8.0;
+    let cart_left = ((width - (cart_w + gap + box_w)) / 2.0).max(16.0).round();
+    let x0 = cart_left + cart_w + gap + 8.0;
     StudioLayout {
         cart_x: cart_left + (cart_w - room) / 2.0,
         cart_room: room,

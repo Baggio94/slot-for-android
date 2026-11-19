@@ -932,33 +932,43 @@ impl Engine {
             let rest = if chosen { 1.0 } else { menu_look::ROW_REST };
             let mut label_room = width - 70.0;
             let right = width - 34.0;
-            if let Some((tex, w, h)) = face(&line.value, line.lit) {
+            let value_face = face(&line.value, line.lit);
+            let label_face = face(&line.label, true);
+            // A label and its value at one size, as the settings pages
+            // (beta41, Siham 2026-11-19): both give way together, in steps
+            // of 0.02, never under 0.6; a label still too long then scrolls
+            // in its room while chosen (a cheat's name).
+            let k = match (label_face, value_face) {
+                (Some((_, lw, _)), Some((_, vw, _))) => {
+                    // Carets only where the value cycles (Port 1's opens a page).
+                    let room = self.value_room() + if line.cycles { 0.0 }
+                        else { self.setting_carets[0].1 as f32 + 8.0 + 22.0 };
+                    let both = (lw + vw) as f32;
+                    if both * 0.79 <= room { 0.79 }
+                    else { (((room / both) * 50.0).floor() / 50.0).clamp(0.6, 0.79) }
+                }
+                _ => 0.79,
+            };
+            if let Some((tex, w, h)) = value_face {
                 let carets = chosen && line.cycles;
-                let scale = 0.79f32.min((width * 0.55) / w.max(1) as f32);
+                let scale = k.min((width * 0.55) / w.max(1) as f32);
                 let vw = w as f32 * scale;
                 let x = right - vw - if carets { 22.0 } else { 0.0 };
-                label_room = (x - 37.0 - 16.0 - if carets { 20.0 } else { 0.0 }).max(80.0);
-                out.push(Draw::Tex { x, y, w: vw, h: h as f32 * scale, tex,
+                label_room = (x - 37.0 - 12.0 - if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 }).max(80.0);
+                let vy = y + h as f32 * (0.79 - scale) / 2.0;
+                out.push(Draw::Tex { x, y: vy, w: vw, h: h as f32 * scale, tex,
                     alpha: fade * shows * rest });
                 if carets {
                     let (left, lw, lh) = self.setting_carets[0];
                     let (right_tex, rw, rh) = self.setting_carets[1];
-                    let y = self.caret_y(y, scale);
+                    let y = self.caret_y(y, 0.79);
                     out.push(Draw::Tex { x: x - lw as f32 - 8.0, y, w: lw as f32, h: lh as f32,
                         tex: left, alpha: fade * shows });
                     out.push(Draw::Tex { x: right - rw as f32, y, w: rw as f32, h: rh as f32,
                         tex: right_tex, alpha: fade * shows });
                 }
             }
-            if let Some((tex, w, h)) = face(&line.label, true) {
-                // Always at 0.79: a name too long for its room is cut with a
-                // fade, and scrolls through while chosen (a cheat's, Siham
-                // 2026-11-15).
-                let mut k = 0.79;
-                // A few pixels too long: a touch smaller, not a tiny scroll.
-                if w as f32 * k > label_room && w as f32 * k * 0.94 <= label_room {
-                    k *= label_room / (w as f32 * k);
-                }
+            if let Some((tex, w, h)) = label_face {
                 let (lw, lh) = (w as f32 * k, h as f32 * k);
                 let y = y + h as f32 * (0.79 - k) / 2.0;
                 let alpha = fade * shows * rest;

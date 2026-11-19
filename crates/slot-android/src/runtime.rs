@@ -7391,17 +7391,21 @@ impl Engine {
         out_w() as f32 - 34.0 - 22.0 - caret - 12.0 - 37.0
     }
 
-    /// Each row's label and value scales. Labels stay at 0.79 (they gave
-    /// way first on narrow screens, Siham 2026-11-15): only one too long to
-    /// leave a value 80 px shrinks, down to 0.55. A value too long for what
-    /// is left is cut (draw_values), never shrunk.
+    /// Each row's label and value scales (beta41, Siham 2026-11-19): when
+    /// a label and its value don't fit side by side (the RG Rotate's and
+    /// the RPC's squarer screens), both give way together, at one size, in
+    /// steps of 0.02 so a value changing barely moves its label; at the
+    /// smallest, a value still too long scrolls (draw_values).
     fn fit_scales(&self, items: &[usize], keys: &[usize]) -> Vec<(f32, f32)> {
         let room = self.value_room();
         items.iter().enumerate().map(|(i, &label)| {
             let lw = self.menu_textures.get(label).map_or(0, |t| t.1) as f32;
-            let has_value = keys.get(i).and_then(|&k| self.value_face(k)).is_some();
-            if !has_value || lw * 0.79 <= room - 80.0 { return (0.79, 0.79); }
-            (((room - 80.0) / lw.max(1.0)).clamp(0.55, 0.79), 0.79)
+            let Some((_, vw, _)) = keys.get(i).and_then(|&k| self.value_face(k)) else { return (0.79, 0.79) };
+            let both = lw + vw as f32;
+            if both * 0.79 <= room || both <= 0.0 { return (0.79, 0.79); }
+            let scale = ((room / both) * 50.0).floor() / 50.0;
+            let scale = scale.clamp(0.6, 0.79);
+            (scale, scale)
         }).collect()
     }
 

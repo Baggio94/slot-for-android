@@ -814,6 +814,28 @@ mod render {
         shoot(&mut engine, &dir, "15_game_menu.png");
     }
 
+    /// $SCRATCH_STUDIO (preview): Cart Studio on the panel in
+    /// $SCRATCH_PANEL, a row at a time.
+    #[test]
+    fn render_studio() {
+        let Ok(dir) = std::env::var("SCRATCH_STUDIO") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some((w, h)) = std::env::var("SCRATCH_PANEL").ok().as_deref()
+            .and_then(|size| size.split_once('x'))
+            .and_then(|(w, h)| Some((w.parse::<u64>().ok()?, h.parse::<u64>().ok()?))) {
+            PANEL_SIZE.store(w << 32 | h, Ordering::Release);
+        }
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        engine.open_cart_studio();
+        for _ in 0..60 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+        for row in 0..4 {
+            if let Some(studio) = engine.studio.as_mut() { studio.row = row; }
+            shoot(&mut engine, &dir, &format!("studio_{row}.png"));
+        }
+    }
+
     /// $SCRATCH_ROTATE: the RG Rotate's pages and its closed covers.
     #[test]
     fn render_rotate() {
