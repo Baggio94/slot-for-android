@@ -165,6 +165,14 @@ pub(crate) fn mask(m: HomeMould) -> &'static [u8] {
     })
 }
 
+/// The front that lifts off an opened cart, at panel density, one byte a
+/// texel, where the mould has its own (see `MouldArt::lid`).
+pub(crate) fn dense_lid(m: HomeMould) -> Option<Arc<Vec<u8>>> {
+    let (w, h) = m.size();
+    let rgba = crate::bitmaps::dense_png(m.art().lid?, w, h);
+    Some(Arc::new(rgba.iter().skip(3).step_by(4).copied().collect()))
+}
+
 /// A clear shell's opacity at panel density, one byte a texel, where the
 /// mould has its own (see `MouldArt::opacity`).
 pub(crate) fn dense_opacity(m: HomeMould) -> Option<Arc<Vec<u8>>> {

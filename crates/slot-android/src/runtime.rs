@@ -1643,6 +1643,9 @@ struct Engine {
     // R1 WAN, L1 LAN, Y Share, UP Digit, arrows Move, A Join.
     link_inet_hints: [[(slot_gfx::TexId, u32); 6]; 2],
     board_texture: Option<slot_gfx::TexId>,
+    /// The front that lifts off a cart that leaves its contacts on the board
+    /// (the Lynx), and whether the open picker's cart has one.
+    picker_lid: (Option<slot_gfx::TexId>, bool),
     picker: Option<CorePicker>,
     /// A finger chose a core: A once the chip has hopped there (ms, born).
     picker_auto_seat: Option<u64>,
@@ -2455,6 +2458,7 @@ impl Engine {
             link_failed_hints,
             link_inet_hints,
             board_texture: None,
+            picker_lid: (None, false),
             picker: None,
             picker_auto_seat: None,
             socket_textures,
@@ -5347,6 +5351,14 @@ impl Engine {
             self.gpu.update_face(texture, &face);
         } else {
             self.board_texture = Some(self.gpu.create_face(&face));
+        }
+        let lid = slot_ui::lid_face(selected);
+        self.picker_lid.1 = lid.is_some();
+        if let Some(lid) = lid {
+            match self.picker_lid.0 {
+                Some(texture) => self.gpu.update_face(texture, &lid),
+                None => self.picker_lid.0 = Some(self.gpu.create_face(&lid)),
+            }
         }
         let now = self.born.elapsed().as_millis() as u64;
         let current_core = PATHS.lock()
@@ -8581,7 +8593,9 @@ impl Engine {
         if front.is_some() { behind = [None, None]; }
         let face=grown(lid,TURN_PAD as f32*lid.w/slot_ui::body_box(shape).0 as f32);
         for tex in behind.into_iter().flatten()
-            .chain(front.or_else(||shelf.face(shelf.index))) {
+            .chain(front
+                .or_else(|| self.picker_lid.0.filter(|_| self.picker_lid.1))
+                .or_else(|| shelf.face(shelf.index))) {
             out.push(Draw::Turned {
                 x:face.x,y:face.y,w:face.w,h:face.h,
                 tex,alpha:1.0,turn,

@@ -77,6 +77,9 @@ pub(crate) struct MouldArt {
     pub opacity: Option<&'static [u8]>,
     /// One core only: the board has no empty footprints and never opens.
     pub single_core: bool,
+    /// The front that lifts off when the cart opens, where it differs from
+    /// the outline: the Lynx's contacts stay on the board (alpha only).
+    pub lid: Option<&'static [u8]>,
 }
 
 pub const HOME_CART_W: u32 = 312;
@@ -102,6 +105,14 @@ macro_rules! art {
             silhouette: None,
             opacity: None,
             single_core: false,
+            lid: None,
+        }
+    };
+    ($name:literal, $h:expr, $label:expr, $fp:expr, $title:expr, $colour:expr, $decal:expr,
+     $silhouette:expr, $opacity:expr, $single:expr, $lid:expr) => {
+        MouldArt {
+            lid: $lid,
+            ..art!($name, $h, $label, $fp, $title, $colour, $decal, $silhouette, $opacity, $single)
         }
     };
     ($name:literal, $h:expr, $label:expr, $fp:expr, $title:expr, $colour:expr, $decal:expr,
@@ -195,7 +206,8 @@ static ARTS: [MouldArt; 20] = [
         (150.0, 64.0, 122.0, 40.0), [25, 25, 25],
         Some(include_bytes!("../../../assets/home/lynx_decal.png")),
         Some(include_bytes!("../../../assets/home/lynx_silhouette.png")),
-        None, false),
+        None, false,
+        Some(include_bytes!("../../../assets/home/lynx_lid.png"))),
     art!("pokemini", 300, (19, 107, 274, 149),
         [(82.0, 28.0, 150.0, 64.0), (82.0, 28.0, 150.0, 64.0)],
         (0.0, 0.0, 0.0, 0.0), [128, 150, 178],

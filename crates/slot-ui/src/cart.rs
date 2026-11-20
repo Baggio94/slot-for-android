@@ -309,6 +309,19 @@ pub fn cart_face(cart: &Cart) -> CartFace {
     cart_face_with(cart, art)
 }
 
+/// The front that lifts off when the cart opens, where it is not the cart's
+/// own face: the Lynx's leaves its contacts on the board. None otherwise.
+pub fn lid_face(cart: &Cart) -> Option<CartFace> {
+    let Body::Home(m) = body_of(cart) else { return None };
+    let lid = home::dense_lid(m)?;
+    let (lw, lh) = label_size(cart);
+    let mut face = cart_face_with(cart, label_art(cart, px(lw), px(lh)));
+    for (px, cover) in face.rgba.chunks_exact_mut(4).zip(lid.iter()) {
+        px[3] = ((px[3] as u32 * *cover as u32 + 127) / 255) as u8;
+    }
+    Some(face)
+}
+
 pub fn is_clear(cart: &Cart) -> bool {
     see_through(shell_for(cart).finish, matches!(body_of(cart), Body::Home(_)))
 }
