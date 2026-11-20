@@ -19,7 +19,7 @@ Take your games with you: the new **slot. folder** carries your saves, states, l
 - **Low battery** — Under 15 %, the battery turns red on the shelf. Under 10 %, a small red battery blinks over the game ([#87](https://github.com/Baggio94/slot-for-android/issues/87)).
 - **Logs** — **About → X** saves slot.'s log to a file of your choice, to attach to an issue ([#107](https://github.com/Baggio94/slot-for-android/issues/107)).
 - **Grey carts** — When the SD card with your games is out, their carts turn grey and slot. tells you the card is missing.
-- **Menus** — One text size on every row: long values scroll when selected. Short forms on small screens (**ORIG. RATIO**, **INT. STORAGE**, **FF SOUND**…). Android's windows now look like slot.'s own.
+- **Menus** — One text size on every row: long values scroll when selected. Short forms on small screens (**ORIG. RATIO**, **INTERNAL**, **FF SOUND**…). Android's windows now look like slot.'s own.
 - **Cart Studio** — The edit page is centred on the cart, with larger text on square screens.
 - **Light and Original themes** — A soft shadow sets the console's bar off from the shelf.
 - **Cores updated** — Genesis Plus GX, Gambatte and Snes9x at libretro's latest.

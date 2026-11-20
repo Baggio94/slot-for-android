@@ -809,7 +809,7 @@ const LIBRARY_VALUE_NAMES: [&str; 3] = ["INTERNAL STORAGE", "SD CARD", "NEEDS RO
 /// 10 % smaller (the RG Rotate, Siham 2026-11-19); others scroll.
 const SHORT_VALUES: [(&str, &str); 3] = [
     ("ORIGINAL RATIO", "ORIG. RATIO"),
-    ("INTERNAL STORAGE", "INT. STORAGE"),
+    ("INTERNAL STORAGE", "INTERNAL"),
     ("Genesis Plus GX", "GPGX"),
 ];
 /// Labels too long for their value on a narrow screen (the RG Rotate's
