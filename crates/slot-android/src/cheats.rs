@@ -34,6 +34,10 @@ fn pack(platform: Platform) -> &'static [u8] {
         Platform::Md => include_bytes!("../cheats/md.cht.z"),
         Platform::Sms => include_bytes!("../cheats/sms.cht.z"),
         Platform::Gg => include_bytes!("../cheats/gg.cht.z"),
+        Platform::Ws => include_bytes!("../cheats/ws.cht.z"),
+        // Neither NeoPop nor RACE applies cheats (retro_cheat_set does
+        // nothing): no pack, so no game offers any.
+        Platform::Ngp => &[],
     }
 }
 
@@ -265,7 +269,10 @@ mod tests {
 
     #[test]
     fn every_pack_opens() {
-        for platform in Platform::ALL {
+        // No Neo Geo Pocket pack: its cores apply no cheats.
+        assert!(pack(Platform::Ngp).is_empty());
+        assert!(lookup(Platform::Ngp, &[0], "Metal Slug - 1st Mission (World)").is_empty());
+        for platform in Platform::ALL.into_iter().filter(|p| *p != Platform::Ngp) {
             let mut text = String::new();
             flate2::read::ZlibDecoder::new(pack(platform)).read_to_string(&mut text).unwrap();
             assert!(text.starts_with("slot-cheats 1\n"), "{platform:?}");

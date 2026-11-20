@@ -123,7 +123,8 @@ pub fn write_system_mode(root: &Path, platform: Platform, mode: VideoMode) -> st
 /// picture then fills it and neither Screen Size nor a bezel is offered,
 /// as GBA on the KONKR's 3:2 screen.
 pub fn screen_fits(platform: Platform, panel: (u32, u32)) -> bool {
-    let shape = if platform.handheld() || platform == Platform::Gg {
+    // The handhelds' LCDs: the picture's own shape.
+    let shape = if platform.handheld() || matches!(platform, Platform::Gg | Platform::Ngp | Platform::Ws) {
         let (w, h) = platform.picture();
         w as f32 / h as f32
     } else {
@@ -179,6 +180,8 @@ pub fn home_aspect(platform: Platform, core: f32, panel: (u32, u32)) -> f32 {
             if !square_pixels(platform, panel) => 4.0 / 3.0,
         // The Game Gear's LCD: its 160x144 pixels are square.
         Platform::Gg => 10.0 / 9.0,
+        // NeoPop and RACE report 160x152's square pixels, Beetle Cygne
+        // 14:9 (9:14 for a game played upright): kept as they come.
         _ => core,
     }
 }
@@ -322,7 +325,7 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
             }
         }
         // No overlay drawn for them yet.
-        Platform::Sms | Platform::Gg => None,
+        Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws => None,
     }
 }
 
@@ -334,7 +337,7 @@ pub fn bezel_offered(platform: Platform, panel: (u32, u32)) -> bool {
             picture_rect(platform, VideoMode::Aspect, panel)[0] >= ROOM * panel.0 as f32,
         Platform::Gba | Platform::Md => !screen_fits(platform, panel),
         Platform::Nes | Platform::Snes => a > 4.0 / 3.0 * 1.01,
-        Platform::Sms | Platform::Gg => false,
+        Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws => false,
     }
 }
 

@@ -320,7 +320,7 @@ impl Bezel {
             Platform::Snes => &Self::SNES,
             Platform::Md => &Self::MD,
             // No overlay drawn for them yet.
-            Platform::Sms | Platform::Gg => &[Bezel::None],
+            Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws => &[Bezel::None],
         }
     }
     pub fn step_in(self,list:&[Bezel],right:bool)->Self {
@@ -580,6 +580,11 @@ pub struct Settings {
     pub shader_sms: Shader,
     #[serde(default = "shader_gg_default")]
     pub shader_gg: Shader,
+    /// Neo Geo Pocket and WonderSwan: no shader (LCDs), 3.0.
+    #[serde(default = "shader_gg_default")]
+    pub shader_ngp: Shader,
+    #[serde(default = "shader_gg_default")]
+    pub shader_ws: Shader,
     // Retain legacy field for old RC1 Settings.json and old desktop Link code;
     // the three platform fields below are authoritative after migration.
     pub colour_correction_gba: bool,
@@ -702,6 +707,10 @@ pub struct Settings {
     pub blending_sms: Blending,
     #[serde(default)]
     pub blending_gg: Blending,
+    #[serde(default)]
+    pub blending_ngp: Blending,
+    #[serde(default)]
+    pub blending_ws: Blending,
     /// LCD Effect of each Game Boy (Systems > [system] > LCD Effect).
     #[serde(default)]
     pub lcd_effect_gba: LcdEffect,
@@ -739,6 +748,7 @@ impl Default for Settings {
             shader_nes: Shader::ZfastCrt, shader_snes: Shader::ZfastCrt,
             shader_md: Shader::ZfastCrt,
             shader_sms: Shader::ZfastCrt, shader_gg: Shader::Off,
+            shader_ngp: Shader::Off, shader_ws: Shader::Off,
             colour_correction_gba: false, colour_correction_gb: false,
             colour_correction_gbc: false,
             bezel_gba: Bezel::None, bezel_gbc: Bezel::Default, bezel_gb: Bezel::Default,
@@ -766,6 +776,7 @@ impl Default for Settings {
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
             blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
             blending_sms: Blending::Off, blending_gg: Blending::Off,
+            blending_ngp: Blending::Off, blending_ws: Blending::Off,
             lcd_effect_gba: LcdEffect::Off, lcd_effect_gbc: LcdEffect::Off, lcd_effect_gb: LcdEffect::Off,
             dither_blend_md: false,
             shader_gbav: Shader::Lcd3x, upscaler_gbav: Upscaler::Fsr,
@@ -881,7 +892,7 @@ impl Settings {
                 if !Shader::DMG.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
                 if !Shader::GBC.contains(&s.shader_gbc) { s.shader_gbc = Shader::Off; }
                 for shader in [&mut s.shader_nes, &mut s.shader_snes, &mut s.shader_md,
-                    &mut s.shader_sms, &mut s.shader_gg] {
+                    &mut s.shader_sms, &mut s.shader_gg, &mut s.shader_ngp, &mut s.shader_ws] {
                     if !Shader::HOME.contains(shader) { *shader = Shader::ZfastCrt; }
                 }
                 if s.gb_palette as usize >= GbPalette::COUNT { s.gb_palette = 1; }
@@ -1068,6 +1079,8 @@ impl Settings {
             slot_store::Platform::Md=>self.shader_md,
             slot_store::Platform::Sms=>self.shader_sms,
             slot_store::Platform::Gg=>self.shader_gg,
+            slot_store::Platform::Ngp=>self.shader_ngp,
+            slot_store::Platform::Ws=>self.shader_ws,
         }
     }
     pub fn set_shader_for(&mut self,platform:slot_store::Platform,shader:Shader) {
@@ -1080,10 +1093,12 @@ impl Settings {
             slot_store::Platform::Md=>self.shader_md=shader,
             slot_store::Platform::Sms=>self.shader_sms=shader,
             slot_store::Platform::Gg=>self.shader_gg=shader,
+            slot_store::Platform::Ngp=>self.shader_ngp=shader,
+            slot_store::Platform::Ws=>self.shader_ws=shader,
         }
     }
     /// The Shader row's key of a home console (47 NES, 48 SNES, 49 MD,
-    /// 110 Master System, 111 Game Gear).
+    /// 110 Master System, 111 Game Gear, 115 Neo Geo Pocket, 116 WonderSwan).
     pub fn home_shader_key(platform:slot_store::Platform)->Option<usize> {
         match platform {
             slot_store::Platform::Nes=>Some(47),
@@ -1091,6 +1106,8 @@ impl Settings {
             slot_store::Platform::Md=>Some(49),
             slot_store::Platform::Sms=>Some(SHADER_SMS_KEY),
             slot_store::Platform::Gg=>Some(SHADER_GG_KEY),
+            slot_store::Platform::Ngp=>Some(SHADER_NGP_KEY),
+            slot_store::Platform::Ws=>Some(SHADER_WS_KEY),
             _=>None,
         }
     }
@@ -1103,11 +1120,12 @@ impl Settings {
         }
     }
     /// The Settings key of a system's Frame Blending row (60..=65, then
-    /// 112 Master System and 113 Game Gear).
+    /// 112 Master System, 113 Game Gear, 117 Neo Geo Pocket, 118 WonderSwan).
     pub fn blending_key(platform: slot_store::Platform) -> usize {
         use slot_store::Platform::*;
         match platform { Gba => 60, Gbc => 61, Gb => 62, Nes => 63, Snes => 64, Md => 65,
-            Sms => BLENDING_SMS_KEY, Gg => BLENDING_GG_KEY }
+            Sms => BLENDING_SMS_KEY, Gg => BLENDING_GG_KEY,
+            Ngp => BLENDING_NGP_KEY, Ws => BLENDING_WS_KEY }
     }
 
     /// The system a Frame Blending key belongs to.
@@ -1121,6 +1139,7 @@ impl Settings {
             Gba => &mut self.blending_gba, Gbc => &mut self.blending_gbc, Gb => &mut self.blending_gb,
             Nes => &mut self.blending_nes, Snes => &mut self.blending_snes, Md => &mut self.blending_md,
             Sms => &mut self.blending_sms, Gg => &mut self.blending_gg,
+            Ngp => &mut self.blending_ngp, Ws => &mut self.blending_ws,
         }
     }
 
@@ -1153,6 +1172,7 @@ impl Settings {
             Gba => self.blending_gba, Gbc => self.blending_gbc, Gb => self.blending_gb,
             Nes => self.blending_nes, Snes => self.blending_snes, Md => self.blending_md,
             Sms => self.blending_sms, Gg => self.blending_gg,
+            Ngp => self.blending_ngp, Ws => self.blending_ws,
         }
     }
 
@@ -1188,7 +1208,8 @@ impl Settings {
             slot_store::Platform::Nes=>self.bezel_nes,
             slot_store::Platform::Snes=>self.bezel_snes,
             slot_store::Platform::Md=>self.bezel_md,
-            slot_store::Platform::Sms|slot_store::Platform::Gg=>Bezel::None,
+            slot_store::Platform::Sms|slot_store::Platform::Gg
+            |slot_store::Platform::Ngp|slot_store::Platform::Ws=>Bezel::None,
         }
     }
     pub fn set_bezel_for(&mut self,platform:slot_store::Platform,value:Bezel) {
@@ -1199,7 +1220,8 @@ impl Settings {
             slot_store::Platform::Nes=>self.bezel_nes=value,
             slot_store::Platform::Snes=>self.bezel_snes=value,
             slot_store::Platform::Md=>self.bezel_md=value,
-            slot_store::Platform::Sms|slot_store::Platform::Gg=>{}
+            slot_store::Platform::Sms|slot_store::Platform::Gg
+            |slot_store::Platform::Ngp|slot_store::Platform::Ws=>{}
         }
     }
     /// The Bezel row's settings key for each system.
@@ -1209,7 +1231,8 @@ impl Settings {
             slot_store::Platform::Gb=>27, slot_store::Platform::Nes=>44,
             slot_store::Platform::Snes=>45, slot_store::Platform::Md=>46,
             // Never shown: no overlay for them yet.
-            slot_store::Platform::Sms|slot_store::Platform::Gg=>usize::MAX,
+            slot_store::Platform::Sms|slot_store::Platform::Gg
+            |slot_store::Platform::Ngp|slot_store::Platform::Ws=>usize::MAX,
         }
     }
     fn step_bezel(&mut self,platform:slot_store::Platform,right:bool) {
@@ -1232,7 +1255,7 @@ impl Settings {
             24 => self.set_colour_for(slot_store::Platform::Gb,
                 !self.colour_correction_gb),
             21 => self.shader_gbc=self.shader_gbc.step(&Shader::GBC,right),
-            60..=65 | BLENDING_SMS_KEY | BLENDING_GG_KEY => {
+            60..=65 | BLENDING_SMS_KEY | BLENDING_GG_KEY | BLENDING_NGP_KEY | BLENDING_WS_KEY => {
                 let Some(platform) = Self::blending_platform(key) else { return false };
                 let blending = self.blending_mut(platform);
                 *blending = blending.step(right);
@@ -1261,6 +1284,8 @@ impl Settings {
             49 => self.shader_md=self.shader_md.step(&Shader::HOME,right),
             SHADER_SMS_KEY => self.shader_sms=self.shader_sms.step(&Shader::HOME,right),
             SHADER_GG_KEY => self.shader_gg=self.shader_gg.step(&Shader::HOME,right),
+            SHADER_NGP_KEY => self.shader_ngp=self.shader_ngp.step(&Shader::HOME,right),
+            SHADER_WS_KEY => self.shader_ws=self.shader_ws.step(&Shader::HOME,right),
             3 => step_palette(&mut self.gb_palettes, &mut self.gb_palette, right),
             4 => {
                 let at = SPEEDS.iter().position(|x| *x == self.ff_speed).unwrap_or(0);
@@ -1315,6 +1340,13 @@ pub const SHADER_SMS_KEY: usize = 110;
 pub const SHADER_GG_KEY: usize = 111;
 pub const BLENDING_SMS_KEY: usize = 112;
 pub const BLENDING_GG_KEY: usize = 113;
+/// Neo Geo Pocket (Default Core, Shader, Frame Blending) and WonderSwan
+/// (Shader, Frame Blending: one core only), 3.0.
+pub const CORE_NGP_KEY: usize = 114;
+pub const SHADER_NGP_KEY: usize = 115;
+pub const SHADER_WS_KEY: usize = 116;
+pub const BLENDING_NGP_KEY: usize = 117;
+pub const BLENDING_WS_KEY: usize = 118;
 
 /// RG Rotate closed: seconds before it dims, then before it sleeps (0 never).
 pub const ROTATE_DIM_S: [u16; 4] = [5, 10, 15, 30];

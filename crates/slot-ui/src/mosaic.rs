@@ -12,10 +12,10 @@ use crate::art;
 use crate::wallpaper_scale::{self, Crop};
 
 /// The shelves' keys, in wallpaper::SHELF_KEYS's order.
-pub const MOSAIC_KEYS: [&str; 11] =
-    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "Recents", "Favorites", "GBAV"];
+pub const MOSAIC_KEYS: [&str; 13] =
+    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "Recents", "Favorites", "GBAV"];
 
-const MASKS: [&[u8]; 11] = [
+const MASKS: [&[u8]; 13] = [
     include_bytes!("../../../assets/wallpapers/GBA.png"),
     include_bytes!("../../../assets/wallpapers/GB.png"),
     include_bytes!("../../../assets/wallpapers/GBC.png"),
@@ -26,6 +26,10 @@ const MASKS: [&[u8]; 11] = [
     // until they get their own.
     include_bytes!("../../../assets/wallpapers/MD.png"),
     include_bytes!("../../../assets/wallpapers/MD.png"),
+    // Neo Geo Pocket and WonderSwan: the Recents shelf's mixed drawings
+    // until they get their own.
+    include_bytes!("../../../assets/wallpapers/Recents.png"),
+    include_bytes!("../../../assets/wallpapers/Recents.png"),
     include_bytes!("../../../assets/wallpapers/Recents.png"),
     include_bytes!("../../../assets/wallpapers/Favorites.png"),
     include_bytes!("../../../assets/wallpapers/GBAV.png"),
@@ -37,7 +41,7 @@ pub enum MosaicTheme { Original, Light, Dark, Oled }
 
 /// Ground, then line, for Original, Light, Dark and OLED, read off Siham's
 /// PNGs (each is exactly ground + mask x (line - ground)).
-const COLOURS: [[[[u8; 3]; 2]; 4]; 11] = [
+const COLOURS: [[[[u8; 3]; 2]; 4]; 13] = [
     // GBA
     [[[196, 198, 228], [145, 147, 182]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [67, 67, 73]], [[0, 0, 0], [50, 50, 56]]],
     // GB
@@ -54,6 +58,10 @@ const COLOURS: [[[[u8; 3]; 2]; 4]; 11] = [
     [[[96, 66, 70], [148, 106, 110]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
     // GG: the Game Gear's dark grey and blue.
     [[[70, 76, 96], [114, 124, 152]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
+    // NGP: the Neo Geo Pocket's anthracite and blue.
+    [[[64, 70, 92], [108, 118, 150]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
+    // WS: the WonderSwan's grey-green.
+    [[[84, 94, 88], [134, 150, 140]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
     // Recents
     [[[211, 216, 223], [155, 164, 177]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // Favorites

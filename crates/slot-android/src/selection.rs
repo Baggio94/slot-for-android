@@ -43,7 +43,8 @@ mod tests {
         let focus=Focus { rack: 7,uri:"content://roms/emerald".into() };
         store(&dir,&focus).unwrap();
         assert_eq!(load(&dir),Some(focus));
-        store(&dir, &Focus { rack: 11, uri: "content://roms/bad".into() }).unwrap();
+        let racks = slot_store::Platform::ALL.len() + 3;
+        store(&dir, &Focus { rack: racks, uri: "content://roms/bad".into() }).unwrap();
         assert_eq!(load(&dir), None, "out-of-range rack must not restore");
         // 2.5's file (six systems): its Favorites rack (7) is Favorites still.
         std::fs::write(dir.join(FILE), r#"{"rack":7,"uri":"content://roms/fav"}"#).unwrap();

@@ -263,6 +263,8 @@ fn outlines(platform: Platform) -> Vec<(&'static str, Outline)> {
         Platform::Sms => &[("Master System", Outline::MasterSystem), ("Master System Japan", Outline::MasterSystemJp),
             ("Sega My Card", Outline::MasterSystemCard)][..],
         Platform::Gg => &[("Game Gear", Outline::GameGear), ("Game Gear Codemasters", Outline::GameGearCodemasters)][..],
+        Platform::Ngp => &[("Neo Geo Pocket", Outline::NeoGeoPocket)][..],
+        Platform::Ws => &[("WonderSwan", Outline::WonderSwan), ("WonderSwan Color", Outline::WonderSwanColor)][..],
         Platform::Gba => &[][..],
     });
     out
@@ -358,6 +360,8 @@ pub(super) fn search_platforms(platform: Platform) -> &'static [&'static str] {
         Platform::Md => &["MD"],
         Platform::Sms => &["SMS"],
         Platform::Gg => &["GG"],
+        Platform::Ngp => &["NGP", "NGPC"],
+        Platform::Ws => &["WS", "WSC"],
     }
 }
 

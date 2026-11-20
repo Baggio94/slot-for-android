@@ -32,7 +32,7 @@ pub struct System {
     pub handheld: bool,
 }
 
-pub const SYSTEMS: [System; 8] = [
+pub const SYSTEMS: [System; 10] = [
     System {
         platform: Platform::Gba, name: "Game Boy Advance", dir: "GBA",
         extensions: &["gba"], folders: &["gba"], romm: &["gba"],
@@ -87,6 +87,24 @@ pub const SYSTEMS: [System; 8] = [
         romm: &["gamegear"],
         retroachievements: 15, screenscraper: 21,
         cores: [Core::GenesisPlusGx, Core::Gearsystem], picture: (160, 144), handheld: false,
+    },
+    // One shelf for both Neo Geo Pockets; their labels keep ScreenScraper's
+    // two systems (NGP 25, NGPC 82).
+    System {
+        platform: Platform::Ngp, name: "Neo Geo Pocket", dir: "NGP",
+        extensions: &["ngp", "ngc", "ngpc"], folders: &["ngp", "ngpc"],
+        romm: &["neo-geo-pocket", "neo-geo-pocket-color", "ngp", "ngpc"],
+        retroachievements: 14, screenscraper: 25,
+        cores: [Core::Neopop, Core::Race], picture: (160, 152), handheld: false,
+    },
+    // One shelf for both WonderSwans (WS 45, WSC 46 on ScreenScraper).
+    // Beetle Cygne is their only core: both sockets hold it.
+    System {
+        platform: Platform::Ws, name: "WonderSwan", dir: "WS",
+        extensions: &["ws", "wsc"], folders: &["wonderswan", "wonderswancolor"],
+        romm: &["wonderswan", "wonderswan-color"],
+        retroachievements: 53, screenscraper: 45,
+        cores: [Core::BeetleCygne, Core::BeetleCygne], picture: (224, 144), handheld: false,
     },
 ];
 

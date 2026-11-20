@@ -144,6 +144,19 @@ fn solar_cart(rom: &Path, which: Core, platform: Platform) -> Option<Solar> {
     else { None }
 }
 
+/// A WonderSwan game made to be held upright: bit 0 of the flags byte in
+/// the footer, the ROM's last 10 bytes (Mednafen reads it there too).
+pub fn ws_upright(rom: &Path) -> bool {
+    let footer = || -> std::io::Result<[u8; 10]> {
+        let mut file = std::fs::File::open(rom)?;
+        file.seek(SeekFrom::End(-10))?;
+        let mut footer = [0u8; 10];
+        file.read_exact(&mut footer)?;
+        Ok(footer)
+    };
+    footer().is_ok_and(|f| f[6] & 1 != 0)
+}
+
 /// Tilt and gyro cartridges, which only mGBA emulates: Yoshi Topsy-Turvy
 /// and Koro Koro Puzzle (tilt), WarioWare: Twisted! (gyro), and the Game
 /// Boy Color MBC7 carts, Kirby Tilt 'n' Tumble's.
@@ -359,6 +372,8 @@ pub struct GameSession {
     core_kind: Core,
     /// SNES / Mega Drive: every face button goes to the core as is.
     full_pad: bool,
+    /// A WonderSwan game held upright: its Controls are "wsv"'s.
+    upright: bool,
     /// NES, SNES and Mega Drive take a second local player on port 2.
     second_player: bool,
     /// Port 2's buttons as slot. read them (Settings > Controls).
@@ -758,10 +773,17 @@ impl GameSession {
                 core.set_option("genesis_plus_gx_lock_on", "disabled");
             }
             Core::Picodrive => {}
-            // Gearsystem runs on its own defaults, as RetroArch starts it.
-            Core::Gearsystem => {}
+            // Gearsystem, NeoPop and RACE run on their own defaults, as
+            // RetroArch starts them.
+            Core::Gearsystem | Core::Neopop | Core::Race => {}
+            // A game held upright is turned on screen, its buttons with it
+            // (Beetle Cygne's own Auto mapping); never SELECT to rotate.
+            Core::BeetleCygne => {
+                core.set_option("wswan_rotate_display", if ws_upright(rom) { "portrait" } else { "landscape" });
+                core.set_option("wswan_rotate_keymap", "auto");
+            }
             // The other 3.0 systems' cores are not shipped yet.
-            Core::Neopop | Core::Race | Core::Handy | Core::BeetleLynx => {}
+            Core::Handy | Core::BeetleLynx => {}
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
@@ -1023,9 +1045,12 @@ impl GameSession {
             gambatte_legacy_export, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
-            full_pad: matches!(platform, Platform::Snes | Platform::Md),
-            // The Game Gear has no second pad: its link cable is another console.
-            second_player: !platform.handheld() && platform != Platform::Gg, port2: 0, layouts: [None, None],
+            full_pad: matches!(platform, Platform::Snes | Platform::Md | Platform::Ws),
+            upright: which == Core::BeetleCygne && ws_upright(rom),
+            // The Game Gear, Neo Geo Pocket and WonderSwan have no second
+            // pad: their link cable is another console.
+            second_player: !platform.handheld() && !matches!(platform, Platform::Gg | Platform::Ngp | Platform::Ws),
+            port2: 0, layouts: [None, None],
             blending: None, slot_blending: crate::frame_blend::Mode::Off,
             runahead_video: Vec::new(), runahead_size: (0, 0), runahead_state: Vec::new(),
             // bsnes shows the frame before an unserialize on the first run
@@ -1301,6 +1326,9 @@ impl GameSession {
     /// A second local player plays now: a home console game outside
     /// Multiplayer (Settings > Controls, Port 2).
     pub fn takes_port2(&self) -> bool { self.second_player && !self.in_multiplayer() }
+
+    /// A WonderSwan game held upright (turned on screen).
+    pub fn upright(&self) -> bool { self.upright }
 
     /// A home console game whose port 2 is the other console's right now.
     pub fn port2_is_remote(&self) -> bool { self.second_player && self.in_multiplayer() }

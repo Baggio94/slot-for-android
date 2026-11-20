@@ -495,9 +495,16 @@ pub fn slot_button_name(slot: u16) -> &'static str {
 /// A button of the console. `core` is the joypad bit the core reads it
 /// from; slot.'s button with that same bit plays it by default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ConsoleButton { pub name: &'static str, pub core: u16 }
+pub struct ConsoleButton {
+    pub name: &'static str,
+    pub core: u16,
+    /// The slot. button playing it by default: its core bit, unless that
+    /// is a key slot. keeps (L2 and R2 are Rewind and Fast Forward).
+    pub slot: u16,
+}
 
-const fn cb(name: &'static str, core: u16) -> ConsoleButton { ConsoleButton { name, core } }
+const fn cb(name: &'static str, core: u16) -> ConsoleButton { ConsoleButton { name, core, slot: core } }
+const fn cb_on(name: &'static str, core: u16, slot: u16) -> ConsoleButton { ConsoleButton { name, core, slot } }
 const DPAD: [ConsoleButton; 4] =
     [cb("Up", bit::UP), cb("Down", bit::DOWN), cb("Left", bit::LEFT), cb("Right", bit::RIGHT)];
 const GBA: [ConsoleButton; 10] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
@@ -522,9 +529,31 @@ const SMS: [ConsoleButton; 7] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
 /// The Game Gear's: Button 1 from B, Button 2 from A, START.
 const GG: [ConsoleButton; 7] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
     cb("1", bit::B), cb("2", bit::A), cb("START", bit::START)];
+/// NeoPop and RACE read the Neo Geo Pocket as RetroArch does: A from B,
+/// B from A, Option from START.
+const NGP: [ConsoleButton; 7] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("A", bit::B), cb("B", bit::A), cb("Option", bit::START)];
+/// Beetle Cygne's WonderSwan held sideways: the X pad from the D-pad, the
+/// Y pad from R2, R1, L2 and L1 (core bits Z, R, C, L). slot. keeps L2 and
+/// R2, so Y1 and Y3 come from X and Y; Y2 and Y4 stay on R1 and L1.
+const WS: [ConsoleButton; 11] = [
+    cb("X1 (Up)", bit::UP), cb("X2 (Right)", bit::RIGHT),
+    cb("X3 (Down)", bit::DOWN), cb("X4 (Left)", bit::LEFT),
+    cb_on("Y1", bit::Z, bit::X), cb("Y2", bit::R), cb_on("Y3", bit::C, bit::Y), cb("Y4", bit::L),
+    cb("A", bit::A), cb("B", bit::B), cb("START", bit::START)];
+/// A game held upright: Beetle Cygne's Auto mapping turns the buttons with
+/// the picture (the Y pad from the D-pad, the X pad from the four face
+/// buttons, A and B from L1 and R1), as in RetroArch.
+const WS_UPRIGHT: [ConsoleButton; 11] = [
+    cb("Y1", bit::LEFT), cb("Y2", bit::UP), cb("Y3", bit::RIGHT), cb("Y4", bit::DOWN),
+    cb("X1", bit::Y), cb("X2", bit::X), cb("X3", bit::A), cb("X4", bit::B),
+    cb("A", bit::L), cb("B", bit::R), cb("START", bit::START)];
 
 /// Systems, by the names slot. files their controls under.
-pub const SYSTEMS: [&str; 8] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg"];
+pub const SYSTEMS: [&str; 11] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv"];
+
+/// Controls of a WonderSwan game made to be held upright.
+pub const WS_UPRIGHT_SYSTEM: &str = "wsv";
 
 pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
     match system {
@@ -533,6 +562,9 @@ pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
         "md" => &MD,
         "sms" => &SMS,
         "gg" => &GG,
+        "ngp" => &NGP,
+        "ws" => &WS,
+        "wsv" => &WS_UPRIGHT,
         _ => &TWO_BUTTONS,
     }
 }
@@ -606,8 +638,8 @@ impl ShoulderRole {
 }
 
 /// X / Y and L1 / R1 rows: on which systems they are spare.
-pub fn spare_xy(system: &str) -> bool { matches!(system, "gba" | "gb" | "gbc" | "nes" | "sms" | "gg") }
-pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes" | "sms" | "gg") }
+pub fn spare_xy(system: &str) -> bool { matches!(system, "gba" | "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp") }
+pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp") }
 /// C / Z row: every system but the Mega Drive, whose pad has them.
 pub fn spare_cz(system: &str) -> bool { system != "md" }
 
@@ -736,7 +768,7 @@ impl Controls {
         if let Some(slot) = own { return (slot, true); }
         let below = self.levels(scope, port).into_iter()
             .find_map(|level| level.binds.get(button.name).copied());
-        (below.unwrap_or(button.core), false)
+        (below.unwrap_or(button.slot), false)
     }
 
     /// Console button `index` <- slot.'s button `slot`. A console button

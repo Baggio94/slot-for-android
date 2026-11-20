@@ -126,7 +126,8 @@ pub fn shell_for(cart: &Cart) -> Shell {
     match cart.platform {
         Platform::Gba => gba_shell_for(&cart.code),
         Platform::Gb | Platform::Gbc => gb_shell_for(&cart.rom),
-        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg => crate::home::home_mould_of(cart)
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
+        | Platform::Ngp | Platform::Ws => crate::home::home_mould_of(cart)
             .map_or(DEFAULT_SHELL, |m| shell(m.art().colour, Finish::Solid)),
     }
 }
@@ -353,6 +354,15 @@ const GG_SWATCHES: &[Swatch] = &[
     swatch("Game Gear black", [20, 20, 20], Finish::Solid),
 ];
 
+const NGP_SWATCHES: &[Swatch] = &[
+    swatch("Neo Geo Pocket black", [18, 18, 18], Finish::Solid),
+];
+
+const WS_SWATCHES: &[Swatch] = &[
+    swatch("WonderSwan black", [30, 30, 30], Finish::Solid),
+    swatch("WonderSwan Color clear", [145, 148, 148], Finish::Translucent),
+];
+
 /// Colours no real cart came in, for fun, on every system.
 pub const FUN_SWATCHES: &[Swatch] = &[
     swatch("Cherry", [0xe0, 0x28, 0x3a], Finish::Solid),
@@ -377,5 +387,7 @@ pub fn system_swatches(platform: Platform) -> &'static [Swatch] {
         Platform::Md => MD_SWATCHES,
         Platform::Sms => SMS_SWATCHES,
         Platform::Gg => GG_SWATCHES,
+        Platform::Ngp => NGP_SWATCHES,
+        Platform::Ws => WS_SWATCHES,
     }
 }

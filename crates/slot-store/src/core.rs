@@ -18,20 +18,22 @@ pub enum Core {
     Bsnes,
     GenesisPlusGx,
     Picodrive,
-    // The 3.0 systems' cores, named on their boards; none is shipped yet.
+    // The 3.0 systems' cores, named on their boards.
     Neopop,
     Race,
     Gearsystem,
     Handy,
     BeetleLynx,
+    BeetleCygne,
 }
 
 impl Core {
-    pub const ALL: [Core; 14] = [
+    pub const ALL: [Core; 15] = [
         Core::Mgba, Core::Gpsp, Core::Gambatte,
         Core::Fceumm, Core::Nestopia, Core::Snes9x, Core::Bsnes,
         Core::GenesisPlusGx, Core::Picodrive,
         Core::Neopop, Core::Race, Core::Gearsystem, Core::Handy, Core::BeetleLynx,
+        Core::BeetleCygne,
     ];
 
     /// libretro's own core name: lib{as_str}_libretro.so, and the key
@@ -52,6 +54,7 @@ impl Core {
             Core::Gearsystem => "gearsystem",
             Core::Handy => "handy",
             Core::BeetleLynx => "mednafen_lynx",
+            Core::BeetleCygne => "mednafen_wswan",
         }
     }
 
@@ -79,11 +82,12 @@ impl Core {
             Core::Bsnes => "bsnes",
             Core::GenesisPlusGx => "Genesis Plus GX",
             Core::Picodrive => "PicoDrive",
-            Core::Neopop => "NeoPop",
+            Core::Neopop => "Beetle NeoPop",
             Core::Race => "RACE",
             Core::Gearsystem => "Gearsystem",
             Core::Handy => "Handy",
             Core::BeetleLynx => "Beetle Lynx",
+            Core::BeetleCygne => "Beetle WonderSwan",
         }
     }
 
@@ -111,7 +115,7 @@ impl Core {
     pub fn socket(self) -> usize {
         match self {
             Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx
-            | Core::Neopop | Core::Handy => 0,
+            | Core::Neopop | Core::Handy | Core::BeetleCygne => 0,
             Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive
             | Core::Race | Core::Gearsystem | Core::BeetleLynx => 1,
         }

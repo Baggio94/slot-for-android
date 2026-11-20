@@ -229,6 +229,7 @@ fn preview_mould(core: Core) -> Option<HomeMould> {
         Core::Neopop | Core::Race => Some(HomeMould::NeoGeoPocket),
         Core::Gearsystem => Some(HomeMould::MasterSystem),
         Core::Handy | Core::BeetleLynx => Some(HomeMould::Lynx),
+        Core::BeetleCygne => Some(HomeMould::WonderSwan),
         _ => None,
     }
 }

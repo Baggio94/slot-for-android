@@ -84,7 +84,7 @@ class SystemsTest {
     }
 
     @Test fun everySystemHasOneCompleteRow() {
-        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG"), Systems.PLATFORMS)
+        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS"), Systems.PLATFORMS)
         for (row in Systems.TABLE) {
             val p = row.platform
             assertTrue(p, row.extensions.isNotEmpty() && row.folders.isNotEmpty() && row.romm.isNotEmpty())
@@ -111,16 +111,16 @@ class SystemsTest {
 
     @Test fun theTableKeepsTheSixSystemsAsTheyWere() {
         assertEquals(setOf("gba", "gb", "gbc", "nes", "fc", "unf", "unif", "sfc", "smc", "md", "gen", "smd", "bin",
-            "sms", "gg"), Systems.ROM_EXTENSIONS)
-        assertEquals(setOf("NES", "SNES", "MD", "SMS", "GG"), Systems.HOME_PLATFORMS)
+            "sms", "gg", "ngp", "ngc", "ngpc", "ws", "wsc"), Systems.ROM_EXTENSIONS)
+        assertEquals(setOf("NES", "SNES", "MD", "SMS", "GG", "NGP", "WS"), Systems.HOME_PLATFORMS)
         assertEquals("GBA", Systems.platformFor("GBA"))
         assertEquals("GBC", Systems.platformFor("gbc"))
         assertEquals("MD", Systems.platformFor("bin"))
         assertEquals(mapOf("GB" to 4, "GBA" to 5, "GBC" to 6, "NES" to 7, "SNES" to 3, "MD" to 1,
-            "SMS" to 11, "GG" to 15),
+            "SMS" to 11, "GG" to 15, "NGP" to 14, "WS" to 53),
             Systems.PLATFORMS.associateWith { Systems.retroAchievementsId(it) })
         assertEquals(mapOf("GB" to null, "GBA" to null, "GBC" to null, "NES" to 3, "SNES" to 4, "MD" to 1,
-            "SMS" to 2, "GG" to 21),
+            "SMS" to 2, "GG" to 21, "NGP" to 25, "WS" to 45),
             Systems.PLATFORMS.associateWith { HomeCartLabels.systemId(it) })
         assertEquals("MD", Romm.platformOf("Sega-Mega-Drive"))
         assertEquals("GG", Romm.platformOf("gamegear"))
@@ -129,6 +129,16 @@ class SystemsTest {
         assertEquals("Gearsystem", Systems.coreFolder("gearsystem", "sms"))
         assertEquals("Genesis Plus GX", Systems.coreFolder("", "gg"))
         assertEquals(null, Romm.platformOf("psx"))
+        assertEquals("NGP", Romm.platformOf("neo-geo-pocket-color"))
+        assertEquals("WS", Romm.platformOf("wonderswan-color"))
+        assertEquals("NGP", Systems.platformFor("ngc"))
+        assertEquals("WS", Systems.platformFor("WSC"))
+        assertEquals("Beetle NeoPop", Systems.coreFolder("", "ngp"))
+        assertEquals("RACE", Systems.coreFolder("race", "ngc"))
+        assertEquals("Beetle WonderSwan", Systems.coreFolder("", "wsc"))
+        assertEquals(listOf("ngpc", "ngp"), Romm.folderNames("neo-geo-pocket-color", "NGP"))
+        assertEquals(listOf("ngp", "ngpc"), Romm.folderNames("neo-geo-pocket", "NGP"))
+        assertEquals(listOf("wonderswancolor", "wonderswan"), Romm.folderNames("wonderswan-color", "WS"))
         assertEquals(listOf("famicom", "nes"), Romm.folderNames("famicom", "NES"))
         assertEquals(listOf("sfc", "snes"), Romm.folderNames("sfam", "SNES"))
         assertEquals(listOf("nes", "famicom"), Romm.folderNames("nes", "NES"))

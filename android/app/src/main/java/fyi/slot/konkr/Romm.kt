@@ -68,6 +68,9 @@ internal object Romm {
     internal fun folderNames(slug: String, platform: String): List<String> = when (slug.lowercase(Locale.ROOT)) {
         "famicom" -> listOf("famicom", "nes")
         "sfam" -> listOf("sfc", "snes")
+        // One shelf, two consoles: a Color game goes to the Color's folder.
+        "neo-geo-pocket-color", "ngpc" -> listOf("ngpc", "ngp")
+        "wonderswan-color" -> listOf("wonderswancolor", "wonderswan")
         else -> (Systems.row(platform) ?: Systems.row(Systems.MD))!!.folders
     }
 

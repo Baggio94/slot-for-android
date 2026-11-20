@@ -411,7 +411,8 @@ internal object RomLibrary {
      * convention most handheld setups follow). Their folders can hold
      * thousands of files, and listing them through SAF is most of a scan's
      * time. Our own systems' folders (gb, gbc, gba, sgb, nes, famicom, snes,
-     * sfc, snesna, megadrive, megadrivejp, genesis, mastersystem, gamegear) and any folder with an
+     * sfc, snesna, megadrive, megadrivejp, genesis, mastersystem, gamegear, ngp, ngpc,
+     * wonderswan, wonderswancolor) and any folder with an
      * unknown name are still searched, so custom layouts keep working.
      */
     internal val OTHER_SYSTEM_DIRECTORIES = setOf(
@@ -427,16 +428,16 @@ internal object RomLibrary {
         "lcdgames", "lowresnx", "lutro", "macintosh", "mame", "mame-advmame",
         "megacd", "megacdjp", "megaduck", "mess", "model2", "model3", "moto", "msx", "msx1",
         "msx2", "msxturbor", "mugen", "multivision", "n3ds", "n64", "n64dd", "naomi",
-        "naomi2", "naomigd", "nds", "neogeo", "neogeocd", "neogeocdjp", "ngage", "ngp",
-        "ngpc", "odyssey2", "openbor", "oric", "palm", "pc", "pc88", "pc98", "pcarcade",
+        "naomi2", "naomigd", "nds", "neogeo", "neogeocd", "neogeocdjp", "ngage",
+        "odyssey2", "openbor", "oric", "palm", "pc", "pc88", "pc98", "pcarcade",
         "pcengine", "pcenginecd", "pcfx", "pico8", "plus4", "pokemini", "ports", "ps2", "ps3",
         "ps4", "psp", "psvita", "psx", "pv1000", "quake", "samcoupe", "saturn", "saturnjp",
         "scummvm", "scv", "sega32x", "sega32xjp", "sega32xna", "segacd", "sg-1000",
         "solarus", "spectravideo", "steam", "stv", "supergrafx", "supervision", "supracan",
         "switch", "symbian", "tanodragon", "tg16", "tg-cd", "ti99", "tic80", "to8", "trs-80",
         "uzebox", "vectrex", "vic20", "videopac", "virtualboy", "vpinball", "vsmile",
-        "wasm4", "wii", "wiiu", "windows", "windows3x", "windows9x", "wonderswan",
-        "wonderswancolor", "x1", "x68000", "xbox", "xbox360", "zmachine", "zx81", "zxnext",
+        "wasm4", "wii", "wiiu", "windows", "windows3x", "windows9x",
+        "x1", "x68000", "xbox", "xbox360", "zmachine", "zx81", "zxnext",
         "zxspectrum"
     )
 

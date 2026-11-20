@@ -179,7 +179,7 @@ impl Hand {
     }
 
     /// The title on one to three lines, as big as the box takes.
-    fn fit(&self, title: &str, seed: u64, bw: f32, bh: f32) -> (Vec<String>, f32) {
+    fn fit(&self, title: &str, seed: u64, bw: f32, bh: f32, one_line: bool) -> (Vec<String>, f32) {
         let words: Vec<&str> = title.split_whitespace().collect();
         if words.is_empty() {
             return (Vec::new(), 0.0);
@@ -188,7 +188,7 @@ impl Hand {
         let mut best: (Vec<String>, f32) = (vec![words.join(" ")], 0.0);
         let n = words.len();
         let mut splits: Vec<Vec<usize>> = vec![vec![]];
-        for a in 1..n {
+        for a in (1..n).filter(|_| !one_line) {
             splits.push(vec![a]);
             for b in a + 1..n {
                 splits.push(vec![a, b]);
@@ -218,9 +218,13 @@ impl Hand {
         let seed = fnv(key);
         let (fw, fh) = (w as f32, h as f32);
         let tilt = (noise(seed, 1) - 0.5) * 0.07;
-        let (bx, by, bw, bh, slope) = (fw * 0.07, fh * 0.12, fw * 0.86, fh * 0.76, tilt * 0.6);
+        // A long, shallow well (the Master System's, Sonic & Knuckles')
+        // takes one line, kept off its top edge: tall letters overshoot it.
+        let one_line = fw > 4.0 * fh;
+        let (by, bh) = if one_line { (fh * 0.26, fh * 0.62) } else { (fh * 0.12, fh * 0.76) };
+        let (bx, bw, slope) = (fw * 0.07, fw * 0.86, tilt * 0.6);
         let colour = ink_for(recess);
-        let (lines, px) = self.fit(title, seed, bw, bh);
+        let (lines, px) = self.fit(title, seed, bw, bh, one_line);
         let mut ink = vec![0u8; (w * h) as usize];
         let block = CAP * px + gaps(&lines) * px;
         let mut baseline = by + (bh - block - DESCENT * px) / 2.0 + CAP * px;

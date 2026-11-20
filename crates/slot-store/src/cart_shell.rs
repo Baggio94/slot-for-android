@@ -97,11 +97,10 @@ impl Outline {
             | Outline::MegaDriveSk => Some(Platform::Md),
             Outline::MasterSystem | Outline::MasterSystemJp | Outline::MasterSystemCard => Some(Platform::Sms),
             Outline::GameGear | Outline::GameGearCodemasters => Some(Platform::Gg),
+            Outline::NeoGeoPocket => Some(Platform::Ngp),
+            Outline::WonderSwan | Outline::WonderSwanColor => Some(Platform::Ws),
             // No system of slot.'s plays them yet.
-            Outline::NeoGeoPocket
-            | Outline::WonderSwan
-            | Outline::WonderSwanColor
-            | Outline::Lynx
+            Outline::Lynx
             | Outline::PokemonMini => None,
         }
     }

@@ -141,13 +141,24 @@ pub fn next_populated(current: usize, direction: i32, count: &[usize]) -> usize 
     current
 }
 
+/// A WonderSwan Color game (.wsc) comes in the Color's clear cart; the
+/// WonderSwan shelf's own mould is the black one.
+fn colour_swan(shell: ShellChoice, entry: &RomEntry) -> ShellChoice {
+    let colour = entry.filename.to_ascii_lowercase().ends_with(".wsc");
+    if !colour || shell.outline != slot_store::Outline::WonderSwan { return shell; }
+    ShellChoice { outline: slot_store::Outline::WonderSwanColor, colour: [145, 148, 148],
+        finish: slot_store::ShellFinish::Clear }
+}
+
 /// A cart's automatic shell, as the shelf gives it when Cart Studio names none.
 fn auto_shell(entry: &RomEntry, platform: Platform) -> Option<ShellChoice> {
     match platform {
         Platform::Gba => None,
         // The region's mould, a publisher's, and the game's colour.
-        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg => slot_ui::home_shell(
-            platform, entry.title.trim(), &entry.home_region, &entry.home_maker),
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
+        | Platform::Ngp | Platform::Ws => slot_ui::home_shell(
+            platform, entry.title.trim(), &entry.home_region, &entry.home_maker)
+            .map(|shell| colour_swan(shell, entry)),
         Platform::Gb | Platform::Gbc => {
             // Cart Studio and the shelf must resolve the same automatic
             // per-game shell, even for SAF content URIs and zipped ROMs.

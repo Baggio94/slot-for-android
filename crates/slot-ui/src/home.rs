@@ -33,12 +33,11 @@ impl HomeMould {
             | HomeMould::MegaDriveSk => Platform::Md,
             HomeMould::MasterSystem | HomeMould::MasterSystemJp | HomeMould::MasterSystemCard => Platform::Sms,
             HomeMould::GameGear | HomeMould::GameGearCodemasters => Platform::Gg,
+            HomeMould::NeoGeoPocket => Platform::Ngp,
+            HomeMould::WonderSwan | HomeMould::WonderSwanColor => Platform::Ws,
             // The 3.0 systems' test carts ride on the Mega Drive's platform
             // (3.0.0-cartes1): no core of theirs is ever asked for.
-            HomeMould::NeoGeoPocket
-            | HomeMould::WonderSwan
-            | HomeMould::WonderSwanColor
-            | HomeMould::Lynx
+            HomeMould::Lynx
             | HomeMould::PokemonMini => Platform::Md,
         }
     }
@@ -47,7 +46,6 @@ impl HomeMould {
     /// plays, whose cores follow the platform, and for the one-core ones).
     pub fn preview_cores(self) -> Option<[Core; 2]> {
         match self {
-            HomeMould::NeoGeoPocket => Some([Core::Neopop, Core::Race]),
             HomeMould::Lynx => Some([Core::Handy, Core::BeetleLynx]),
             _ => None,
         }
@@ -61,6 +59,8 @@ impl HomeMould {
             Platform::Md => Some(HomeMould::MegaDrive),
             Platform::Sms => Some(HomeMould::MasterSystem),
             Platform::Gg => Some(HomeMould::GameGear),
+            Platform::Ngp => Some(HomeMould::NeoGeoPocket),
+            Platform::Ws => Some(HomeMould::WonderSwan),
             Platform::Gba | Platform::Gb | Platform::Gbc => None,
         }
     }
@@ -229,6 +229,8 @@ pub fn home_shell(platform: Platform, stem: &str, region: &str, maker: &str) -> 
         Platform::Md => HomeSystem::Md,
         Platform::Sms => HomeSystem::MasterSystem,
         Platform::Gg => HomeSystem::GameGear,
+        Platform::Ngp => HomeSystem::NeoGeoPocket,
+        Platform::Ws => HomeSystem::WonderSwan,
         Platform::Gba | Platform::Gb | Platform::Gbc => return None,
     };
     let (mould, colour, glitter) = home_pick(system, stem, region, maker);
