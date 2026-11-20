@@ -99,9 +99,8 @@ impl Outline {
             Outline::GameGear | Outline::GameGearCodemasters => Some(Platform::Gg),
             Outline::NeoGeoPocket => Some(Platform::Ngp),
             Outline::WonderSwan | Outline::WonderSwanColor => Some(Platform::Ws),
-            // No system of slot.'s plays them yet.
-            Outline::Lynx
-            | Outline::PokemonMini => None,
+            Outline::Lynx => Some(Platform::Lynx),
+            Outline::PokemonMini => Some(Platform::Pokemini),
         }
     }
 }

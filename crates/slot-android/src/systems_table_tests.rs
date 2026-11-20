@@ -114,7 +114,7 @@ fn every_system_has_a_complete_row() {
         assert!(!system.folders.is_empty() && !system.romm.is_empty(), "{p:?}");
         assert!(system.retroachievements > 0 && system.screenscraper > 0, "{p:?}");
         // The WonderSwan's board has one core: Beetle Cygne in both sockets.
-        assert!(system.cores[0] != system.cores[1] || p == Platform::Ws, "{p:?}: two sockets, one core");
+        assert!(system.cores[0] != system.cores[1] || matches!(p, Platform::Ws | Platform::Pokemini), "{p:?}: two sockets, one core");
         for core in system.cores {
             assert!(core.runs(p), "{p:?} {core:?}");
             assert_eq!(Core::parse(core.as_str()), Some(core));

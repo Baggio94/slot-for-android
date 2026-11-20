@@ -12,10 +12,11 @@ use crate::art;
 use crate::wallpaper_scale::{self, Crop};
 
 /// The shelves' keys, in wallpaper::SHELF_KEYS's order.
-pub const MOSAIC_KEYS: [&str; 13] =
-    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "Recents", "Favorites", "GBAV"];
+pub const MOSAIC_KEYS: [&str; 15] =
+    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI",
+     "Recents", "Favorites", "GBAV"];
 
-const MASKS: [&[u8]; 13] = [
+const MASKS: [&[u8]; 15] = [
     include_bytes!("../../../assets/wallpapers/GBA.png"),
     include_bytes!("../../../assets/wallpapers/GB.png"),
     include_bytes!("../../../assets/wallpapers/GBC.png"),
@@ -26,8 +27,10 @@ const MASKS: [&[u8]; 13] = [
     // until they get their own.
     include_bytes!("../../../assets/wallpapers/MD.png"),
     include_bytes!("../../../assets/wallpapers/MD.png"),
-    // Neo Geo Pocket and WonderSwan: the Recents shelf's mixed drawings
-    // until they get their own.
+    // Neo Geo Pocket, WonderSwan, Lynx and Pokémon mini: the Recents
+    // shelf's mixed drawings until they get their own.
+    include_bytes!("../../../assets/wallpapers/Recents.png"),
+    include_bytes!("../../../assets/wallpapers/Recents.png"),
     include_bytes!("../../../assets/wallpapers/Recents.png"),
     include_bytes!("../../../assets/wallpapers/Recents.png"),
     include_bytes!("../../../assets/wallpapers/Recents.png"),
@@ -41,7 +44,7 @@ pub enum MosaicTheme { Original, Light, Dark, Oled }
 
 /// Ground, then line, for Original, Light, Dark and OLED, read off Siham's
 /// PNGs (each is exactly ground + mask x (line - ground)).
-const COLOURS: [[[[u8; 3]; 2]; 4]; 13] = [
+const COLOURS: [[[[u8; 3]; 2]; 4]; 15] = [
     // GBA
     [[[196, 198, 228], [145, 147, 182]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [67, 67, 73]], [[0, 0, 0], [50, 50, 56]]],
     // GB
@@ -62,6 +65,10 @@ const COLOURS: [[[[u8; 3]; 2]; 4]; 13] = [
     [[[64, 70, 92], [108, 118, 150]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
     // WS: the WonderSwan's grey-green.
     [[[84, 94, 88], [134, 150, 140]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
+    // LYNX: the Lynx's black and orange.
+    [[[96, 74, 60], [150, 118, 96]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
+    // POKEMINI: the Pokémon mini's blue.
+    [[[78, 96, 128], [124, 146, 186]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
     // Recents
     [[[211, 216, 223], [155, 164, 177]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // Favorites

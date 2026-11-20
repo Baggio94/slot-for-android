@@ -127,7 +127,7 @@ pub fn shell_for(cart: &Cart) -> Shell {
         Platform::Gba => gba_shell_for(&cart.code),
         Platform::Gb | Platform::Gbc => gb_shell_for(&cart.rom),
         Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
-        | Platform::Ngp | Platform::Ws => crate::home::home_mould_of(cart)
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini => crate::home::home_mould_of(cart)
             .map_or(DEFAULT_SHELL, |m| shell(m.art().colour, Finish::Solid)),
     }
 }
@@ -363,6 +363,14 @@ const WS_SWATCHES: &[Swatch] = &[
     swatch("WonderSwan Color clear", [145, 148, 148], Finish::Translucent),
 ];
 
+const LYNX_SWATCHES: &[Swatch] = &[
+    swatch("Lynx black", [25, 25, 25], Finish::Solid),
+];
+
+const POKEMINI_SWATCHES: &[Swatch] = &[
+    swatch("Pokemon mini clear", [128, 150, 178], Finish::Translucent),
+];
+
 /// Colours no real cart came in, for fun, on every system.
 pub const FUN_SWATCHES: &[Swatch] = &[
     swatch("Cherry", [0xe0, 0x28, 0x3a], Finish::Solid),
@@ -389,5 +397,7 @@ pub fn system_swatches(platform: Platform) -> &'static [Swatch] {
         Platform::Gg => GG_SWATCHES,
         Platform::Ngp => NGP_SWATCHES,
         Platform::Ws => WS_SWATCHES,
+        Platform::Lynx => LYNX_SWATCHES,
+        Platform::Pokemini => POKEMINI_SWATCHES,
     }
 }

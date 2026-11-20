@@ -124,7 +124,8 @@ pub fn write_system_mode(root: &Path, platform: Platform, mode: VideoMode) -> st
 /// as GBA on the KONKR's 3:2 screen.
 pub fn screen_fits(platform: Platform, panel: (u32, u32)) -> bool {
     // The handhelds' LCDs: the picture's own shape.
-    let shape = if platform.handheld() || matches!(platform, Platform::Gg | Platform::Ngp | Platform::Ws) {
+    let shape = if platform.handheld() || matches!(platform,
+        Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini) {
         let (w, h) = platform.picture();
         w as f32 / h as f32
     } else {
@@ -325,7 +326,8 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
             }
         }
         // No overlay drawn for them yet.
-        Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws => None,
+        Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
+        | Platform::Lynx | Platform::Pokemini => None,
     }
 }
 
@@ -337,7 +339,8 @@ pub fn bezel_offered(platform: Platform, panel: (u32, u32)) -> bool {
             picture_rect(platform, VideoMode::Aspect, panel)[0] >= ROOM * panel.0 as f32,
         Platform::Gba | Platform::Md => !screen_fits(platform, panel),
         Platform::Nes | Platform::Snes => a > 4.0 / 3.0 * 1.01,
-        Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws => false,
+        Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
+        | Platform::Lynx | Platform::Pokemini => false,
     }
 }
 

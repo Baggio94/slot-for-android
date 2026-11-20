@@ -578,7 +578,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 161] = [
+const MENU_TEXT: [&str; 163] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -744,50 +744,33 @@ const MENU_TEXT: [&str; 161] = [
     "Game Gear",                          // 158
     "Neo Geo Pocket",                     // 159
     "WonderSwan",                         // 160
+    "Lynx",                               // 161
+    "Pokemon mini",                       // 162
 ];
 
 /// Settings > Systems, top to bottom.
-const SYSTEM_ORDER: [Platform; 10] = [
+const SYSTEM_ORDER: [Platform; 12] = [
     Platform::Gba, Platform::Gbc, Platform::Gb,
     Platform::Nes, Platform::Snes, Platform::Md,
     Platform::Sms, Platform::Gg, Platform::Ngp, Platform::Ws,
+    Platform::Lynx, Platform::Pokemini,
 ];
-const SYSTEM_TITLES: [usize; 10] = [91, 92, 93, 121, 122, 123, 157, 158, 159, 160];
+const SYSTEM_TITLES: [usize; 12] = [91, 92, 93, 121, 122, 123, 157, 158, 159, 160, 161, 162];
 // Special racks follow the supported platforms, not hard-coded GB-era indices.
 const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 /// The 3.0 test shelf (3.0.0-cartes1), after Library > RomM's rack.
 const TEST_RACK: usize = Platform::ALL.len() + 4;
 
-/// The 3.0 test shelf's carts (3.0.0-cartes1): two or three a system, each
-/// in its own mould, with slot.'s printed label. No ROM is behind them.
+/// The 3.0 test shelf's carts (3.0.0-cartes1). Every 3.0 system has real
+/// carts since 3.0.0-lynxmini1, so the shelf is empty and Interface no
+/// longer offers it.
 fn test_carts() -> Vec<slot_store::Cart> {
-    use slot_store::{ShellChoice, ShellFinish};
-    use slot_ui::HomeMould as M;
-    // The Master System and the Game Gear left it in 3.0.0-sms1: their
-    // carts are real ones now.
-    // The Neo Geo Pocket and the WonderSwan left it in 3.0.0-ngpws1.
-    let carts: [(M, &str, [u8; 3], ShellFinish); 5] = [
-        (M::Lynx, "California Games", [25, 25, 25], ShellFinish::Solid),
-        (M::Lynx, "Chip's Challenge", [25, 25, 25], ShellFinish::Solid),
-        (M::PokemonMini, "Pokemon Party mini", [128, 150, 178], ShellFinish::Clear),
-        (M::PokemonMini, "Pokemon Puzzle Collection", [128, 150, 178], ShellFinish::Clear),
-        (M::PokemonMini, "Pokemon Pinball mini", [128, 150, 178], ShellFinish::Clear),
-    ];
-    carts.into_iter().enumerate().map(|(i, (m, title, colour, finish))| slot_store::Cart {
-        platform: m.platform(),
-        stem: title.to_string(),
-        rom: format!("{}{}/{i}", slot_ui::TEST_CART_SCHEME, m.name()).into(),
-        label: None,
-        title: title.to_string(),
-        code: String::new(),
-        shell: Some(ShellChoice { outline: m.outline(), colour, finish }),
-        battery: false,
-    }).collect()
+    Vec::new()
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 159] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 161] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -832,6 +815,8 @@ const SETTING_VALUE_NAMES: [&str; 159] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Gearsystem",
                                // 136, 137: the Neo Geo Pocket's two cores.
                                "Beetle NeoPop", "RACE",
+                               // 138, 139: the Lynx's two cores.
+                               "Handy", "Beetle Lynx",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -1054,6 +1039,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         crate::settings::SHADER_SMS_KEY => shader(scoped.shader_sms),
         crate::settings::SHADER_NGP_KEY => shader(scoped.shader_ngp),
         crate::settings::SHADER_WS_KEY => shader(scoped.shader_ws),
+        crate::settings::SHADER_LYNX_KEY => shader(scoped.shader_lynx),
+        crate::settings::SHADER_POKEMINI_KEY => shader(scoped.shader_pokemini),
         crate::settings::SHADER_GG_KEY => shader(scoped.shader_gg),
         22 => if scoped.shader_gba.includes_gba_color() { 42 }
             else if scoped.colour_correction_gba {4}else{5},
@@ -1071,13 +1058,14 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         28 => if settings.time_format==crate::settings::TimeFormat::TwelveHour
             {35}else{36},
         29..=31 | 41..=43 | crate::settings::CORE_SMS_KEY | crate::settings::CORE_GG_KEY
-        | crate::settings::CORE_NGP_KEY =>
+        | crate::settings::CORE_NGP_KEY | crate::settings::CORE_LYNX_KEY =>
             core_value(Engine::core_key_platform(key)
             .map_or(Core::Mgba, |platform| cores[platform as usize])),
         // Frame Blending, LCD Effect and Dither Blending: the game's own in
         // game, the system's default in Settings > Systems.
         60..=65 | crate::settings::BLENDING_SMS_KEY | crate::settings::BLENDING_GG_KEY
-        | crate::settings::BLENDING_NGP_KEY | crate::settings::BLENDING_WS_KEY => {
+        | crate::settings::BLENDING_NGP_KEY | crate::settings::BLENDING_WS_KEY
+        | crate::settings::BLENDING_LYNX_KEY | crate::settings::BLENDING_POKEMINI_KEY => {
             match scoped.blending_for(Settings::blending_platform(key)?) {
                 crate::settings::Blending::Off => 5,
                 crate::settings::Blending::Mix => 96,
@@ -1194,6 +1182,7 @@ fn core_value(core: Core) -> usize {
     match core {
         Core::Mgba => 50, Core::Gpsp => 51, Core::Gambatte => 52,
         Core::Gearsystem => 135, Core::Neopop => 136, Core::Race => 137,
+        Core::Handy => 138, Core::BeetleLynx => 139,
         other => 70 + other.index() - Core::Fceumm.index(),
     }
 }
@@ -1260,8 +1249,9 @@ fn settings_rows() -> &'static [usize] {
 
 /// Settings > Interface: Theme, Wallpaper (its page), Recents, Game Titles,
 /// Status Bar (its page).
-const INTERFACE_PAGE_ROWS: [usize; 6] = [85, 83, 86, 87, 58, 156];
-const INTERFACE_PAGE_KEYS: [usize; 6] = [18, usize::MAX, 19, 20, usize::MAX, TEST_SHELF_KEY];
+/// 3.0 Test Shelf (156) left it in 3.0.0-lynxmini1: no test cart is left.
+const INTERFACE_PAGE_ROWS: [usize; 5] = [85, 83, 86, 87, 58];
+const INTERFACE_PAGE_KEYS: [usize; 5] = [18, usize::MAX, 19, 20, usize::MAX];
 /// Interface > 3.0 Test Shelf's value (3.0.0-cartes1).
 const TEST_SHELF_KEY: usize = 107;
 const INTERFACE_WALLPAPER_ROW: usize = 1;
@@ -1662,7 +1652,7 @@ struct Engine {
     pak_chip_textures: [slot_gfx::TexId; Core::ALL.len()],
     pak_chip_blank: slot_gfx::TexId,
     /// The NES, Super Nintendo and Mega Drive chips with no core name.
-    home_chip_blanks: [slot_gfx::TexId; 7],
+    home_chip_blanks: [slot_gfx::TexId; 9],
     chip_shadow: slot_gfx::TexId,
     core_legend_faces: [(slot_gfx::TexId, u32); 3],
     /// The same, their words in Light's dark ink: over a light shelf
@@ -2189,7 +2179,7 @@ impl Engine {
         let pak_chip_textures = Core::ALL.map(|core| gpu.create_face(&pak_chip_face(Some(core))));
         let pak_chip_blank = gpu.create_face(&pak_chip_face(None));
         let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md, Platform::Sms, Platform::Gg,
-            Platform::Ngp, Platform::Ws]
+            Platform::Ngp, Platform::Ws, Platform::Lynx, Platform::Pokemini]
             .map(|p| gpu.create_face(&slot_ui::home_chip_face(p, None)));
         let shadow = chip_shadow_face();
         let chip_shadow = gpu.create_face(&shadow);
@@ -6057,9 +6047,10 @@ impl Engine {
             (Platform::Snes|Platform::Md,false)=>&[120,124],
             (Platform::Snes|Platform::Md,true)=>&[120,124,90],
             // Master System, Game Gear and Neo Geo Pocket size with L1/R1,
-            // as the NES; the WonderSwan's L1/R1 are its Y buttons.
+            // as the NES; the WonderSwan's L1/R1 are its Y buttons, the
+            // Lynx's its Options, the Pokemon mini's Shake and C.
             (Platform::Sms|Platform::Gg|Platform::Ngp,_)=>&[124],
-            (Platform::Ws,_)=>&[120,124],
+            (Platform::Ws|Platform::Lynx|Platform::Pokemini,_)=>&[120,124],
         }
     }
     fn screen_keys(platform: Platform)-> &'static [usize] {
@@ -6084,6 +6075,8 @@ impl Engine {
             (Platform::Gg,_)=>&[crate::settings::SHADER_GG_KEY],
             (Platform::Ngp,_)=>&[crate::settings::SHADER_NGP_KEY],
             (Platform::Ws,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_WS_KEY],
+            (Platform::Lynx,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_LYNX_KEY],
+            (Platform::Pokemini,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_POKEMINI_KEY],
         }
     }
     // Settings > Systems opens with the system's default core, then its
@@ -6156,10 +6149,11 @@ impl Engine {
             (Platform::Sms|Platform::Gg,true,_)=>&[118,124],
             (Platform::Sms|Platform::Gg,false,_)=>&[118,120,124],
             (Platform::Ngp,true,_)=>&[118,124],
-            (Platform::Ngp,false,_)=>&[118,120,124],
+            (Platform::Ngp|Platform::Lynx,true,_)=>&[118,124],
+            (Platform::Ngp|Platform::Lynx,false,_)=>&[118,120,124],
             // One core only: no Default Core row.
-            (Platform::Ws,true,_)=>&[124],
-            (Platform::Ws,false,_)=>&[120,124],
+            (Platform::Ws|Platform::Pokemini,true,_)=>&[124],
+            (Platform::Ws|Platform::Pokemini,false,_)=>&[120,124],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -6195,6 +6189,10 @@ impl Engine {
             (Platform::Ngp,false,_)=>&[crate::settings::CORE_NGP_KEY,SCREEN_SIZE_KEY,crate::settings::SHADER_NGP_KEY],
             (Platform::Ws,true,_)=>&[crate::settings::SHADER_WS_KEY],
             (Platform::Ws,false,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_WS_KEY],
+            (Platform::Lynx,true,_)=>&[crate::settings::CORE_LYNX_KEY,crate::settings::SHADER_LYNX_KEY],
+            (Platform::Lynx,false,_)=>&[crate::settings::CORE_LYNX_KEY,SCREEN_SIZE_KEY,crate::settings::SHADER_LYNX_KEY],
+            (Platform::Pokemini,true,_)=>&[crate::settings::SHADER_POKEMINI_KEY],
+            (Platform::Pokemini,false,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_POKEMINI_KEY],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
@@ -6204,6 +6202,7 @@ impl Engine {
             crate::settings::CORE_SMS_KEY=>Some(Platform::Sms),
             crate::settings::CORE_GG_KEY=>Some(Platform::Gg),
             crate::settings::CORE_NGP_KEY=>Some(Platform::Ngp),
+            crate::settings::CORE_LYNX_KEY=>Some(Platform::Lynx),
             _=>None,
         }
     }
@@ -8598,6 +8597,8 @@ impl Engine {
                 Platform::Gg => self.home_chip_blanks[4],
                 Platform::Ngp => self.home_chip_blanks[5],
                 Platform::Ws => self.home_chip_blanks[6],
+                Platform::Lynx => self.home_chip_blanks[7],
+                Platform::Pokemini => self.home_chip_blanks[8],
                 _ => self.pak_chip_blank,
             };
             (&self.pak_chip_textures, blank)

@@ -196,7 +196,8 @@ impl EmulationProfile {
             // The paused game's rows send each system's own key (21 GBC
             // shader, 22/23/24 corrections); 1 and 2 are the old shared ones.
             1|21|47..=49|settings::SHADER_SMS_KEY|settings::SHADER_GG_KEY
-            |settings::SHADER_NGP_KEY|settings::SHADER_WS_KEY if platform!=Platform::Gba =>
+            |settings::SHADER_NGP_KEY|settings::SHADER_WS_KEY
+            |settings::SHADER_LYNX_KEY|settings::SHADER_POKEMINI_KEY if platform!=Platform::Gba =>
                 self.screen_shader=Some(view.shader_for(platform)),
             2|22|23|24 => self.colour_correction_override=Some(view.colour_for(platform)),
             25..=27|44..=46 => self.screen_bezel=Some(view.bezel_for(platform)),
@@ -212,7 +213,8 @@ impl EmulationProfile {
             8 => self.rumble_override=Some(view.rumble),
             9 => self.eject_save_override=Some(view.eject_save),
             60..=65|settings::BLENDING_SMS_KEY|settings::BLENDING_GG_KEY
-            |settings::BLENDING_NGP_KEY|settings::BLENDING_WS_KEY =>
+            |settings::BLENDING_NGP_KEY|settings::BLENDING_WS_KEY
+            |settings::BLENDING_LYNX_KEY|settings::BLENDING_POKEMINI_KEY =>
                 self.blending_override=Some(view.blending_for(platform)),
             66..=68 => self.lcd_effect_override=Some(view.lcd_effect_for(platform)),
             69 if platform==Platform::Md => self.dither_override=Some(view.dither_blend_md),

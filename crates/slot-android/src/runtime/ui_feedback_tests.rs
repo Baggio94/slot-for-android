@@ -586,27 +586,9 @@ fn console_connector_and_role_follow_the_inserted_cart_and_actual_link_state() {
 }
 
 #[test]
-fn the_3_0_test_shelf_carts_draw_open_and_take_their_own_bars() {
-    let carts = test_carts();
-    assert_eq!(carts.len(), 5);
-    let mut families = std::collections::HashSet::new();
-    for cart in &carts {
-        assert!(slot_ui::is_test_cart(cart), "{}", cart.stem);
-        let mould = slot_ui::home_mould_of(cart).expect("a home mould");
-        assert!(mould.is_preview(), "{mould:?}");
-        let family = slot_ui::bitmaps::console_slot_family(cart);
-        assert!((7..slot_ui::bitmaps::CONSOLE_SLOTS).contains(&family), "{mould:?}: {family}");
-        families.insert(family);
-        // No closer, and no out-of-range closer either.
-        let tex = slot_gfx::TexId::from_raw(0);
-        assert!(pick_closer(Some((tex, tex)), [None; 4], Some(cart)).is_none());
-        let face = slot_ui::cart_face_with_material(cart, None);
-        assert!(face.rgba.chunks_exact(4).any(|p| p[3] == 255), "{mould:?}");
-        if slot_ui::cart_opens(cart) {
-            let board = slot_ui::board_face(cart);
-            assert_eq!((board.w, board.h), mould.size());
-        }
-    }
-    assert_eq!(families.len(), 2, "a bar for every 3.0 system still on the test shelf");
+fn the_3_0_test_shelf_is_empty_once_every_system_has_real_carts() {
+    // Every 3.0 system plays its own carts since 3.0.0-lynxmini1.
+    assert!(test_carts().is_empty());
+    assert!(!INTERFACE_PAGE_ROWS.contains(&156), "no 3.0 Test Shelf row");
     assert_eq!(TEST_RACK, romm::ROMM_RACK + 1);
 }

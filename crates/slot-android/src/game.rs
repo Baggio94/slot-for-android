@@ -782,8 +782,15 @@ impl GameSession {
                 core.set_option("wswan_rotate_display", if ws_upright(rom) { "portrait" } else { "landscape" });
                 core.set_option("wswan_rotate_keymap", "auto");
             }
-            // The other 3.0 systems' cores are not shipped yet.
-            Core::Handy | Core::BeetleLynx => {}
+            // A Lynx game held upright is turned on screen, its buttons
+            // with it: both cores' own Auto, as RetroArch starts them.
+            // SELECT turns the screen by hand in Beetle Lynx's Manual
+            // mode only; slot. never maps SELECT for the Lynx.
+            Core::Handy => core.set_option("handy_rot", "Auto"),
+            Core::BeetleLynx => core.set_option("lynx_rot_screen", "auto"),
+            // PokeMini runs on its own defaults, as RetroArch starts it: its
+            // dot-matrix LCD at 4x, the cart's rumble on the device.
+            Core::PokeMini => {}
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
@@ -806,8 +813,10 @@ impl GameSession {
         // bsnes keeps its battery itself, named after the ROM file and
         // written to the save directory when the game unloads, as in
         // RetroArch. Hand it the cart under its own name, so the file is
-        // Saves/bsnes/<game>.srm like every other core's.
-        let named_rom = if which == Core::Bsnes && linked_boot.is_none() {
+        // Saves/bsnes/<game>.srm like every other core's. Handy (.eeprom)
+        // and PokeMini (.eep) name theirs the same way.
+        let named_rom = if matches!(which, Core::Bsnes | Core::Handy | Core::PokeMini)
+            && linked_boot.is_none() {
             Some(named_rom_alias(storage, rom, rom_stem)?)
         } else { None };
         core.load(named_rom.as_deref().unwrap_or(rom)).map_err(|e| e.to_string())?;
@@ -1049,7 +1058,8 @@ impl GameSession {
             upright: which == Core::BeetleCygne && ws_upright(rom),
             // The Game Gear, Neo Geo Pocket and WonderSwan have no second
             // pad: their link cable is another console.
-            second_player: !platform.handheld() && !matches!(platform, Platform::Gg | Platform::Ngp | Platform::Ws),
+            second_player: !platform.handheld() && !matches!(platform,
+                Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini),
             port2: 0, layouts: [None, None],
             blending: None, slot_blending: crate::frame_blend::Mode::Off,
             runahead_video: Vec::new(), runahead_size: (0, 0), runahead_state: Vec::new(),

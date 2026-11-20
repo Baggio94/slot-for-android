@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Reproducible arm64 builds of the NES, SNES, Mega Drive, Master System,
-# Game Gear, Neo Geo Pocket and WonderSwan libretro cores,
+# Game Gear, Neo Geo Pocket, WonderSwan, Lynx and Pokemon mini libretro cores,
 # each from a pinned upstream commit with the core's own Android recipe
 # (jni/Android.mk). No BIOS or ROMs. Usage: build-home-core-android.sh CORE
 #   fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem
-#   mednafen_ngp race mednafen_wswan
+#   mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NDK="${ANDROID_NDK_HOME:-${ANDROID_SDK_ROOT:?Set ANDROID_NDK_HOME or ANDROID_SDK_ROOT}/ndk/27.2.12479018}"
@@ -27,6 +27,10 @@ case "$CORE" in
   mednafen_ngp)    REPO=beetle-ngp-libretro;   PIN=a50d5ac288a81f2104ddf43195a4efdd15c72227; JNI=jni;          LICENCE=COPYING ;;
   race)            REPO=RACE;                  PIN=c660d9ab5aafb47aefff90182ca90d319ad9b077; JNI=jni;          LICENCE=license.txt ;;
   mednafen_wswan)  REPO=beetle-wswan-libretro; PIN=4b01295838ea89e3f1355bbe4cb5cf98aa6108cd; JNI=jni;          LICENCE=COPYING ;;
+  # Handy (2026-04-20), Beetle Lynx (2026-04-20), PokeMini (2026-07-31).
+  handy)           REPO=libretro-handy;        PIN=bc55d462f0b2d6b073ea93dc552ebd73cec60fd1; JNI=jni;          LICENCE=lynx/license.txt ;;
+  mednafen_lynx)   REPO=beetle-lynx-libretro;  PIN=fcdefcfb3c11d6d2e71be076a5d3df2e88ab73ed; JNI=jni;          LICENCE=COPYING ;;
+  pokemini)        REPO=PokeMini;              PIN=132111b76343559860532a1ccc094f93f1ed5650; JNI=jni;          LICENCE=LICENSE ;;
   *) echo "Unknown home console core: $CORE" >&2; exit 1 ;;
 esac
 OUT="$ROOT/.build/$CORE"

@@ -35,10 +35,8 @@ impl HomeMould {
             HomeMould::GameGear | HomeMould::GameGearCodemasters => Platform::Gg,
             HomeMould::NeoGeoPocket => Platform::Ngp,
             HomeMould::WonderSwan | HomeMould::WonderSwanColor => Platform::Ws,
-            // The 3.0 systems' test carts ride on the Mega Drive's platform
-            // (3.0.0-cartes1): no core of theirs is ever asked for.
-            HomeMould::Lynx
-            | HomeMould::PokemonMini => Platform::Md,
+            HomeMould::Lynx => Platform::Lynx,
+            HomeMould::PokemonMini => Platform::Pokemini,
         }
     }
 
@@ -61,6 +59,8 @@ impl HomeMould {
             Platform::Gg => Some(HomeMould::GameGear),
             Platform::Ngp => Some(HomeMould::NeoGeoPocket),
             Platform::Ws => Some(HomeMould::WonderSwan),
+            Platform::Lynx => Some(HomeMould::Lynx),
+            Platform::Pokemini => Some(HomeMould::PokemonMini),
             Platform::Gba | Platform::Gb | Platform::Gbc => None,
         }
     }
@@ -231,6 +231,8 @@ pub fn home_shell(platform: Platform, stem: &str, region: &str, maker: &str) -> 
         Platform::Gg => HomeSystem::GameGear,
         Platform::Ngp => HomeSystem::NeoGeoPocket,
         Platform::Ws => HomeSystem::WonderSwan,
+        Platform::Lynx => HomeSystem::Lynx,
+        Platform::Pokemini => HomeSystem::PokemonMini,
         Platform::Gba | Platform::Gb | Platform::Gbc => return None,
     };
     let (mould, colour, glitter) = home_pick(system, stem, region, maker);

@@ -84,7 +84,7 @@ class SystemsTest {
     }
 
     @Test fun everySystemHasOneCompleteRow() {
-        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS"), Systems.PLATFORMS)
+        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI"), Systems.PLATFORMS)
         for (row in Systems.TABLE) {
             val p = row.platform
             assertTrue(p, row.extensions.isNotEmpty() && row.folders.isNotEmpty() && row.romm.isNotEmpty())
@@ -111,16 +111,16 @@ class SystemsTest {
 
     @Test fun theTableKeepsTheSixSystemsAsTheyWere() {
         assertEquals(setOf("gba", "gb", "gbc", "nes", "fc", "unf", "unif", "sfc", "smc", "md", "gen", "smd", "bin",
-            "sms", "gg", "ngp", "ngc", "ngpc", "ws", "wsc"), Systems.ROM_EXTENSIONS)
-        assertEquals(setOf("NES", "SNES", "MD", "SMS", "GG", "NGP", "WS"), Systems.HOME_PLATFORMS)
+            "sms", "gg", "ngp", "ngc", "ngpc", "ws", "wsc", "lnx", "lyx", "min"), Systems.ROM_EXTENSIONS)
+        assertEquals(setOf("NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI"), Systems.HOME_PLATFORMS)
         assertEquals("GBA", Systems.platformFor("GBA"))
         assertEquals("GBC", Systems.platformFor("gbc"))
         assertEquals("MD", Systems.platformFor("bin"))
         assertEquals(mapOf("GB" to 4, "GBA" to 5, "GBC" to 6, "NES" to 7, "SNES" to 3, "MD" to 1,
-            "SMS" to 11, "GG" to 15, "NGP" to 14, "WS" to 53),
+            "SMS" to 11, "GG" to 15, "NGP" to 14, "WS" to 53, "LYNX" to 13, "POKEMINI" to 24),
             Systems.PLATFORMS.associateWith { Systems.retroAchievementsId(it) })
         assertEquals(mapOf("GB" to null, "GBA" to null, "GBC" to null, "NES" to 3, "SNES" to 4, "MD" to 1,
-            "SMS" to 2, "GG" to 21, "NGP" to 25, "WS" to 45),
+            "SMS" to 2, "GG" to 21, "NGP" to 25, "WS" to 45, "LYNX" to 28, "POKEMINI" to 211),
             Systems.PLATFORMS.associateWith { HomeCartLabels.systemId(it) })
         assertEquals("MD", Romm.platformOf("Sega-Mega-Drive"))
         assertEquals("GG", Romm.platformOf("gamegear"))
@@ -136,6 +136,14 @@ class SystemsTest {
         assertEquals("Beetle NeoPop", Systems.coreFolder("", "ngp"))
         assertEquals("RACE", Systems.coreFolder("race", "ngc"))
         assertEquals("Beetle WonderSwan", Systems.coreFolder("", "wsc"))
+        assertEquals("LYNX", Romm.platformOf("lynx"))
+        assertEquals("POKEMINI", Romm.platformOf("pokemon-mini"))
+        assertEquals("LYNX", Systems.platformFor("LNX"))
+        assertEquals("POKEMINI", Systems.platformFor("min"))
+        assertEquals("Handy", Systems.coreFolder("", "lnx"))
+        assertEquals("Beetle Lynx", Systems.coreFolder("mednafen_lynx", "lyx"))
+        assertEquals("PokeMini", Systems.coreFolder("", "min"))
+        assertEquals(listOf("atarilynx", "lynx"), Romm.folderNames("lynx", "LYNX"))
         assertEquals(listOf("ngpc", "ngp"), Romm.folderNames("neo-geo-pocket-color", "NGP"))
         assertEquals(listOf("ngp", "ngpc"), Romm.folderNames("neo-geo-pocket", "NGP"))
         assertEquals(listOf("wonderswancolor", "wonderswan"), Romm.folderNames("wonderswan-color", "WS"))

@@ -92,6 +92,7 @@ impl Engine {
             Platform::Nes => "nes", Platform::Snes => "snes", Platform::Md => "md",
             Platform::Sms => "sms", Platform::Gg => "gg",
             Platform::Ngp => "ngp", Platform::Ws => "ws",
+            Platform::Lynx => "lynx", Platform::Pokemini => "pokemini",
         }
     }
 

@@ -119,7 +119,7 @@ jobs:
       - name: Build NES, SNES, Mega Drive, Master System, Game Gear, Neo Geo Pocket and WonderSwan arm64 libretro cores
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan; do
+          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini; do
             bash scripts/build-home-core-android.sh "$core"
           done
       - name: Test Android debug and release policies on JVM
@@ -177,7 +177,7 @@ jobs:
           grep -F "package: name='fyi.slot.konkr.diag' versionCode='$VERSION_CODE'" "$RUNNER_TEMP/mac-lab-badging.txt"
           grep -F "versionName='$VERSION_NAME-mac-lab'" "$RUNNER_TEMP/mac-lab-badging.txt"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify "$APK"
-          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro; do
+          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro; do
             unzip -Z -1 "$APK" | grep -Fx "lib/arm64-v8a/lib${core}.so"
           done
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
@@ -202,7 +202,7 @@ jobs:
           grep -F "versionName='$VERSION_NAME'" "$RUNNER_TEMP/konkr-badging.txt"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" |
             grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
-          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro; do
+          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro; do
             unzip -Z -1 "$APK" | grep -Fx "lib/arm64-v8a/lib${core}.so"
           done
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
@@ -230,6 +230,9 @@ jobs:
               "mednafen_ngp": "a50d5ac288a81f2104ddf43195a4efdd15c72227",
               "race": "c660d9ab5aafb47aefff90182ca90d319ad9b077",
               "mednafen_wswan": "4b01295838ea89e3f1355bbe4cb5cf98aa6108cd",
+              "handy": "bc55d462f0b2d6b073ea93dc552ebd73cec60fd1",
+              "mednafen_lynx": "fcdefcfb3c11d6d2e71be076a5d3df2e88ab73ed",
+              "pokemini": "132111b76343559860532a1ccc094f93f1ed5650",
           }
           for name, revision in home.items():
               with zipfile.ZipFile(sys.argv[1]) as archive:

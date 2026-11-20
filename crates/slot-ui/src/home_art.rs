@@ -310,7 +310,8 @@ impl HomeMould {
     pub fn is_preview(self) -> bool {
         !matches!(self.system(), HomeSystem::Nes | HomeSystem::Snes | HomeSystem::Md
             | HomeSystem::MasterSystem | HomeSystem::GameGear
-            | HomeSystem::NeoGeoPocket | HomeSystem::WonderSwan)
+            | HomeSystem::NeoGeoPocket | HomeSystem::WonderSwan
+            | HomeSystem::Lynx | HomeSystem::PokemonMini)
     }
 
     /// The shell a system's carts get when nothing picks another.

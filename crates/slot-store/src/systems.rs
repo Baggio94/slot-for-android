@@ -32,7 +32,7 @@ pub struct System {
     pub handheld: bool,
 }
 
-pub const SYSTEMS: [System; 10] = [
+pub const SYSTEMS: [System; 12] = [
     System {
         platform: Platform::Gba, name: "Game Boy Advance", dir: "GBA",
         extensions: &["gba"], folders: &["gba"], romm: &["gba"],
@@ -105,6 +105,22 @@ pub const SYSTEMS: [System; 10] = [
         romm: &["wonderswan", "wonderswan-color"],
         retroachievements: 53, screenscraper: 45,
         cores: [Core::BeetleCygne, Core::BeetleCygne], picture: (224, 144), handheld: false,
+    },
+    // Handy runs without the boot ROM; Beetle Lynx needs lynxboot.img.
+    System {
+        platform: Platform::Lynx, name: "Lynx", dir: "LYNX",
+        extensions: &["lnx", "lyx"], folders: &["atarilynx", "lynx"],
+        romm: &["lynx", "atari-lynx"],
+        retroachievements: 13, screenscraper: 28,
+        cores: [Core::Handy, Core::BeetleLynx], picture: (160, 102), handheld: false,
+    },
+    // PokeMini is its only core: both sockets hold it.
+    System {
+        platform: Platform::Pokemini, name: "Pokemon mini", dir: "POKEMINI",
+        extensions: &["min"], folders: &["pokemini"],
+        romm: &["pokemon-mini", "pokemini"],
+        retroachievements: 24, screenscraper: 211,
+        cores: [Core::PokeMini, Core::PokeMini], picture: (96, 64), handheld: false,
     },
 ];
 

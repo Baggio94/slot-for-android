@@ -20,13 +20,18 @@ pub enum Platform {
     Ngp,
     /// WonderSwan and WonderSwan Color: one shelf.
     Ws,
+    /// Atari Lynx.
+    Lynx,
+    /// Pokémon mini.
+    Pokemini,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 10] = [
+    pub const ALL: [Platform; 12] = [
         Platform::Gba, Platform::Gb, Platform::Gbc,
         Platform::Nes, Platform::Snes, Platform::Md,
         Platform::Sms, Platform::Gg, Platform::Ngp, Platform::Ws,
+        Platform::Lynx, Platform::Pokemini,
     ];
 
     pub fn name(self) -> &'static str {

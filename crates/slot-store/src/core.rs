@@ -25,15 +25,16 @@ pub enum Core {
     Handy,
     BeetleLynx,
     BeetleCygne,
+    PokeMini,
 }
 
 impl Core {
-    pub const ALL: [Core; 15] = [
+    pub const ALL: [Core; 16] = [
         Core::Mgba, Core::Gpsp, Core::Gambatte,
         Core::Fceumm, Core::Nestopia, Core::Snes9x, Core::Bsnes,
         Core::GenesisPlusGx, Core::Picodrive,
         Core::Neopop, Core::Race, Core::Gearsystem, Core::Handy, Core::BeetleLynx,
-        Core::BeetleCygne,
+        Core::BeetleCygne, Core::PokeMini,
     ];
 
     /// libretro's own core name: lib{as_str}_libretro.so, and the key
@@ -55,6 +56,7 @@ impl Core {
             Core::Handy => "handy",
             Core::BeetleLynx => "mednafen_lynx",
             Core::BeetleCygne => "mednafen_wswan",
+            Core::PokeMini => "pokemini",
         }
     }
 
@@ -88,6 +90,7 @@ impl Core {
             Core::Handy => "Handy",
             Core::BeetleLynx => "Beetle Lynx",
             Core::BeetleCygne => "Beetle WonderSwan",
+            Core::PokeMini => "PokeMini",
         }
     }
 
@@ -115,7 +118,7 @@ impl Core {
     pub fn socket(self) -> usize {
         match self {
             Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx
-            | Core::Neopop | Core::Handy | Core::BeetleCygne => 0,
+            | Core::Neopop | Core::Handy | Core::BeetleCygne | Core::PokeMini => 0,
             Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive
             | Core::Race | Core::Gearsystem | Core::BeetleLynx => 1,
         }

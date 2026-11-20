@@ -549,8 +549,21 @@ const WS_UPRIGHT: [ConsoleButton; 11] = [
     cb("X1", bit::Y), cb("X2", bit::X), cb("X3", bit::A), cb("X4", bit::B),
     cb("A", bit::L), cb("B", bit::R), cb("START", bit::START)];
 
+/// Handy and Beetle Lynx read the Lynx as RetroArch does: A, B, Option 1
+/// from L1, Option 2 from R1, Pause from START. Both cores turn the buttons
+/// with an upright game themselves; SELECT (Beetle Lynx's manual turn) is
+/// left out.
+const LYNX: [ConsoleButton; 9] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("A", bit::A), cb("B", bit::B), cb("Option 1", bit::L), cb("Option 2", bit::R),
+    cb("Pause", bit::START)];
+/// PokeMini reads the Pokemon mini as RetroArch does: A, B, C from R1,
+/// Shake from L1. Its Power button (SELECT) is left out.
+const POKEMINI: [ConsoleButton; 8] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("A", bit::A), cb("B", bit::B), cb("C", bit::R), cb("Shake", bit::L)];
+
 /// Systems, by the names slot. files their controls under.
-pub const SYSTEMS: [&str; 11] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv"];
+pub const SYSTEMS: [&str; 13] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv",
+    "lynx", "pokemini"];
 
 /// Controls of a WonderSwan game made to be held upright.
 pub const WS_UPRIGHT_SYSTEM: &str = "wsv";
@@ -565,6 +578,8 @@ pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
         "ngp" => &NGP,
         "ws" => &WS,
         "wsv" => &WS_UPRIGHT,
+        "lynx" => &LYNX,
+        "pokemini" => &POKEMINI,
         _ => &TWO_BUTTONS,
     }
 }
@@ -638,7 +653,9 @@ impl ShoulderRole {
 }
 
 /// X / Y and L1 / R1 rows: on which systems they are spare.
-pub fn spare_xy(system: &str) -> bool { matches!(system, "gba" | "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp") }
+pub fn spare_xy(system: &str) -> bool {
+    matches!(system, "gba" | "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp" | "lynx" | "pokemini")
+}
 pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp") }
 /// C / Z row: every system but the Mega Drive, whose pad has them.
 pub fn spare_cz(system: &str) -> bool { system != "md" }

@@ -230,6 +230,7 @@ fn preview_mould(core: Core) -> Option<HomeMould> {
         Core::Gearsystem => Some(HomeMould::MasterSystem),
         Core::Handy | Core::BeetleLynx => Some(HomeMould::Lynx),
         Core::BeetleCygne => Some(HomeMould::WonderSwan),
+        Core::PokeMini => Some(HomeMould::PokemonMini),
         _ => None,
     }
 }

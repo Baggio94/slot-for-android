@@ -20,6 +20,8 @@ internal object Systems {
     const val GG = "GG"
     const val NGP = "NGP"
     const val WS = "WS"
+    const val LYNX = "LYNX"
+    const val POKEMINI = "POKEMINI"
 
     /** One system slot. plays: a row of slot_store::SYSTEMS, field for field
      *  and in the same order (the native tests read these rows and compare,
@@ -54,6 +56,9 @@ internal object Systems {
         // One shelf for both Neo Geo Pockets, one for both WonderSwans (Beetle Cygne only).
         SystemRow(NGP, listOf("ngp", "ngc", "ngpc"), listOf("ngp", "ngpc"), listOf("neo-geo-pocket", "neo-geo-pocket-color", "ngp", "ngpc"), 14, 25, listOf("mednafen_ngp", "race"), home = true),
         SystemRow(WS, listOf("ws", "wsc"), listOf("wonderswan", "wonderswancolor"), listOf("wonderswan", "wonderswan-color"), 53, 45, listOf("mednafen_wswan", "mednafen_wswan"), home = true),
+        // The Lynx (Beetle Lynx needs lynxboot.img) and the Pokemon mini (PokeMini only).
+        SystemRow(LYNX, listOf("lnx", "lyx"), listOf("atarilynx", "lynx"), listOf("lynx", "atari-lynx"), 13, 28, listOf("handy", "mednafen_lynx"), home = true),
+        SystemRow(POKEMINI, listOf("min"), listOf("pokemini"), listOf("pokemon-mini", "pokemini"), 24, 211, listOf("pokemini", "pokemini"), home = true),
     )
 
     /** Every shelf key, in the native side's order. */
@@ -102,6 +107,9 @@ internal object Systems {
         "mednafen_ngp" to "Beetle NeoPop",
         "race" to "RACE",
         "mednafen_wswan" to "Beetle WonderSwan",
+        "handy" to "Handy",
+        "mednafen_lynx" to "Beetle Lynx",
+        "pokemini" to "PokeMini",
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
