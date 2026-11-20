@@ -26,10 +26,20 @@ SYSTEMS = {
     "NES": ("Nintendo - Nintendo Entertainment System.dat", 3),
     "SNES": ("Nintendo - Super Nintendo Entertainment System.dat", 4),
     "MD": ("Sega - Mega Drive - Genesis.dat", 1),
+    # slot. 3.0's systems.
+    "NGP": ("SNK - Neo Geo Pocket.dat", 25),
+    "NGPC": ("SNK - Neo Geo Pocket Color.dat", 82),
+    "WS": ("Bandai - WonderSwan.dat", 45),
+    "WSC": ("Bandai - WonderSwan Color.dat", 46),
+    "GG": ("Sega - Game Gear.dat", 21),
+    "SMS": ("Sega - Master System - Mark III.dat", 2),
+    "LYNX": ("Atari - Lynx.dat", 28),
+    "POKEMINI": ("Nintendo - Pokemon Mini.dat", 211),
 }
 # Home carts' support-2D is drawn per game (gold Zeldas, black Tengens, EA moulds); the Game
 # Boy family's is one template with the label pasted on, so only its real scans count.
-HOME = {"NES", "SNES", "MD"}
+HOME = {"NES", "SNES", "MD", "NGP", "NGPC", "WS", "WSC", "GG", "SMS", "LYNX", "POKEMINI"}
+NEW = {"NGP", "NGPC", "WS", "WSC", "GG", "SMS", "LYNX", "POKEMINI"}
 SKIP = re.compile(r"\((Proto|Beta|Demo|Sample|Debug|Program|Pirate|Aftermarket)[^)]*\)|\[BIOS\]", re.I)
 REGIONS = {
     "World": "wor", "USA": "us", "Europe": "eu", "Japan": "jp", "France": "fr",
@@ -174,12 +184,14 @@ def main():
     ap.add_argument("--systems", default="GB,GBC,GBA")
     ap.add_argument("--print", default="", help="systems whose rows go to the log (default: --systems)")
     ap.add_argument("--only", default="", help="regex of ROM names to re-check, printing their media")
+    ap.add_argument("--thumbs", default="", help="folder for small WebP copies of the support-2D and scans of NEW systems")
     args = ap.parse_args()
     cache, out = Path(args.cache), Path(args.out)
     (cache / "img").mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     systems = [p for p in args.systems.split(",") if p in SYSTEMS]
-    seen_path = cache / ("seen-home.jsonl" if HOME & set(systems) else "seen-scan.jsonl")
+    seen_path = cache / ("seen-new.jsonl" if NEW & set(systems) else
+                         "seen-home.jsonl" if HOME & set(systems) else "seen-scan.jsonl")
     seen = {}
     if seen_path.exists():
         for line in seen_path.read_text().splitlines():
@@ -256,6 +268,21 @@ def main():
                             row["image"] = img.name if img.exists() else None
                         else:
                             row["image"] = None
+                        # Real photos of the cart, where ScreenScraper has some, show its plastic
+                        # when the support-2D is a shared template (WonderSwan).
+                        scan = pick_support(medias, row["regions"], "support-scan") if platform in NEW else None
+                        if scan and not stopped:
+                            key = scan.get("md5") or scan.get("crc") or f"{row['game_id']}-scan-{scan.get('region', '')}"
+                            img = cache / "img" / f"{key}.{scan.get('format', 'png')}"
+                            if not img.exists():
+                                st, data = get(scan["url"], timeout=120)
+                                time.sleep(args.pause)
+                                if st in STOP:
+                                    stopped = f"media HTTP {st}"
+                                if st == 200 and data[:4] != b"NOME":
+                                    img.write_bytes(data)
+                            row["scan_image"] = img.name if img.exists() else None
+                            row["scan_region"] = scan.get("region", "")
                 log.write(json.dumps(row) + "\n")
                 log.flush()
                 seen[(platform, rom["crc"])] = row
@@ -287,6 +314,22 @@ def main():
             "p": row["platform"], "crc": row["crc"], "serial": row["serial"], "n": row["name"],
             "r": row.get("media_region"), "e": row.get("error"), "k": row.get("kinds"), "m": m or None,
         }, ensure_ascii=False, separators=(",", ":")))
+    if args.thumbs:
+        thumbs = Path(args.thumbs)
+        thumbs.mkdir(parents=True, exist_ok=True)
+        for row in results:
+            if row["platform"] not in NEW:
+                continue
+            for field in ("image", "scan_image"):
+                name = row.get(field)
+                if not name or (thumbs / (Path(name).stem + ".webp")).exists():
+                    continue
+                try:
+                    im = Image.open(cache / "img" / name).convert("RGBA")
+                    im.thumbnail((320, 320), Image.LANCZOS)
+                    im.save(thumbs / (Path(name).stem + ".webp"), "WEBP", quality=85, method=6)
+                except Exception as e:
+                    print("thumb failed", name, e)
     with_image = sum(1 for r in results if r.get("image"))
     print(f"rows: {len(results)}, with support-2D: {with_image}")
     (out / "summary.txt").write_text(f"rows {len(results)}\nwith_support {with_image}\nstopped {stopped}\n")

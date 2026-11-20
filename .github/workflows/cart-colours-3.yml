@@ -1,0 +1,61 @@
+name: cart-colours-3
+
+# slot. 3.0's systems: every game's support-2D (and real scans where there are some),
+# measured for its shell colour, clear plastic and glitter. The measures and small WebP
+# copies go to the data branch tools/cart-colours-3-data for the review sheets; the
+# full-size images stay in the workflow cache.
+
+on:
+  push:
+    branches: [tools/cart-colours]
+    paths: [tools/cart-colours/systems3.txt, .github/workflows/cart-colours-3.yml]
+
+concurrency:
+  group: cart-colours
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    # Two jobs = the two ScreenScraper threads the account allows; never run this while
+    # the weekly Cart art harvest is running.
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [A, B]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
+      SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
+      SS_SOFTNAME: ${{ secrets.SCREENSCRAPER_SOFTNAME }}
+      SS_USER: ${{ secrets.SCREENSCRAPER_SSID }}
+      SS_PASSWORD: ${{ secrets.SCREENSCRAPER_SSPASSWORD }}
+      SYSTEMS: ${{ matrix.group == 'A' && 'SMS,NGP,NGPC,POKEMINI' || 'GG,LYNX,WS,WSC' }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install numpy pillow scipy
+      - uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: cart-colours-3-${{ matrix.group }}-${{ github.run_id }}
+          restore-keys: cart-colours-3-${{ matrix.group }}-
+      - run: python3 -u tools/cart-colours/scrape.py --budget-min 320 --systems "$SYSTEMS" --print NONE --thumbs out/thumbs
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: cache
+          key: cart-colours-3-${{ matrix.group }}-${{ github.run_id }}
+      - name: publish
+        if: always()
+        run: |
+          set -e
+          mkdir -p data && cp -r out/thumbs data/ 2>/dev/null || true
+          cp out/results.jsonl "data/results-${{ matrix.group }}.jsonl"
+          cd data
+          git init -q -b tools/cart-colours-3-${{ matrix.group }}
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com add -A
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com commit -q -m "Cart measures for slot. 3.0's systems"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" tools/cart-colours-3-${{ matrix.group }}
