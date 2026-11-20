@@ -1,0 +1,36 @@
+name: art-previews
+
+on:
+  push:
+    branches: [tools/art-previews]
+    paths: [tools/art-previews/**, .github/workflows/art-previews.yml]
+
+concurrency:
+  group: cart-colours
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
+      SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
+      SS_SOFTNAME: ${{ secrets.SCREENSCRAPER_SOFTNAME }}
+      SS_USER: ${{ secrets.SCREENSCRAPER_USER }}
+      SS_PASSWORD: ${{ secrets.SCREENSCRAPER_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install numpy pillow scipy
+      - run: python3 -u tools/art-previews/labels.py --out out
+      # Preview material only, on a temporary branch deleted once the previews are made.
+      - name: publish
+        run: |
+          cd out
+          git init -q -b tools/art-previews-data
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com add -A
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com commit -q -m "Labels for the 3.0 cartridge previews"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" tools/art-previews-data
