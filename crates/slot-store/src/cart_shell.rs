@@ -34,7 +34,7 @@ pub enum Outline {
     MasterSystem,
     Lynx,
     PokemonMini,
-    // Per-game 3.0 shells (2026-11-20).
+    // Per-game Master System and Game Gear shells (2026-11-20).
     MasterSystemJp,
     MasterSystemCard,
     GameGearCodemasters,
@@ -95,17 +95,14 @@ impl Outline {
             | Outline::MegaDriveCodemasters
             | Outline::MegaDriveVr
             | Outline::MegaDriveSk => Some(Platform::Md),
-            Outline::MasterSystem => Some(Platform::Sms),
-            Outline::GameGear => Some(Platform::Gg),
+            Outline::MasterSystem | Outline::MasterSystemJp | Outline::MasterSystemCard => Some(Platform::Sms),
+            Outline::GameGear | Outline::GameGearCodemasters => Some(Platform::Gg),
             // No system of slot.'s plays them yet.
             Outline::NeoGeoPocket
             | Outline::WonderSwan
             | Outline::WonderSwanColor
             | Outline::Lynx
-            | Outline::PokemonMini
-            | Outline::MasterSystemJp
-            | Outline::MasterSystemCard
-            | Outline::GameGearCodemasters => None,
+            | Outline::PokemonMini => None,
         }
     }
 }

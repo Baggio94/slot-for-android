@@ -31,18 +31,15 @@ impl HomeMould {
             | HomeMould::MegaDriveCodemasters
             | HomeMould::MegaDriveVr
             | HomeMould::MegaDriveSk => Platform::Md,
-            HomeMould::MasterSystem => Platform::Sms,
-            HomeMould::GameGear => Platform::Gg,
+            HomeMould::MasterSystem | HomeMould::MasterSystemJp | HomeMould::MasterSystemCard => Platform::Sms,
+            HomeMould::GameGear | HomeMould::GameGearCodemasters => Platform::Gg,
             // The 3.0 systems' test carts ride on the Mega Drive's platform
             // (3.0.0-cartes1): no core of theirs is ever asked for.
             HomeMould::NeoGeoPocket
             | HomeMould::WonderSwan
             | HomeMould::WonderSwanColor
             | HomeMould::Lynx
-            | HomeMould::PokemonMini
-            | HomeMould::MasterSystemJp
-            | HomeMould::MasterSystemCard
-            | HomeMould::GameGearCodemasters => Platform::Md,
+            | HomeMould::PokemonMini => Platform::Md,
         }
     }
 
@@ -51,10 +48,6 @@ impl HomeMould {
     pub fn preview_cores(self) -> Option<[Core; 2]> {
         match self {
             HomeMould::NeoGeoPocket => Some([Core::Neopop, Core::Race]),
-            HomeMould::GameGear
-            | HomeMould::GameGearCodemasters
-            | HomeMould::MasterSystem
-            | HomeMould::MasterSystemJp => Some([Core::GenesisPlusGx, Core::Gearsystem]),
             HomeMould::Lynx => Some([Core::Handy, Core::BeetleLynx]),
             _ => None,
         }
@@ -386,9 +379,6 @@ mod tests {
         assert_eq!(board_cores(&test_cart(HomeMould::GameGear)), [Core::GenesisPlusGx, Core::Gearsystem]);
         assert!(!cart_opens(&test_cart(HomeMould::WonderSwanColor)));
         assert!(cart_opens(&test_cart(HomeMould::Lynx)));
-        assert!(!cart_opens(&test_cart(HomeMould::MasterSystemCard)));
-        assert!(cart_opens(&test_cart(HomeMould::GameGearCodemasters)));
-        assert_eq!(board_cores(&test_cart(HomeMould::MasterSystemJp)), [Core::GenesisPlusGx, Core::Gearsystem]);
     }
 
     #[test]
@@ -406,5 +396,21 @@ mod tests {
         assert_eq!(pick(S::GameGear, "Micro Machines (USA, Europe)").0, HomeMould::GameGearCodemasters);
         assert_eq!(pick(S::GameGear, "Waternet (World)"), (HomeMould::GameGear, [0x96, 0, 0]));
         assert_eq!(pick(S::GameGear, "Sonic the Hedgehog (Japan)"), (HomeMould::GameGear, [20, 20, 20]));
+        // A real Master System cart in the My Card stays shut; the others open.
+        let real = |m: HomeMould| Cart {
+            platform: m.platform(),
+            stem: "Bomb Jack (World)".into(),
+            rom: "content://x/y.sms".into(),
+            label: None,
+            title: "Bomb Jack".into(),
+            code: String::new(),
+            shell: Some(ShellChoice { outline: m.outline(), colour: m.art().colour, finish: ShellFinish::Solid }),
+            battery: false,
+        };
+        assert_eq!(home_mould_of(&real(HomeMould::MasterSystemCard)), Some(HomeMould::MasterSystemCard));
+        assert!(!cart_opens(&real(HomeMould::MasterSystemCard)));
+        assert!(cart_opens(&real(HomeMould::MasterSystemJp)));
+        assert!(cart_opens(&real(HomeMould::GameGearCodemasters)));
+        assert_eq!(home_mould_of(&real(HomeMould::GameGearCodemasters)), Some(HomeMould::GameGearCodemasters));
     }
 }
