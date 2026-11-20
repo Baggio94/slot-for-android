@@ -218,7 +218,9 @@ pub fn slot_front_light() -> &'static [u8] {
 }
 
 /// A console's slot bar (`family`: 0 Famicom, 1 NES, 2 Super Nintendo,
-/// 3 Mega Drive, 4 Game Boy, 5 Game Boy Color, 6 GBA) in a bar theme: 0
+/// 3 Mega Drive, 4 Game Boy, 5 Game Boy Color, 6 GBA; the 3.0 systems: 7
+/// Neo Geo Pocket, 8 WonderSwan, 9 WonderSwan Color, 10 Game Gear, 11
+/// Master System, 12 Lynx, 13 Pokémon mini) in a bar theme: 0
 /// the console's own colours, 1 dark (black and grey), 2 light (light
 /// versions of its colours) (Siham 2026-11-03).
 /// A console's slot bar masters, PNG bytes at 3x (`family`, `theme` as `home_slot`).
@@ -232,6 +234,13 @@ pub fn home_slot_png(family: usize, theme: usize) -> (&'static [u8], &'static [u
             include_bytes!(concat!("../../../assets/slot_", $part, "_gb", $suffix, ".png")).as_slice(),
             include_bytes!(concat!("../../../assets/slot_", $part, "_gbc", $suffix, ".png")).as_slice(),
             include_bytes!(concat!("../../../assets/slot_", $part, "_gba", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_ngp", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_ws", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_wsc", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_gg", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_sms", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_lynx", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_pokemini", $suffix, ".png")).as_slice(),
         ]};
     }
     const BACK: [[&[u8]; CONSOLE_SLOTS]; BAR_THEMES] = [bars!("back", ""), bars!("back", "_dark"), bars!("back", "_light")];
@@ -258,7 +267,7 @@ pub fn slot_bar_png(light: bool) -> (&'static [u8], &'static [u8]) {
 pub const BAR_THEMES: usize = 3;
 
 /// How many console slot bars `home_slot` draws.
-pub const CONSOLE_SLOTS: usize = 7;
+pub const CONSOLE_SLOTS: usize = 14;
 
 /// Which console bar a cart goes into (see `home_slot`).
 pub fn console_slot_family(cart: &slot_store::Cart) -> usize {
@@ -277,7 +286,7 @@ pub fn console_slot_takes_dark_ink(family: usize, theme: usize) -> bool {
     match theme {
         1 => false,
         2 => true,
-        _ => !matches!(family, 3 | 6),
+        _ => !matches!(family, 3 | 6 | 7..=13),
     }
 }
 
@@ -313,6 +322,13 @@ pub fn home_slot_family(cart: &slot_store::Cart) -> Option<usize> {
         | M::MegaDriveCodemasters
         | M::MegaDriveVr
         | M::MegaDriveSk => 3,
+        M::NeoGeoPocket => 7,
+        M::WonderSwan => 8,
+        M::WonderSwanColor => 9,
+        M::GameGear => 10,
+        M::MasterSystem => 11,
+        M::Lynx => 12,
+        M::PokemonMini => 13,
     })
 }
 

@@ -175,11 +175,16 @@ fn home_board_face(cart: &Cart) -> CartFace {
     let (w, h) = m.size();
     let mut face = CartFace { rgba: home::board_rgba(m, cart.battery), w, h };
     let art = m.art();
-    let cores = [Core::primary_for(cart.platform), Core::alternate_for(cart.platform)];
-    for (core, (x, y, fw, fh)) in cores.into_iter().zip(art.footprints) {
-        over(&mut face, &home_footprint_face(core, fw as u32, fh as u32), x as u32, y as u32);
+    if !art.single_core {
+        for (core, (x, y, fw, fh)) in home::board_cores(cart).into_iter().zip(art.footprints) {
+            over(&mut face, &home_footprint_face(core, fw as u32, fh as u32), x as u32, y as u32);
+        }
     }
     let (tx, ty, tw, th) = art.title;
+    if tw < 1.0 {
+        // The Pokémon mini's chip keeps its own marking.
+        return face;
+    }
     let line_px = (th / 3.4).clamp(5.0, PAK_MARK_PX);
     let title = marking(&cart.stem, ((tw / (line_px * 0.62)) as usize).max(6));
     over(&mut face, &marking_face(&title, tw as u32, th as u32, 2, line_px, PAK_MARK_MIN_PX), tx as u32, ty as u32);
@@ -191,6 +196,9 @@ fn home_board_face(cart: &Cart) -> CartFace {
 pub(crate) fn home_shelf_board(cart: &Cart) -> CartFace {
     let mut face = home_board_face(cart);
     if let Body::Home(m) = body_of(cart) {
+        if m.art().single_core {
+            return face;
+        }
         let (x, y, w, h) = m.art().footprints[0];
         over(&mut face, &home_chip_body(m, w as u32, h as u32), x as u32, y as u32);
     }
@@ -215,10 +223,25 @@ fn home_platform(core: Core) -> Option<Platform> {
     [Platform::Nes, Platform::Snes, Platform::Md].into_iter().find(|p| core.runs(*p))
 }
 
+/// The mould whose big chip a 3.0 system's core is printed on.
+fn preview_mould(core: Core) -> Option<HomeMould> {
+    match core {
+        Core::Neopop | Core::Race => Some(HomeMould::NeoGeoPocket),
+        Core::Gearsystem => Some(HomeMould::MasterSystem),
+        Core::Handy | Core::BeetleLynx => Some(HomeMould::Lynx),
+        _ => None,
+    }
+}
+
 /// The big chip a home console core's name is printed on, at the size of
 /// that system's footprints.
 pub fn home_chip_face(platform: Platform, core: Option<Core>) -> CartFace {
     let Body::Home(m) = platform_body(platform) else { return pak_chip_face(core) };
+    home_mould_chip_face(m, core)
+}
+
+/// The big chip of a mould with a core's name on it.
+pub fn home_mould_chip_face(m: HomeMould, core: Option<Core>) -> CartFace {
     let (_, _, w, h) = m.art().footprints[0];
     let mut face = home_chip_body(m, w as u32, h as u32);
     if let Some(layout) = core.and_then(|c| name_layout(c, (w - 16.0).max(8.0))) {
@@ -717,6 +740,9 @@ fn pak_chip_body() -> CartFace {
 pub fn pak_chip_face(core: Option<Core>) -> CartFace {
     if let Some(platform) = core.and_then(home_platform) {
         return home_chip_face(platform, core);
+    }
+    if let Some(m) = core.and_then(preview_mould) {
+        return home_mould_chip_face(m, core);
     }
     let mut face = pak_chip_body();
     if let Some(layout) = core.and_then(|c| name_layout(c, (PAK_CHIP.0 - 26.0).max(8.0))) {

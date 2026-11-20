@@ -758,6 +758,8 @@ impl GameSession {
                 core.set_option("genesis_plus_gx_lock_on", "disabled");
             }
             Core::Picodrive => {}
+            // The 3.0 systems' cores are not shipped yet.
+            Core::Neopop | Core::Race | Core::Gearsystem | Core::Handy | Core::BeetleLynx => {}
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.

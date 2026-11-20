@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 312 188" width="312" height="188">
+  <defs><linearGradient id="wallShade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity=".6"/><stop offset=".08" stop-color="#000" stop-opacity="0"/></linearGradient></defs>
+  <rect x="0" y="0" width="312" height="188" fill="#ff00ff"/>
+  <rect x="7" y="7" width="298" height="174" rx="6" fill="#800080"/>
+  <rect x="7" y="7" width="298" height="174" rx="6" fill="url(#wallShade)"/>
+  <circle cx="62.4" cy="88.4" r="8" fill="#ff00ff" stroke="#400040" stroke-width="1"/>
+  <circle cx="62.4" cy="88.4" r="3.2" fill="#400040"/>
+  <circle cx="249.6" cy="88.4" r="8" fill="#ff00ff" stroke="#400040" stroke-width="1"/>
+  <circle cx="249.6" cy="88.4" r="3.2" fill="#400040"/>
+</svg>

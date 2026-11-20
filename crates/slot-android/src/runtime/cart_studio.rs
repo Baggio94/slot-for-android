@@ -728,6 +728,10 @@ impl Engine {
     pub(super) fn open_cart_studio(&mut self) {
         let shelf = &self.shelves[self.active];
         let Some(cart) = shelf.carts.get(shelf.index).cloned() else { return };
+        if slot_ui::is_test_cart(&cart) {
+            set_message("Cart Studio comes with slot. 3.0.".into());
+            return;
+        }
         // The cart leaves the shelf from where it is drawn (lifted by a long
         // press) for its place on the page.
         let pressed = self.press_lift() > 0.0;

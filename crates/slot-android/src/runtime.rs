@@ -578,7 +578,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 156] = [
+const MENU_TEXT: [&str; 157] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -739,6 +739,7 @@ const MENU_TEXT: [&str; 156] = [
     "Blur",                               // 153
     "Halo",                               // 154
     "Tint",                               // 155, Darken in 2.5's first betas
+    "3.0 Test Shelf",                     // 156, Interface (3.0.0-cartes1)
 ];
 
 /// Settings > Systems, top to bottom.
@@ -750,6 +751,44 @@ const SYSTEM_TITLES: [usize; 6] = [91, 92, 93, 121, 122, 123];
 // Special racks follow the supported platforms, not hard-coded GB-era indices.
 const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
+/// The 3.0 test shelf (3.0.0-cartes1), after Library > RomM's rack.
+const TEST_RACK: usize = Platform::ALL.len() + 4;
+
+/// The 3.0 test shelf's carts (3.0.0-cartes1): two or three a system, each
+/// in its own mould, with slot.'s printed label. No ROM is behind them.
+fn test_carts() -> Vec<slot_store::Cart> {
+    use slot_store::{ShellChoice, ShellFinish};
+    use slot_ui::HomeMould as M;
+    let carts: [(M, &str, [u8; 3], ShellFinish); 17] = [
+        (M::NeoGeoPocket, "Metal Slug - 1st Mission", [18, 18, 18], ShellFinish::Solid),
+        (M::NeoGeoPocket, "SNK vs. Capcom - Match of the Millennium", [18, 18, 18], ShellFinish::Solid),
+        (M::NeoGeoPocket, "Sonic the Hedgehog Pocket Adventure", [18, 18, 18], ShellFinish::Clear),
+        (M::WonderSwan, "Gunpey", [30, 30, 30], ShellFinish::Solid),
+        (M::WonderSwan, "Klonoa - Moonlight Museum", [30, 30, 30], ShellFinish::Solid),
+        (M::WonderSwanColor, "Final Fantasy", [145, 148, 148], ShellFinish::Clear),
+        (M::WonderSwanColor, "Judgement Silversword", [145, 148, 148], ShellFinish::Clear),
+        (M::GameGear, "Sonic the Hedgehog", [20, 20, 20], ShellFinish::Solid),
+        (M::GameGear, "Shining Force - The Sword of Hajya", [20, 20, 20], ShellFinish::Solid),
+        (M::GameGear, "Columns", [20, 20, 20], ShellFinish::Clear),
+        (M::MasterSystem, "Alex Kidd in Miracle World", [18, 18, 18], ShellFinish::Solid),
+        (M::MasterSystem, "Phantasy Star", [18, 18, 18], ShellFinish::Solid),
+        (M::Lynx, "California Games", [25, 25, 25], ShellFinish::Solid),
+        (M::Lynx, "Chip's Challenge", [25, 25, 25], ShellFinish::Solid),
+        (M::PokemonMini, "Pokemon Party mini", [128, 150, 178], ShellFinish::Clear),
+        (M::PokemonMini, "Pokemon Puzzle Collection", [128, 150, 178], ShellFinish::Clear),
+        (M::PokemonMini, "Pokemon Pinball mini", [128, 150, 178], ShellFinish::Clear),
+    ];
+    carts.into_iter().enumerate().map(|(i, (m, title, colour, finish))| slot_store::Cart {
+        platform: m.platform(),
+        stem: title.to_string(),
+        rom: format!("{}{}/{i}", slot_ui::TEST_CART_SCHEME, m.name()).into(),
+        label: None,
+        title: title.to_string(),
+        code: String::new(),
+        shell: Some(ShellChoice { outline: m.outline(), colour, finish }),
+        battery: false,
+    }).collect()
+}
 
 /// Every Settings value face, by index: setting_face gives these indices.
 const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF",
@@ -1007,6 +1046,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         },
         19 => if settings.show_recents {4}else{5},
         20 => if settings.show_titles {4}else{5},
+        TEST_SHELF_KEY => if settings.test_shelf {4}else{5},
         21 => shader(scoped.shader_gbc),
         47 => shader(scoped.shader_nes),
         48 => shader(scoped.shader_snes),
@@ -1213,8 +1253,10 @@ fn settings_rows() -> &'static [usize] {
 
 /// Settings > Interface: Theme, Wallpaper (its page), Recents, Game Titles,
 /// Status Bar (its page).
-const INTERFACE_PAGE_ROWS: [usize; 5] = [85, 83, 86, 87, 58];
-const INTERFACE_PAGE_KEYS: [usize; 5] = [18, usize::MAX, 19, 20, usize::MAX];
+const INTERFACE_PAGE_ROWS: [usize; 6] = [85, 83, 86, 87, 58, 156];
+const INTERFACE_PAGE_KEYS: [usize; 6] = [18, usize::MAX, 19, 20, usize::MAX, TEST_SHELF_KEY];
+/// Interface > 3.0 Test Shelf's value (3.0.0-cartes1).
+const TEST_SHELF_KEY: usize = 107;
 const INTERFACE_WALLPAPER_ROW: usize = 1;
 const INTERFACE_STATUS_ROW: usize = 4;
 /// Settings > Interface > Wallpaper (Engine::wallpaper_rows): Shelf
@@ -1673,6 +1715,7 @@ struct Engine {
     recents_platform_face: Printed,
     favorites_platform_face: Printed,
     video_platform_face: Printed,
+    test_platform_face: Printed,
     focus_seen: Option<(usize, String)>,
     focus_dirty_since: Option<Instant>,
     // Upstream v1.7 menu key-repeat belongs to the UI clock, never libretro.
@@ -1855,7 +1898,7 @@ impl Engine {
         let slot_dark_faces = (upload(&mut gpu), upload(&mut gpu));
         let slot_light_faces = (upload(&mut gpu), upload(&mut gpu));
         let footer_inked_dark_at_start = settings.appearance == crate::settings::Appearance::Light;
-        let home_slot_themes = [0usize, 1, 2].map(|_| [0usize, 1, 2, 3, 4, 5, 6]
+        let home_slot_themes = [0usize, 1, 2].map(|_| [(); slot_ui::bitmaps::CONSOLE_SLOTS]
             .map(|_| (upload(&mut gpu), upload(&mut gpu))));
         steps.mark("slot bars");
         let home_slot_faces = home_slot_themes[settings.appearance.bar_theme()];
@@ -1898,6 +1941,11 @@ impl Engine {
         shelves.push(Shelf::new(favorite_carts));
         debug_assert_eq!(shelves.len(), VIDEO_RACK);
         shelves.push(Shelf::new(video_carts));
+        // Library > RomM's page has its rack but no shelf: an empty one
+        // keeps the 3.0 test shelf at its own rack (3.0.0-cartes1).
+        shelves.push(Shelf::new(Vec::new()));
+        debug_assert_eq!(shelves.len(), TEST_RACK);
+        shelves.push(Shelf::new(if settings.test_shelf { test_carts() } else { Vec::new() }));
 
         // Original Slot names, not abbreviations: Game Boy Advance,
         // Game Boy, Game Boy Color. Keep the existing 3x antialiased 16px
@@ -1920,6 +1968,8 @@ impl Engine {
             favorites_label.w);
         let video_label=platform_name_face("Game Boy Advance Video");
         let video_platform_face=Printed::new(gpu.create_face(&video_label), video_label.w);
+        let test_label=platform_name_face("3.0 TEST");
+        let test_platform_face=Printed::new(gpu.create_face(&test_label), test_label.w);
 
         steps.mark("platform names");
         let gba = upload(&mut gpu);
@@ -2455,6 +2505,7 @@ impl Engine {
             recents_platform_face,
             favorites_platform_face,
             video_platform_face,
+            test_platform_face,
             focus_seen: None,
             focus_dirty_since: None,
             menu_held: None,
@@ -5187,6 +5238,19 @@ impl Engine {
                             set_message("The SD card with your games isn't in.".into());
                             return;
                         }
+                        96 if !self.inserted && !self.shelves[self.active].carts.is_empty()
+                            && self.selected_test_cart() => {
+                            // A 3.0 test cart goes in and stays seated: no
+                            // core to start yet (3.0.0-cartes1).
+                            self.inserted = true;
+                            self.prepared_rom = None;
+                            self.pending_game = None;
+                            self.insert_started = Some(Instant::now());
+                            self.a_down_at = self.insert_started;
+                            self.fresh_launch = false;
+                            set_message("No core for this system yet: 3.0 test cart.".into());
+                            return;
+                        }
                         96 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
                             self.load_selected_emulation();
                             self.inserted = true;
@@ -5274,6 +5338,10 @@ impl Engine {
     /// the middle cart up, touch.rs).
     pub(super) fn open_core_picker(&mut self) {
         let Some(selected) = self.shelves[self.active].carts.get(self.shelves[self.active].index) else { return };
+        if !slot_ui::cart_opens(selected) {
+            set_message("One core only: this cart doesn't open.".into());
+            return;
+        }
         let face = board_face(selected);
         if let Some(texture) = self.board_texture {
             self.gpu.update_face(texture, &face);
@@ -5287,9 +5355,10 @@ impl Engine {
             .map(|(storage, _)| core_selection::selected_for(
                 storage, &selected.rom.to_string_lossy(), selected.platform))
             .unwrap_or_else(|| Core::default_for(selected.platform));
-        let mut picker = CorePicker::open_between(current_core,
-            Core::primary_for(selected.platform),
-            Core::alternate_for(selected.platform), now);
+        let [primary, alternate] = slot_ui::board_cores(selected);
+        // A 3.0 test cart keeps no core: its first chip is seated.
+        let current_core = if slot_ui::is_test_cart(selected) { primary } else { current_core };
+        let mut picker = CorePicker::open_between(current_core, primary, alternate, now);
         // A clear cart's lid waits for its plastic without
         // the board (start_waiting_picker), or the shelf
         // face would lift with the board drawn on it.
@@ -5304,6 +5373,10 @@ impl Engine {
         let now = self.born.elapsed().as_millis() as u64;
         let Some(core) = self.picker.map(|picker| picker.seat()) else { return };
         let cart = &self.shelves[self.active].carts[self.shelves[self.active].index];
+        if slot_ui::is_test_cart(cart) {
+            set_message(format!("{} comes with slot. 3.0.", core.text()));
+            return;
+        }
         let uri = cart.rom.to_string_lossy().into_owned();
         let platform = cart.platform;
         let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -6608,6 +6681,7 @@ impl Engine {
             .map(|shelf| shelf.carts.as_slice()).collect()
     }
     fn toggle_favorite(&mut self) {
+        if self.selected_test_cart() { return; }
         let Some(uri)=self.selected_rom_uri() else {return};
         let Some(root)=Self::recents_root() else {return};
         match crate::favorites::toggle(&root,&uri) {
@@ -6713,6 +6787,23 @@ impl Engine {
                 }
             }
         }
+    }
+    /// Interface > 3.0 Test Shelf turned on or off (3.0.0-cartes1).
+    fn rebuild_test_shelf(&mut self) {
+        let carts = if self.settings.test_shelf { test_carts() } else { Vec::new() };
+        let Some(shelf) = self.shelves.get_mut(TEST_RACK) else { return };
+        if shelf.carts == carts { return; }
+        self.cart_render.invalidate_shelf(TEST_RACK);
+        let moves = self.shelves[TEST_RACK].update_carts(carts);
+        self.rekey_rack_visuals(TEST_RACK, &moves);
+        if self.active == TEST_RACK && self.shelves[TEST_RACK].carts.is_empty() {
+            self.active = self.next_shelf(0, 1);
+        }
+    }
+    /// The selected cart is one of the 3.0 test shelf's.
+    fn selected_test_cart(&self) -> bool {
+        let shelf = &self.shelves[self.active];
+        shelf.carts.get(shelf.index).is_some_and(slot_ui::is_test_cart)
     }
     fn rebuild_recents(&mut self) {
         let Some(root)=Self::recents_root() else { return };
@@ -6877,6 +6968,11 @@ impl Engine {
             87 => {
                 self.settings.show_titles=!self.settings.show_titles;
                 self.selected_title_name.clear();
+                self.persist_settings();
+            }
+            156 => {
+                self.settings.test_shelf=!self.settings.test_shelf;
+                self.rebuild_test_shelf();
                 self.persist_settings();
             }
             58 if confirm => self.overlay = ShelfOverlay::InterfaceSettings { row: 0 },
@@ -9683,7 +9779,9 @@ impl Engine {
                                 RECENTS_RACK=>self.recents_platform_face,
                                 FAVORITES_RACK=>self.favorites_platform_face,
                                 VIDEO_RACK=>self.video_platform_face,
-                                index=>self.platform_faces[index],
+                                TEST_RACK=>self.test_platform_face,
+                                index=>self.platform_faces.get(index).copied()
+                                    .unwrap_or(self.test_platform_face),
                             };
                         Some((face,elapsed,true))
                     } else {
@@ -10332,7 +10430,7 @@ impl StartJob {
             jobs.extend([StartJob::Band(back), StartJob::Band(front)]);
         }
         for theme in 0..3 {
-            for family in 0..7 {
+            for family in 0..slot_ui::bitmaps::CONSOLE_SLOTS {
                 let (back, front) = home_slot_png(family, theme);
                 jobs.extend([StartJob::Band(back), StartJob::Band(front)]);
             }
@@ -10457,7 +10555,7 @@ fn pick_closer(
     cart: Option<&slot_store::Cart>,
 ) -> Option<slot_ui::SlotCloser> {
     faces?;
-    closers[cart.and_then(slot_ui::bitmaps::home_slot_family)?]
+    closers.get(cart.and_then(slot_ui::bitmaps::home_slot_family)?).copied().flatten()
 }
 
 /// The screen columns the core picker covers at `progress`.

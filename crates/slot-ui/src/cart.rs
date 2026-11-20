@@ -212,7 +212,7 @@ pub fn shelf_grow(body: Body) -> f32 {
 /// EA's included, fill their slot's recess, which is drawn to fit them.
 fn seat_grow(body: Body) -> f32 {
     match body {
-        Body::Home(m) if m.system() != home::HomeSystem::Nes => 1.2,
+        Body::Home(m) if matches!(m.system(), home::HomeSystem::Snes | home::HomeSystem::Md) => 1.2,
         _ => 1.0,
     }
 }
@@ -427,7 +427,8 @@ fn blend_over(dst: &mut [u8], src: &[u8]) {
 
 pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
     let s = spec(shape_of(cart));
-    if art.is_none() {
+    // A 3.0 test cart wears slot.'s printed label: its title on a colour.
+    if art.is_none() && !home::is_test_cart(cart) {
         if let Some(face) = handwritten(&s, cart) {
             return face;
         }
@@ -669,6 +670,12 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
     // The label box stays opaque.
     let (lx, ly, lw, lh) = s.label;
     let (lx0, ly0, lx1, ly1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    // A mould's own clear plastic (the WonderSwan Color's, the Pokémon
+    // mini's frosted cap) instead of the same 80% everywhere.
+    let opacity = match s.mould {
+        Mould::Home(m) if clear => home::dense_opacity(m),
+        _ => None,
+    };
     for y in 0..th {
         for x in 0..tw {
             let on_label = !bare && (lx0..lx1).contains(&x) && (ly0..ly1).contains(&y);
@@ -684,7 +691,8 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
             rgba[i + 3] = if on_label {
                 255
             } else if clear {
-                ((own * u32::from(CLEAR_ALPHA) + 127) / 255) as u8
+                let k = opacity.as_ref().map_or(CLEAR_ALPHA, |o| o[(y * tw + x) as usize]);
+                ((own * u32::from(k) + 127) / 255) as u8
             } else {
                 own as u8
             };

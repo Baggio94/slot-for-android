@@ -1,7 +1,8 @@
 //! Multiplayer artwork uses the same family and material as the inserted cartridge.
 use crate::{bitmaps, density, native_assets, CartFace, Face};
 
-const CABLES: [&[u8]; bitmaps::CONSOLE_SLOTS] = [
+/// The cables of the systems slot. plays (the 3.0 systems have none yet).
+const CABLES: [&[u8]; 7] = [
     include_bytes!("../assets/link/fc.png"),
     include_bytes!("../assets/link/nes.png"),
     include_bytes!("../assets/link/snes.png"),
@@ -24,7 +25,9 @@ pub struct Hardware {
 
 impl Hardware {
     pub fn new(family: usize, theme: usize, wireless: bool) -> Self {
-        assert!(family < CABLES.len() && theme < bitmaps::BAR_THEMES);
+        // A 3.0 system plays no Multiplayer yet: the GBA's cable stands in.
+        let family = if family < CABLES.len() { family } else { 6 };
+        assert!(theme < bitmaps::BAR_THEMES);
         Self {
             family,
             theme,
