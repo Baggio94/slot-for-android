@@ -1,0 +1,35 @@
+name: cart-refs-3
+
+on:
+  push:
+    branches: [tools/cart-colours]
+    paths: [tools/cart-colours/refs3.txt, tools/cart-colours/refs3.py, .github/workflows/cart-refs-3.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  refs:
+    strategy:
+      matrix:
+        group: [A, B]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: cart-colours-3-${{ matrix.group }}-none
+          restore-keys: cart-colours-3-${{ matrix.group }}-
+      - run: pip install numpy pillow scipy spandrel torch --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+      - run: curl -sL -o x4.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+      - run: python3 -u tools/cart-colours/refs3.py x4.pth refs-out
+      - name: publish
+        run: |
+          set -e
+          cd refs-out
+          git init -q -b tools/cart-refs-3-${{ matrix.group }}
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com add -A
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com commit -q -m "Reference renders for the 3.0 moulds"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" tools/cart-refs-3-${{ matrix.group }}
