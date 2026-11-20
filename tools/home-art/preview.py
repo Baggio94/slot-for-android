@@ -17,11 +17,11 @@ import harvest  # noqa: E402
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
-    ap.add_argument('--platform', choices=sorted(harvest.PLATFORMS) + ['all'], default='all')
+    ap.add_argument('--platform', choices=sorted(harvest.PLATFORMS) + list(harvest.GROUPS), default='all')
     ap.add_argument('--dat', help='a local dat (one platform only)')
     args = ap.parse_args()
     out = Path(args.out)
-    chosen = sorted(harvest.PLATFORMS) if args.platform == 'all' else [args.platform]
+    chosen = harvest.GROUPS.get(args.platform, [args.platform])
     rows = []
     for platform in chosen:
         index = harvest.load(out / f'{platform}.json', {})

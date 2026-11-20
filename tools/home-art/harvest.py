@@ -75,8 +75,19 @@ PLATFORMS = {
     'NES': 'Nintendo - Nintendo Entertainment System',
     'SNES': 'Nintendo - Super Nintendo Entertainment System',
     'MD': 'Sega - Mega Drive - Genesis',
+    # slot. 3.0's systems.
+    'NGP': 'SNK - Neo Geo Pocket',
+    'NGPC': 'SNK - Neo Geo Pocket Color',
+    'WS': 'Bandai - WonderSwan',
+    'WSC': 'Bandai - WonderSwan Color',
+    'GG': 'Sega - Game Gear',
+    'SMS': 'Sega - Master System - Mark III',
+    'LYNX': 'Atari - Lynx',
+    'POKEMINI': 'Nintendo - Pokemon Mini',
 }
-SS_SYSTEM = {'GB': 9, 'GBC': 10, 'GBA': 12, 'NES': 3, 'SNES': 4, 'MD': 1}
+SS_SYSTEM = {'GB': 9, 'GBC': 10, 'GBA': 12, 'NES': 3, 'SNES': 4, 'MD': 1,
+             'NGP': 25, 'NGPC': 82, 'WS': 45, 'WSC': 46, 'GG': 21, 'SMS': 2, 'LYNX': 28,
+             'POKEMINI': 211}
 SS_EXPECT = {
     'GB': ('game boy',),
     'GBC': ('game boy color',),
@@ -84,9 +95,26 @@ SS_EXPECT = {
     'NES': ('nes', 'nintendo entertainment system', 'famicom'),
     'SNES': ('super nintendo', 'snes', 'super famicom'),
     'MD': ('mega drive', 'megadrive', 'genesis'),
+    'NGP': ('pocket',),
+    'NGPC': ('pocket color',),
+    'WS': ('wonderswan',),
+    'WSC': ('wonderswan color',),
+    'GG': ('game gear', 'gamegear'),
+    'SMS': ('master system', 'mark iii'),
+    'LYNX': ('lynx',),
+    'POKEMINI': ('mini',),
 }
-EXTENSION = {'GB': '.gb', 'GBC': '.gbc', 'GBA': '.gba', 'NES': '.nes', 'SNES': '.sfc', 'MD': '.md'}
-HOME = {'NES', 'SNES', 'MD'}
+EXTENSION = {'GB': '.gb', 'GBC': '.gbc', 'GBA': '.gba', 'NES': '.nes', 'SNES': '.sfc', 'MD': '.md',
+             'NGP': '.ngp', 'NGPC': '.ngc', 'WS': '.ws', 'WSC': '.wsc', 'GG': '.gg', 'SMS': '.sms',
+             'LYNX': '.lnx', 'POKEMINI': '.min'}
+# Platforms whose label is kept for every region family a shell can ask for, not only the
+# dump's own region: the home consoles, and the 3.0 systems, whose shells are still being drawn.
+HOME = {'NES', 'SNES', 'MD', 'NGP', 'NGPC', 'WS', 'WSC', 'GG', 'SMS', 'LYNX', 'POKEMINI'}
+# What --platform accepts besides one platform.
+GROUPS = {
+    'all': sorted(PLATFORMS),
+    '3.0': ['NGP', 'NGPC', 'WS', 'WSC', 'GG', 'SMS', 'LYNX', 'POKEMINI'],
+}
 
 # HomeCartLabels.labelRegions: the regions the app ever asks for, Europe always as this block.
 EUROPE = ('eu', 'fr', 'de', 'uk', 'sp', 'it', 'nl', 'se', 'au')
@@ -594,9 +622,10 @@ def derive(index, entries, stems):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('--platform', choices=sorted(PLATFORMS) + ['all'], default='all')
+    ap.add_argument('--platform', choices=sorted(PLATFORMS) + list(GROUPS), default='all')
     ap.add_argument('--out', required=True, help='the art set folder, created if needed')
-    ap.add_argument('--limit', type=int, help='stop after this many games, for a trial run')
+    ap.add_argument('--limit', type=int,
+                    help='ask about at most this many games of each platform, for a trial run')
     ap.add_argument('--match', help='only dumps whose No-Intro name matches this regex')
     ap.add_argument('--dat', help='a local dat instead of libretro\'s (one platform only)')
     ap.add_argument('--no-hacks', action='store_true',
@@ -613,7 +642,7 @@ def main():
                     help='ask again for dumps last answered with no label more than DAYS ago')
     args = ap.parse_args()
 
-    chosen = sorted(PLATFORMS) if args.platform == 'all' else [args.platform]
+    chosen = GROUPS.get(args.platform, [args.platform])
     if args.dat and len(chosen) != 1:
         sys.exit('--dat needs a single --platform')
     out = Path(args.out)
@@ -635,6 +664,7 @@ def main():
     urls = load(urls_path, {})  # public media url -> stored file, shared by every dump
     lock = threading.Lock()
     stop = threading.Event()
+    per = {'asked': 0}  # games asked about for the platform under way, for --limit
     n = {'asked': 0, 'labelled': 0, 'none': 0, 'failed': 0, 'skipped': 0, 'downloads': 0}
     today = time.strftime('%Y-%m-%d', time.gmtime())
     cutoff = (time.strftime('%Y-%m-%d', time.gmtime(time.time() - args.retry_after * 86400))
@@ -658,11 +688,13 @@ def main():
         with lock:
             if stop.is_set():
                 return
-            if ((left is not None and n['asked'] >= left) or (args.limit and n['asked'] >= args.limit)
-                    or (deadline and time.monotonic() > deadline)):
+            if args.limit and per['asked'] >= args.limit:
+                return
+            if (left is not None and n['asked'] >= left) or (deadline and time.monotonic() > deadline):
                 stop.set()
                 return
             n['asked'] += 1
+            per['asked'] += 1
         params = dict(c, crc=crc, systemeid=SS_SYSTEM[platform], romtype='rom',
                       romnom=name + EXTENSION[platform])
         if size:
@@ -737,6 +769,9 @@ def main():
                     continue
                 jobs.append((crc, name, size))
             print(f'{platform}: {len(entries)} dumps in the dat, {len(jobs)} to ask', flush=True)
+            per['asked'] = 0
+            if args.limit:
+                jobs = jobs[:args.limit]
             try:
                 with ThreadPoolExecutor(max_workers=threads) as pool:
                     for job in jobs:
