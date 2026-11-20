@@ -1,0 +1,26 @@
+[
+ {
+  "platform": "MD",
+  "name": "Virtua Racing (USA)",
+  "crc": "7E1A324A",
+  "source": "ss",
+  "files": {
+   "support-texture": {
+    "file": "MD-7E1A324A-support-texture-us.png",
+    "region": "us",
+    "size": [
+     600,
+     500
+    ]
+   },
+   "support-2D": {
+    "file": "MD-7E1A324A-support-2D-us.png",
+    "region": "us",
+    "size": [
+     600,
+     593
+    ]
+   }
+  }
+ }
+]
