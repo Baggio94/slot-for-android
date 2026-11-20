@@ -16,7 +16,7 @@ android {
         // Dedicated KONKR ARM64 build; retain the stable package and signing
         // identity so adb install -r preserves existing data and SAF grants.
         // 1.2.3: Frame Pacing NATIVE / RESPONSIVE.
-        versionCode = 561
+        versionCode = 562
         versionName = "3.0.0-lynxmini1"
         ndk { abiFilters += listOf("arm64-v8a") }
         // slot.'s ScreenScraper developer credentials for the NES, Super
