@@ -18,7 +18,7 @@ DATS = {
     "GG": "Sega - Game Gear.dat", "SMS": "Sega - Master System - Mark III.dat",
     "LYNX": "Atari - Lynx.dat", "PMINI": "Nintendo - Pokemon Mini.dat",
 }
-SS_ID = {"NGP": 25, "NGPC": 82, "WS": 45, "WSC": 46, "GG": 21, "SMS": 2, "LYNX": 28, "PMINI": 211}
+SS_ID = {"MD": 1, "NGP": 25, "NGPC": 82, "WS": 45, "WSC": 46, "GG": 21, "SMS": 2, "LYNX": 28, "PMINI": 211}
 COUNTRY = {"USA": "us", "World": "wor", "Europe": "eu", "Japan": "jp"}
 ART = "https://art.slot-android.app/"
 KINDS = ("support-texture", "support-2D")
