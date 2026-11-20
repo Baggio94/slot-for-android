@@ -64,6 +64,14 @@ impl MenuPalette {
             3 => ([34, 34, 36], [68, 68, 72], [88, 90, 96]),        // Mega Drive
             4 => ([178, 178, 170], [206, 206, 198], [202, 211, 168]),  // Game Boy
             5 => ([236, 188, 20], [252, 224, 128], [243, 227, 160]), // Game Boy Color
+            // The 3.0 consoles: their bar's plastic, their mosaic's ground.
+            7 => ([46, 46, 46], [78, 78, 80], [207, 219, 232]),     // Neo Geo Pocket
+            8 => ([44, 43, 45], [76, 75, 79], [219, 209, 230]),     // WonderSwan
+            9 => ([58, 57, 57], [90, 89, 90], [219, 209, 230]),     // WonderSwan Color
+            10 => ([40, 40, 40], [72, 72, 74], [196, 217, 213]),    // Game Gear
+            11 => ([40, 40, 40], [72, 72, 74], [220, 196, 192]),    // Master System
+            12 => ([40, 39, 39], [72, 71, 72], [232, 214, 182]),    // Lynx
+            13 => ([86, 91, 128], [120, 126, 164], [215, 223, 175]), // Pokemon mini
             _ => ([74, 80, 152], [108, 114, 184], [196, 198, 228]), // Game Boy Advance
         };
         let ink = crate::bitmaps::console_slot_takes_dark_ink(family, 0).then_some(DARK_INK);

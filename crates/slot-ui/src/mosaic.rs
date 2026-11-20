@@ -23,16 +23,13 @@ const MASKS: [&[u8]; 15] = [
     include_bytes!("../../../assets/wallpapers/NES.png"),
     include_bytes!("../../../assets/wallpapers/SNES.png"),
     include_bytes!("../../../assets/wallpapers/MD.png"),
-    // Master System and Game Gear share the Mega Drive's Sega drawings
-    // until they get their own.
-    include_bytes!("../../../assets/wallpapers/MD.png"),
-    include_bytes!("../../../assets/wallpapers/MD.png"),
-    // Neo Geo Pocket, WonderSwan, Lynx and Pokémon mini: the Recents
-    // shelf's mixed drawings until they get their own.
-    include_bytes!("../../../assets/wallpapers/Recents.png"),
-    include_bytes!("../../../assets/wallpapers/Recents.png"),
-    include_bytes!("../../../assets/wallpapers/Recents.png"),
-    include_bytes!("../../../assets/wallpapers/Recents.png"),
+    // The six 3.0 systems' own drawings (Siham 2026-11-20).
+    include_bytes!("../../../assets/wallpapers/SMS.png"),
+    include_bytes!("../../../assets/wallpapers/GG.png"),
+    include_bytes!("../../../assets/wallpapers/NGP.png"),
+    include_bytes!("../../../assets/wallpapers/WS.png"),
+    include_bytes!("../../../assets/wallpapers/LYNX.png"),
+    include_bytes!("../../../assets/wallpapers/POKEMINI.png"),
     include_bytes!("../../../assets/wallpapers/Recents.png"),
     include_bytes!("../../../assets/wallpapers/Favorites.png"),
     include_bytes!("../../../assets/wallpapers/GBAV.png"),
@@ -57,18 +54,18 @@ const COLOURS: [[[[u8; 3]; 2]; 4]; 15] = [
     [[[205, 211, 222], [152, 161, 178]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
     // MD
     [[[88, 90, 96], [134, 140, 152]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
-    // SMS: the Master System's black and red.
-    [[[96, 66, 70], [148, 106, 110]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
-    // GG: the Game Gear's dark grey and blue.
-    [[[70, 76, 96], [114, 124, 152]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
-    // NGP: the Neo Geo Pocket's anthracite and blue.
-    [[[64, 70, 92], [108, 118, 150]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
-    // WS: the WonderSwan's grey-green.
-    [[[84, 94, 88], [134, 150, 140]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
-    // LYNX: the Lynx's black and orange.
-    [[[96, 74, 60], [150, 118, 96]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
-    // POKEMINI: the Pokémon mini's blue.
-    [[[78, 96, 128], [124, 146, 186]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
+    // SMS: Alex Kidd, Wonder Boy and Opa-Opa on pink.
+    [[[220, 196, 192], [169, 145, 141]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // GG: Tails, Arle and Carbuncle on sea green.
+    [[[196, 217, 213], [145, 170, 164]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // NGP: Terry, Nakoruru and Athena on pale blue.
+    [[[207, 219, 232], [155, 170, 190]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // WS: the WonderSwan's consoles, carts and origami swans on lilac.
+    [[[219, 209, 230], [167, 154, 183]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // LYNX: Toki, Chip and Louie on sand.
+    [[[232, 214, 182], [183, 161, 125]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // POKEMINI: the Pokémon mini's consoles, carts and balls on lime.
+    [[[215, 223, 175], [162, 175, 121]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // Recents
     [[[211, 216, 223], [155, 164, 177]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // Favorites
@@ -174,7 +171,7 @@ pub fn mosaic_native(shelf: usize, theme: MosaicTheme, look: MosaicLook) -> Opti
 }
 
 /// Three box blurs of radius `r` each way: close to a Gaussian.
-fn soften(rgba: &mut [u8], w: usize, h: usize, r: usize) {
+pub(crate) fn soften(rgba: &mut [u8], w: usize, h: usize, r: usize) {
     if w == 0 || h == 0 { return; }
     let mut line = Vec::new();
     for _ in 0..3 {

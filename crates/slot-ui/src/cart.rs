@@ -412,6 +412,8 @@ pub fn cart_face_with_material(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
         let (w, h) = label_size(cart);
         label_art(cart, px(w), px(h))
     });
+    // The title by hand (no label, or Cart Studio's slot. label).
+    let by_hand = !home::is_test_cart(cart) && artwork.as_deref().is_none_or(mostly_clear);
     let plastic = cart_face_with(cart, artwork);
     if !is_clear(cart) {
         return plastic;
@@ -423,8 +425,37 @@ pub fn cart_face_with_material(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
     let mut pixels = vec![0u8; plastic.rgba.len()];
     blend_over(&mut pixels, &interior.rgba);
     blend_over(&mut pixels, &backing.rgba);
+    if by_hand {
+        frost_well(&spec(shape_of(cart)), &mut pixels, &plastic.rgba);
+    }
     blend_over(&mut pixels, &plastic.rgba);
     CartFace { rgba: pixels, w: plastic.w, h: plastic.h }
+}
+
+/// Under a title written by hand, a clear cart's label well is frosted
+/// plastic (Siham 2026-11-20): the board behind it blurred and milky, so
+/// the chips' printing never reads through the writing.
+fn frost_well(s: &Spec, under: &mut [u8], plastic: &[u8]) {
+    let (lx, ly, lw, lh) = s.label;
+    let (fw, fh) = (px(s.w) as usize, px(s.h) as usize);
+    let (x0, y0) = (px(lx) as usize, px(ly) as usize);
+    let (x1, y1) = ((px(lx + lw) as usize).min(fw), (px(ly + lh) as usize).min(fh));
+    if x1 <= x0 || y1 <= y0 { return; }
+    let (w, h) = (x1 - x0, y1 - y0);
+    let mut well = Vec::with_capacity(w * h * 4);
+    for y in y0..y1 { well.extend_from_slice(&under[(y * fw + x0) * 4..(y * fw + x1) * 4]); }
+    crate::mosaic::soften(&mut well, w, h, px(4).max(1) as usize);
+    // The haze: the plastic's own colour, halfway to white.
+    let mid = ((y0 + h / 2) * fw + x0 + w / 2) * 4;
+    let haze = [0, 1, 2].map(|c| (plastic[mid + c] as u32 + 255) / 2);
+    for y in 0..h {
+        for x in 0..w {
+            let (from, to) = ((y * w + x) * 4, ((y + y0) * fw + x + x0) * 4);
+            for c in 0..3 {
+                under[to + c] = ((well[from + c] as u32 * 55 + haze[c] * 45) / 100) as u8;
+            }
+        }
+    }
 }
 
 /// Straight-alpha source-over. Channel math uses integers and is independent
