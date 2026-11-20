@@ -3,13 +3,13 @@ use slot_store::Platform;
 #[test]
 fn every_platform_has_a_directory() {
     let names: Vec<&str> = Platform::ALL.iter().map(|p| p.dir_name()).collect();
-    assert_eq!(names, vec!["GBA", "GB", "GBC", "NES", "SNES", "MD"]);
+    assert_eq!(names, vec!["GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG"]);
 }
 
 #[test]
 fn every_platform_is_a_shelf_of_its_own() {
     assert_eq!(Platform::ALL, [Platform::Gba, Platform::Gb, Platform::Gbc,
-        Platform::Nes, Platform::Snes, Platform::Md]);
+        Platform::Nes, Platform::Snes, Platform::Md, Platform::Sms, Platform::Gg]);
     for (i, p) in Platform::ALL.iter().enumerate() {
         assert!(
             !Platform::ALL[..i].contains(p),
@@ -33,12 +33,16 @@ fn each_platform_takes_only_its_own_extensions() {
     assert!(Platform::Md.accepts(std::path::Path::new("Sonic.md")));
     assert!(Platform::Md.accepts(std::path::Path::new("Sonic.gen")));
     assert!(!Platform::Snes.accepts(std::path::Path::new("Zelda.nes")));
+    assert!(Platform::Sms.accepts(std::path::Path::new("Alex Kidd.sms")));
+    assert!(Platform::Gg.accepts(std::path::Path::new("Columns.GG")));
+    assert!(!Platform::Gg.accepts(std::path::Path::new("Alex Kidd.sms")));
 }
 
 #[test]
 fn only_the_game_boys_draw_into_the_canvas() {
     assert!(Platform::Gba.handheld() && Platform::Gb.handheld() && Platform::Gbc.handheld());
     assert!(!Platform::Nes.handheld() && !Platform::Snes.handheld() && !Platform::Md.handheld());
+    assert!(!Platform::Sms.handheld() && !Platform::Gg.handheld());
     for p in Platform::ALL {
         assert_eq!(Platform::parse(p.dir_name()), Some(p));
     }

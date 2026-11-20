@@ -515,20 +515,30 @@ const MD: [ConsoleButton; 12] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
     cb("X", bit::L), cb("Y", bit::X), cb("Z", bit::R),
     cb("Mode", bit::SELECT), cb("START", bit::START)];
 
+/// Genesis Plus GX and Gearsystem read the Master System pad as RetroArch
+/// does: Button 1 from B, Button 2 from A, Pause from START.
+const SMS: [ConsoleButton; 7] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("1", bit::B), cb("2", bit::A), cb("Pause", bit::START)];
+/// The Game Gear's: Button 1 from B, Button 2 from A, START.
+const GG: [ConsoleButton; 7] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("1", bit::B), cb("2", bit::A), cb("START", bit::START)];
+
 /// Systems, by the names slot. files their controls under.
-pub const SYSTEMS: [&str; 6] = ["gba", "gbc", "gb", "nes", "snes", "md"];
+pub const SYSTEMS: [&str; 8] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg"];
 
 pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
     match system {
         "gba" => &GBA,
         "snes" => &SNES,
         "md" => &MD,
+        "sms" => &SMS,
+        "gg" => &GG,
         _ => &TWO_BUTTONS,
     }
 }
 
-/// Only NES, SNES and Mega Drive take a second player.
-pub fn takes_port2(system: &str) -> bool { matches!(system, "nes" | "snes" | "md") }
+/// Only NES, SNES, Mega Drive and Master System take a second player.
+pub fn takes_port2(system: &str) -> bool { matches!(system, "nes" | "snes" | "md" | "sms") }
 
 /// What X and Y do on a console without them (Game Boys, NES).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -596,8 +606,8 @@ impl ShoulderRole {
 }
 
 /// X / Y and L1 / R1 rows: on which systems they are spare.
-pub fn spare_xy(system: &str) -> bool { matches!(system, "gba" | "gb" | "gbc" | "nes") }
-pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes") }
+pub fn spare_xy(system: &str) -> bool { matches!(system, "gba" | "gb" | "gbc" | "nes" | "sms" | "gg") }
+pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes" | "sms" | "gg") }
 /// C / Z row: every system but the Mega Drive, whose pad has them.
 pub fn spare_cz(system: &str) -> bool { system != "md" }
 
@@ -1460,7 +1470,7 @@ mod tests {
     #[test]
     fn untouched_systems_play_exactly_as_before() {
         let controls = Controls::default();
-        for system in SYSTEMS {
+        for system in &SYSTEMS[..6] {
             for turbo in [true, false] {
                 let default_xy = if turbo { XyRole::TurboAB } else { XyRole::BA };
                 let layout = controls.resolve(system, None, 0, default_xy);

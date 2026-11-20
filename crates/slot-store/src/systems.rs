@@ -32,7 +32,7 @@ pub struct System {
     pub handheld: bool,
 }
 
-pub const SYSTEMS: [System; 6] = [
+pub const SYSTEMS: [System; 8] = [
     System {
         platform: Platform::Gba, name: "Game Boy Advance", dir: "GBA",
         extensions: &["gba"], folders: &["gba"], romm: &["gba"],
@@ -73,6 +73,20 @@ pub const SYSTEMS: [System; 6] = [
         romm: &["genesis", "megadrive", "genesis-slash-megadrive", "sega-mega-drive"],
         retroachievements: 1, screenscraper: 1,
         cores: [Core::GenesisPlusGx, Core::Picodrive], picture: (320, 224), handheld: false,
+    },
+    System {
+        platform: Platform::Sms, name: "Master System", dir: "SMS",
+        extensions: &["sms"], folders: &["mastersystem"],
+        romm: &["sms"],
+        retroachievements: 11, screenscraper: 2,
+        cores: [Core::GenesisPlusGx, Core::Gearsystem], picture: (256, 192), handheld: false,
+    },
+    System {
+        platform: Platform::Gg, name: "Game Gear", dir: "GG",
+        extensions: &["gg"], folders: &["gamegear"],
+        romm: &["gamegear"],
+        retroachievements: 15, screenscraper: 21,
+        cores: [Core::GenesisPlusGx, Core::Gearsystem], picture: (160, 144), handheld: false,
     },
 ];
 

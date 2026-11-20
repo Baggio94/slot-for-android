@@ -59,6 +59,10 @@ internal object HomeCartLabels {
 
     internal data class Media(val type: String, val region: String, val url: String)
 
+    /** The home systems whose real labels slot. fetches: the Master System's
+     *  and the Game Gear's wait for their label wells (3.0 roadmap, labels). */
+    internal val LABEL_PLATFORMS = setOf(Systems.NES, Systems.SNES, Systems.MD)
+
     /** ScreenScraper's system ids. */
     internal fun systemId(platform: String): Int? =
         Systems.row(platform)?.takeIf { it.home }?.screenScraper
@@ -231,7 +235,7 @@ internal object HomeCartLabels {
             val row = rows.optJSONObject(i) ?: return@mapNotNull null
             val platform = row.optString("platform")
             val uri = row.optString("uri")
-            if (platform !in Systems.HOME_PLATFORMS || !uri.startsWith("content://")) return@mapNotNull null
+            if (platform !in LABEL_PLATFORMS || !uri.startsWith("content://")) return@mapNotNull null
             Rom(uri, platform, row.optString("title"), row.optString("filename"),
                 row.optLong("size", -1), row.optLong("modified", -1),
                 row.optString("home_region"), row.optString("home_maker"))

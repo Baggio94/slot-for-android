@@ -277,7 +277,8 @@ impl HomeMould {
 
     /// One of the 3.0 systems, which slot. shows but does not play yet.
     pub fn is_preview(self) -> bool {
-        !matches!(self.system(), HomeSystem::Nes | HomeSystem::Snes | HomeSystem::Md)
+        !matches!(self.system(), HomeSystem::Nes | HomeSystem::Snes | HomeSystem::Md
+            | HomeSystem::MasterSystem | HomeSystem::GameGear)
     }
 
     /// The shell a system's carts get when nothing picks another.

@@ -758,16 +758,15 @@ impl GameSession {
                 core.set_option("genesis_plus_gx_lock_on", "disabled");
             }
             Core::Picodrive => {}
-            // The 3.0 systems' cores are not shipped yet.
-            Core::Neopop | Core::Race | Core::Gearsystem | Core::Handy | Core::BeetleLynx => {}
+            // Gearsystem runs on its own defaults, as RetroArch starts it.
+            Core::Gearsystem => {}
+            // The other 3.0 systems' cores are not shipped yet.
+            Core::Neopop | Core::Race | Core::Handy | Core::BeetleLynx => {}
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
         // Speculative frames never reach it (including GB/GBC Run-Ahead).
-        let console = match platform {
-            Platform::Gb => 4, Platform::Gba => 5, Platform::Gbc => 6,
-            Platform::Nes => 7, Platform::Snes => 3, Platform::Md => 1,
-        };
+        let console = platform.system().retroachievements;
         // Second-instance Run-Ahead boots its copy from these, solo only.
         let runahead_secondary_spec = linked_boot.is_none().then(|| crate::runahead_secondary::Spec {
             core_file: core_file.to_path_buf(),
@@ -1025,7 +1024,8 @@ impl GameSession {
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
             full_pad: matches!(platform, Platform::Snes | Platform::Md),
-            second_player: !platform.handheld(), port2: 0, layouts: [None, None],
+            // The Game Gear has no second pad: its link cable is another console.
+            second_player: !platform.handheld() && platform != Platform::Gg, port2: 0, layouts: [None, None],
             blending: None, slot_blending: crate::frame_blend::Mode::Off,
             runahead_video: Vec::new(), runahead_size: (0, 0), runahead_state: Vec::new(),
             // bsnes shows the frame before an unserialize on the first run

@@ -12,12 +12,17 @@ pub enum Platform {
     Snes,
     /// Mega Drive and Genesis.
     Md,
+    /// Master System and Mark III.
+    Sms,
+    /// Game Gear.
+    Gg,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 6] = [
+    pub const ALL: [Platform; 8] = [
         Platform::Gba, Platform::Gb, Platform::Gbc,
         Platform::Nes, Platform::Snes, Platform::Md,
+        Platform::Sms, Platform::Gg,
     ];
 
     pub fn name(self) -> &'static str {

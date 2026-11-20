@@ -411,7 +411,7 @@ internal object RomLibrary {
      * convention most handheld setups follow). Their folders can hold
      * thousands of files, and listing them through SAF is most of a scan's
      * time. Our own systems' folders (gb, gbc, gba, sgb, nes, famicom, snes,
-     * sfc, snesna, megadrive, megadrivejp, genesis) and any folder with an
+     * sfc, snesna, megadrive, megadrivejp, genesis, mastersystem, gamegear) and any folder with an
      * unknown name are still searched, so custom layouts keep working.
      */
     internal val OTHER_SYSTEM_DIRECTORIES = setOf(
@@ -423,8 +423,8 @@ internal object RomLibrary {
         "cps", "cps1", "cps2", "cps3", "crvision", "daphne", "desktop", "doom", "dos",
         "dragon32", "dreamcast", "easyrpg", "electron", "emulators", "epic", "fba", "fbneo",
         "fds", "flash", "fm7", "fmtowns", "fpinball", "gamate", "gameandwatch", "gamecom",
-        "gamegear", "gc", "gmaster", "gx4000", "intellivision", "j2me", "kodi", "laserdisc",
-        "lcdgames", "lowresnx", "lutro", "macintosh", "mame", "mame-advmame", "mastersystem",
+        "gc", "gmaster", "gx4000", "intellivision", "j2me", "kodi", "laserdisc",
+        "lcdgames", "lowresnx", "lutro", "macintosh", "mame", "mame-advmame",
         "megacd", "megacdjp", "megaduck", "mess", "model2", "model3", "moto", "msx", "msx1",
         "msx2", "msxturbor", "mugen", "multivision", "n3ds", "n64", "n64dd", "naomi",
         "naomi2", "naomigd", "nds", "neogeo", "neogeocd", "neogeocdjp", "ngage", "ngp",

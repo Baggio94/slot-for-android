@@ -95,7 +95,8 @@ fn android_names_each_core_folder_as_retroarch_does() {
 
 #[test]
 fn label_harvester_uses_the_same_screenscraper_ids() {
-    let line = HARVEST_PY.lines().find(|l| l.starts_with("SS_SYSTEM = {")).expect("SS_SYSTEM");
+    let start = HARVEST_PY.find("SS_SYSTEM = {").expect("SS_SYSTEM");
+    let line = &HARVEST_PY[start..start + HARVEST_PY[start..].find('}').expect("SS_SYSTEM's end")];
     for system in &SYSTEMS {
         let entry = format!("'{}': {}", system.dir, system.screenscraper);
         assert!(line.contains(&entry), "harvest.py SS_SYSTEM lacks {entry}");
@@ -165,7 +166,7 @@ fn the_six_systems_keep_what_they_had_before_the_table() {
         (Snes, "Super Nintendo", "SNES", &["sfc", "smc"], (256, 224), false, [Core::Snes9x, Core::Bsnes]),
         (Md, "Mega Drive", "MD", &["md", "gen", "smd", "bin"], (320, 224), false, [Core::GenesisPlusGx, Core::Picodrive]),
     ];
-    assert_eq!(Platform::ALL, before.map(|b| b.0));
+    assert_eq!(Platform::ALL[..6], before.map(|b| b.0));
     for (p, name, dir, ext, picture, handheld, cores) in before {
         assert_eq!((p.name(), p.dir_name(), p.extensions(), p.picture(), p.handheld()),
             (name, dir, ext, picture, handheld), "{p:?}");
@@ -177,8 +178,8 @@ fn the_six_systems_keep_what_they_had_before_the_table() {
     std::fs::create_dir_all(dir.join("Config")).unwrap();
     std::fs::write(dir.join(slot_store::DEFAULT_CORE_FILE),
         "gba=gpsp\ngb=gambatte\ngbc=gambatte\nnes=nestopia\nsnes=bsnes\nmd=picodrive\n").unwrap();
-    for p in Platform::ALL {
-        assert_eq!(slot_store::default_core(&dir, p), Core::alternate_for(p), "{p:?}");
+    for p in &Platform::ALL[..6] {
+        assert_eq!(slot_store::default_core(&dir, *p), Core::alternate_for(*p), "{p:?}");
     }
     let _ = std::fs::remove_dir_all(dir);
 }

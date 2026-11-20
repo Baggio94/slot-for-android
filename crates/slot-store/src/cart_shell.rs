@@ -88,12 +88,12 @@ impl Outline {
             | Outline::MegaDriveCodemasters
             | Outline::MegaDriveVr
             | Outline::MegaDriveSk => Some(Platform::Md),
+            Outline::MasterSystem => Some(Platform::Sms),
+            Outline::GameGear => Some(Platform::Gg),
             // No system of slot.'s plays them yet.
             Outline::NeoGeoPocket
             | Outline::WonderSwan
             | Outline::WonderSwanColor
-            | Outline::GameGear
-            | Outline::MasterSystem
             | Outline::Lynx
             | Outline::PokemonMini => None,
         }

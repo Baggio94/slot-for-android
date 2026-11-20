@@ -12,15 +12,19 @@ use crate::art;
 use crate::wallpaper_scale::{self, Crop};
 
 /// The shelves' keys, in wallpaper::SHELF_KEYS's order.
-pub const MOSAIC_KEYS: [&str; 9] =
-    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "Recents", "Favorites", "GBAV"];
+pub const MOSAIC_KEYS: [&str; 11] =
+    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "Recents", "Favorites", "GBAV"];
 
-const MASKS: [&[u8]; 9] = [
+const MASKS: [&[u8]; 11] = [
     include_bytes!("../../../assets/wallpapers/GBA.png"),
     include_bytes!("../../../assets/wallpapers/GB.png"),
     include_bytes!("../../../assets/wallpapers/GBC.png"),
     include_bytes!("../../../assets/wallpapers/NES.png"),
     include_bytes!("../../../assets/wallpapers/SNES.png"),
+    include_bytes!("../../../assets/wallpapers/MD.png"),
+    // Master System and Game Gear share the Mega Drive's Sega drawings
+    // until they get their own.
+    include_bytes!("../../../assets/wallpapers/MD.png"),
     include_bytes!("../../../assets/wallpapers/MD.png"),
     include_bytes!("../../../assets/wallpapers/Recents.png"),
     include_bytes!("../../../assets/wallpapers/Favorites.png"),
@@ -33,7 +37,7 @@ pub enum MosaicTheme { Original, Light, Dark, Oled }
 
 /// Ground, then line, for Original, Light, Dark and OLED, read off Siham's
 /// PNGs (each is exactly ground + mask x (line - ground)).
-const COLOURS: [[[[u8; 3]; 2]; 4]; 9] = [
+const COLOURS: [[[[u8; 3]; 2]; 4]; 11] = [
     // GBA
     [[[196, 198, 228], [145, 147, 182]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [67, 67, 73]], [[0, 0, 0], [50, 50, 56]]],
     // GB
@@ -46,6 +50,10 @@ const COLOURS: [[[[u8; 3]; 2]; 4]; 9] = [
     [[[205, 211, 222], [152, 161, 178]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
     // MD
     [[[88, 90, 96], [134, 140, 152]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
+    // SMS: the Master System's black and red.
+    [[[96, 66, 70], [148, 106, 110]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
+    // GG: the Game Gear's dark grey and blue.
+    [[[70, 76, 96], [114, 124, 152]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
     // Recents
     [[[211, 216, 223], [155, 164, 177]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // Favorites

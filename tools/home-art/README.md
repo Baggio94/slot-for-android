@@ -1,12 +1,13 @@
 # Cart art
 
 slot. for Android's own cart label set, for every system it plays: Game Boy, Game Boy Color,
-Game Boy Advance, NES, Super Nintendo and Mega Drive. It is built ahead of time from
+Game Boy Advance, NES, Super Nintendo and Mega Drive, and from 3.0 Neo Geo Pocket (Color),
+WonderSwan (Color), Game Gear, Master System, Lynx and Pokémon mini (`--platform 3.0`). It is built ahead of time from
 ScreenScraper, the way slot.'s art set (art.slot-cfw.fyi) is, and published to an R2 bucket.
 
 - `harvest.py` asks ScreenScraper about every dump in libretro's No-Intro and rom hack dats,
   keeps the label scans and front renders the app can pick (pixel for pixel) and one clear logo,
-  and writes one index per platform (`GB.json` ... `MD.json`), mapping CRC32 to
+  and writes one index per platform (`GB.json` ... `POKEMINI.json`), mapping CRC32 to
   `[type, region, file]`. Files live under
   `files/`, named by SHA-1, so revisions of one game share them. It paces itself to the account's
   quota and resumes where it stopped.

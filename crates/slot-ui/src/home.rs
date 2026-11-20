@@ -31,13 +31,13 @@ impl HomeMould {
             | HomeMould::MegaDriveCodemasters
             | HomeMould::MegaDriveVr
             | HomeMould::MegaDriveSk => Platform::Md,
+            HomeMould::MasterSystem => Platform::Sms,
+            HomeMould::GameGear => Platform::Gg,
             // The 3.0 systems' test carts ride on the Mega Drive's platform
             // (3.0.0-cartes1): no core of theirs is ever asked for.
             HomeMould::NeoGeoPocket
             | HomeMould::WonderSwan
             | HomeMould::WonderSwanColor
-            | HomeMould::GameGear
-            | HomeMould::MasterSystem
             | HomeMould::Lynx
             | HomeMould::PokemonMini => Platform::Md,
         }
@@ -48,7 +48,6 @@ impl HomeMould {
     pub fn preview_cores(self) -> Option<[Core; 2]> {
         match self {
             HomeMould::NeoGeoPocket => Some([Core::Neopop, Core::Race]),
-            HomeMould::GameGear | HomeMould::MasterSystem => Some([Core::GenesisPlusGx, Core::Gearsystem]),
             HomeMould::Lynx => Some([Core::Handy, Core::BeetleLynx]),
             _ => None,
         }
@@ -60,6 +59,8 @@ impl HomeMould {
             Platform::Nes => Some(HomeMould::Nes),
             Platform::Snes => Some(HomeMould::Snes),
             Platform::Md => Some(HomeMould::MegaDrive),
+            Platform::Sms => Some(HomeMould::MasterSystem),
+            Platform::Gg => Some(HomeMould::GameGear),
             Platform::Gba | Platform::Gb | Platform::Gbc => None,
         }
     }
@@ -223,6 +224,8 @@ pub fn home_shell(platform: Platform, stem: &str, region: &str, maker: &str) -> 
         Platform::Nes => HomeSystem::Nes,
         Platform::Snes => HomeSystem::Snes,
         Platform::Md => HomeSystem::Md,
+        Platform::Sms => HomeSystem::MasterSystem,
+        Platform::Gg => HomeSystem::GameGear,
         Platform::Gba | Platform::Gb | Platform::Gbc => return None,
     };
     let (mould, colour, glitter) = home_pick(system, stem, region, maker);

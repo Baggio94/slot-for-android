@@ -16,6 +16,8 @@ internal object Systems {
     const val NES = "NES"
     const val SNES = "SNES"
     const val MD = "MD"
+    const val SMS = "SMS"
+    const val GG = "GG"
 
     /** One system slot. plays: a row of slot_store::SYSTEMS, field for field
      *  and in the same order (the native tests read these rows and compare,
@@ -45,6 +47,8 @@ internal object Systems {
         SystemRow(SNES, listOf("sfc", "smc"), listOf("snes", "sfc", "snesna"), listOf("snes", "sfam"), 3, 4, listOf("snes9x", "bsnes"), home = true),
         // .bin is shared with other systems: only a SEGA header makes it a Mega Drive cart.
         SystemRow(MD, listOf("md", "gen", "smd", "bin"), listOf("megadrive", "genesis", "megadrivejp"), listOf("genesis", "megadrive", "genesis-slash-megadrive", "sega-mega-drive"), 1, 1, listOf("genesis_plus_gx", "picodrive"), home = true),
+        SystemRow(SMS, listOf("sms"), listOf("mastersystem"), listOf("sms"), 11, 2, listOf("genesis_plus_gx", "gearsystem"), home = true),
+        SystemRow(GG, listOf("gg"), listOf("gamegear"), listOf("gamegear"), 15, 21, listOf("genesis_plus_gx", "gearsystem"), home = true),
     )
 
     /** Every shelf key, in the native side's order. */
@@ -89,6 +93,7 @@ internal object Systems {
         "bsnes" to "bsnes",
         "genesis_plus_gx" to "Genesis Plus GX",
         "picodrive" to "PicoDrive",
+        "gearsystem" to "Gearsystem",
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()

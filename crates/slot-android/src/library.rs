@@ -146,7 +146,7 @@ fn auto_shell(entry: &RomEntry, platform: Platform) -> Option<ShellChoice> {
     match platform {
         Platform::Gba => None,
         // The region's mould, a publisher's, and the game's colour.
-        Platform::Nes | Platform::Snes | Platform::Md => slot_ui::home_shell(
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg => slot_ui::home_shell(
             platform, entry.title.trim(), &entry.home_region, &entry.home_maker),
         Platform::Gb | Platform::Gbc => {
             // Cart Studio and the shelf must resolve the same automatic
@@ -222,7 +222,7 @@ pub fn chosen_shell(platform: Platform, auto: Option<ShellChoice>, chosen: Optio
             // A Studio colour on a home cart keeps the automatic mould
             // unless it names one of that system's own.
             if let Some(auto) = auto.filter(|_| {
-                matches!(platform, Platform::Nes | Platform::Snes | Platform::Md)
+                !platform.handheld()
                     && chosen.outline.platform() != Some(platform)
             }) {
                 chosen.outline = auto.outline;
@@ -427,7 +427,7 @@ mod tests {
             entry("NES", "nes"), entry("SNES", "snes"), entry("MD", "md"),
         ]);
         assert_eq!(grouped.len(), slot_store::Platform::ALL.len());
-        assert!(grouped.iter().all(|shelf| shelf.len() == 1));
+        assert!(grouped[..6].iter().all(|shelf| shelf.len() == 1));
         let sources: Vec<&[Cart]> = grouped.iter().map(|shelf| shelf.as_slice()).collect();
         let recent = crate::recents::carts(&[
             "content://roms/nes".into(), "content://roms/snes".into(),
@@ -443,7 +443,7 @@ mod tests {
         assert!(favorites.iter().any(|c| c.platform == Platform::Nes));
         assert!(favorites.iter().any(|c| c.platform == Platform::Snes));
         assert!(favorites.iter().any(|c| c.platform == Platform::Md));
-        assert!(grouped.iter().all(|shelf| shelf.len() == 1),
+        assert!(grouped[..6].iter().all(|shelf| shelf.len() == 1),
             "special-rack materialization must not overwrite a system shelf");
     }
 

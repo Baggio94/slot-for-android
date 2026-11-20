@@ -578,7 +578,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 157] = [
+const MENU_TEXT: [&str; 159] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -740,14 +740,17 @@ const MENU_TEXT: [&str; 157] = [
     "Halo",                               // 154
     "Tint",                               // 155, Darken in 2.5's first betas
     "3.0 Test Shelf",                     // 156, Interface (3.0.0-cartes1)
+    "Master System",                      // 157, Systems (3.0)
+    "Game Gear",                          // 158
 ];
 
 /// Settings > Systems, top to bottom.
-const SYSTEM_ORDER: [Platform; 6] = [
+const SYSTEM_ORDER: [Platform; 8] = [
     Platform::Gba, Platform::Gbc, Platform::Gb,
     Platform::Nes, Platform::Snes, Platform::Md,
+    Platform::Sms, Platform::Gg,
 ];
-const SYSTEM_TITLES: [usize; 6] = [91, 92, 93, 121, 122, 123];
+const SYSTEM_TITLES: [usize; 8] = [91, 92, 93, 121, 122, 123, 157, 158];
 // Special racks follow the supported platforms, not hard-coded GB-era indices.
 const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
@@ -759,7 +762,9 @@ const TEST_RACK: usize = Platform::ALL.len() + 4;
 fn test_carts() -> Vec<slot_store::Cart> {
     use slot_store::{ShellChoice, ShellFinish};
     use slot_ui::HomeMould as M;
-    let carts: [(M, &str, [u8; 3], ShellFinish); 17] = [
+    // The Master System and the Game Gear left it in 3.0.0-sms1: their
+    // carts are real ones now.
+    let carts: [(M, &str, [u8; 3], ShellFinish); 12] = [
         (M::NeoGeoPocket, "Metal Slug - 1st Mission", [18, 18, 18], ShellFinish::Solid),
         (M::NeoGeoPocket, "SNK vs. Capcom - Match of the Millennium", [18, 18, 18], ShellFinish::Solid),
         (M::NeoGeoPocket, "Sonic the Hedgehog Pocket Adventure", [18, 18, 18], ShellFinish::Clear),
@@ -767,11 +772,6 @@ fn test_carts() -> Vec<slot_store::Cart> {
         (M::WonderSwan, "Klonoa - Moonlight Museum", [30, 30, 30], ShellFinish::Solid),
         (M::WonderSwanColor, "Final Fantasy", [145, 148, 148], ShellFinish::Clear),
         (M::WonderSwanColor, "Judgement Silversword", [145, 148, 148], ShellFinish::Clear),
-        (M::GameGear, "Sonic the Hedgehog", [20, 20, 20], ShellFinish::Solid),
-        (M::GameGear, "Shining Force - The Sword of Hajya", [20, 20, 20], ShellFinish::Solid),
-        (M::GameGear, "Columns", [20, 20, 20], ShellFinish::Clear),
-        (M::MasterSystem, "Alex Kidd in Miracle World", [18, 18, 18], ShellFinish::Solid),
-        (M::MasterSystem, "Phantasy Star", [18, 18, 18], ShellFinish::Solid),
         (M::Lynx, "California Games", [25, 25, 25], ShellFinish::Solid),
         (M::Lynx, "Chip's Challenge", [25, 25, 25], ShellFinish::Solid),
         (M::PokemonMini, "Pokemon Party mini", [128, 150, 178], ShellFinish::Clear),
@@ -791,7 +791,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 157] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -832,6 +832,8 @@ const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                // Halo and Tint; 0 % shows OFF (5).
                                "10%", "20%", "30%", "40%", "50%",
                                "60%", "70%", "80%", "90%", "100%",
+                               // 135: the Master System and Game Gear's second core.
+                               "Gearsystem",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -1051,6 +1053,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         47 => shader(scoped.shader_nes),
         48 => shader(scoped.shader_snes),
         49 => shader(scoped.shader_md),
+        crate::settings::SHADER_SMS_KEY => shader(scoped.shader_sms),
+        crate::settings::SHADER_GG_KEY => shader(scoped.shader_gg),
         22 => if scoped.shader_gba.includes_gba_color() { 42 }
             else if scoped.colour_correction_gba {4}else{5},
         23 => if scoped.colour_correction_gbc {4}else{5},
@@ -1066,13 +1070,13 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         27 => bezel_value(scoped.bezel_gb),
         28 => if settings.time_format==crate::settings::TimeFormat::TwelveHour
             {35}else{36},
-        29..=31 | 41..=43 => core_value(Engine::core_key_platform(key)
+        29..=31 | 41..=43 | crate::settings::CORE_SMS_KEY | crate::settings::CORE_GG_KEY =>
+            core_value(Engine::core_key_platform(key)
             .map_or(Core::Mgba, |platform| cores[platform as usize])),
         // Frame Blending, LCD Effect and Dither Blending: the game's own in
         // game, the system's default in Settings > Systems.
-        60..=65 => {
-            use slot_store::Platform::*;
-            match scoped.blending_for([Gba, Gbc, Gb, Nes, Snes, Md][key - 60]) {
+        60..=65 | crate::settings::BLENDING_SMS_KEY | crate::settings::BLENDING_GG_KEY => {
+            match scoped.blending_for(Settings::blending_platform(key)?) {
                 crate::settings::Blending::Off => 5,
                 crate::settings::Blending::Mix => 96,
                 crate::settings::Blending::Ghosting => 97,
@@ -1187,6 +1191,7 @@ fn dot_matrix_colours(view: &Settings) -> [u32; 4] {
 fn core_value(core: Core) -> usize {
     match core {
         Core::Mgba => 50, Core::Gpsp => 51, Core::Gambatte => 52,
+        Core::Gearsystem => 135,
         other => 70 + other.index() - Core::Fceumm.index(),
     }
 }
@@ -1655,7 +1660,7 @@ struct Engine {
     pak_chip_textures: [slot_gfx::TexId; Core::ALL.len()],
     pak_chip_blank: slot_gfx::TexId,
     /// The NES, Super Nintendo and Mega Drive chips with no core name.
-    home_chip_blanks: [slot_gfx::TexId; 3],
+    home_chip_blanks: [slot_gfx::TexId; 5],
     chip_shadow: slot_gfx::TexId,
     core_legend_faces: [(slot_gfx::TexId, u32); 3],
     /// The same, their words in Light's dark ink: over a light shelf
@@ -2181,7 +2186,7 @@ impl Engine {
         // GB/GBC boards hop their own big pak chip between two footprints.
         let pak_chip_textures = Core::ALL.map(|core| gpu.create_face(&pak_chip_face(Some(core))));
         let pak_chip_blank = gpu.create_face(&pak_chip_face(None));
-        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md]
+        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md, Platform::Sms, Platform::Gg]
             .map(|p| gpu.create_face(&slot_ui::home_chip_face(p, None)));
         let shadow = chip_shadow_face();
         let chip_shadow = gpu.create_face(&shadow);
@@ -6048,6 +6053,8 @@ impl Engine {
             (Platform::Nes,true)=>&[124,90],
             (Platform::Snes|Platform::Md,false)=>&[120,124],
             (Platform::Snes|Platform::Md,true)=>&[120,124,90],
+            // Master System and Game Gear size with L1/R1, as the NES.
+            (Platform::Sms|Platform::Gg,_)=>&[124],
         }
     }
     fn screen_keys(platform: Platform)-> &'static [usize] {
@@ -6068,6 +6075,8 @@ impl Engine {
             (Platform::Nes,true)=>&[47,44],
             (Platform::Snes,true)=>&[SCREEN_SIZE_KEY,48,45],
             (Platform::Md,true)=>&[SCREEN_SIZE_KEY,49,46],
+            (Platform::Sms,_)=>&[crate::settings::SHADER_SMS_KEY],
+            (Platform::Gg,_)=>&[crate::settings::SHADER_GG_KEY],
         }
     }
     // Settings > Systems opens with the system's default core, then its
@@ -6137,6 +6146,8 @@ impl Engine {
             (Platform::Nes|Platform::Snes|Platform::Md,true,_)=>&[118,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,false)=>&[118,120,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,true)=>&[118,120,124,90],
+            (Platform::Sms|Platform::Gg,true,_)=>&[118,124],
+            (Platform::Sms|Platform::Gg,false,_)=>&[118,120,124],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -6164,12 +6175,18 @@ impl Engine {
             (Platform::Md,true,_)=>&[43,49],
             (Platform::Md,false,false)=>&[43,SCREEN_SIZE_KEY,49],
             (Platform::Md,false,true)=>&[43,SCREEN_SIZE_KEY,49,46],
+            (Platform::Sms,true,_)=>&[crate::settings::CORE_SMS_KEY,crate::settings::SHADER_SMS_KEY],
+            (Platform::Sms,false,_)=>&[crate::settings::CORE_SMS_KEY,SCREEN_SIZE_KEY,crate::settings::SHADER_SMS_KEY],
+            (Platform::Gg,true,_)=>&[crate::settings::CORE_GG_KEY,crate::settings::SHADER_GG_KEY],
+            (Platform::Gg,false,_)=>&[crate::settings::CORE_GG_KEY,SCREEN_SIZE_KEY,crate::settings::SHADER_GG_KEY],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
         match key {
             29=>Some(Platform::Gba), 30=>Some(Platform::Gbc), 31=>Some(Platform::Gb),
             41=>Some(Platform::Nes), 42=>Some(Platform::Snes), 43=>Some(Platform::Md),
+            crate::settings::CORE_SMS_KEY=>Some(Platform::Sms),
+            crate::settings::CORE_GG_KEY=>Some(Platform::Gg),
             _=>None,
         }
     }
@@ -8560,6 +8577,8 @@ impl Engine {
                 Platform::Nes => self.home_chip_blanks[0],
                 Platform::Snes => self.home_chip_blanks[1],
                 Platform::Md => self.home_chip_blanks[2],
+                Platform::Sms => self.home_chip_blanks[3],
+                Platform::Gg => self.home_chip_blanks[4],
                 _ => self.pak_chip_blank,
             };
             (&self.pak_chip_textures, blank)

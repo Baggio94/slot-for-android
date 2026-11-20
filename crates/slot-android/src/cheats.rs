@@ -32,6 +32,8 @@ fn pack(platform: Platform) -> &'static [u8] {
         Platform::Nes => include_bytes!("../cheats/nes.cht.z"),
         Platform::Snes => include_bytes!("../cheats/snes.cht.z"),
         Platform::Md => include_bytes!("../cheats/md.cht.z"),
+        Platform::Sms => include_bytes!("../cheats/sms.cht.z"),
+        Platform::Gg => include_bytes!("../cheats/gg.cht.z"),
     }
 }
 

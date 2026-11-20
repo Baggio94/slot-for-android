@@ -588,7 +588,7 @@ fn console_connector_and_role_follow_the_inserted_cart_and_actual_link_state() {
 #[test]
 fn the_3_0_test_shelf_carts_draw_open_and_take_their_own_bars() {
     let carts = test_carts();
-    assert_eq!(carts.len(), 17);
+    assert_eq!(carts.len(), 12);
     let mut families = std::collections::HashSet::new();
     for cart in &carts {
         assert!(slot_ui::is_test_cart(cart), "{}", cart.stem);
@@ -607,6 +607,6 @@ fn the_3_0_test_shelf_carts_draw_open_and_take_their_own_bars() {
             assert_eq!((board.w, board.h), mould.size());
         }
     }
-    assert_eq!(families.len(), 7, "a bar for every 3.0 system");
+    assert_eq!(families.len(), 5, "a bar for every 3.0 system still on the test shelf");
     assert_eq!(TEST_RACK, romm::ROMM_RACK + 1);
 }

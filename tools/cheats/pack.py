@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pack libretro-database's cheat files into slot.'s cheat packs.
 
-    python3 tools/cheats/pack.py <libretro-database checkout> <out dir>
+    python3 tools/cheats/pack.py <libretro-database checkout> <out dir> [system...]
 
 The checkout needs the folders cht/ and metadat/no-intro/ (pinned commit:
 see COMMIT below). For each system it writes <out>/<system>.cht.z, a zlib
@@ -26,6 +26,8 @@ SYSTEMS = {
     "nes": "Nintendo - Nintendo Entertainment System",
     "snes": "Nintendo - Super Nintendo Entertainment System",
     "md": "Sega - Mega Drive - Genesis",
+    "sms": "Sega - Master System - Mark III",
+    "gg": "Sega - Game Gear",
 }
 # Tags naming the cheat device, after the game's own No-Intro name.
 DEVICES = ("Action Replay", "Pro Action Replay", "Game Genie", "GameShark",
@@ -142,9 +144,11 @@ def pack(db, out, system, folder):
 
 def main():
     db, out = sys.argv[1], sys.argv[2]
+    only = sys.argv[3:]
     os.makedirs(out, exist_ok=True)
     for system, folder in SYSTEMS.items():
-        pack(db, out, system, folder)
+        if not only or system in only:
+            pack(db, out, system, folder)
 
 
 if __name__ == "__main__":
