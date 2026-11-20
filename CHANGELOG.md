@@ -2,6 +2,11 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v2.5.1 — 20 November 2026
+
+- ROM scan (#122): bounds raised to 10,000 carts (RomLibrary.MAX_ROMS, library.rs), 30,000 listed files and 5,000 folders; ROM index cache up to 32 MB (shelf, Cart Studio, home labels, RetroAchievements cache). A scan over the bounds adds the carts it found and keeps every earlier one (toast "ROM folder too big: … some games skipped.") instead of leaving a fresh install with an empty shelf. The old index's text is dropped before the new index is built; an OutOfMemoryError during a scan keeps the shelf.
+- Android-drawn pages follow Settings > Controls (#123): Apps, slot.'s dialogs (SlotModalDialog) and the RetroAchievements account read controller keys through SlotKeys.menuCode → controls_ui::menu_key, as the shelf does. With A and B swapped, B on Apps no longer launches the selected app.
+
 ## v2.5.0 — 20 November 2026
 
 - slot. folder (SlotFolder.kt, FolderSync.kt): Library → Choose slot. Folder (INTERNAL STORAGE, SD CARD, NONE); saves, states, labels, Studio, game settings, cheats, custom cheats, wallpapers, settings, controls, favorites, recents and Config/ travel; RomM, RetroAchievements (cache and token), trusted devices, caches and ROMs never do. First copy, A5 window (CANCEL / FOLDER ONLY / MERGE BOTH, this handheld backed up first), A6 (create slot inside), newer-format refusal, old folder offered for deletion. Copies after saves, at pause and on return; a launch waits only for its own game's files; the folder is read again when its card comes back. Conflicts: TWO SAVES at launch (THIS HANDHELD'S / THE FOLDER'S), the other kept in Conflicts/. Deletions kept in deleted.json.

@@ -21,7 +21,7 @@ import java.util.zip.CRC32
 internal object CartStudioCatalog {
     private const val LIBRARY = "rom-library-cache-v1.json"
     private const val CACHE = "cart-studio-crc-cache-v1.json"
-    private const val MAX_LIBRARY_BYTES = 8L * 1024 * 1024
+    private const val MAX_LIBRARY_BYTES = RomLibrary.CACHE_MAX_BYTES.toLong()
     private const val HEAD_BYTES = 0x150
 
     /** GB/GBA, and the NES, Super Nintendo and Mega Drive carts. */
@@ -52,7 +52,7 @@ internal object CartStudioCatalog {
         if (root.optInt("schema") != 1) return emptyList()
         val entries = root.optJSONArray("games") ?: return emptyList()
         val result = ArrayList<Rom>(entries.length())
-        for (i in 0 until entries.length().coerceAtMost(5000)) {
+        for (i in 0 until entries.length().coerceAtMost(RomLibrary.MAX_ROMS)) {
             val row = entries.optJSONObject(i) ?: continue
             val uri = row.optString("uri")
             val platform = row.optString("platform")

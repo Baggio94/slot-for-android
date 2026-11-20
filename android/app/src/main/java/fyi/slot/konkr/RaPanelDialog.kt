@@ -48,7 +48,9 @@ internal class RaPanelDialog(
 
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
             if (closing) return activity.dispatchKeyEvent(event)
-            val keyCode = event.keyCode
+            // Controller keys as the shelf reads them (issue #123).
+            val keyCode = SlotKeys.menuCode(event)
+            if (keyCode == SlotKeys.NONE) return true
             if (keyCode == KeyEvent.KEYCODE_BUTTON_B) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) dismiss()
                 return true

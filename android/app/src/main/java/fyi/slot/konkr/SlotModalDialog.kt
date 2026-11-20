@@ -59,8 +59,10 @@ internal class SlotModalDialog(
 
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
             if (closing) return activity.dispatchKeyEvent(event)
-            // Physical KONKR buttons, never synthetic Mac keyboard mapping.
-            val keyCode = event.keyCode
+            // Controller keys as the shelf reads them (Settings > Controls),
+            // so a swapped A / B works here too (issue #123).
+            val keyCode = SlotKeys.menuCode(event)
+            if (keyCode == SlotKeys.NONE) return true
             when (keyCode) {
                 KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK -> {
                     if (event.action == KeyEvent.ACTION_DOWN &&
@@ -88,7 +90,7 @@ internal class SlotModalDialog(
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (event.action == KeyEvent.ACTION_DOWN &&
                         event.repeatCount == 0 && !busy) {
-                        moveFocus(if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)
+                        moveFocus(if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)
                     }
                     return true
                 }
@@ -97,7 +99,7 @@ internal class SlotModalDialog(
                     if (currentFocus is EditText) return super.dispatchKeyEvent(event)
                     if (event.action == KeyEvent.ACTION_DOWN &&
                         event.repeatCount == 0 && !busy) {
-                        val step = if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                        val step = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
                         val choice = (currentFocus as? TextView)?.let { choices[it] }
                         if (choice != null) choice(step) else moveFocus(step)
                     }

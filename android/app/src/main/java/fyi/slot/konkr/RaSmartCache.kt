@@ -17,8 +17,8 @@ import java.security.MessageDigest
  */
 internal object RaSmartCache {
     private const val SCHEMA = 1
-    private const val MAX_LIBRARY_BYTES = 8 * 1024 * 1024L
-    private const val MAX_ROMS = 5000
+    private const val MAX_LIBRARY_BYTES = RomLibrary.CACHE_MAX_BYTES.toLong()
+    private const val MAX_ROMS = RomLibrary.MAX_ROMS
     private const val MAX_ROM_BYTES = 64L * 1024 * 1024
     private const val INDEX_FILE = "ra-smart-rom-index-v1.json"
 

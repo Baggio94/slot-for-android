@@ -106,7 +106,7 @@ class MainActivity : Activity() {
         private const val STATE_ROOT = "states_root_uri"
         private const val ROM_CACHE_NAME = "rom-library-cache-v1.json"
         private const val ROM_CACHE_SCHEMA = 1
-        private const val ROM_CACHE_MAX_BYTES = 8 * 1024 * 1024
+        private const val ROM_CACHE_MAX_BYTES = RomLibrary.CACHE_MAX_BYTES
         private val BUTTONS = setOf(
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
@@ -265,7 +265,9 @@ class MainActivity : Activity() {
         /** RomM's games, one by one: DOWNLOADING n/m says it already, so no
          *  UPDATING LIBRARY each time, and the label search waits for the
          *  batch's end (it flashed 29 times: Siham 2026-11-16). */
-        val silent: Boolean = false
+        val silent: Boolean = false,
+        /** The ROM folder was over slot.'s bounds: some games were skipped. */
+        val partial: Boolean = false
     )
     private var pendingLibraryIndex: PendingLibraryIndex? = null
     /** The index last handed to the shelf, and when RomM's last one went:
@@ -4357,7 +4359,13 @@ class MainActivity : Activity() {
             }
         }
         // No "0 cartridges ready.": an empty shelf already says so.
-        if (!next.quiet && count > 0) {
+        if (next.partial && !next.silent) {
+            // Even after a quiet scan: the player should know why some
+            // games are missing (issue #122).
+            SlotToast.makeText(this,
+                "ROM folder too big: $count cartridges ready, some games skipped.",
+                Toast.LENGTH_LONG).show()
+        } else if (!next.quiet && count > 0) {
             SlotToast.makeText(this,
                 if (count == 1) "1 cartridge ready." else "$count cartridges ready.",
                 Toast.LENGTH_SHORT).show()
@@ -4402,8 +4410,13 @@ class MainActivity : Activity() {
                 val result = RomLibrary.scan(this, uri, previous, progress)
                 if (scanSerial.get() != serial) return@execute
                 // A bounded/incomplete SAF scan is not evidence that a ROM
-                // was removed. Fail closed, retaining the previous shelf.
-                if (result.truncated) {
+                // was removed: RomLibrary kept every earlier cart. What it
+                // found is added (issue #122: a fresh install with a folder
+                // over the bounds kept its empty shelf); with nothing new,
+                // the shelf stays as it is.
+                val partial = result.truncated
+                if (partial && (result.count == 0 ||
+                        (previous != null && RomLibrary.sameIndex(previous, result.json)))) {
                     SlotLog.w(TAG, "Incomplete SAF ROM listing: retaining existing index")
                     val gone = romFolderGone(uri)
                     runOnUiThread {
@@ -4414,7 +4427,7 @@ class MainActivity : Activity() {
                             nativeSetShelfStatus(shelfNone)
                         }
                         if (!quiet) SlotToast.makeText(this,
-                            "ROM folder partly read. Carts kept.",
+                            "ROM folder too big: some games skipped.",
                             Toast.LENGTH_LONG).show()
                     }
                     return@execute
@@ -4441,8 +4454,22 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
                     pendingLibraryIndex = PendingLibraryIndex(
-                        uri, result.json, prepared, serial, quiet)
+                        uri, result.json, prepared, serial, quiet, partial = partial)
                     publishPendingLibraryIfIdle()
+                }
+            } catch (error: OutOfMemoryError) {
+                // Last resort (issue #122's bigger bound): the scan's copies
+                // are dropped with its frames; the shelf stays as it was
+                // rather than slot. closing (RomM did, 2026-11-19).
+                SlotLog.e(TAG, "ROM scan ran out of memory; previous shelf retained", error)
+                runOnUiThread {
+                    if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
+                    if (shown) {
+                        libraryRefreshIndicator.hide()
+                        nativeSetShelfStatus(if (shelfCarts == 0) shelfReadError else shelfNone)
+                    }
+                    SlotToast.makeText(this, "ROM folder too big to read.",
+                        Toast.LENGTH_LONG).show()
                 }
             } catch (error: Exception) {
                 SlotLog.e(TAG, "SAF ROM scan failed; previous cache retained", error)
