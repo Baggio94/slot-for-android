@@ -17,7 +17,7 @@ android {
         // identity so adb install -r preserves existing data and SAF grants.
         // 1.2.3: Frame Pacing NATIVE / RESPONSIVE.
         versionCode = 561
-        versionName = "2.5.1-beta1"
+        versionName = "2.5.1"
         ndk { abiFilters += listOf("arm64-v8a") }
         // slot.'s ScreenScraper developer credentials for the NES, Super
         // Nintendo and Mega Drive labels, from GitHub secrets at build time
