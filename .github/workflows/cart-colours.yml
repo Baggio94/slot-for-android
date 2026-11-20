@@ -1,9 +1,9 @@
 name: cart-colours
 
+# The NES, SNES and Mega Drive passes are done (2026-11-10): by hand only, so that work on
+# the other tools of this branch no longer starts a ScreenScraper pass.
 on:
-  push:
-    branches: [tools/cart-colours]
-    paths: [tools/cart-colours/**, .github/workflows/cart-colours.yml]
+  workflow_dispatch:
 
 concurrency:
   group: cart-colours
