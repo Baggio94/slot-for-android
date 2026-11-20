@@ -1103,6 +1103,15 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePadKey(
         .push_back(Input::PadKey { device, code: key, pressed: pressed != 0, stick: stick != 0 });
 }
 
+/// A controller key as slot.'s menus read it (Settings > Controls), for
+/// Android's own pages: Apps, slot.'s dialogs, the RetroAchievements account.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_SlotKeys_nativeMenuKey(
+    _env: *mut c_void, _class: *mut c_void, device: i32, key: i32,
+) -> i32 {
+    super::controls_ui::menu_key(device, key)
+}
+
 /// Every controller connected now, as JSON: [{"id","name","fp"}].
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeControllers(

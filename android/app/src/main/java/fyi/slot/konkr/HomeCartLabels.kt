@@ -36,7 +36,7 @@ internal object HomeCartLabels {
     internal const val REAL_DIR = "home-real-labels"
     private const val REAL_DONE = "home-real-labels/done.json"
     private const val API = "https://api.screenscraper.fr/api2/jeuInfos.php"
-    private const val MAX_LIBRARY_BYTES = 8L * 1024 * 1024
+    private const val MAX_LIBRARY_BYTES = RomLibrary.CACHE_MAX_BYTES.toLong()
     private const val MAX_JSON = 2 * 1024 * 1024
     private const val MAX_IMAGE = 6 * 1024 * 1024
     // One request at a time, but enough carts per pass that a library fills
@@ -231,7 +231,7 @@ internal object HomeCartLabels {
         if (!file.isFile || file.length() !in 1..MAX_LIBRARY_BYTES) return emptyList()
         val root = try { JSONObject(file.readText(Charsets.UTF_8)) } catch (_: Exception) { return emptyList() }
         val rows = root.optJSONArray("games") ?: return emptyList()
-        return (0 until rows.length().coerceAtMost(5000)).mapNotNull { i ->
+        return (0 until rows.length().coerceAtMost(RomLibrary.MAX_ROMS)).mapNotNull { i ->
             val row = rows.optJSONObject(i) ?: return@mapNotNull null
             val platform = row.optString("platform")
             val uri = row.optString("uri")

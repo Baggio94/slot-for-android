@@ -62,7 +62,7 @@ internal object RaDiagnostics {
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
-    private fun readJson(file: File, limit: Long = 8L * 1024 * 1024): JSONObject? =
+    private fun readJson(file: File, limit: Long = RomLibrary.CACHE_MAX_BYTES.toLong()): JSONObject? =
         if (!file.isFile || file.length() !in 1L..limit) null
         else runCatching { JSONObject(file.readText(Charsets.UTF_8)) }.getOrNull()
 
@@ -113,7 +113,7 @@ internal object RaDiagnostics {
 
         val hashesByUri = HashMap<String, String>()
         if (indexed != null) {
-            for (i in 0 until indexed.length().coerceAtMost(5000)) {
+            for (i in 0 until indexed.length().coerceAtMost(RomLibrary.MAX_ROMS)) {
                 val item = indexed.optJSONObject(i) ?: continue
                 val hash = item.optString("md5")
                 if (hash.length == 32 && hash.all { it in '0'..'9' || it in 'a'..'f' }) {
@@ -127,7 +127,7 @@ internal object RaDiagnostics {
         val cachedByConsole = HashMap(Systems.TABLE.associate { it.retroAchievements to 0 })
         val discovered = HashMap<String, Int>()
         if (games != null) {
-            for (i in 0 until games.length().coerceAtMost(5000)) {
+            for (i in 0 until games.length().coerceAtMost(RomLibrary.MAX_ROMS)) {
                 val item = games.optJSONObject(i) ?: continue
                 val console = Systems.retroAchievementsId(item.optString("platform")) ?: continue
                 totalByConsole[console] = totalByConsole.getValue(console) + 1

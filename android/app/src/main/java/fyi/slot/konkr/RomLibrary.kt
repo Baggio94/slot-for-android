@@ -15,10 +15,20 @@ import java.util.Locale
  * No commercial games, BIOS files, or writable access are requested or copied.
  */
 internal object RomLibrary {
-    private const val MAX_ROMS = 5000
-    /** Files listed before reading: room for ZIPs and .bins that are not carts. */
-    private const val MAX_CANDIDATES = MAX_ROMS * 2
-    private const val MAX_DIRECTORIES = 1500
+    /**
+     * The most carts a shelf holds (library.rs keeps the same bound). 5,000
+     * left a 6,000-game folder with an empty shelf (issue #122). Each cart
+     * costs about 1 KB of Java heap per copy of the index, and a scan holds
+     * a few copies at once: 10,000 stays far below what ran the RG Rotate
+     * out of memory with RomM's pages (2026-11-19).
+     */
+    internal const val MAX_ROMS = 10_000
+    /** Files listed before reading: room for ZIPs and .bins that are not
+     *  carts (other systems' ZIPs in folders with names slot. doesn't know). */
+    private const val MAX_CANDIDATES = MAX_ROMS * 3
+    private const val MAX_DIRECTORIES = 5000
+    /** The saved index of MAX_ROMS carts, with long non-Latin names. */
+    internal const val CACHE_MAX_BYTES = 32 * 1024 * 1024
     private const val MAX_DEPTH = 12
 
     internal data class ScanResult(val json: String, val count: Int, val truncated: Boolean)
@@ -74,29 +84,7 @@ internal object RomLibrary {
      */
     fun scan(context: Context, treeUri: Uri, oldGamesJson: String? = null,
              progress: ((done: Int, total: Int) -> Unit)? = null): ScanResult {
-        val previous = HashMap<String, JSONObject>()
-        val cachedJson = oldGamesJson ?: try {
-            val cache = java.io.File(context.filesDir, "rom-library-cache-v1.json")
-            if (cache.length() > 8L * 1024 * 1024) null
-            else JSONObject(cache.readText(Charsets.UTF_8)).let { meta ->
-                if (meta.optInt("schema") == 1 &&
-                    meta.optString("root") == treeUri.toString())
-                    meta.optJSONArray("games")?.toString()
-                else null
-            }
-        } catch (_: Exception) { null }
-        if (cachedJson != null) {
-            try {
-                val cached = JSONArray(cachedJson)
-                for (index in 0 until cached.length().coerceAtMost(MAX_ROMS)) {
-                    val entry = cached.optJSONObject(index) ?: continue
-                    val uri = entry.optString("uri")
-                    if (uri.startsWith("content://")) previous[uri] = entry
-                }
-            } catch (_: Exception) {
-                // Bad cache affects speed only; discovery still reads headers.
-            }
-        }
+        val previous = previousEntries(context, treeUri, oldGamesJson)
         var headersRead = 0
         var headersReused = 0
         val resolver = context.contentResolver
@@ -179,9 +167,55 @@ internal object RomLibrary {
             games.put(read.game)
         }
         progress?.invoke(found.size, found.size)
+        // A partial read never removes a cart: the carts of the last index
+        // this scan didn't reach stay, after the ones it found (issue #122:
+        // a fresh install used to keep its empty shelf instead).
+        var kept = 0
+        if (truncated) {
+            val listed = HashSet<String>(games.length() * 2)
+            for (i in 0 until games.length()) listed.add(games.getJSONObject(i).optString("uri"))
+            for ((uri, old) in previous) {
+                if (games.length() >= MAX_ROMS) break
+                if (uri in listed) continue
+                games.put(old)
+                kept++
+            }
+        }
         android.util.Log.i("SlotKonkr", "ROM scan: $directories folders, ${games.length()} carts, " +
-            "headers read=$headersRead, reused=$headersReused")
+            "headers read=$headersRead, reused=$headersReused" +
+            (if (truncated) ", partial (limit reached; $kept earlier carts kept)" else ""))
         return ScanResult(games.toString(), games.length(), truncated)
+    }
+
+    /** The last index's carts by URI, in its order. In its own function so
+     *  the index's text is gone before the scan builds the new one (memory:
+     *  issue #122 raised the bound). A bad cache only costs speed. */
+    private fun previousEntries(context: Context, treeUri: Uri,
+                                oldGamesJson: String?): LinkedHashMap<String, JSONObject> {
+        val previous = LinkedHashMap<String, JSONObject>()
+        val cachedJson = oldGamesJson ?: try {
+            val cache = java.io.File(context.filesDir, "rom-library-cache-v1.json")
+            if (cache.length() > CACHE_MAX_BYTES) null
+            else JSONObject(cache.readText(Charsets.UTF_8)).let { meta ->
+                if (meta.optInt("schema") == 1 &&
+                    meta.optString("root") == treeUri.toString())
+                    meta.optJSONArray("games")?.toString()
+                else null
+            }
+        } catch (_: Exception) { null }
+        if (cachedJson != null) {
+            try {
+                val cached = JSONArray(cachedJson)
+                for (index in 0 until cached.length().coerceAtMost(MAX_ROMS)) {
+                    val entry = cached.optJSONObject(index) ?: continue
+                    val uri = entry.optString("uri")
+                    if (uri.startsWith("content://")) previous[uri] = entry
+                }
+            } catch (_: Exception) {
+                // Bad cache affects speed only; discovery still reads headers.
+            }
+        }
+        return previous
     }
 
     /** One cart as the index keeps it, and whether its header came from

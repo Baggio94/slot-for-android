@@ -8938,6 +8938,7 @@ impl Engine {
         for event in events {
             self.handle(event);
         }
+        self.publish_menu_keys();
         self.poll_multiplayer();
         if self.picker.is_some_and(|p| p.finished(self.born.elapsed().as_millis() as u64)) {
             self.picker = None;
