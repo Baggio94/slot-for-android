@@ -341,10 +341,7 @@ fn swatch_tile(colour: [u8; 3], clear: bool, glitter: bool) -> SmallFace {
 }
 
 pub(super) fn platform_key(platform: Platform) -> &'static str {
-    match platform {
-        Platform::Gba => "GBA", Platform::Gb => "GB", Platform::Gbc => "GBC",
-        Platform::Nes => "NES", Platform::Snes => "SNES", Platform::Md => "MD",
-    }
+    platform.dir_name()
 }
 
 /// The systems whose labels a cart may borrow: its own, the Game Boy and

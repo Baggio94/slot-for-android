@@ -399,7 +399,7 @@ internal object RomLibrary {
         return lower in IGNORED_DIRECTORIES || lower in OTHER_SYSTEM_DIRECTORIES
     }
 
-    private val IGNORED_DIRECTORIES = setOf(
+    internal val IGNORED_DIRECTORIES = setOf(
         "bios", "saves", "savestates", "states", "screenshots", "videos",
         "themes", "media", "images", "artwork", "covers", "system volume information",
         // ES-DE's scraped media, gamelists and its own folder: never ROMs.
@@ -414,7 +414,7 @@ internal object RomLibrary {
      * sfc, snesna, megadrive, megadrivejp, genesis) and any folder with an
      * unknown name are still searched, so custom layouts keep working.
      */
-    private val OTHER_SYSTEM_DIRECTORIES = setOf(
+    internal val OTHER_SYSTEM_DIRECTORIES = setOf(
         "3do", "adam", "ags", "amiga", "amiga1200", "amiga600", "amigacd32", "amstradcpc",
         "android", "apple2", "apple2gs", "arcade", "arcadia", "archimedes", "arduboy",
         "astrocde", "atari2600", "atari5200", "atari7800", "atari800", "atarijaguar",

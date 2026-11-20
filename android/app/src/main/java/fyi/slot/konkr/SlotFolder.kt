@@ -74,7 +74,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         /** The folder's deletions (FolderSync.Tomb), for every handheld. */
         private const val TOMBS = "deleted.json"
         /** The systems' folders made in CustomCheats/ for the player's files. */
-        private val CHEAT_SYSTEMS = listOf("GBA", "GB", "GBC", "NES", "SNES", "MD")
+        private val CHEAT_SYSTEMS = Systems.PLATFORMS
         private const val CHEAT_README = "CustomCheats/README.txt"
         private val CHEAT_HELP = ("Your own cheats, in RetroArch's .cht format: put each file in its " +
             "system's folder, named exactly like the game's ROM with .cht at the end, for example " +

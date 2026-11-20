@@ -17,30 +17,66 @@ internal object Systems {
     const val SNES = "SNES"
     const val MD = "MD"
 
-    private val NES_EXT = setOf("nes", "fc", "unf", "unif")
-    private val SNES_EXT = setOf("sfc", "smc")
-    // .bin is shared with other systems: only a SEGA header makes it a Mega Drive cart.
-    private val MD_EXT = setOf("md", "gen", "smd", "bin")
+    /** One system slot. plays: a row of slot_store::SYSTEMS, field for field
+     *  and in the same order (the native tests read these rows and compare,
+     *  so keep each one on a single line). */
+    class SystemRow(
+        /** The shelf key, as the native side parses it. */
+        val platform: String,
+        /** Cartridge extensions, lower case, without the .zip container. */
+        val extensions: List<String>,
+        /** ES-DE ROM folder names: an existing one is used, else the first is made. */
+        val folders: List<String>,
+        /** RomM's platform slugs (IGDB's). */
+        val romm: List<String>,
+        val retroAchievements: Int,
+        val screenScraper: Int,
+        /** libretro keys of the board's two cores, the default first. */
+        val cores: List<String>,
+        /** A home console: its own header, labels and shell. */
+        val home: Boolean,
+    )
+
+    val TABLE: List<SystemRow> = listOf(
+        SystemRow(GBA, listOf("gba"), listOf("gba"), listOf("gba"), 5, 12, listOf("mgba", "gpsp"), home = false),
+        SystemRow(GB, listOf("gb", "gbc"), listOf("gb"), listOf("gb"), 4, 9, listOf("mgba", "gambatte"), home = false),
+        SystemRow(GBC, listOf("gb", "gbc"), listOf("gbc"), listOf("gbc"), 6, 10, listOf("mgba", "gambatte"), home = false),
+        SystemRow(NES, listOf("nes", "fc", "unf", "unif"), listOf("nes", "famicom"), listOf("nes", "famicom"), 7, 3, listOf("fceumm", "nestopia"), home = true),
+        SystemRow(SNES, listOf("sfc", "smc"), listOf("snes", "sfc", "snesna"), listOf("snes", "sfam"), 3, 4, listOf("snes9x", "bsnes"), home = true),
+        // .bin is shared with other systems: only a SEGA header makes it a Mega Drive cart.
+        SystemRow(MD, listOf("md", "gen", "smd", "bin"), listOf("megadrive", "genesis", "megadrivejp"), listOf("genesis", "megadrive", "genesis-slash-megadrive", "sega-mega-drive"), 1, 1, listOf("genesis_plus_gx", "picodrive"), home = true),
+    )
+
+    /** Every shelf key, in the native side's order. */
+    val PLATFORMS: List<String> = TABLE.map { it.platform }
+
+    fun row(platform: String?): SystemRow? = TABLE.firstOrNull { it.platform == platform }
 
     /** Every cartridge extension, without the .zip container. */
-    val ROM_EXTENSIONS: Set<String> = setOf("gba", "gb", "gbc") + NES_EXT + SNES_EXT + MD_EXT
+    val ROM_EXTENSIONS: Set<String> = TABLE.flatMap { it.extensions }.toSet()
 
-    val HOME_PLATFORMS = setOf(NES, SNES, MD)
+    val HOME_PLATFORMS: Set<String> = TABLE.filter { it.home }.map { it.platform }.toSet()
 
     private fun lower(ext: String) = ext.lowercase(Locale.ROOT)
 
     /** The shelf for a cartridge extension. A .gb may still be a GBC cart. */
-    fun platformFor(ext: String): String? = when (lower(ext)) {
-        "gba" -> GBA
+    fun platformFor(ext: String): String? = when (val e = lower(ext)) {
         "gb" -> GB
         "gbc" -> GBC
-        in NES_EXT -> NES
-        in SNES_EXT -> SNES
-        in MD_EXT -> MD
-        else -> null
+        else -> TABLE.firstOrNull { e in it.extensions }?.platform
     }
 
     fun isHome(ext: String) = platformFor(ext) in HOME_PLATFORMS
+
+    /** The system of a RomM platform slug, or null when slot. doesn't play it. */
+    fun platformForRommSlug(slug: String): String? =
+        lower(slug).let { s -> TABLE.firstOrNull { s in it.romm }?.platform }
+
+    /** RetroAchievements' console id of a shelf. */
+    fun retroAchievementsId(platform: String?): Int? = row(platform)?.retroAchievements
+
+    /** ScreenScraper's system id of a shelf. */
+    fun screenScraperId(platform: String?): Int? = row(platform)?.screenScraper
 
     /** libretro key -> RetroArch core name, also its saves/states folder. */
     private val FOLDERS = linkedMapOf(
@@ -62,14 +98,7 @@ internal object Systems {
         FOLDERS.entries.firstOrNull { it.value == folder }?.key ?: folder.lowercase(Locale.ROOT)
 
     /** The two cores of each shelf: the default first. */
-    private fun coresFor(platform: String?): List<String> = when (platform) {
-        GBA -> listOf("mgba", "gpsp")
-        GB, GBC -> listOf("mgba", "gambatte")
-        NES -> listOf("fceumm", "nestopia")
-        SNES -> listOf("snes9x", "bsnes")
-        MD -> listOf("genesis_plus_gx", "picodrive")
-        else -> emptyList()
-    }
+    private fun coresFor(platform: String?): List<String> = row(platform)?.cores ?: emptyList()
 
     /** The folder of the core that runs this cart: the one the native side
      *  picked when it runs this extension's system, else the system default. */

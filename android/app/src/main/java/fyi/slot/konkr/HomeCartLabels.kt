@@ -60,12 +60,8 @@ internal object HomeCartLabels {
     internal data class Media(val type: String, val region: String, val url: String)
 
     /** ScreenScraper's system ids. */
-    internal fun systemId(platform: String): Int? = when (platform) {
-        Systems.NES -> 3
-        Systems.SNES -> 4
-        Systems.MD -> 1
-        else -> null
-    }
+    internal fun systemId(platform: String): Int? =
+        Systems.row(platform)?.takeIf { it.home }?.screenScraper
 
     private fun credentials(): Triple<String, String, String>? {
         fun read(value: String) = try {

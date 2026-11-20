@@ -61,29 +61,14 @@ internal object Romm {
                val regions: String = "", val revision: String = "")
 
     /** RomM's platform slugs (IGDB's) for the six systems slot. plays. */
-    internal fun platformOf(slug: String): String? = when (slug.lowercase(Locale.ROOT)) {
-        "gb" -> Systems.GB
-        "gbc" -> Systems.GBC
-        "gba" -> Systems.GBA
-        "nes", "famicom" -> Systems.NES
-        "snes", "sfam" -> Systems.SNES
-        "genesis", "megadrive", "genesis-slash-megadrive", "sega-mega-drive" -> Systems.MD
-        else -> null
-    }
+    internal fun platformOf(slug: String): String? = Systems.platformForRommSlug(slug)
 
     /** ROM folder names for a RomM system, ES-DE's first: an existing one is
      *  used, else the first is created. */
     internal fun folderNames(slug: String, platform: String): List<String> = when (slug.lowercase(Locale.ROOT)) {
         "famicom" -> listOf("famicom", "nes")
         "sfam" -> listOf("sfc", "snes")
-        else -> when (platform) {
-            Systems.GB -> listOf("gb")
-            Systems.GBC -> listOf("gbc")
-            Systems.GBA -> listOf("gba")
-            Systems.NES -> listOf("nes", "famicom")
-            Systems.SNES -> listOf("snes", "sfc", "snesna")
-            else -> listOf("megadrive", "genesis", "megadrivejp")
-        }
+        else -> (Systems.row(platform) ?: Systems.row(Systems.MD))!!.folders
     }
 
     /** "192.168.1.20:8080" → http://192.168.1.20:8080, "romm.example.com" →

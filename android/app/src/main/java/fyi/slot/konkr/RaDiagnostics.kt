@@ -122,22 +122,14 @@ internal object RaDiagnostics {
             }
         }
 
-        val totalByConsole = hashMapOf(4 to 0, 5 to 0, 6 to 0, 7 to 0, 3 to 0, 1 to 0)
-        val indexedByConsole = hashMapOf(4 to 0, 5 to 0, 6 to 0, 7 to 0, 3 to 0, 1 to 0)
-        val cachedByConsole = hashMapOf(4 to 0, 5 to 0, 6 to 0, 7 to 0, 3 to 0, 1 to 0)
+        val totalByConsole = HashMap(Systems.TABLE.associate { it.retroAchievements to 0 })
+        val indexedByConsole = HashMap(Systems.TABLE.associate { it.retroAchievements to 0 })
+        val cachedByConsole = HashMap(Systems.TABLE.associate { it.retroAchievements to 0 })
         val discovered = HashMap<String, Int>()
         if (games != null) {
             for (i in 0 until games.length().coerceAtMost(5000)) {
                 val item = games.optJSONObject(i) ?: continue
-                val console = when (item.optString("platform")) {
-                    "GB" -> 4
-                    "GBA" -> 5
-                    "GBC" -> 6
-                    Systems.NES -> 7
-                    Systems.SNES -> 3
-                    Systems.MD -> 1
-                    else -> continue
-                }
+                val console = Systems.retroAchievementsId(item.optString("platform")) ?: continue
                 totalByConsole[console] = totalByConsole.getValue(console) + 1
                 val hash = hashesByUri[item.optString("uri")] ?: continue
                 if (discovered.putIfAbsent(hash, console) == null) {

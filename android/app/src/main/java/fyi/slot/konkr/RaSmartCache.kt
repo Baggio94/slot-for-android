@@ -138,15 +138,7 @@ internal object RaSmartCache {
             // Suspend SAF fingerprinting without polling once the screen is off.
             awaitForeground()
             val item = entries.optJSONObject(i) ?: continue
-            val console = when (item.optString("platform")) {
-                "GB" -> 4
-                "GBA" -> 5
-                "GBC" -> 6
-                Systems.NES -> 7
-                Systems.SNES -> 3
-                Systems.MD -> 1
-                else -> continue
-            }
+            val console = Systems.retroAchievementsId(item.optString("platform")) ?: continue
             val uriText = item.optString("uri")
             if (!uriText.startsWith("content://")) continue
             val size = item.optLong("size", -1)

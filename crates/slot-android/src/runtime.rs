@@ -10646,6 +10646,21 @@ mod settings_value_tests {
     const PANELS: [(u32, u32); 7] = [(960, 640), (1240, 1080), (1920, 1080),
         (720, 720), (1024, 768), (1280, 720), (1920, 1152)];
 
+    #[test]
+    fn every_system_has_its_settings_page_on_every_screen() {
+        // The screens slot. ships on (systems_table_tests::SCREENS).
+        assert_eq!(PANELS, crate::systems_table_tests::SCREENS.map(|(_, panel)| panel));
+        let mut order = SYSTEM_ORDER.to_vec();
+        order.sort_by_key(|p| *p as usize);
+        assert_eq!(order, Platform::ALL, "Settings > Systems lists every system once");
+        for platform in Platform::ALL {
+            for panel in PANELS {
+                assert!(!Engine::system_keys_on(platform, panel).is_empty(), "{platform:?} on {panel:?}");
+                assert!(!Engine::screen_keys_on(platform, panel).is_empty(), "{platform:?} game menu on {panel:?}");
+            }
+        }
+    }
+
     fn menu_keys() -> Vec<(String, usize, Platform)> {
         let mut keys = Vec::new();
         for platform in Platform::ALL {

@@ -82,4 +82,51 @@ class SystemsTest {
         "4  ".toByteArray().copyInto(rom, 0x1f0)
         assertEquals("U", Systems.homeHeader("md", rom, "ps.md").region)
     }
+
+    @Test fun everySystemHasOneCompleteRow() {
+        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD"), Systems.PLATFORMS)
+        for (row in Systems.TABLE) {
+            val p = row.platform
+            assertTrue(p, row.extensions.isNotEmpty() && row.folders.isNotEmpty() && row.romm.isNotEmpty())
+            assertEquals(p, 2, row.cores.size)
+            for (core in row.cores) assertEquals(p, core, Systems.keyForFolder(Systems.folderForKey(core)))
+            for (ext in row.extensions) assertTrue("$p .$ext", ext in Systems.ROM_EXTENSIONS)
+            for (slug in row.romm) assertEquals("$p $slug", p, Romm.platformOf(slug))
+            assertEquals(p, row.home, p in Systems.HOME_PLATFORMS)
+            assertTrue(p, row.retroAchievements > 0 && row.screenScraper > 0)
+        }
+        assertEquals(Systems.TABLE.size, Systems.TABLE.map { it.retroAchievements }.toSet().size)
+        assertEquals(Systems.TABLE.size, Systems.TABLE.map { it.screenScraper }.toSet().size)
+    }
+
+    @Test fun ourOwnFoldersAreNeverSkippedByTheScan() {
+        // RomLibrary skips ES-DE folders of systems slot. does not run
+        // (gamegear, ngp, wonderswan...): a system joining the table must
+        // leave that list, or its carts are never found.
+        for (row in Systems.TABLE) for (folder in row.folders) {
+            assertFalse("${row.platform} $folder", folder in RomLibrary.OTHER_SYSTEM_DIRECTORIES)
+            assertFalse("${row.platform} $folder", folder in RomLibrary.IGNORED_DIRECTORIES)
+        }
+    }
+
+    @Test fun theTableKeepsTheSixSystemsAsTheyWere() {
+        assertEquals(setOf("gba", "gb", "gbc", "nes", "fc", "unf", "unif", "sfc", "smc", "md", "gen", "smd", "bin"),
+            Systems.ROM_EXTENSIONS)
+        assertEquals(setOf("NES", "SNES", "MD"), Systems.HOME_PLATFORMS)
+        assertEquals("GBA", Systems.platformFor("GBA"))
+        assertEquals("GBC", Systems.platformFor("gbc"))
+        assertEquals("MD", Systems.platformFor("bin"))
+        assertEquals(mapOf("GB" to 4, "GBA" to 5, "GBC" to 6, "NES" to 7, "SNES" to 3, "MD" to 1),
+            Systems.PLATFORMS.associateWith { Systems.retroAchievementsId(it) })
+        assertEquals(mapOf("GB" to null, "GBA" to null, "GBC" to null, "NES" to 3, "SNES" to 4, "MD" to 1),
+            Systems.PLATFORMS.associateWith { HomeCartLabels.systemId(it) })
+        assertEquals("MD", Romm.platformOf("Sega-Mega-Drive"))
+        assertEquals(null, Romm.platformOf("gamegear"))
+        assertEquals(listOf("famicom", "nes"), Romm.folderNames("famicom", "NES"))
+        assertEquals(listOf("sfc", "snes"), Romm.folderNames("sfam", "SNES"))
+        assertEquals(listOf("nes", "famicom"), Romm.folderNames("nes", "NES"))
+        assertEquals(listOf("snes", "sfc", "snesna"), Romm.folderNames("snes", "SNES"))
+        assertEquals(listOf("megadrive", "genesis", "megadrivejp"), Romm.folderNames("genesis", "MD"))
+        assertEquals(listOf("gb"), Romm.folderNames("gb", "GB"))
+    }
 }

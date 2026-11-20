@@ -91,6 +91,8 @@ mod cheats;
 mod wallpaper;
 // Use Slot's original per-game Actual/Stretch geometry and video_mode.ini.
 mod video_mode;
+#[cfg(test)]
+mod systems_table_tests;
 mod thumb;
 mod retroarch_state;
 // Reuse the upstream 20 MiB XOR/LZ4 rewind ring without forking its algorithm.

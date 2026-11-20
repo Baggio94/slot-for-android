@@ -29,8 +29,7 @@ internal object SlotArtSet {
     private const val MAX_INDEX = 16 * 1024 * 1024
     private const val MAX_FILE = 6 * 1024 * 1024
     private val filePath = Regex("files/[0-9a-f]{2}/[0-9a-f]{40}\\.(png|webp|jpg)")
-    private val platforms = setOf(Systems.GB, Systems.GBC, Systems.GBA,
-        Systems.NES, Systems.SNES, Systems.MD)
+    private val platforms = Systems.PLATFORMS.toSet()
 
     class Entry(val type: String, val region: String, val file: String) {
         val url: String get() = BASE + file

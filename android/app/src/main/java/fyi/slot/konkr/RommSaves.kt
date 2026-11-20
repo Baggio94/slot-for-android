@@ -99,7 +99,7 @@ internal object RommSaves {
         val name = GameKeys.name(target.romUri)
         if (!name.contains('/') || name.startsWith("content:")) return null
         return name.substringBefore('/').uppercase(Locale.ROOT)
-            .takeIf { it in setOf(Systems.GBA, Systems.GB, Systems.GBC, Systems.NES, Systems.SNES, Systems.MD) }
+            .takeIf { it in Systems.PLATFORMS }
     }
 
     /** What to do when both the server and the handheld changed. */
