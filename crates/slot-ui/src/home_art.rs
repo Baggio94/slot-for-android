@@ -49,6 +49,12 @@ pub enum HomeMould {
     MasterSystem,
     Lynx,
     PokemonMini,
+    /// The Japanese Master System's (Mark III) taller cart.
+    MasterSystemJp,
+    /// Sega's My Card, a card in the Master System's card slot: it never opens.
+    MasterSystemCard,
+    /// Codemasters' taller Game Gear cart.
+    GameGearCodemasters,
 }
 
 /// A mould's art and where things sit on it, in its logical pixels.
@@ -127,7 +133,7 @@ macro_rules! art {
 }
 
 // Printed by nes-megadrive/export_app.py.
-static ARTS: [MouldArt; 20] = [
+static ARTS: [MouldArt; 23] = [
     art!("nes", 352, (126, 0, 145, 239),
         [(40.6, 234.6, 101.0, 46.5), (170.4, 234.6, 101.0, 46.5)],
         (166.3, 103.6, 121.6, 39.5), [126, 126, 128], None),
@@ -214,11 +220,31 @@ static ARTS: [MouldArt; 20] = [
         Some(include_bytes!("../../../assets/home/pokemini_decal.png")),
         None,
         Some(include_bytes!("../../../assets/home/pokemini_opacity.png")), true),
+    // Per-game 3.0 moulds from ScreenScraper's support-2D (validated by
+    // Siham 2026-11-20), printed by couleurs-cartouches/3.0/pipeline/export3.py.
+    art!("sms_jp", 360, (29, 2, 254, 209),
+        [(31.1, 204.6, 89.8, 62.3), (136.5, 204.6, 89.8, 62.3)],
+        (179.4, 155.2, 99.5, 34.4), [18, 18, 18],
+        None,
+        None,
+        None, false),
+    art!("sms_card", 500, (18, 21, 279, 290),
+        [(0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)],
+        (0.0, 0.0, 0.0, 0.0), [236, 236, 232],
+        Some(include_bytes!("../../../assets/home/sms_card_decal.png")),
+        None,
+        None, true),
+    art!("gg_codemasters", 367, (41, 17, 231, 295),
+        [(46.4, 172.2, 102.8, 71.3), (161.8, 172.2, 102.8, 71.3)],
+        (149.2, 76.5, 107.0, 44.5), [20, 20, 20],
+        None,
+        None,
+        None, false),
 ];
 
 
 impl HomeMould {
-    pub const ALL: [HomeMould; 20] = [
+    pub const ALL: [HomeMould; 23] = [
         HomeMould::Nes,
         HomeMould::Famicom,
         HomeMould::FamicomNamco,
@@ -239,6 +265,9 @@ impl HomeMould {
         HomeMould::MasterSystem,
         HomeMould::Lynx,
         HomeMould::PokemonMini,
+        HomeMould::MasterSystemJp,
+        HomeMould::MasterSystemCard,
+        HomeMould::GameGearCodemasters,
     ];
 
     pub fn index(self) -> usize {
@@ -268,8 +297,10 @@ impl HomeMould {
             | HomeMould::MegaDriveSk => HomeSystem::Md,
             HomeMould::NeoGeoPocket => HomeSystem::NeoGeoPocket,
             HomeMould::WonderSwan | HomeMould::WonderSwanColor => HomeSystem::WonderSwan,
-            HomeMould::GameGear => HomeSystem::GameGear,
-            HomeMould::MasterSystem => HomeSystem::MasterSystem,
+            HomeMould::GameGear | HomeMould::GameGearCodemasters => HomeSystem::GameGear,
+            HomeMould::MasterSystem | HomeMould::MasterSystemJp | HomeMould::MasterSystemCard => {
+                HomeSystem::MasterSystem
+            }
             HomeMould::Lynx => HomeSystem::Lynx,
             HomeMould::PokemonMini => HomeSystem::PokemonMini,
         }
@@ -319,6 +350,9 @@ impl HomeMould {
             HomeMould::MasterSystem => "mastersystem",
             HomeMould::Lynx => "lynx",
             HomeMould::PokemonMini => "pokemini",
+            HomeMould::MasterSystemJp => "mastersystem-jp",
+            HomeMould::MasterSystemCard => "mastersystem-card",
+            HomeMould::GameGearCodemasters => "gamegear-codemasters",
         }
     }
 
@@ -498,6 +532,30 @@ pub fn home_pick(system: HomeSystem, stem: &str, region: &str, maker: &str) -> (
                 .into_iter()
                 .find(|m| own_shell(*m, &key, usa).is_some())
                 .unwrap_or(HomeMould::MegaDrive)
+            };
+            let (colour, glitter) = own_shell(mould, &key, usa).unwrap_or((mould.art().colour, false));
+            (mould, colour, glitter)
+        }
+        // Japanese Master System carts are the Mark III's taller shape, as
+        // are a few Korean ones; Bomb Jack came on a Sega My Card
+        // (ScreenScraper's support-2D, Siham 2026-11-20).
+        HomeSystem::MasterSystem => {
+            let mould = if own_shell(HomeMould::MasterSystemCard, &key, usa).is_some() {
+                HomeMould::MasterSystemCard
+            } else if japan_only || own_shell(HomeMould::MasterSystemJp, &key, usa).is_some() {
+                HomeMould::MasterSystemJp
+            } else {
+                HomeMould::MasterSystem
+            };
+            let (colour, glitter) = own_shell(mould, &key, usa).unwrap_or((mould.art().colour, false));
+            (mould, colour, glitter)
+        }
+        // Codemasters' own taller cart, and three red Sega carts.
+        HomeSystem::GameGear => {
+            let mould = if own_shell(HomeMould::GameGearCodemasters, &key, usa).is_some() {
+                HomeMould::GameGearCodemasters
+            } else {
+                HomeMould::GameGear
             };
             let (colour, glitter) = own_shell(mould, &key, usa).unwrap_or((mould.art().colour, false));
             (mould, colour, glitter)

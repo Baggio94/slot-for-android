@@ -34,10 +34,14 @@ pub enum Outline {
     MasterSystem,
     Lynx,
     PokemonMini,
+    // Per-game 3.0 shells (2026-11-20).
+    MasterSystemJp,
+    MasterSystemCard,
+    GameGearCodemasters,
 }
 
 impl Outline {
-    pub const NAMES: [(Outline, &'static str); 23] = [
+    pub const NAMES: [(Outline, &'static str); 26] = [
         (Outline::Auto, "auto"),
         (Outline::Notched, "notched"),
         (Outline::Rounded, "rounded"),
@@ -61,6 +65,9 @@ impl Outline {
         (Outline::MasterSystem, "mastersystem"),
         (Outline::Lynx, "lynx"),
         (Outline::PokemonMini, "pokemini"),
+        (Outline::MasterSystemJp, "mastersystem-jp"),
+        (Outline::MasterSystemCard, "mastersystem-card"),
+        (Outline::GameGearCodemasters, "gamegear-codemasters"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -95,7 +102,10 @@ impl Outline {
             | Outline::WonderSwan
             | Outline::WonderSwanColor
             | Outline::Lynx
-            | Outline::PokemonMini => None,
+            | Outline::PokemonMini
+            | Outline::MasterSystemJp
+            | Outline::MasterSystemCard
+            | Outline::GameGearCodemasters => None,
         }
     }
 }

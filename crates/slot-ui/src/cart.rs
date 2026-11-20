@@ -197,12 +197,18 @@ pub fn cart_box_for(cart: &Cart) -> (u32, u32) {
 /// EA's tall Mega Drive carts are drawn 20% smaller than that (Siham
 /// 2026-11-04): at full size they ran off the top of the screen. The other
 /// tall Mega Drive moulds (Accolade, Codemasters, Virtua Racing) are held
-/// to the height the EA cart is shown at.
+/// to the height the EA cart is shown at, the tall 3.0 moulds to the Game
+/// Gear cart's.
 pub fn shelf_grow(body: Body) -> f32 {
     match body {
         Body::Home(m) if m.system() == home::HomeSystem::Md => {
             let tallest = HomeMould::MegaDriveEa.size().1 as f32 * 1.2 * 0.8;
             seat_grow(body).min(tallest / m.size().1 as f32)
+        }
+        // The Mark III's cart, the My Card and Codemasters' Game Gear cart
+        // are held to the Game Gear cart's height, so they stay on screen.
+        Body::Home(m @ (HomeMould::MasterSystemJp | HomeMould::MasterSystemCard | HomeMould::GameGearCodemasters)) => {
+            (HomeMould::GameGear.size().1 as f32 / m.size().1 as f32).min(1.0)
         }
         _ => seat_grow(body),
     }

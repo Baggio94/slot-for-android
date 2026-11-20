@@ -325,8 +325,8 @@ pub fn home_slot_family(cart: &slot_store::Cart) -> Option<usize> {
         M::NeoGeoPocket => 7,
         M::WonderSwan => 8,
         M::WonderSwanColor => 9,
-        M::GameGear => 10,
-        M::MasterSystem => 11,
+        M::GameGear | M::GameGearCodemasters => 10,
+        M::MasterSystem | M::MasterSystemJp | M::MasterSystemCard => 11,
         M::Lynx => 12,
         M::PokemonMini => 13,
     })

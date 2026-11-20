@@ -39,7 +39,10 @@ impl HomeMould {
             | HomeMould::WonderSwan
             | HomeMould::WonderSwanColor
             | HomeMould::Lynx
-            | HomeMould::PokemonMini => Platform::Md,
+            | HomeMould::PokemonMini
+            | HomeMould::MasterSystemJp
+            | HomeMould::MasterSystemCard
+            | HomeMould::GameGearCodemasters => Platform::Md,
         }
     }
 
@@ -48,6 +51,10 @@ impl HomeMould {
     pub fn preview_cores(self) -> Option<[Core; 2]> {
         match self {
             HomeMould::NeoGeoPocket => Some([Core::Neopop, Core::Race]),
+            HomeMould::GameGear
+            | HomeMould::GameGearCodemasters
+            | HomeMould::MasterSystem
+            | HomeMould::MasterSystemJp => Some([Core::GenesisPlusGx, Core::Gearsystem]),
             HomeMould::Lynx => Some([Core::Handy, Core::BeetleLynx]),
             _ => None,
         }
@@ -87,6 +94,9 @@ impl HomeMould {
             HomeMould::MasterSystem => Outline::MasterSystem,
             HomeMould::Lynx => Outline::Lynx,
             HomeMould::PokemonMini => Outline::PokemonMini,
+            HomeMould::MasterSystemJp => Outline::MasterSystemJp,
+            HomeMould::MasterSystemCard => Outline::MasterSystemCard,
+            HomeMould::GameGearCodemasters => Outline::GameGearCodemasters,
         }
     }
 
@@ -376,5 +386,25 @@ mod tests {
         assert_eq!(board_cores(&test_cart(HomeMould::GameGear)), [Core::GenesisPlusGx, Core::Gearsystem]);
         assert!(!cart_opens(&test_cart(HomeMould::WonderSwanColor)));
         assert!(cart_opens(&test_cart(HomeMould::Lynx)));
+        assert!(!cart_opens(&test_cart(HomeMould::MasterSystemCard)));
+        assert!(cart_opens(&test_cart(HomeMould::GameGearCodemasters)));
+        assert_eq!(board_cores(&test_cart(HomeMould::MasterSystemJp)), [Core::GenesisPlusGx, Core::Gearsystem]);
+    }
+
+    #[test]
+    fn master_system_and_game_gear_carts_take_their_own_shells() {
+        use crate::home_art::{home_pick, HomeSystem as S};
+        let pick = |s, stem| {
+            let (m, c, _) = home_pick(s, stem, "", "");
+            (m, c)
+        };
+        assert_eq!(pick(S::MasterSystem, "Hokuto no Ken (Japan)").0, HomeMould::MasterSystemJp);
+        assert_eq!(pick(S::MasterSystem, "Super Boy 4 (Korea) (En)").0, HomeMould::MasterSystemJp);
+        assert_eq!(pick(S::MasterSystem, "Wonder Boy (USA, Europe, Brazil)").0, HomeMould::MasterSystem);
+        assert_eq!(pick(S::MasterSystem, "Great Golf (USA, Europe)").0, HomeMould::MasterSystem);
+        assert_eq!(pick(S::MasterSystem, "Bomb Jack (World)"), (HomeMould::MasterSystemCard, [0xec, 0xec, 0xe8]));
+        assert_eq!(pick(S::GameGear, "Micro Machines (USA, Europe)").0, HomeMould::GameGearCodemasters);
+        assert_eq!(pick(S::GameGear, "Waternet (World)"), (HomeMould::GameGear, [0x96, 0, 0]));
+        assert_eq!(pick(S::GameGear, "Sonic the Hedgehog (Japan)"), (HomeMould::GameGear, [20, 20, 20]));
     }
 }
