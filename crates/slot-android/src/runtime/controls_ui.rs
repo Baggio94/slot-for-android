@@ -25,8 +25,45 @@ pub(super) struct ControlsView {
     hints: Vec<(slot_gfx::TexId, u32)>,
 }
 
+/// What Android's own pages (Apps, slot.'s dialogs, the RetroAchievements
+/// account) need to read a controller key as the shelf does: Settings >
+/// Controls and the controllers connected. The engine keeps it current;
+/// `menu_key` reads it from Android's UI thread (issue #123).
+pub(crate) struct MenuKeys {
+    rev: u64,
+    devices: Vec<(i32, String)>,
+    controls: crate::controls::Controls,
+}
+
+pub(crate) static MENU_KEYS: Mutex<Option<MenuKeys>> = Mutex::new(None);
+
+/// The slot. button (its Android code) a controller key is in the menus, or
+/// -1 when Settings > Controls gives that key no button. Unchanged before
+/// the engine has published its controls.
+pub(crate) fn menu_key(device: i32, code: i32) -> i32 {
+    let keys = MENU_KEYS.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(keys) = keys.as_ref() else { return code };
+    let fp = keys.devices.iter().find(|(id, _)| *id == device)
+        .map_or(BUILTIN, |(_, fp)| fp.as_str());
+    keys.controls.slot_code(fp, code, false).unwrap_or(-1)
+}
+
 impl Engine {
     fn controls_now(&self) -> u64 { self.born.elapsed().as_millis() as u64 }
+
+    /// Hand `menu_key` the controls when they or the controllers changed.
+    pub(super) fn publish_menu_keys(&self) {
+        let mut keys = MENU_KEYS.lock().unwrap_or_else(|e| e.into_inner());
+        let same = keys.as_ref().is_some_and(|k| k.rev == self.controls_rev
+            && k.devices.len() == self.pad_devices.len()
+            && k.devices.iter().zip(&self.pad_devices).all(|((id, fp), d)| *id == d.id && *fp == d.fp));
+        if same { return; }
+        *keys = Some(MenuKeys {
+            rev: self.controls_rev,
+            devices: self.pad_devices.iter().map(|d| (d.id, d.fp.clone())).collect(),
+            controls: self.controls.clone(),
+        });
+    }
 
     pub(super) fn persist_controls(&mut self) {
         self.controls_rev = self.controls_rev.wrapping_add(1);
@@ -1035,4 +1072,30 @@ pub(super) fn has_touchscreen() -> bool {
 /// touchscreen handheld, Reset to Default.
 fn controls_rows() -> usize {
     if has_touchscreen() { 5 } else { 4 }
+}
+
+#[cfg(test)]
+mod menu_key_tests {
+    use super::{menu_key, MenuKeys, MENU_KEYS};
+    use crate::controls::{Controls, Pad, BUILTIN};
+
+    /// Issue #123: with A and B swapped in Settings > Controls, Android's
+    /// pages read the keys as the shelf does.
+    #[test]
+    fn android_pages_read_swapped_a_and_b_as_the_shelf_does() {
+        let mut controls = Controls::default();
+        let mut pad = Pad::default();
+        assert!(pad.map(4, 97)); // slot. A on the key Android calls B
+        controls.pads.insert(BUILTIN.to_owned(), pad);
+        *MENU_KEYS.lock().unwrap() = Some(MenuKeys {
+            rev: 1, devices: vec![(7, BUILTIN.to_owned())], controls,
+        });
+        assert_eq!(menu_key(7, 97), 96, "B key is slot.'s A");
+        assert_eq!(menu_key(7, 96), 97, "A key is slot.'s B");
+        assert_eq!(menu_key(7, 108), 108, "START unchanged");
+        // A controller slot. doesn't list yet plays as the handheld.
+        assert_eq!(menu_key(99, 97), 96);
+        *MENU_KEYS.lock().unwrap() = None;
+        assert_eq!(menu_key(7, 97), 97, "before the engine publishes: as Android says");
+    }
 }

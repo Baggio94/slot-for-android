@@ -536,8 +536,10 @@ class AppsActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Only physical controller codes in the production application.
-        val mapped = event.keyCode
+        // Controller keys as the shelf reads them (Settings > Controls): with
+        // A and B swapped, B launched the selected app (issue #123).
+        val mapped = SlotKeys.menuCode(event)
+        if (mapped == SlotKeys.NONE) return true
         when (mapped) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {

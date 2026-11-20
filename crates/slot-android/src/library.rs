@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-const MAX_ROMS: usize = 5000;
+/// RomLibrary.MAX_ROMS: the most carts a shelf holds (issue #122).
+const MAX_ROMS: usize = 10_000;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct RomEntry {
