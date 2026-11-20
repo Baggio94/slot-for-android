@@ -31,7 +31,7 @@ on:
         default: true
 
 permissions:
-  contents: read
+  contents: write  # work branch only: trial sets go to a data branch to be looked at
 
 concurrency:
   group: cart-art
@@ -113,3 +113,13 @@ jobs:
             art
             !art/.state
           if-no-files-found: warn
+      # Work branch only (dropped before main): the trial set on a temporary data branch.
+      - name: Trial set to a data branch
+        if: always() && env.PUBLISH != 'true'
+        run: |
+          cd art
+          rm -rf .state
+          git init -q -b tools/home-art-3.0-data
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com add -A
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com commit -q -m "Trial label set for the 3.0 systems"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" tools/home-art-3.0-data
