@@ -66,6 +66,22 @@ const GROW_S: f32 = 0.12;
 /// Columns and rows of the grid for the screen's width, and its cells.
 struct Grid { x: f32, cols: usize, rows: usize, cell_w: f32, cell_h: f32 }
 
+/// Where a cell's name goes and how much room is free under it, the cart
+/// keeping its size (Siham 2026-11-19): the cart and name as drawn.
+fn name_place(g: &Grid, cy: f32, shown: &Cart) -> (f32, f32) {
+    let mut name_y = cy + g.cell_h - NAME_H - 4.0;
+    let (room_w, room_h) = (g.cell_w - 12.0, name_y - NAME_GAP - (cy + 4.0));
+    let (bw, bh) = slot_ui::cart_box_for(shown);
+    let fit = (room_w / bw as f32).min(room_h / bh as f32);
+    // A cart its width limits sits in the middle of its cell, name and
+    // all, rather than on the bottom (Siham 2026-11-09).
+    name_y -= ((room_h - bh as f32 * fit) / 2.0).max(0.0);
+    (name_y, cy + g.cell_h - name_y)
+}
+
+/// A game's name under its cart, at the RomM page's size.
+const LIB_NAME_SCALE: f32 = 0.42;
+
 /// SELECT's size steps for a system on the screen's width, as (rows,
 /// columns), the first always two big carts (Siham 2026-11-10). Carts taller
 /// than wide (GB, GBC, NES) take a second row only in the last step, where
@@ -397,14 +413,34 @@ impl Engine {
         }
         texts.push((unsaved_note(library.drafts.len()), true));
         if let Some(count) = label_count(&library.labelled) { texts.push((count, false)); }
-        for (rack, i) in self.cart_library_cells() {
-            texts.push((slot_ui::label_text(&self.shelves[rack].carts[i]), true));
+        {
+            let g = library.grid();
+            let first = library.first_row * g.cols;
+            for v in first..(first + g.cols * (g.rows + 1)).min(library.view.len()) {
+                let (rack, index) = library.view[v];
+                let cart = &self.shelves[rack].carts[index];
+                let shown = library.drafts.get(cart.rom.to_string_lossy().as_ref()).map_or(cart, |d| &d.cart);
+                let cy = GRID_TOP + ((v - first) / g.cols) as f32 * g.cell_h;
+                for line in self.library_name_lines(&g, cy, shown, cart, v == library.cursor).0 {
+                    texts.push((line, true));
+                }
+            }
         }
         for (text, lit) in texts { self.controls_face(&text, lit); }
         for (key, label) in [("B", "BACK"), ("L2 R2", "LETTER"), ("SELECT", "SIZE"), ("Y", "SAVE"), ("A", "EDIT"),
                              ("B", "DISCARD"), ("A", "KEEP EDITING"), ("L1", ""), ("R1", "")] {
             self.controls_hint(key, label);
         }
+    }
+
+    /// A cell's name: two lines at most where the cart leaves room for
+    /// them, else one; the cart never gives way (Siham 2026-11-19).
+    fn library_name_lines(&self, g: &Grid, cy: f32, shown: &Cart, cart: &Cart, chosen: bool) -> (Vec<String>, f32) {
+        let (_, free) = name_place(g, cy, shown);
+        let line_h = self.controls_faces.get(&Self::face_key("CART STUDIO", true))
+            .map(|&(_, _, h)| super::romm::caption_line_h(h, LIB_NAME_SCALE));
+        let most = line_h.map_or(1, |line_h| if free - 4.0 >= 2.0 * line_h { 2 } else { 1 });
+        super::romm::caption_lines(&slot_ui::label_text(cart), g.cell_w - 14.0, LIB_NAME_SCALE, most, chosen)
     }
 
     pub(super) fn draw_cart_library(&self, out: &mut Vec<Draw>) {
@@ -444,13 +480,10 @@ impl Engine {
             let shown = draft.map_or(cart, |d| &d.cart);
             let (col, row) = ((i - first) % g.cols, (i - first) / g.cols);
             let (cx, cy) = (g.x + col as f32 * g.cell_w, GRID_TOP + row as f32 * g.cell_h);
-            let mut name_y = cy + g.cell_h - NAME_H - 4.0;
-            let (room_w, room_h) = (g.cell_w - 12.0, name_y - NAME_GAP - (cy + 4.0));
+            let (name_y, _) = name_place(&g, cy, shown);
+            let room_h = cy + g.cell_h - NAME_H - 4.0 - NAME_GAP - (cy + 4.0);
             let (bw, bh) = slot_ui::cart_box_for(shown);
-            let fit = (room_w / bw as f32).min(room_h / bh as f32);
-            // A cart its width limits sits in the middle of its cell, name and
-            // all, rather than on the bottom (Siham 2026-11-09).
-            name_y -= ((room_h - bh as f32 * fit) / 2.0).max(0.0);
+            let fit = ((g.cell_w - 12.0) / bw as f32).min(room_h / bh as f32);
             let s = fit * cart_size(library, i);
             let (dw, dh) = (bw as f32 * s, bh as f32 * s);
             let (ix, iy) = (cx + (g.cell_w - dw) / 2.0, name_y - NAME_GAP - dh);
@@ -470,12 +503,10 @@ impl Engine {
                     out.push(Draw::Tex { x: tx, y: ty, w: tw, h: th, tex, alpha: fade });
                 });
             }
-            if let Some((tex, w, h)) = face(&slot_ui::label_text(cart), true) {
-                let s = 0.5f32.min((g.cell_w - 14.0) / w.max(1) as f32);
-                let tw = w as f32 * s;
-                out.push(Draw::Tex { x: cx + (g.cell_w - tw) / 2.0, y: name_y,
-                    w: tw, h: h as f32 * s, tex, alpha: if i == library.cursor { fade } else { 0.7 * fade } });
-            }
+            let chosen = i == library.cursor;
+            let (lines, scale) = self.library_name_lines(&g, cy, shown, cart, chosen);
+            self.draw_caption(out, &lines, cx + g.cell_w / 2.0, g.cell_w - 14.0, name_y, scale,
+                if chosen { fade } else { 0.7 * fade }, (usize::MAX - 4, i));
         }
         // B with changes not saved: the question over the grid.
         if library.confirm {

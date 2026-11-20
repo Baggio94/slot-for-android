@@ -1,4 +1,5 @@
 mod art;
+mod wallpaper_scale;
 pub mod bitmaps;
 pub mod fit_overlay;
 pub mod watomsk;
@@ -7,6 +8,8 @@ pub use native_assets::{native_png, native_rgba, native_w, native_h, refit_band,
 pub use art::cover;
 pub use art::decode_png_bytes as decode_png;
 mod backdrop;
+pub mod mosaic;
+pub use mosaic::{blur_wallpaper, mosaic_ground, mosaic_native, MosaicLook, MosaicTheme};
 mod barcode;
 mod battery;
 mod board;
@@ -41,11 +44,12 @@ pub mod text;
 pub mod menu_style;
 mod button_art;
 mod hold_ring;
+mod task_pill;
 mod toast;
 
 pub use backdrop::{bezel_face, blur_background, blur_background_native, default_background, default_background_native, draw_backdrop, draw_ground_tinted, top_line_luma, wallpaper_face, wallpaper_face_native, LIGHT_WALLPAPER};
 pub use barcode::{code39, CODE39_NARROW, CODE39_WIDE};
-pub use battery::{draw_gauge, draw_status_gauge, status_gauge_width, BOLT_PX, GAUGE_H, GAUGE_W, WALL};
+pub use battery::{battery_low, draw_gauge, draw_status_gauge, low_battery_badge, status_gauge_width, BADGE_H, BADGE_W, BOLT_PX, GAUGE_H, GAUGE_W, LOW_PERCENT, LOW_RED, VERY_LOW_PERCENT, WALL};
 pub use board::{
     board_at, board_face, pak_chip_face, home_chip_face, board_layout_body, lid_rest_body, picker_span_body, shelf_cart_body, board_layout, board_toward, BoardLayout, board_from, board_zoom, chip_face, chip_shadow_face, grown, lid_at,
     lid_from, lid_rest, lid_toward, lift_of, on_board, padded, pak_marking_face, picker_span, rom_marking, rom_marking_face, shelf_cart, shelf_cart_at, shelf_cart_for,
@@ -54,7 +58,7 @@ pub use board::{
     SLIDE_SHARE, SLIDE_UP, SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
 pub use cart::{
-    cart_box, cart_box_for, generated_label_art, handwritten_label_art, label_art_from_rgba, logo_label_art, body_box, body_of, body_seated_box, platform_body, seated_box_for, home_cart_shadow, Body, cart_face, cart_face_with, cart_face_with_material, cart_interior, cart_backing, is_clear, cart_shadow, clean_label, gb_cart_shadow, gb_label_panel,
+    cart_box, cart_box_for, shelf_box_for, generated_label_art, handwritten_label_art, label_art_from_rgba, logo_label_art, body_box, body_of, body_seated_box, platform_body, seated_box_for, home_cart_shadow, Body, cart_face, cart_face_with, cart_face_with_material, cart_interior, cart_backing, is_clear, cart_shadow, clean_label, gb_cart_shadow, gb_label_panel,
     gb_shell_of, label_colour, label_panel, label_rect, label_size, label_tags, label_text, seated_box,
     CartFace, CART_H, CART_W, GB_CART_H, GB_CART_W, GB_LABEL_H, GB_LABEL_W, GB_LABEL_X, GB_LABEL_Y,
     LABEL_H, LABEL_W, LABEL_X, LABEL_Y,
@@ -76,7 +80,7 @@ pub use link_art::{
 };
 pub use plate::{
     arrows_hint_face, arrows_hint_face_ink, hint_face_ink, hint_label_x, arrows_label_x, arrows_hint_width, cap_width, centred_hints, hint_face, hint_quad, hint_row,
-    hint_width, title_face, title_line_face, word_face, word_ink, word_ink_scaled, word_width, platform_name_face, PLATFORM_NAME_SCALE,
+    hint_width, title_face, title_line_face, title_line_face_within, title_line_window, word_face, word_ink, word_ink_scaled, word_width, platform_name_face, PLATFORM_NAME_SCALE,
     onboarding_instruction_face, onboarding_note_face, onboarding_max_w,
     Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,
     HINT_EDGE, HINT_GAP, HINT_H, LEGEND_GAP, TITLE_H, TITLE_W,
@@ -86,7 +90,7 @@ pub use polaroids::{
 };
 pub use power_menu::{menu_face, PowerChoice, MENU_PAD};
 pub use quick_menu::{
-    quick_value_width, quick_value_width_within, quick_value_face_within,
+    quick_value_width, quick_value_width_within, quick_face_width, quick_value_face_within,
     quick_caret_face, quick_caret_mid, quick_label_face, quick_legend_faces, quick_value_face, QuickMenu,
     QuickMenuFaces, QuickRow, QuickValue, QUICK_EDGE, QUICK_PITCH, QUICK_SPLIT, QUICK_TOP,
 };
@@ -104,7 +108,7 @@ pub use net_switch::{
     NET_KNOB_Y, NET_SWITCH_H, NET_SWITCH_W,
 };
 pub use slot_chrome::{
-    draw_empty_slot, draw_empty_slot_closed, draw_empty_slot_with, draw_slot_name, draw_slot_title, draw_platform_name, ease, edge, housing, opening, recess,
+    draw_empty_slot, draw_empty_slot_closed, draw_empty_slot_with, draw_slot_name, draw_slot_title, draw_slot_title_scrolled, slot_title_travel, draw_platform_name, ease, edge, housing, opening, recess,
     set_theme, CloserKind, SlotChrome, SlotCloser,
     ALERT_PX, LIP_H, MOUTH_H, MOUTH_W,
 };
@@ -114,4 +118,5 @@ pub use sticker::{
 };
 pub use button_art::{key_art, BUTTON_H};
 pub use hold_ring::{hold_ring_face, HOLD_RING};
+pub use task_pill::{task_pill_face, TASK_PILL_H};
 pub use toast::{toast_box, toast_face, toast_rect, Toast};

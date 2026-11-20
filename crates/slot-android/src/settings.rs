@@ -14,14 +14,24 @@ pub enum WallpaperPick {
     /// Recents.png or Favorites.png follow the shelf on screen. Read only:
     /// load turns it into each shelf's own wallpaper (wallpaper_shelves).
     Shelf,
+    /// 2.5: Siham's mosaic for the shelf on screen, in the theme's colours
+    /// (slot_ui::mosaic), softened by its Blur and lit by its Halo.
     #[default]
     Default,
+    /// Read only, from 2.5's first betas: load turns Default Blur, Default
+    /// Halo and slot. Blur into Default or slot. with a Blur or a Halo
+    /// (WallpaperLook, Siham 2026-11-19).
     Blur,
+    Halo,
+    /// The wood with stickers that was Default until 2.5.
+    Slot,
+    SlotBlur,
     File(String),
 }
 impl WallpaperPick {
+    /// None, Default, slot., Random, then the images (Siham 2026-11-19).
     pub fn choices(root: &Path) -> Vec<Self> {
-        let mut choices=vec![Self::None, Self::Random, Self::Default, Self::Blur];
+        let mut choices=vec![Self::None, Self::Default, Self::Slot, Self::Random];
         choices.extend(crate::wallpaper::list(root).into_iter().map(Self::File));
         choices
     }
@@ -31,7 +41,7 @@ impl WallpaperPick {
     /// Wallpapers/<shelf>.png (upstream's name) when there is one. No Random:
     /// General deals it.
     pub fn shelf_choices(root: &Path, shelf: usize) -> Vec<Option<Self>> {
-        let mut choices=vec![None, Some(Self::None), Some(Self::Default), Some(Self::Blur)];
+        let mut choices=vec![None, Some(Self::None), Some(Self::Default), Some(Self::Slot)];
         choices.extend(crate::wallpaper::list(root).into_iter().map(|f| Some(Self::File(f))));
         if let Some(own)=crate::wallpaper::for_shelf(root, shelf) {
             choices.push(Some(Self::File(own)));
@@ -47,9 +57,14 @@ impl WallpaperPick {
     pub fn step(&self, root: &Path, right: bool) -> Self {
         let choices=Self::choices(root);
         // An unknown or retired pick (Shelf, a deleted image) steps from Default.
-        let at=choices.iter().position(|v| v==self).unwrap_or(2);
+        let at=choices.iter().position(|v| v==self).unwrap_or(1);
         let n=choices.len();
         choices[if right {(at+1)%n}else{(at+n-1)%n}].clone()
+    }
+    /// Default (and the retired Default Blur and Halo): each shelf shows its
+    /// own mosaic.
+    pub fn is_mosaic(&self) -> bool {
+        matches!(self, Self::Default | Self::Blur | Self::Halo)
     }
     pub fn label(&self) -> String {
         match self {
@@ -58,6 +73,9 @@ impl WallpaperPick {
             Self::Shelf=>"Shelf".into(),
             Self::Default=>"Default".into(),
             Self::Blur=>"Default Blur".into(),
+            Self::Halo=>"Default Halo".into(),
+            Self::Slot=>"slot.".into(),
+            Self::SlotBlur=>"slot. Blur".into(),
             // The imported image reads "User", like the other values.
             Self::File(name)=>match name.rsplit_once('.').map(|(a,_)|a).unwrap_or(name) {
                 stem if stem.eq_ignore_ascii_case("user") => "User".into(),
@@ -81,6 +99,33 @@ impl WallpaperTint {
         // Exact Slot v1.7.0 app.rs tint_alpha().
         match self { Self::Off=>0.0, Self::Low=>0.25, Self::Medium=>0.45, Self::High=>0.65 }
     }
+    /// The Darken that keeps a tinted image as dark as it was.
+    pub fn darken(self)->u8 {
+        match self { Self::Off=>0, Self::Low=>30, Self::Medium=>50, Self::High=>70 }
+    }
+}
+
+/// Interface > Wallpaper's Blur, Halo and Tint (`darken`) for General or a shelf, in
+/// percent, 0 (OFF) to 100 by tens (Siham 2026-11-19). Blur softens every
+/// wallpaper, Halo lights Default's lines, Tint shades an image.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WallpaperLook { pub blur: u8, pub halo: u8, pub darken: u8 }
+impl WallpaperLook {
+    /// Default Blur and slot. Blur as they were, and Default Halo.
+    pub const OLD_DEFAULT_BLUR: u8 = 30;
+    pub const OLD_SLOT_BLUR: u8 = 40;
+    pub const OLD_HALO: u8 = 70;
+    /// Right adds 10 %, left takes 10 % away; they stop at 100 % and OFF.
+    pub fn step(value: u8, right: bool) -> u8 {
+        let value = value.min(100) / 10 * 10;
+        if right { (value + 10).min(100) } else { value.saturating_sub(10) }
+    }
+    /// How much black covers the image: 100 % leaves a trace of it.
+    pub fn darken_alpha(self) -> f32 { self.darken.min(100) as f32 * 0.009 }
+    pub fn mosaic(self) -> slot_ui::MosaicLook {
+        slot_ui::MosaicLook { halo: self.halo, blur: self.blur }
+    }
 }
 
 /// Settings.json's own key for the OLED appearance (Settings::save).
@@ -102,6 +147,13 @@ impl Appearance {
             Appearance::Light, Appearance::Original];
         let at = ALL.iter().position(|a| *a == self).unwrap_or(0);
         ALL[if right { (at + 1) % 4 } else { (at + 3) % 4 }]
+    }
+    /// Which colours the Default wallpaper's mosaics take.
+    pub fn mosaic_theme(self)->slot_ui::MosaicTheme {
+        match self {
+            Self::Original=>slot_ui::MosaicTheme::Original, Self::Light=>slot_ui::MosaicTheme::Light,
+            Self::Dark=>slot_ui::MosaicTheme::Dark, Self::Oled=>slot_ui::MosaicTheme::Oled,
+        }
     }
     /// Which set of console bars `slot_ui::bitmaps::home_slot` draws.
     pub fn bar_theme(self)->usize {
@@ -437,6 +489,61 @@ impl Shader {
     }
 }
 
+/// The settings that belong to one handheld: its screen (overlays), its
+/// chip (Frame Pacing, Run-Ahead), its buttons and lid (Touchscreen, the RG
+/// Rotate's page). Kept apart in a file the slot. folder never copies, so
+/// another handheld's never replace them (Siham 2026-11-16, slot. 2.5).
+/// Screen Size has its own file, Config/video_mode.ini, kept likewise.
+const DEVICE_NAME: &str = "slot-konkr-device.json";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DeviceSettings {
+    bezel_gba: Bezel, bezel_gbc: Bezel, bezel_gb: Bezel,
+    bezel_nes: Bezel, bezel_snes: Bezel, bezel_md: Bezel,
+    home_bezel_three_two: bool,
+    responsive_loop: bool, run_ahead_frames: u8,
+    rotate_game_cover: u8, rotate_shelf_cover: u8, rotate_dim: u8, rotate_sleep: u8,
+    rotate_animations: bool, rotate_game_info: u8,
+    touchscreen: bool,
+}
+
+impl DeviceSettings {
+    fn of(s: &Settings) -> Self {
+        DeviceSettings {
+            bezel_gba: s.bezel_gba, bezel_gbc: s.bezel_gbc, bezel_gb: s.bezel_gb,
+            bezel_nes: s.bezel_nes, bezel_snes: s.bezel_snes, bezel_md: s.bezel_md,
+            home_bezel_three_two: s.home_bezel_three_two,
+            responsive_loop: s.responsive_loop, run_ahead_frames: s.run_ahead_frames,
+            rotate_game_cover: s.rotate_game_cover, rotate_shelf_cover: s.rotate_shelf_cover,
+            rotate_dim: s.rotate_dim, rotate_sleep: s.rotate_sleep,
+            rotate_animations: s.rotate_animations, rotate_game_info: s.rotate_game_info,
+            touchscreen: s.touchscreen,
+        }
+    }
+    fn load(dir: &Path) -> Option<Self> {
+        serde_json::from_slice(&fs::read(dir.join(DEVICE_NAME)).ok()?).ok()
+    }
+    /// The settings file with this handheld's own values in place.
+    fn merged(dir: &Path, main: Vec<u8>) -> Vec<u8> {
+        let Some(own) = fs::read(dir.join(DEVICE_NAME)).ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) else { return main };
+        let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&main) else { return main };
+        let (Some(json_map), Some(own_map)) = (json.as_object_mut(), own.as_object()) else { return main };
+        for (key, value) in own_map { json_map.insert(key.clone(), value.clone()); }
+        serde_json::to_vec(&json).unwrap_or(main)
+    }
+    fn save(&self, dir: &Path) -> io::Result<()> {
+        let data = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        slot_store::atomic_write(&dir.join(DEVICE_NAME), &data)
+    }
+}
+
+/// This handheld's Frame Pacing and Run-Ahead (for a game whose own were
+/// set on another handheld).
+pub fn device_pacing(dir: &Path) -> Option<(bool, u8)> {
+    DeviceSettings::load(dir).map(|d| (d.responsive_loop, d.run_ahead_frames))
+}
+
 /// What a fresh install's defaults depend on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Device {
@@ -539,6 +646,14 @@ pub struct Settings {
     /// A key of its own, so a version without it keeps every other setting.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub wallpaper_shelves: std::collections::BTreeMap<String, WallpaperPick>,
+    /// General's Blur, Halo and Darken (2.5).
+    pub wallpaper_look: WallpaperLook,
+    /// A shelf's own, by the same names as wallpaper_shelves; a shelf showing
+    /// General's wallpaper shows General's look.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub wallpaper_shelf_looks: std::collections::BTreeMap<String, WallpaperLook>,
+    /// Read only: Wallpaper Tint became Darken (wallpaper_look) in 2.5.
+    #[serde(skip_serializing)]
     pub wallpaper_tint: WallpaperTint,
     pub appearance: Appearance,
     /// Slot v1.7 GENERAL: Recents is off by default; persist its list regardless.
@@ -624,6 +739,8 @@ impl Default for Settings {
             cart_studio_size: 0,
             status_opt_in_v2: true, wallpaper: WallpaperPick::Default,
             wallpaper_shelves: Default::default(),
+            wallpaper_look: WallpaperLook::default(),
+            wallpaper_shelf_looks: Default::default(),
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
             show_recents: false, show_titles: false, touchscreen: true, home_bezel_three_two: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
@@ -692,12 +809,15 @@ impl Settings {
     /// Only a missing or unreadable first-install configuration gets a
     /// model-specific default; never rewrite the file just to apply a default.
     pub fn load_for_device(dir: &Path, device: Device) -> Self {
-        fs::read(dir.join(NAME)).ok()
+        let main = fs::read(dir.join(NAME)).ok();
+        // This handheld's own values go in first, so the migrations below
+        // see them as they would have before 2.5.
+        let mut s = main.map(|b| DeviceSettings::merged(dir, b))
             .and_then(|b| {
                 let old_json=serde_json::from_slice::<serde_json::Value>(&b).ok();
                 let had_wallpaper_choice=old_json.as_ref()
                     .is_some_and(|v|v.get("wallpaper").is_some());
-                serde_json::from_slice::<Self>(&b).ok().map(|mut s| {
+                Self::lenient(&b).map(|mut s| {
                     // Critical: prior U1/RC1 stored a shared GB/GBC shader and
                     // shared color correction. Copy those values *once* into
                     // independent fields, never reset the user's preferences.
@@ -730,6 +850,7 @@ impl Settings {
                         s.wallpaper=WallpaperPick::File("user.png".into());
                     }
                     s.adopt_shelf_wallpapers(dir);
+                    s.adopt_wallpaper_looks();
                     s
                 })
             })
@@ -792,7 +913,18 @@ impl Settings {
                     s.simpletex_gba_colour = true;
                 }
                 s
-            }).unwrap_or_else(|| Self::first_install_defaults_for_device(device))
+            }).unwrap_or_else(|| Self::first_install_defaults_for_device(device));
+        // What belongs to this handheld (its screen, chip and buttons) is
+        // its own, whatever the slot. folder brought (Siham 2026-11-16).
+        match DeviceSettings::load(dir) {
+            Some(_) => {}
+            None => {
+                // First 2.5 start on this handheld: its values so far are its own.
+                let _ = DeviceSettings::of(&s).save(dir);
+                crate::emulation::EmulationProfile::keep_device_fields_once(dir);
+            }
+        }
+        s
     }
     /// The old Shelf wallpaper becomes each shelf's own: a shelf with its
     /// Wallpapers/<shelf>.png keeps it, the others show Default, as they did.
@@ -805,6 +937,67 @@ impl Settings {
             }
         }
         self.wallpaper = WallpaperPick::Default;
+    }
+    /// The settings in `bytes`, each on its own: a value this version does
+    /// not know (written by a newer one on a handheld sharing the slot.
+    /// folder) goes back to its default alone, every other value kept.
+    fn lenient(bytes: &[u8]) -> Option<Self> {
+        if let Ok(whole) = serde_json::from_slice::<Self>(bytes) { return Some(whole); }
+        let serde_json::Value::Object(fields) = serde_json::from_slice::<serde_json::Value>(bytes).ok()?
+            else { return None };
+        let mut kept = serde_json::Map::new();
+        let mut dropped = Vec::new();
+        for (key, value) in fields {
+            let alone = serde_json::Value::Object([(key.clone(), value.clone())].into_iter().collect());
+            if serde_json::from_value::<Self>(alone).is_ok() { kept.insert(key, value); }
+            else { dropped.push(key); }
+        }
+        crate::log_warn(&format!("Settings: unknown values back to their defaults: {}", dropped.join(", ")));
+        serde_json::from_value(serde_json::Value::Object(kept)).ok()
+    }
+
+    /// Default Blur, Default Halo and slot. Blur become Default or slot. with
+    /// that Blur or Halo, and Wallpaper Tint each image's Darken, for General
+    /// and every shelf (2.5, Siham 2026-11-19).
+    fn adopt_wallpaper_looks(&mut self) {
+        fn retire(pick: &mut WallpaperPick, look: &mut WallpaperLook) {
+            let (to, blur, halo) = match pick {
+                WallpaperPick::Blur => (WallpaperPick::Default, WallpaperLook::OLD_DEFAULT_BLUR, 0),
+                WallpaperPick::Halo => (WallpaperPick::Default, 0, WallpaperLook::OLD_HALO),
+                WallpaperPick::SlotBlur => (WallpaperPick::Slot, WallpaperLook::OLD_SLOT_BLUR, 0),
+                _ => return,
+            };
+            *pick = to;
+            if look.blur == 0 { look.blur = blur; }
+            if look.halo == 0 { look.halo = halo; }
+        }
+        let darken = self.wallpaper_tint.darken();
+        self.wallpaper_tint = WallpaperTint::Off;
+        retire(&mut self.wallpaper, &mut self.wallpaper_look);
+        if darken > 0 && self.wallpaper_look.darken == 0 { self.wallpaper_look.darken = darken; }
+        let Self { wallpaper_shelves, wallpaper_shelf_looks, .. } = self;
+        for (key, pick) in wallpaper_shelves.iter_mut() {
+            let look = wallpaper_shelf_looks.entry(key.clone()).or_default();
+            retire(pick, look);
+            if darken > 0 && look.darken == 0 && matches!(pick, WallpaperPick::File(_)) {
+                look.darken = darken;
+            }
+        }
+        wallpaper_shelf_looks.retain(|_, look| *look != WallpaperLook::default());
+    }
+    /// The look shelf `shelf` shows: its own with a wallpaper of its own,
+    /// else General's.
+    pub fn look_on(&self, shelf: usize) -> WallpaperLook {
+        if self.shelf_wallpaper(shelf).is_none() { return self.wallpaper_look; }
+        crate::wallpaper::SHELF_KEYS.get(shelf)
+            .and_then(|key| self.wallpaper_shelf_looks.get(*key)).copied().unwrap_or_default()
+    }
+    /// General's look (None) or a shelf's own, to change.
+    pub fn set_look(&mut self, shelf: Option<usize>, look: WallpaperLook) {
+        let Some(shelf) = shelf else { self.wallpaper_look = look; return };
+        let Some(key) = crate::wallpaper::SHELF_KEYS.get(shelf) else { return };
+        if look == WallpaperLook::default() { self.wallpaper_shelf_looks.remove(*key); }
+        else { self.wallpaper_shelf_looks.insert((*key).to_string(), look); }
     }
     /// A shelf's own wallpaper, None when it shows General's.
     pub fn shelf_wallpaper(&self, shelf: usize) -> Option<&WallpaperPick> {
@@ -826,6 +1019,7 @@ impl Settings {
     }
     pub fn save(&self, dir: &Path) -> io::Result<()> {
         fs::create_dir_all(dir)?;
+        DeviceSettings::of(self).save(dir)?;
         // A version from before OLED reads the whole file or none of it: an
         // appearance it doesn't know would reset every setting. Written as
         // Dark plus a key it ignores, it keeps them and shows Dark.
@@ -1141,6 +1335,35 @@ pub fn frame_debt_mgba_cable(prev: f64, elapsed: f64, period: f64) -> f64 {
 }
 
 #[cfg(test)]
+mod device_tests {
+    use super::*;
+
+    #[test]
+    fn a_handhelds_screen_chip_and_button_settings_stay_its_own() {
+        let root = std::env::temp_dir().join(format!("slot-settings-device-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // This handheld: Responsive, touch on.
+        let mut here = Settings::load_for_device(&root, Device::RPC);
+        here.touchscreen = true;
+        here.responsive_loop = true;
+        here.save(&root).unwrap();
+        // Another handheld's settings arrive through the slot. folder.
+        let mut other = here.clone();
+        other.touchscreen = false;
+        other.responsive_loop = false;
+        other.bezel_snes = Bezel::None;
+        other.show_titles = true;
+        std::fs::write(root.join(NAME), serde_json::to_vec(&other).unwrap()).unwrap();
+        let mixed = Settings::load_for_device(&root, Device::RPC);
+        assert!(mixed.touchscreen && mixed.responsive_loop, "this handheld's own");
+        assert_eq!(mixed.bezel_snes, here.bezel_snes);
+        assert!(mixed.show_titles, "a taste follows");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1247,15 +1470,23 @@ mod tests {
         std::fs::write(dir.join("GBA.png"), b"placeholder").unwrap();
         let choices=WallpaperPick::choices(&root);
         // Shelf is gone from General: each shelf picks its own (2.4).
-        assert_eq!(choices, vec![None,Random,Default,Blur,
+        // None, Default, slot., Random, the images (Siham 2026-11-19).
+        assert_eq!(choices, vec![None,Default,Slot,Random,
             File("another.png".into()),File("user.png".into())]);
-        assert_eq!(None.step(&root,true), Random);
-        assert_eq!(Random.step(&root,true), Default);
-        assert_eq!(Shelf.step(&root,true), Blur);
+        assert_eq!(None.step(&root,true), Default);
+        assert_eq!(Default.step(&root,true), Slot);
+        assert_eq!(Slot.step(&root,true), Random);
+        assert_eq!(Random.step(&root,true), File("another.png".into()));
+        assert_eq!(Shelf.step(&root,true), Slot);
         assert_eq!(None.step(&root,false), File("user.png".into()));
-        assert_eq!(Default.step(&root,true), Blur);
-        assert_eq!(Blur.step(&root,true), File("another.png".into()));
-        assert_eq!(File("missing.png".into()).step(&root,true), Blur);
+        assert_eq!(File("user.png".into()).step(&root,true), None);
+        assert_eq!(serde_json::to_string(&Halo).unwrap(), r#""halo""#);
+        // The wood that was Default until 2.5 keeps its own pick.
+        assert_eq!(serde_json::to_string(&Slot).unwrap(), r#""slot""#);
+        assert_eq!(serde_json::to_string(&SlotBlur).unwrap(), r#""slot_blur""#);
+        assert_eq!(Slot.label(), "slot.");
+        assert_eq!(SlotBlur.label(), "slot. Blur");
+        assert_eq!(File("missing.png".into()).step(&root,true), Slot);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1270,7 +1501,7 @@ mod tests {
         std::fs::write(dir.join("NES.png"), b"placeholder").unwrap();
         // NES (3): General first, no Random, its own NES.png last.
         assert_eq!(WallpaperPick::shelf_choices(&root, 3), vec![
-            Option::None, Some(None), Some(Default), Some(Blur),
+            Option::None, Some(None), Some(Default), Some(Slot),
             Some(File("user.png".into())), Some(File("NES.png".into()))]);
         // GB (1) has no file of its own.
         assert_eq!(WallpaperPick::shelf_choices(&root, 1).len(), 5);
@@ -1295,6 +1526,55 @@ mod tests {
     }
 
     #[test]
+    fn a_value_from_a_newer_version_resets_alone() {
+        let root=std::env::temp_dir().join(format!(
+            "slot-lenient-settings-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(NAME), r#"{"wallpaper":"sparkles","appearance":"light",
+            "wallpaper_look":{"blur":40,"halo":0,"darken":0},"show_titles":true,
+            "status_opt_in_v2":true}"#).unwrap();
+        let s=Settings::load(&root);
+        assert_eq!(s.wallpaper, WallpaperPick::default());
+        assert_eq!(s.appearance, Appearance::Light);
+        assert_eq!(s.wallpaper_look.blur, 40);
+        assert!(s.show_titles);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn blur_halo_and_tint_become_each_wallpapers_look() {
+        use WallpaperPick::*;
+        let root=std::env::temp_dir().join(format!(
+            "slot-wallpaper-looks-test-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("Wallpapers")).unwrap();
+        std::fs::write(root.join("Wallpapers/user.png"), b"placeholder").unwrap();
+        std::fs::write(root.join(NAME), r#"{"wallpaper":"blur","wallpaper_tint":"high",
+            "wallpaper_shelves":{"NES":"halo","GBA":"slot_blur","GB":{"file":"user.png"},"SNES":"default"},
+            "status_opt_in_v2":true}"#).unwrap();
+        let s=Settings::load(&root);
+        assert_eq!(s.wallpaper, Default);
+        assert_eq!(s.wallpaper_look, WallpaperLook { blur: 30, halo: 0, darken: 70 });
+        let shelf = |key: &str| crate::wallpaper::SHELF_KEYS.iter().position(|k| *k == key).unwrap();
+        assert_eq!(s.wallpaper_on(shelf("NES")), &Default);
+        assert_eq!(s.look_on(shelf("NES")), WallpaperLook { blur: 0, halo: 70, darken: 0 });
+        assert_eq!(s.wallpaper_on(shelf("GBA")), &Slot);
+        assert_eq!(s.look_on(shelf("GBA")).blur, WallpaperLook::OLD_SLOT_BLUR);
+        // An image keeps its tint as Darken; a plain Default shelf has no look.
+        assert_eq!(s.look_on(shelf("GB")).darken, 70);
+        assert_eq!(s.look_on(shelf("SNES")), WallpaperLook::default());
+        // A shelf showing General's shows General's look.
+        assert_eq!(s.look_on(shelf("GBC")), s.wallpaper_look);
+        // Saved and read again, nothing moves.
+        s.save(&root).unwrap();
+        assert_eq!(Settings::load(&root), s);
+        assert_eq!(WallpaperLook::step(0, true), 10);
+        assert_eq!(WallpaperLook::step(100, true), 100);
+        assert_eq!(WallpaperLook::step(0, false), 0);
+        assert_eq!(WallpaperLook::step(35, false), 20);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_2_3_settings_file_keeps_its_values_in_2_4() {
         // A file as 2.3.0 wrote it: its values stay, what 2.4 adds takes its
         // default, and nothing resets the rest.
@@ -1314,7 +1594,10 @@ mod tests {
         assert!(s.show_wifi && s.show_recents && s.show_titles && s.status_opt_in_v2);
         assert_eq!(s.appearance, Appearance::Original);
         assert_eq!(s.wallpaper, WallpaperPick::None);
-        assert_eq!(s.wallpaper_tint, WallpaperTint::Medium);
+        // Wallpaper Tint Medium is Darken 50 % now, as dark as it was.
+        assert_eq!(s.wallpaper_tint, WallpaperTint::Off);
+        assert_eq!(s.wallpaper_look.darken, 50);
+        assert!((s.wallpaper_look.darken_alpha() - WallpaperTint::Medium.alpha()).abs() < 0.01);
         assert_eq!(s.cart_studio_size, 2);
         // 2.4's own: no shelf wallpapers yet, Game Info off, animations on.
         assert!(s.wallpaper_shelves.is_empty());
@@ -1353,12 +1636,13 @@ mod tests {
         assert_eq!(settings.appearance, Appearance::Dark);
         assert_eq!(settings.wallpaper_tint, WallpaperTint::Off);
         settings.wallpaper=WallpaperPick::None;
-        settings.wallpaper_tint=WallpaperTint::High;
+        settings.wallpaper_look.darken=70;
         settings.appearance=Appearance::Light;
         let saved=serde_json::to_string(&settings).unwrap();
+        assert!(!saved.contains("wallpaper_tint"), "{saved}");
         let restored:Settings=serde_json::from_str(&saved).unwrap();
         assert_eq!(restored.wallpaper,WallpaperPick::None);
-        assert_eq!(restored.wallpaper_tint.alpha(),0.65);
+        assert_eq!(restored.wallpaper_look.darken,70);
         assert_eq!(restored.appearance,Appearance::Light);
         assert_eq!(restored.run_ahead_frames,2);
         assert!(restored.show_wifi && restored.status_opt_in_v2);
@@ -1512,15 +1796,18 @@ mod tests {
         assert!(s.change(11, false) && s.responsive_loop);
         let dir = std::env::temp_dir().join(format!("slot-konkr-pacing-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
+        let _ = fs::remove_file(dir.join(DEVICE_NAME));
         for old in [r#"{"responsive_pacing":false}"#, r#"{"responsive_pacing":true}"#,
             r#"{"responsive_pacing":true,"display_sync_pacing":true}"#,
             r#"{"hybrid_pacing":true}"#, r#"{"retroarch_clock_pacing":true}"#,
             r#"{"retroarch_sync_pacing":false,"responsive_loop":true}"#] {
             fs::write(dir.join(NAME), old).unwrap();
+            let _ = fs::remove_file(dir.join(DEVICE_NAME));
             assert!(!Settings::load(&dir).responsive_loop, "{old}");
         }
         fs::write(dir.join(NAME), r#"{"retroarch_sync_pacing":true,"responsive_loop":true}"#)
             .unwrap();
+        let _ = fs::remove_file(dir.join(DEVICE_NAME));
         assert!(Settings::load(&dir).responsive_loop);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1649,6 +1936,7 @@ mod tests {
         // An older *partial* JSON must use old missing-field values, not
         // freshly introduced LCD3x/Display Sync/Run-Ahead preferences.
         std::fs::write(root.join(NAME),r#"{"ff_speed":4,"show_titles":true}"#).unwrap();
+        let _ = std::fs::remove_file(root.join(DEVICE_NAME));
         let previous=Settings::load(&root);
         assert_eq!(previous.ff_speed,4);
         assert!(previous.show_titles);
@@ -2011,6 +2299,8 @@ mod tests {
         fs::write(root.join(NAME), r#"{"bezel_nes":"nes","bezel_md":"genesis"}"#).unwrap();
         let mut s=Settings::load_for_device(&root, Device::KONKR);
         assert_eq!((s.bezel_nes,s.bezel_md),(Bezel::None,Bezel::None));
+        // Another handheld reading the same file (no own values yet).
+        let _ = fs::remove_file(root.join(DEVICE_NAME));
         assert_eq!(Settings::load_for_device(&root, Device::RPC).bezel_md,Bezel::Genesis);
         s.bezel_md=Bezel::MegaDrive;
         s.save(&root).unwrap();

@@ -1,54 +1,48 @@
-# slot. for Android — v2.4.2
+# slot. for Android — v2.5.0
 
-The Anbernic RG Rotate is the star of this update: slot. for Android now fits its square screen, its buttons and its rotating screen, with now playing and stand by screens when you close it.
+Take your games with you: the new **slot. folder** carries your saves, states, labels, favorites and settings from one handheld to another, and **RomM** can now keep your saves in sync too.
 
-### Fixed in 2.4.2
+### New in 2.5
 
-- **Saves you copy into your save folder now load.** If you already played that game in slot., it asks whether to play the copied save or continue where you left off ([#116](https://github.com/Baggio94/slot-for-android/issues/116)).
-- **Save states you copy into your states folder load too**, even when the file has an old date.
-- **Your newest save is kept after a Link trade**, even if it couldn't be copied to your save folder right away.
+- **slot. folder** — Keep slot.'s data in a folder of your choice, on the internal storage or an SD card: saves, save states, labels, Cart Studio changes, favorites, recents, cheats and settings. Put the card in another handheld, pick the same folder there, and everything comes back. Each handheld keeps its own screen sizes, overlays, Frame Pacing, Run-Ahead, Touchscreen and Handheld settings. **START → Library → Choose slot. Folder**. See the [slot. Folder](https://github.com/Baggio94/slot-for-android/wiki/slot.-Folder) guide.
+- **Sync Saves with RomM** — slot. sends your in-game saves to your RomM server and brings back the newer one when you start a game. If both changed, slot. asks which one to play. **START → Library → Saves & States**.
+- **Saves & States page** — Save Folder, Save State Folder, Share Core Saves and Sync Saves with RomM now have their own page in **Library**.
+- **Your games keep their names across handhelds** — Favorites, recents, labels, cores and game settings follow a game by its system and file name, wherever it sits.
+- **Two saves, one choice** — When this handheld and your slot. folder each have a different save for a game, slot. asks which one to use. The other one is kept.
+- **Deleted saves stay deleted** — A save you delete in RetroArch's folders, in your slot. folder or on another handheld is no longer put back behind your back: slot. asks **PUT IT BACK** or **DELETE IT** when you start the game.
+- **Your own cheats** — Put RetroArch `.cht` files in your slot. folder's **CustomCheats** folder: they show first in the game's Cheats, as **My Cheats**.
+- **BIOS from RomM** — Game Boy, Game Boy Color and Game Boy Advance BIOS files come from your RomM server with your games, when slot. has none.
+- **Default wallpapers** — A new mosaic for each shelf, drawn for slot., in the colours of your theme. The wood wallpaper is now called **slot.**.
+- **Wallpaper page** — **Blur**, **Halo** and **Tint** in percent, for every shelf.
+- **Touch** — Push the middle cart up to choose its core, then tap a chip. Hold a cart to open it in Cart Studio: the cart flies to the page and back.
+- **Progress pill** — Long tasks (copying to your slot. folder, RomM downloads…) show a small pill next to the battery.
+- **Low battery** — Under 15 %, the battery turns red on the shelf. Under 10 %, a small red battery blinks over the game ([#87](https://github.com/Baggio94/slot-for-android/issues/87)).
+- **Logs** — **About → X** saves slot.'s log to a file of your choice, to attach to an issue ([#107](https://github.com/Baggio94/slot-for-android/issues/107)).
+- **Grey carts** — When the SD card with your games is out, their carts turn grey and slot. tells you the card is missing.
+- **Menus** — One text size on every row: long values scroll when selected. Short forms on small screens (**ORIG. RATIO**, **INTERNAL**, **FF SOUND**…). Android's windows now look like slot.'s own.
+- **Cart Studio** — The edit page is centred on the cart, with larger text on square screens.
+- **Light and Original themes** — A soft shadow sets the console's bar off from the shelf.
+- **Cores updated** — Genesis Plus GX, Gambatte and Snes9x at libretro's latest.
 
-### New in 2.4.1
+### Faster
 
-- **Handwritten carts** — A cart with no label art now gets its title written by hand on the plastic. **slot. label** in Cart Studio writes it the same way. From slot. original 1.16.
-- **Touch on the shelf** — Swipe to scroll the carts, tap a side cart to bring it to the middle, tap or pull down the middle cart to insert it. **Settings → Controls → Touchscreen**.
-- **GBA: X / Y as L / R** — A new **L / R** value for the X / Y row in **Systems → Controls**.
-- **Update progress** — **About** shows the download percentage.
-- **RomM labels** — The labels shown on the RomM page now go on the carts of the games you download.
+- slot. starts faster: 5.3 s down to 3.1 s on the KONKR Pocket Advance.
+- Changing shelves, opening menus and saving settings no longer stutter.
+- Cart Studio opens and draws its cart without holding up the shelf.
 
-### Fixed in 2.4.1
+### Fixed in 2.5
 
-- RetroArch save states compressed with zstd now load in slot. Thanks to Daniel Byon for testing.
-- A save folder Android can't read no longer stops the game: it starts with slot.'s own save.
-- **Keep Folder Saves**: a game starts from the save in your saves folder, not from an older slot. save state.
-- Labels found by the label search show on the carts right away, without restarting slot.
-- A colour or finish changed in Cart Studio shows on the shelf right away.
-- Choosing a ROM or BIOS folder takes you back to the shelf.
-- A deleted ROM folder empties the shelf with **ROM FOLDER NOT FOUND**. Your saves, states, labels and favorites are kept.
-- **Update available** sits at the right of the About row again.
-- Light and Original themes: the selected row of the in-game **Screen** page is readable.
-- **Settings → Controls**: the selection bar sits on its row again.
-- RomM: choosing your ROM folder from the RomM page keeps the page open, and the games reach the shelf in groups as they download, with **DOWNLOADING n/m** while they come in.
+- RetroAchievements: colourised Game Boy DX hacks play the Game Boy set ([#117](https://github.com/Baggio94/slot-for-android/issues/117)).
+- The selected game's title fits narrow screens instead of running past the edges ([#119](https://github.com/Baggio94/slot-for-android/issues/119)).
+- Large RomM libraries no longer crash slot. while loading ([#121](https://github.com/Baggio94/slot-for-android/issues/121)).
+- Thin lines in wallpapers stay even at every screen size.
+- RG Rotate: the cover shows sooner when you close the screen.
+- A game never waits more than 2 seconds for an unreachable RomM server.
+- A setting from a newer version of slot. resets alone instead of resetting all your settings.
+- Simpletex looks right on screens where the Game Boy isn't at a whole scale (RG Rotate, KONKR Pocket Advance, Retroid Pocket Classic).
+- Buttons pressed while a window closes reach slot.
+- **Update** checks GitHub again before downloading.
 
-### Anbernic RG Rotate (since 2.4)
+### Updating
 
-- The **middle button** works like the slot. cap: tap to insert or open the game menu, double-tap for the Save State Switcher, hold to save and eject.
-- **Closing the screen** shows a cover of your choice, set in **Settings → Handheld**:
-  - while playing: **Inserted Cart**, **Full Cart** or **Last Frame**;
-  - with no game: **Drifting Shelf**, **Last Played**, **Random Cart**, **Black**, **Digital Clock** or **Analog Clock**.
-- **Game Info** adds **Now Playing**, the game's title and the time played to the cover while playing.
-- After a while, slot. dims the screen, then puts the RG Rotate to sleep (**Dim After**, **Sleep After**, **Sleep When Closed**). Opening it takes you straight back to the shelf or your game.
-
-### RG Rotate setup
-
-For the best experience with slot., set these on your RG Rotate:
-
-1. **Settings → Security → Screen lock → Swipe**
-2. **Settings → Handheld Game Console Settings → Rotate Setting → Slide out Setting → Wake Up and Unlock**
-3. **Settings → Handheld Game Console Settings → Rotate Setting → Slide into Setting → No Operation**
-4. **Quick Settings** (swipe down twice from the top) **→ Direction following system → On**
-5. **Settings → Handheld Game Console Settings → Quick Launcher → slot.**
-
-Then in slot.: **START → Settings → Handheld → Sleep When Closed → ON**, and allow the permission Android asks for.
-
-More in the [RG Rotate](https://github.com/Baggio94/slot-for-android/wiki/RG-Rotate) guide.
+Install over your current version, as usual. Your favorites, labels, saves and settings are kept. To keep your saves safe from now on, choose a slot. folder in **START → Library → Choose slot. Folder**.

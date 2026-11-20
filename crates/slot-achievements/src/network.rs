@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::storage::{self, Auth, Config, Game, Store, Unlock};
-use crate::{wake_evaluator, Notice, Status, SyncDetail, SyncStatus};
+use crate::{same_console, wake_evaluator, Notice, Status, SyncDetail, SyncStatus};
 
 const API: &str = "https://retroachievements.org/dorequest.php";
 const VERSION: &str = "12.2.1";
@@ -293,7 +293,7 @@ fn prefetch(
         let patch = call(http, auth, "patch", &[("g", id.to_string())])?;
         let game: Game =
             serde_json::from_value(patch["PatchData"].clone()).map_err(|_| Failure::Invalid)?;
-        if game.console != console || u64::from(game.id) != id {
+        if !same_console(console, game.console) || u64::from(game.id) != id {
             return Err(Failure::Invalid);
         }
         let unlocks = call(
@@ -339,7 +339,7 @@ impl PrefetchBudget {
 
 fn already_prepared(dir: &std::path::Path, hash: &str, console: u32) -> bool {
     storage::read::<(Game, BTreeSet<u32>)>(&dir.join(format!("{hash}.json")))
-        .is_ok_and(|(game, _)| game.console == console)
+        .is_ok_and(|(game, _)| same_console(console, game.console))
 }
 
 /// Older prepared PatchData can lack ImageIcon, although the ROM and award
@@ -363,7 +363,7 @@ impl IconRefreshJournal {
         let Ok((game, _)) =
             storage::read::<(Game, BTreeSet<u32>)>(&dir.join(format!("{hash}.json")))
         else { return false };
-        game.console == console && game.id != 0
+        same_console(console, game.console) && game.id != 0
             && crate::badges::game_icon_path(dir, &game.image_icon).is_none()
             && self.checked.get(hash).is_none_or(|(id, checked_at)| {
                 *id != game.id || at.saturating_sub(*checked_at) >= Self::RETRY_AFTER
@@ -393,11 +393,11 @@ fn repair_missing_game_icon(
     let file = dir.join(format!("{hash}.json"));
     let (mut game, ids): (Game, BTreeSet<u32>) =
         storage::read(&file).map_err(|_| Failure::Invalid)?;
-    if game.console != console || game.id == 0 { return Err(Failure::Invalid); }
+    if !same_console(console, game.console) || game.id == 0 { return Err(Failure::Invalid); }
     let patch = call(http, auth, "patch", &[("g", game.id.to_string())])?;
     let data = &patch["PatchData"];
     if data["ID"].as_u64() != Some(u64::from(game.id))
-        || data["ConsoleID"].as_u64() != Some(u64::from(console)) {
+        || data["ConsoleID"].as_u64() != Some(u64::from(game.console)) {
         return Err(Failure::Invalid);
     }
     let icon = data["ImageIcon"].as_str().unwrap_or_default();
@@ -492,7 +492,7 @@ pub(crate) fn run(
                     if auth.is_some() {
                         let cache = dir.join(format!("{}.json", game.hash));
                         if let Ok((data, ids)) = storage::read::<(Game, BTreeSet<u32>)>(&cache) {
-                            if data.console == game.console {
+                            if same_console(game.console, data.console) {
                                 badges.enqueue(&data);
                                 signal_prepared(&prepared, &wake, Prepared {
                                     generation: game.generation,
@@ -623,7 +623,7 @@ pub(crate) fn run(
                         let patch = call(&mut http, auth, "patch", &[("g", id.to_string())])?;
                         let data: Game = serde_json::from_value(patch["PatchData"].clone())
                             .map_err(|_| Failure::Invalid)?;
-                        if data.console != game.console || u64::from(data.id) != id {
+                        if !same_console(game.console, data.console) || u64::from(data.id) != id {
                             return Err(Failure::Invalid);
                         }
                         let session = call(
@@ -956,6 +956,28 @@ mod tests {
                 .collect();
             Ok(self.reply.clone())
         }
+    }
+    #[test]
+    fn a_colourised_game_boy_hack_plays_the_game_boy_set() {
+        // #117: RetroAchievements files a DX hack (.gbc) under the Game Boy game.
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let hash = "00112233445566778899aabbccddeeff";
+        let auth = Auth { username: "Player".into(), token: "secret".into() };
+        let reply = json!({"Success": true, "GameID": 42, "UserUnlocks": [],
+            "PatchData": {"ID": 42, "ConsoleID": 4, "Title": "Link's Awakening",
+                "Achievements": []}});
+        let mut http = Fake { reply: reply.clone(), fields: vec![] };
+        let game = prefetch(&mut http, &auth, dir, hash, 6).unwrap();
+        assert_eq!((game.id, game.console), (42, 4));
+        assert!(already_prepared(dir, hash, 6));
+        assert!(IconRefreshJournal::load(dir).needs_refresh(dir, hash, 6, 10_000_000));
+        assert!(crate::same_console(6, 4) && crate::same_console(4, 4));
+        // Only that way round, and no other console is let through.
+        assert!(!crate::same_console(4, 6));
+        assert!(!already_prepared(dir, hash, 5));
+        let mut http = Fake { reply, fields: vec![] };
+        assert!(prefetch(&mut http, &auth, dir, hash, 5).is_err());
     }
     #[test]
     fn delayed_awards_use_original_time_and_softcore_signature() {

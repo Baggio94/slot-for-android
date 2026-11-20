@@ -25,6 +25,8 @@ const NAME_H: f32 = 24.0;
 const CHOSEN: f32 = 1.05;
 const RESTING: f32 = 0.9;
 const NAME_GAP: f32 = 8.0;
+/// A game's name under its cart: one size, never shrunk to fit.
+const NAME_SCALE: f32 = 0.42;
 const GROW_S: f32 = 0.12;
 /// Statuses come from Android: short, plain text only on the GL thread.
 const MAX_TEXT: usize = 120;
@@ -202,7 +204,7 @@ pub(super) struct RommPage {
     info: Option<Vec<(String, bool)>>,
     systems: Vec<System>,
     system: usize,
-    cursor: usize,
+    pub(super) cursor: usize,
     first_row: usize,
     picked: HashSet<i64>,
     /// Loading, or why there is nothing to show.
@@ -417,7 +419,7 @@ impl Engine {
     pub(super) fn romm_status(&mut self, kind: i32, text: String) {
         if kind == 3 {
             if matches!(self.overlay, ShelfOverlay::Romm) {
-                self.leave_romm(ShelfOverlay::Library { row: 1 });
+                self.leave_romm(ShelfOverlay::Library { row: LIBRARY_ROMM_ROW });
             }
             return;
         }
@@ -644,7 +646,7 @@ impl Engine {
                 page.info = Some(info_lines(&title, entry, on_shelf, room,
                     |t| slot_ui::quick_value_width_within(t, wide)));
             }
-            97 => self.leave_romm(ShelfOverlay::Library { row: 1 }),
+            97 => self.leave_romm(ShelfOverlay::Library { row: LIBRARY_ROMM_ROW }),
             _ => {}
         }
         self.keep_romm_cursor_visible();
@@ -700,7 +702,12 @@ impl Engine {
         if let Some(note) = corner_note(page) { texts.push((note, false)); }
         let info: Vec<(String, bool)> = page.info.clone().unwrap_or_default();
         if let Some(system) = page.systems.get(page.system) {
-            for &i in &cells { texts.push((slot_ui::label_text(&system.carts[i]), true)); }
+            let room = grid().cell_w - 14.0;
+            for &i in &cells {
+                for line in caption_lines(&slot_ui::label_text(&system.carts[i]), room, NAME_SCALE, 2, i == page.cursor).0 {
+                    texts.push((line, true));
+                }
+            }
         }
         for (text, lit) in texts { self.controls_face(&text, lit); }
         let wide = info_room(out_w()) + 2 * slot_ui::quick_value_width("");
@@ -752,7 +759,8 @@ impl Engine {
             let id = system.ids[i];
             let (col, row) = ((i - first) % g.cols, (i - first) / g.cols);
             let (cx, cy) = (g.x + col as f32 * g.cell_w, GRID_TOP + row as f32 * g.cell_h);
-            let name_y = cy + g.cell_h - NAME_H - 4.0;
+            // Room for a name on two lines (Siham 2026-11-19).
+            let name_y = cy + g.cell_h - 2.0 * NAME_H - 4.0;
             let (room_w, room_h) = (g.cell_w - 12.0, name_y - NAME_GAP - (cy + 4.0));
             let (bw, bh) = slot_ui::cart_box_for(cart);
             let s = (room_w / bw as f32).min(room_h / bh as f32) * cart_size(page, i);
@@ -779,12 +787,10 @@ impl Engine {
                     out.push(Draw::Tex { x: tx, y: ty, w: tw, h: th, tex, alpha: fade });
                 });
             }
-            if let Some((tex, w, h)) = face(&slot_ui::label_text(cart), true) {
-                let s = 0.5f32.min((g.cell_w - 14.0) / w.max(1) as f32);
-                let tw = w as f32 * s;
-                out.push(Draw::Tex { x: cx + (g.cell_w - tw) / 2.0, y: name_y,
-                    w: tw, h: h as f32 * s, tex, alpha: if i == page.cursor { fade } else { 0.7 * fade } });
-            }
+            let chosen = i == page.cursor;
+            let (lines, scale) = caption_lines(&slot_ui::label_text(cart), g.cell_w - 14.0, NAME_SCALE, 2, chosen);
+            self.draw_caption(out, &lines, cx + g.cell_w / 2.0, g.cell_w - 14.0, name_y, scale,
+                if chosen { fade } else { 0.7 * fade }, (usize::MAX - 2, i));
         }
         // The letter L2/R2 jumped to, as the shelf shows it.
         if let (Some((tex, w, h)), Some(at)) = (page.letter, page.letter_at) {
@@ -794,10 +800,11 @@ impl Engine {
                 let (w, h) = (w as f32, h as f32);
                 let side = w.max(h) + 24.0;
                 let (mx, my) = ((width - side) / 2.0, (GRID_TOP + GRID_BOTTOM - side) / 2.0);
-                let mut ground = menu_ground();
-                ground[3] *= 0.65 * alpha;
-                out.push(Draw::Rect { x: mx, y: my, w: side, h: side, colour: ground });
-                out.push(Draw::Tex { x: (width - w) / 2.0, y: my + (side - h) / 2.0, w, h, tex, alpha });
+                // White on a see-through black square, whatever the theme
+                // (Siham 2026-11-17).
+                out.push(Draw::Rect { x: mx, y: my, w: side, h: side, colour: [0.0, 0.0, 0.0, 0.62 * alpha] });
+                self.without_ink(out, |out| out.push(Draw::Tex {
+                    x: (width - w) / 2.0, y: my + (side - h) / 2.0, w, h, tex, alpha }));
             }
         }
         // The legend.
@@ -840,7 +847,11 @@ const INFO_LINE: f32 = 23.0;
 impl Engine {
     fn draw_romm_info(&self, out: &mut Vec<Draw>, lines: &[(String, bool)], fade: f32) {
         let width = out_w() as f32;
-        out.push(Draw::Rect { x: 0.0, y: 64.0, w: width, h: 352.0, colour: menu_style::scrim(0.82 * fade) });
+        // The theme's colour over the whole page, title and legend too: no
+        // bands above and below the card (Siham 2026-11-17).
+        let mut veil = menu_ground();
+        veil[3] = 0.90 * fade;
+        out.push(Draw::Rect { x: 0.0, y: 0.0, w: width, h: OUT_H as f32, colour: veil });
         let mut y = 78.0;
         for (i, (text, lit)) in lines.iter().enumerate() {
             let Some(&(tex, w, h)) = self.controls_faces.get(&Self::wide_face_key(text, *lit)) else { continue };
@@ -879,6 +890,133 @@ fn info_lines(title: &str, entry: &RommEntry, on_shelf: bool, room: u32,
         lines.push((value, true));
     }
     lines
+}
+
+/// A game's name under its cart (Siham 2026-11-19): one line, else two cut
+/// between words, never inside one; too long for two, the text gives way a
+/// little (to 80 %), then the second line ends with "…" (or, `whole`, keeps
+/// the rest to scroll: the chosen game's). `most` is 1 or 2. With the scale
+/// drawn at. Kept: the same names are asked every frame.
+pub(super) fn caption_lines(text: &str, room: f32, scale: f32, most: usize, whole: bool) -> (Vec<String>, f32) {
+    type Key = (String, u32, u32, usize, bool);
+    thread_local! {
+        static CAPTIONS: std::cell::RefCell<HashMap<Key, (Vec<String>, f32)>> = std::cell::RefCell::new(HashMap::new());
+    }
+    let key = (text.to_owned(), room.to_bits(), scale.to_bits(), most, whole);
+    if let Some(kept) = CAPTIONS.with(|c| c.borrow().get(&key).cloned()) { return kept; }
+    let made = caption_lines_now(text.trim(), room, scale, most.clamp(1, 2), whole);
+    CAPTIONS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 600 { c.clear(); }
+        c.insert(key, made.clone());
+    });
+    made
+}
+
+fn caption_lines_now(text: &str, room: f32, scale: f32, most: usize, whole: bool) -> (Vec<String>, f32) {
+    let width = |t: &str| slot_ui::quick_face_width(t) as f32;
+    // A little slack: the drawn face can come out a few pixels wider.
+    let room = room * 0.96;
+    let smallest = scale * 0.8;
+    // Words to lines of `room / s`, none cut: None when a word is too wide.
+    let lines_at = |s: f32| -> Option<Vec<String>> {
+        let room_face = room / s;
+        let mut lines: Vec<String> = Vec::new();
+        let mut line = String::new();
+        for word in text.split_whitespace() {
+            if width(word) > room_face { return None; }
+            let tried = if line.is_empty() { word.to_owned() } else { format!("{line} {word}") };
+            if width(&tried) <= room_face { line = tried; } else { lines.push(std::mem::replace(&mut line, word.to_owned())); }
+        }
+        if !line.is_empty() { lines.push(line); }
+        Some(lines)
+    };
+    // As large as it fits on `most` lines, down to 80 %.
+    let mut s = scale;
+    while s >= smallest - 1e-4 {
+        if let Some(lines) = lines_at(s) {
+            if lines.len() <= most { return (lines, s); }
+        }
+        s -= 0.02;
+    }
+    // Still too long: at 80 %, the first line(s) whole, the last with "…".
+    let s = smallest;
+    let room_face = room / s;
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut i = 0;
+    // Every line but the last: whole words that fit.
+    while lines.len() + 1 < most && i < words.len() {
+        let mut line = String::new();
+        while i < words.len() {
+            let tried = if line.is_empty() { words[i].to_owned() } else { format!("{line} {}", words[i]) };
+            if width(&tried) <= room_face { line = tried; i += 1; } else { break; }
+        }
+        // A word too wide for a whole line goes to the last, with "…".
+        if line.is_empty() { break; }
+        lines.push(line);
+    }
+    let rest = words[i.min(words.len())..].join(" ");
+    if whole || rest.is_empty() {
+        if !rest.is_empty() { lines.push(rest); }
+        return (lines, s);
+    }
+    // Whole words then "…"; only a first word too wide on its own is cut.
+    let rest_words: Vec<&str> = rest.split(' ').collect();
+    for n in (1..=rest_words.len()).rev() {
+        let line = format!("{}\u{2026}", rest_words[..n].join(" ").trim_end_matches([',', ';', ':', '-', '&', '+', ' ']));
+        if width(&line) <= room_face {
+            lines.push(line);
+            return (lines, s);
+        }
+    }
+    let mut kept: Vec<char> = rest_words[0].chars().collect();
+    loop {
+        let line = format!("{}\u{2026}", kept.iter().collect::<String>());
+        if width(&line) <= room_face || kept.len() <= 1 { lines.push(line); break; }
+        kept.pop();
+    }
+    (lines, s)
+}
+
+impl Engine {
+    /// Lines of a caption (caption_lines), each centred on `centre` from
+    /// `y`; a line wider than `room` scrolls in it (the chosen game's).
+    /// Returns how tall they are.
+    pub(super) fn draw_caption(&self, out: &mut Vec<Draw>, lines: &[String], centre: f32, room: f32,
+                               y: f32, scale: f32, alpha: f32, scroll: (usize, usize)) -> f32 {
+        let mut at = y;
+        for line in lines {
+            let Some(&(tex, w, h)) = self.controls_faces.get(&Self::face_key(line, true)) else { continue };
+            let (dw, dh) = (w as f32 * scale, h as f32 * scale);
+            // A line a little wider than measured gives way; a long one
+            // (the chosen game's rest) scrolls.
+            let squeeze = room / dw;
+            if dw <= room + 0.5 || squeeze >= 0.85 {
+                let k = squeeze.min(1.0);
+                let (dw, dh2) = (dw * k, dh * k);
+                out.push(Draw::Tex { x: centre - dw / 2.0, y: at + (dh - dh2) / 2.0, w: dw, h: dh2, tex, alpha });
+            } else {
+                let (from, to) = (centre - room / 2.0, centre + room / 2.0);
+                let travel = dw - room;
+                let shift = self.marquee_offset(scroll, travel);
+                const FEATHER: f32 = 14.0;
+                out.push(Draw::Span(Some(slot_gfx::Span {
+                    left: from, right: to,
+                    feather_left: shift.min(FEATHER), feather_right: (travel - shift).min(FEATHER),
+                })));
+                out.push(Draw::Tex { x: from - shift, y: at, w: dw, h: dh, tex, alpha });
+                out.push(Draw::Span(None));
+            }
+            at += caption_line_h(h, scale);
+        }
+        at - y
+    }
+}
+
+/// One caption line's height: its face's, less the face's own margins.
+pub(super) fn caption_line_h(face_h: u32, scale: f32) -> f32 {
+    face_h as f32 * scale * 0.8
 }
 
 /// Words to lines of at most `room` (as `width` measures them); a word too

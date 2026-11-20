@@ -34,6 +34,17 @@ impl Engine {
         let checksums = std::fs::read(game.rom_path())
             .map(|rom| crate::cheats::rom_checksums(platform, &rom)).unwrap_or_default();
         self.cheat_sources = crate::cheats::lookup(platform, &checksums, game.rom_stem());
+        // The player's own cheat file first (CustomCheats, slot. 2.5).
+        let storage = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(root, _)| root.clone());
+        if let Some(storage) = storage {
+            let title = self.shelves[self.active].carts.get(self.shelves[self.active].index)
+                .map(|cart| cart.title.clone()).unwrap_or_default();
+            match crate::cheats::custom(&storage, platform, game.rom_stem(), &title) {
+                Some(Ok(source)) => self.cheat_sources.insert(0, source),
+                Some(Err(())) => set_message("Couldn't read your cheat file for this game.".into()),
+                None => {}
+            }
+        }
         // Start on the file holding a cheat already on, if any.
         let on = game.cheats();
         self.cheat_source = self.cheat_sources.iter()

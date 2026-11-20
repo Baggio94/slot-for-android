@@ -4,6 +4,11 @@
 use super::*;
 use crate::controls::VISIBLE_ROWS;
 
+/// The paths over the menus' pages, drawn ahead (prepare_menu_look).
+const MENU_PATHS_AHEAD: [&str; 9] = ["slot.", "Menu", "Menu \u{203a} Library", "Menu \u{203a} Settings",
+    "Settings \u{203a} Interface", "Settings \u{203a} Systems", "Settings \u{203a} Controls",
+    "Menu \u{203a} Cart Studio", "Game Menu"];
+
 /// An unselected row's ink, against the selected row's.
 pub(super) const ROW_REST: f32 = 0.58;
 /// A page's title: where it sits under its path line.
@@ -121,6 +126,16 @@ impl Engine {
         if ink.is_some() { out.push(Draw::Ink(ink)); }
     }
 
+    /// A cart drawn over a menu page: its own colours, or grey while its
+    /// card is out (beta39), then the page's ink again.
+    pub(super) fn with_cart_ink(&self, out: &mut Vec<Draw>, draw: impl FnOnce(&mut Vec<Draw>)) {
+        let (menu, cart) = (self.menu_ink(), self.cart_ink());
+        let switch = menu.is_some() || cart.is_some();
+        if switch { out.push(Draw::Ink(cart)); }
+        draw(out);
+        if switch { out.push(Draw::Ink(menu)); }
+    }
+
     /// Light, Original (the console of the cart on the slot) or Dark's
     /// theme colours; the bar redrawn when they change.
     pub(super) fn update_menu_palette(&mut self) {
@@ -186,6 +201,7 @@ impl Engine {
             (self.settings_hints[0].0, key("B", "Back")), (self.settings_hints[1].0, Arrows("Change".into())),
         ];
         hints.push((self.screen_size_hint.0, key("L1+R1", "Size")));
+        hints.push((self.about_logs_hint.0, key("X", "Logs")));
         for (white, spec) in hints { self.register_ink_hint(white, spec); }
     }
 
@@ -267,6 +283,7 @@ impl Engine {
         match heading {
             0 => "slot.",
             5 => "Menu",
+            151 => "Menu \u{203a} Library",
             19 => "Paused",
             26 if game => "Game Menu",
             26 => "Menu",
@@ -300,8 +317,8 @@ impl Engine {
             26 => item != 57,
             // The game menu's Save States, Multiplayer, Cheats and Settings.
             19 => matches!(item, 22 | 25 | 66 | 134),
-            // Library's RomM Server.
-            5 => item == 135,
+            // Library's Saves & States and RomM Server.
+            5 => matches!(item, 135 | 150),
             // Interface's Wallpaper and Status Bar.
             82 => matches!(item, 83 | 58),
             // A system's Controls.
@@ -324,11 +341,23 @@ impl Engine {
             | ShelfOverlay::Hotkeys { .. } | ShelfOverlay::Cheats { .. } => self.controls_path(),
             ShelfOverlay::Menu { .. } => self.menu_path(0),
             ShelfOverlay::Library { .. } => self.menu_path(5),
+            ShelfOverlay::SavesStates { .. } => self.menu_path(151),
             ShelfOverlay::GameMenu { .. } => self.menu_path(19),
             ShelfOverlay::Settings { .. } | ShelfOverlay::PauseSettings { .. } => self.menu_path(26),
             ShelfOverlay::ScreenSystemSettings { .. } => self.menu_path(91),
             _ => self.menu_path(33),
         };
+        // The menus' paths drawn ahead on a still shelf, one a frame
+        // (beta42): a page's first opening drew its own, ~50 ms on the KONKR.
+        if matches!(self.overlay, ShelfOverlay::None) && self.game.is_none() && !self.inserted
+            && self.last_cart_navigation.elapsed() >= Duration::from_secs(2)
+            && !self.shelves.get(self.active).is_some_and(|s| s.is_scrolling()) {
+            if let Some(&ahead) = MENU_PATHS_AHEAD.iter().find(|p| !self.menu_paths.contains_key(*p)) {
+                let face = menu_style::menu_path_face(ahead);
+                let tex = self.gpu.create_face(&face);
+                self.menu_paths.insert(ahead, (tex, face.w, face.h));
+            }
+        }
         if !path.is_empty() && !self.menu_paths.contains_key(path) {
             let face = menu_style::menu_path_face(path);
             let tex = self.gpu.create_face(&face);
@@ -456,7 +485,8 @@ mod render {
     fn apps_and_bios_picker_return_to_their_original_menu_row() {
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
-        for page in [ShelfOverlay::Menu { row: 3 }, ShelfOverlay::Library { row: 2 }] {
+        for page in [ShelfOverlay::Menu { row: 3 }, ShelfOverlay::Library { row: 2 },
+                     ShelfOverlay::SavesStates { row: 1 }] {
             engine.overlay = page;
             engine.handle(Input::Key(96, true));
             assert!(engine.external_pending);
@@ -469,7 +499,7 @@ mod render {
             assert!(engine.menu_held.is_none());
         }
         // Refresh Library opens nothing: back to the shelf, where its scan shows.
-        engine.overlay = ShelfOverlay::Library { row: 6 };
+        engine.overlay = ShelfOverlay::Library { row: 5 };
         engine.handle(Input::Key(96, true));
         assert_eq!(engine.overlay, ShelfOverlay::None);
         assert!(!engine.external_pending);
@@ -616,6 +646,41 @@ mod render {
     }
 
     #[test]
+    fn the_default_wallpaper_is_the_shelf_s_mosaic_in_the_theme_s_colours() {
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Default;
+        engine.reload_wallpaper(None);
+        let mosaic = |engine: &Engine, theme| slot_ui::mosaic_native(engine.active, theme, slot_ui::MosaicLook::SHARP).unwrap();
+        // Dark: the dark mosaic, the status line white over it.
+        assert_eq!(engine.settings.appearance, crate::settings::Appearance::Dark);
+        assert_eq!(engine.wallpaper_top_luma, Some(slot_ui::top_line_luma(
+            &mosaic(&engine, slot_ui::MosaicTheme::Dark), slot_ui::native_w())));
+        assert!(!engine.top_line_dark_ink());
+        // Dark > OLED > Light: the cream mosaic, the line black.
+        engine.cycle_appearance(true);
+        engine.cycle_appearance(true);
+        assert_eq!(engine.wallpaper_top_luma, Some(slot_ui::top_line_luma(
+            &mosaic(&engine, slot_ui::MosaicTheme::Light), slot_ui::native_w())));
+        assert!(engine.top_line_dark_ink());
+        // Every shelf gets its own mosaic, the one on screen first.
+        assert!(engine.shelf_wallpaper_rx.is_some());
+        // Light's cream: the shelf's name, letter and title in dark ink.
+        assert!(engine.shelf_ink().is_some());
+        // Original: light on the GBA, white words over the Mega Drive's grey.
+        engine.cycle_appearance(true);
+        assert_eq!(engine.settings.appearance, crate::settings::Appearance::Original);
+        assert_eq!(engine.active, 0);
+        assert!(engine.shelf_ink().is_some());
+        engine.active = 5;
+        assert!(engine.shelf_ink().is_none());
+        engine.active = 0;
+        // Dark: white words.
+        engine.cycle_appearance(true);
+        assert!(engine.shelf_ink().is_none());
+    }
+
+    #[test]
     fn no_wallpaper_shows_each_theme_s_colour() {
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
@@ -632,7 +697,7 @@ mod render {
         let f = |c: [f32; 4]| [0, 1, 2].map(|i| (c[i] * 255.0).round() as u8);
         // From the wood wallpaper, as on a handheld (the 2.4.0-menus6 Theme
         // choice kept drawing the image it left), to None.
-        engine.settings.wallpaper = crate::settings::WallpaperPick::Default;
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Slot;
         engine.reload_wallpaper(None);
         assert!(engine.wallpaper_texture.is_some());
         let wood = corner(&mut engine);
@@ -653,7 +718,8 @@ mod render {
         assert_eq!(corner(&mut engine), menu_style::MenuPalette::original(6).shelf);
         assert!(engine.shelf_ink().is_some());
         // Any image chosen covers the colour again.
-        engine.settings.wallpaper = crate::settings::WallpaperPick::Blur;
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Slot;
+        engine.settings.wallpaper_look.blur = 60;
         engine.reload_wallpaper(None);
         assert_ne!(corner(&mut engine), menu_style::MenuPalette::original(6).shelf);
         assert!(engine.shelf_ink().is_none());
@@ -684,9 +750,15 @@ mod render {
             engine.cycle_appearance(true);
             assert_eq!(ground(&mut engine), menu_style::shelf_ground());
         }
-        // An image keeps the dark hold.
-        engine.settings.wallpaper = crate::settings::WallpaperPick::Blur;
-        assert_eq!(ground(&mut engine), [0.085, 0.085, 0.093, 1.0]);
+        // An image is drawn under the cart, as on the shelf: no dark screen.
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Slot;
+        engine.settings.wallpaper_look.blur = 60;
+        engine.reload_wallpaper(None);
+        let tex = engine.active_wallpaper().unwrap().0;
+        let mut scene = Vec::new();
+        engine.push_hold_scene(&mut scene);
+        assert!(matches!(scene.get(1), Some(Draw::Tex { tex: t, x, y, .. }) if *t == tex && *x == 0.0 && *y == 0.0),
+            "{:?}", scene.get(1));
     }
 
     fn entries() -> Vec<RomEntry> {
@@ -730,7 +802,8 @@ mod render {
         let pages: Vec<(&str, ShelfOverlay)> = vec![
             ("01_menu", ShelfOverlay::Menu { row: 1 }),
             ("02_library_top", ShelfOverlay::Library { row: 0 }),
-            ("03_library_end", ShelfOverlay::Library { row: 6 }),
+            ("03_library_end", ShelfOverlay::Library { row: 5 }),
+            ("03_saves_states", ShelfOverlay::SavesStates { row: 3 }),
             ("04_settings", ShelfOverlay::Settings { row: 1 }),
             ("05_systems", ShelfOverlay::ScreenSettings { row: 0 }),
             ("06_gba_top", ShelfOverlay::ScreenSystemSettings { platform: Platform::Gba, row: 1 }),
@@ -757,6 +830,80 @@ mod render {
         save(&engine, &dir, "14_slide_b.png");
         engine.overlay = ShelfOverlay::GameMenu { row: 0 };
         shoot(&mut engine, &dir, "15_game_menu.png");
+    }
+
+    /// $SCRATCH_STUDIO (preview): Cart Studio on the panel in
+    /// $SCRATCH_PANEL, a row at a time.
+    #[test]
+    fn render_studio() {
+        let Ok(dir) = std::env::var("SCRATCH_STUDIO") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some((w, h)) = std::env::var("SCRATCH_PANEL").ok().as_deref()
+            .and_then(|size| size.split_once('x'))
+            .and_then(|(w, h)| Some((w.parse::<u64>().ok()?, h.parse::<u64>().ok()?))) {
+            PANEL_SIZE.store(w << 32 | h, Ordering::Release);
+        }
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        engine.open_cart_studio();
+        for _ in 0..60 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+        for row in 0..4 {
+            if let Some(studio) = engine.studio.as_mut() { studio.row = row; }
+            shoot(&mut engine, &dir, &format!("studio_{row}.png"));
+        }
+    }
+
+    /// $SCRATCH_CAPTIONS (preview): long game names under their carts, in
+    /// Cart Studio and on RomM's page, on the panel in $SCRATCH_PANEL.
+    #[test]
+    fn render_captions() {
+        let Ok(dir) = std::env::var("SCRATCH_CAPTIONS") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some((w, h)) = std::env::var("SCRATCH_PANEL").ok().as_deref()
+            .and_then(|size| size.split_once('x'))
+            .and_then(|(w, h)| Some((w.parse::<u64>().ok()?, h.parse::<u64>().ok()?))) {
+            PANEL_SIZE.store(w << 32 | h, Ordering::Release);
+        }
+        let names = ["Adventures of Batman & Robin, The", "007 - NightFire",
+            "2 Games in 1 - Dr. Mario + Puzzle League", "3 Games in 1! - SpongeBob SquarePants - Battle for Bikini Bottom + The Movie",
+            "3 Game Pack! - The Game of Life + Payday + Yahtzee", "3 Games in One! - Yars' Revenge + Asteroids + Pong",
+            "Pokemon Emerald"];
+        let mut json: Vec<String> = names.iter().enumerate().map(|(i, n)| format!(
+            r#"{{"title":"{n}","platform":"GBA","uri":"content://roms/g{i}.gba","code":"AXXE"}}"#)).collect();
+        // A tall cart (NES) with a long name: less room under it.
+        json.push(r#"{"title":"Teenage Mutant Ninja Turtles II - The Arcade Game","platform":"NES","uri":"content://roms/tmnt2.nes"}"#.into());
+        let entries: Vec<RomEntry> = serde_json::from_str(&format!("[{}]", json.join(","))).unwrap();
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries)).unwrap();
+        let shelf = &mut engine.shelves[engine.active];
+        if let Some(at) = shelf.carts.iter().position(|c| slot_ui::label_text(c).to_uppercase().contains("BATMAN")) { shelf.select(at); }
+        engine.open_cart_studio();
+        for _ in 0..60 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+        shoot(&mut engine, &dir, "studio.png");
+        engine.studio = None;
+        engine.overlay = ShelfOverlay::None;
+        if let Some(nes) = engine.shelves.iter().position(|s| s.carts.iter().any(|c| slot_ui::label_text(c).to_uppercase().contains("TURTLES"))) {
+            engine.active = nes;
+            let at = engine.shelves[nes].carts.iter().position(|c| slot_ui::label_text(c).to_uppercase().contains("TURTLES")).unwrap();
+            engine.shelves[nes].select(at);
+            engine.open_cart_studio();
+            for _ in 0..60 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+            shoot(&mut engine, &dir, "studio_tall.png");
+            engine.studio = None;
+            engine.overlay = ShelfOverlay::None;
+        }
+        engine.open_romm();
+        let romm: Vec<String> = names.iter().enumerate().map(|(i, n)| format!(
+            r#"{{"id":{},"platform":"GBA","title":"{n} (USA)","label":""}}"#, i + 1)).collect();
+        let catalog: Vec<super::romm::RommEntry> = serde_json::from_str(&format!("[{}]", romm.join(","))).unwrap();
+        engine.handle(Input::RommCatalog(catalog));
+        for _ in 0..60 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+        shoot(&mut engine, &dir, "romm.png");
+        if let Some(page) = engine.romm.as_mut() { page.cursor = 3; }
+        for _ in 0..90 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+        shoot(&mut engine, &dir, "romm_chosen.png");
     }
 
     /// $SCRATCH_ROTATE: the RG Rotate's pages and its closed covers.
@@ -806,5 +953,98 @@ mod render {
         }
         engine.lid_covered = false;
         engine.lid_t = 0.0;
+    }
+
+    /// The Rotate's lid closing over a game, frame by frame, for each game
+    /// cover, into $SCRATCH_LID (beta42 preview). A test picture stands for
+    /// the game.
+    #[test]
+    fn render_lid() {
+        let Ok(dir) = std::env::var("SCRATCH_LID") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some((w, h)) = std::env::var("SCRATCH_PANEL").ok().as_deref()
+            .and_then(|size| size.split_once('x'))
+            .and_then(|(w, h)| Some((w.parse::<u64>().ok()?, h.parse::<u64>().ok()?))) {
+            PANEL_SIZE.store(w << 32 | h, Ordering::Release);
+        }
+        let _surface = slot_gfx::TestEgl::new();
+        let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        let mut game = vec![0u8; 240 * 160 * 4];
+        for y in 0..160 {
+            for x in 0..240 {
+                let i = (y * 240 + x) * 4;
+                let tile = ((x / 20) + (y / 20)) % 2 == 0;
+                game[i] = (x * 255 / 240) as u8;
+                game[i + 1] = if tile { 200 } else { 90 };
+                game[i + 2] = (y * 255 / 160) as u8;
+                game[i + 3] = 255;
+            }
+        }
+        engine.gpu.upload_game(&game);
+        engine.lid_covered = true;
+        for (mode, name) in [(0, "inserted"), (1, "full_cart")] {
+            engine.settings.rotate_game_cover = mode;
+            for step in 0..=10 {
+                engine.lid_t = step as f32 / 10.0;
+                engine.draw_lid_game();
+                save(&engine, &dir, &format!("{name}_{step:02}.png"));
+            }
+        }
+        engine.lid_covered = false;
+        engine.lid_t = 0.0;
+    }
+
+    /// Times slot.'s own work without a handheld (beta41): the cold
+    /// renderer's steps, then every frame of a shelf switch, a scroll and
+    /// the menu opening, with the build part's spans. Software GL makes the
+    /// gpu part meaningless here; the CPU parts compare. $SCRATCH_BENCH on.
+    #[test]
+    fn bench_shelf() {
+        if std::env::var("SCRATCH_BENCH").is_err() { return; }
+        let json: Vec<String> = (0..250).map(|i| {
+            let (platform, ext) = [("GBA", "gba"), ("GB", "gb"), ("GBC", "gbc")][i % 3];
+            format!(r#"{{"title":"Game number {i} of the bench","platform":"{platform}","uri":"content://roms/g{i}.{ext}","code":"AXXE"}}"#)
+        }).collect();
+        let entries: Vec<RomEntry> = serde_json::from_str(&format!("[{}]", json.join(","))).unwrap();
+        let _surface = slot_gfx::TestEgl::new();
+        let started = std::time::Instant::now();
+        let mut engine = Engine::new(1, Some(&entries)).unwrap();
+        eprintln!("BENCH cold renderer {}ms", started.elapsed().as_millis());
+        crate::frame_watch::set_hitch_ms(0.0);
+        let run = |engine: &mut Engine, what: &str, frames: usize| {
+            for i in 0..frames {
+                let at = std::time::Instant::now();
+                engine.draw(0, || {});
+                let took = at.elapsed();
+                eprint!("BENCH {what} #{i} ");
+                crate::frame_watch::frame(took, crate::frame_watch::Moment::default());
+                std::thread::sleep(std::time::Duration::from_millis(4));
+            }
+        };
+        run(&mut engine, "settle", 30);
+        for _ in 0..2 {
+            engine.handle(Input::Key(103, true)); engine.handle(Input::Key(103, false));
+            run(&mut engine, "shelf R1", 20);
+        }
+        engine.handle(Input::Key(102, true)); engine.handle(Input::Key(102, false));
+        run(&mut engine, "shelf L1", 20);
+        for _ in 0..6 {
+            engine.handle(Input::Key(22, true)); engine.handle(Input::Key(22, false));
+            run(&mut engine, "cart right", 6);
+        }
+        run(&mut engine, "still", 60);
+        // Three labels arrive for carts on the shelf.
+        let shelf = &engine.shelves[engine.active];
+        let uris: Vec<String> = (0..3).map(|k| shelf.carts[(shelf.index + k) % shelf.carts.len()]
+            .rom.to_string_lossy().into_owned()).collect();
+        for uri in uris { engine.relabel.push_back(uri); }
+        engine.last_cart_navigation = Instant::now() - std::time::Duration::from_secs(1);
+        run(&mut engine, "label", 30);
+        engine.handle(Input::Key(108, true)); engine.handle(Input::Key(108, false));
+        run(&mut engine, "menu", 20);
+        engine.overlay = ShelfOverlay::Settings { row: 1 };
+        run(&mut engine, "settings", 20);
+        crate::frame_watch::set_hitch_ms(50.0);
     }
 }

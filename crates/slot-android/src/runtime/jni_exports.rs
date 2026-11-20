@@ -27,6 +27,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
 ) -> u8 {
     ENGINE.with(|holder| {
         let started = Instant::now();
+        FIRST_FRAME_SINCE.store(uptime_ms(), Ordering::Release);
         LIBRARY_UPDATE_SAFE.store(false, Ordering::Release);
         if let Some(engine) = holder.borrow_mut().as_mut() {
             // GLSurfaceView calls this on its existing owner thread after EGL
@@ -34,7 +35,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
             let result = engine.gpu.restore_after_context_loss(&AndroidSurface { size: engine.size });
             if let Err(error) = result {
-                eprintln!("slot-konkr: graphics recovery failed; session retained: {error}");
+                crate::log_warn(&format!("graphics recovery failed; session retained: {error}"));
                 return 0;
             }
             if let Some(session) = engine.game.as_ref() { engine.gpu.upload_game(session.frame()); }
@@ -67,7 +68,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
                 1
             }
             Err(error) => {
-                eprintln!("slot-konkr: OpenGL renderer initialization failed: {error}");
+                crate::log_warn(&format!("OpenGL renderer initialization failed: {error}"));
                 0
             }
         }
@@ -221,6 +222,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
     activity: JObject<'_>,
     vsync_frame_ns: jni::sys::jlong,
 ) {
+    let frame_at = Instant::now();
     ENGINE.with(|holder| {
         // Even a direct JNI draw must not advance or save while recovery failed.
         if holder.borrow().as_ref().is_some_and(|e| !e.gpu.graphics_ready()) { return; }
@@ -231,15 +233,19 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 && !matches!(e.overlay, ShelfOverlay::Romm));
         LIBRARY_UPDATE_SAFE.store(safe, Ordering::Release);
         let current = holder.borrow().as_ref().map(|engine| engine.library_version);
+        // The slot. folder brought settings, favourites or labels in: the
+        // shelf is built again from them (SlotFolder.kt, 2.5).
+        let reload = safe && current.is_some() && RELOAD_ALL.swap(false, Ordering::AcqRel);
         let updated = {
             let state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
-            if safe && current.is_some_and(|version| version != state.version) {
+            if safe && current.is_some_and(|version| version != state.version || reload) {
                 Some((state.version, state.entries.clone()))
             } else {
                 None
             }
         };
         if let Some((version, snapshot)) = updated {
+            crate::frame_watch::did(crate::frame_watch::WORK_LIBRARY);
             // Saving an in-progress game on library replacement is mandatory.
             if let Some(engine) = holder.borrow_mut().as_mut() {
                 if let Some(mut session) = engine.game.take() { session.save(true); }
@@ -261,10 +267,11 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 ));
             // Other ROMs: the shelves take them in place, their faces kept.
             let library_page = holder.borrow().as_ref().and_then(|engine| {
-                matches!(engine.overlay, ShelfOverlay::Library { .. } | ShelfOverlay::Menu { .. })
+                matches!(engine.overlay, ShelfOverlay::Library { .. } | ShelfOverlay::SavesStates { .. }
+                    | ShelfOverlay::Menu { .. })
                     .then_some((engine.overlay, engine.external_pending))
             });
-            let in_place = holder.borrow_mut().as_mut()
+            let in_place = !reload && holder.borrow_mut().as_mut()
                 // An empty list on the cold start's placeholder: nothing to
                 // show, so nothing to rebuild (5 s: 2.4.1-beta16 log).
                 .is_some_and(|engine| (engine.has_library || engine.shelves.iter().any(|s| !s.carts.is_empty())
@@ -287,7 +294,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                         }
                         *holder.borrow_mut() = Some(engine);
                     }
-                    Err(error) => eprintln!("slot-konkr: could not reload library: {error}"),
+                    Err(error) => crate::log_warn(&format!("could not reload library: {error}")),
                 }
             }
         }
@@ -300,6 +307,25 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeDrawFrame(
                 }
             });
             engine.observe_frame_delay(vsync_frame_ns);
+            let moment = crate::frame_watch::Moment {
+                playing: engine.game.is_some(),
+                scrolling: engine.shelves.get(engine.active).is_some_and(|s| s.is_scrolling()),
+                menu: !matches!(engine.overlay, ShelfOverlay::None),
+                inserting: engine.inserted && engine.game.is_none(),
+                ejecting: engine.exiting_screen || (!engine.inserted && engine.progress > 0.0),
+            };
+            crate::frame_watch::frame(frame_at.elapsed(), moment);
+            let now = uptime_ms();
+            let since = FIRST_FRAME_SINCE.swap(0, Ordering::AcqRel);
+            if since != 0 {
+                crate::game::log_launch_timing(&format!(
+                    "[{now}] first frame {} ms after the surface came", now - since));
+            }
+            let last = LAST_FRAME_AT.swap(now, Ordering::AcqRel);
+            if last != 0 && now - last > 1_500 {
+                crate::game::log_launch_timing(&format!(
+                    "[{now}] a frame again after {} ms without any", now - last));
+            }
         }
         let now_safe = holder.borrow().as_ref().is_some_and(|e|
             may_apply_library_update(e.game.is_some(), e.inserted, e.awaiting_game)
@@ -1206,3 +1232,111 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeUpdateProgress(
 ) {
     push(Input::UpdateProgress(percent.clamp(0, 100) as u8));
 }
+
+/// A game's portable name (library::game_key), for GameKeys.kt.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_GameKeys_nativeGameKey(
+    mut env: JNIEnv<'_>, _class: JObject<'_>, uri: JString<'_>,
+) -> jni::sys::jstring {
+    let Ok(uri) = env.get_string(&uri) else { return std::ptr::null_mut() };
+    let name = crate::library::game_key(&uri.to_string_lossy());
+    env.new_string(name).map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+/// Where the slot. folder is (Library's first row): 0 none, 1 internal
+/// storage, 2 SD card.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetSlotFolder(
+    _env: *mut c_void, _this: *mut c_void, place: i32,
+) {
+    SLOT_FOLDER.store(place.clamp(0, 2) as u8, Ordering::Release);
+}
+
+/// The slot. folder's first copy, as Library shows it: 0-100, -1 none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetSlotFolderCopy(
+    _env: *mut c_void, _this: *mut c_void, percent: i32,
+) {
+    SLOT_FOLDER_COPY.store(percent.clamp(-1, 100), Ordering::Release);
+}
+
+/// Whether the handheld has a touchscreen (beta41).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetHasTouchscreen(
+    _env: *mut c_void, _this: *mut c_void, has: u8,
+) {
+    HAS_TOUCHSCREEN.store(has != 0, Ordering::Release);
+}
+
+/// The player answered a window before the game, after `ms` (beta39): the
+/// insertion's line leaves it out.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLaunchAsked(
+    _env: *mut c_void, _this: *mut c_void, ms: i64,
+) {
+    crate::frame_watch::asked(ms.max(0) as u128);
+}
+
+/// The task pill's tasks (beta39), most important first: a line each,
+/// "kind<TAB>progress<TAB>words"; empty when nothing runs. Sent only when
+/// it changes.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetTaskPill(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, spec: JString<'_>,
+) {
+    let Ok(spec) = env.get_string(&spec) else { return };
+    *TASK_PILL.lock().unwrap_or_else(|e| e.into_inner()) = spec.to_string_lossy().into_owned();
+    TASK_PILL_REV.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetRommSync(
+    _env: *mut c_void, _this: *mut c_void, state: i32,
+) {
+    ROMM_SYNC.store(state.clamp(0, 2) as u8, Ordering::Release);
+}
+
+/// The ROM folder's SD card isn't in: the shelf greys its carts and
+/// won't insert one (Siham 2026-11-16).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetRomsMissing(
+    _env: *mut c_void, _this: *mut c_void, missing: jboolean,
+) {
+    ROMS_MISSING.store(missing != 0, Ordering::Release);
+}
+
+/// Everything slot. read at start (settings, favourites, labels, controls)
+/// changed on disk: build the shelf again from it when no game is on.
+static RELOAD_ALL: AtomicBool = AtomicBool::new(false);
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeReloadAll(
+    _env: *mut c_void, _this: *mut c_void,
+) {
+    RELOAD_ALL.store(true, Ordering::Release);
+}
+
+/// The bench's end (SlotBench): the shelf's frames since the last line.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeFrameWatchFlush(
+    _env: *mut c_void,
+    _activity: *mut c_void,
+) {
+    crate::frame_watch::flush("bench");
+}
+
+/// slot.'s native journal for About's X Logs (SlotLog), "epoch-ms|line" each.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeJournal(
+    env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jstring {
+    env.new_string(crate::journal_text()).map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+/// Wi-Fi and Bluetooth's width on the status line (canvas pixels): the task
+/// pill sits before them (Siham 2026-11-19).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetStatusIconsWidth(
+    _env: *mut c_void, _this: *mut c_void, width: jint,
+) { STATUS_ICONS_W.store(width.clamp(0, 400) as u32, Ordering::Release); }

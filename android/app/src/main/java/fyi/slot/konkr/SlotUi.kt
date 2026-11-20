@@ -146,11 +146,16 @@ internal object SlotUi {
     fun menuHeader(context: Context, title: String): View =
         android.widget.LinearLayout(context).apply {
             orientation = android.widget.LinearLayout.VERTICAL
+            // Where the window opens from, as the native pages' paths.
             val path = when (title.uppercase(Locale.ROOT)) {
                 "APPS", "RETROACHIEVEMENTS" -> "MENU"
-                "ROMM" -> "MENU › LIBRARY"
+                "ROMM", "SLOT. FOLDER", "OLD SLOT FOLDER" -> "MENU › LIBRARY"
+                "FILTER" -> "LIBRARY › ROMM"
                 "SIGN OUT" -> "MENU › RETROACHIEVEMENTS"
-                "SAVE CONFLICT", "SAVE STATE" -> "LIBRARY"
+                "SAVES ALREADY IN THIS FOLDER", "STATES ALREADY IN THIS FOLDER" ->
+                    "LIBRARY › SAVES & STATES"
+                "SLEEP WHEN CLOSED" -> "SETTINGS › HANDHELD"
+                // A game starting from the shelf.
                 else -> "slot."
             }
             addView(label(context, path, 13f, menuInk).apply {
@@ -244,16 +249,7 @@ internal object SlotUi {
     fun menuEntryInset(context: Context): Int = menuPixel(context, 5)
 
     fun menuHeading(context: Context, title: String): View {
-        val asset = when (title.uppercase(Locale.ROOT)) {
-            "APPS" -> "heading-apps.png"
-            "RETROACHIEVEMENTS" -> "heading-ra.png"
-            "SAVE CONFLICT" -> "heading-save-conflict.png"
-            "SAVE STATE" -> "heading-save-state.png"
-            "SIGN OUT" -> "heading-sign-out.png"
-            "LINK — SHARE CARTRIDGE" -> "heading-link-consent.png"
-            "MULTIPLAYER — DIRECT JOIN" -> "heading-direct-join.png"
-            else -> null
-        }
+        val asset: String? = Headings.asset(title)
         val image = asset?.let { file ->
             runCatching {
                 context.assets.open("apps_controls/$file").use {
@@ -261,6 +257,7 @@ internal object SlotUi {
                 }
             }.getOrNull()
         }
+        // A title without its picture (none should be): Android's text.
         if (image == null) return label(context, title, 16f, menuInk).apply {
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuPixel(context, 26).toFloat())
             setPadding(menuPixel(context, 16), 0, 0, 0)

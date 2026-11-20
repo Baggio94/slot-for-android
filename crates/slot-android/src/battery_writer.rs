@@ -106,7 +106,7 @@ impl Drop for BatteryWriter {
         self.send.take();
         if let Some(handle) = self.worker.take() {
             if handle.join().is_err() {
-                eprintln!("slot-konkr: battery writer panicked on shutdown");
+                crate::log_warn("battery writer panicked on shutdown");
             }
         }
     }

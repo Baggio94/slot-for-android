@@ -229,6 +229,9 @@ impl SlotChrome<'_> {
         let slot_alpha = if held { 1.0 } else { chrome };
         if self.game && opening && self.over { out.push(Draw::Game); }
 
+        if self.slot_faces.is_some() {
+            draw_bar_shadow(chrome, out);
+        }
         draw_slot_back_with(self.slot_faces.map(|faces| faces.0), slot_alpha, out);
 
         let (cw, ch) = crate::cart::shelf_box_for(self.cart);
@@ -306,6 +309,40 @@ impl SlotChrome<'_> {
             if self.over { chrome } else { slot_alpha }, out);
         if self.game && opening && !self.over { out.push(Draw::Game); }
     }
+}
+
+/// Light and Original: the console bar's top edge melts into a light
+/// shelf, where Dark's light rim stands out on its dark one. A short soft
+/// shadow, a darker shade of the shelf's own colour, sets it off; a little
+/// less over the GBA's and Mega Drive's dark plastic (Siham 2026-11-17).
+/// Drawn before the bar and the cart, so neither is shaded.
+fn draw_bar_shadow(alpha: f32, out: &mut Vec<Draw>) {
+    for (y, a) in bar_shadow_bands() {
+        out.push(Draw::Rect { x: 0.0, y, w: out_w() as f32, h: BAR_SHADOW_STEP, colour: [a[0], a[1], a[2], a[3] * alpha] });
+    }
+}
+
+const BAR_SHADOW_STEP: f32 = 0.5;
+
+/// The shadow's half-pixel bands above the bar: (top, colour). Empty in
+/// Dark and OLED.
+pub fn bar_shadow_bands() -> Vec<(f32, [f32; 4])> {
+    bar_shadow_bands_for(crate::menu_style::palette())
+}
+
+fn bar_shadow_bands_for(palette: Option<crate::menu_style::MenuPalette>) -> Vec<(f32, [f32; 4])> {
+    let Some(palette) = palette else { return Vec::new() };
+    // A little less over the GBA's and Mega Drive's dark plastic, still
+    // seen there (Siham 2026-11-17: more on the GBA's).
+    let strength = if palette.ink.is_some() { 1.0 } else { 0.8 };
+    let tint = palette.shelf.map(|c| c as f32 / 255.0 * 0.45);
+    (0..14).map(|i| {
+        let d = (i as f32 + 0.5) * BAR_SHADOW_STEP;
+        let mut a = 0.17 * strength * (-((d - 0.25) / 2.2).powi(2)).exp();
+        // The edge itself, a fine line as Dark's rim.
+        if i == 0 { a += 0.13 * strength; }
+        (BAND_Y - (i as f32 + 1.0) * BAR_SHADOW_STEP, [tint[0], tint[1], tint[2], a.min(1.0)])
+    }).collect()
 }
 
 fn band(x: f32, y: f32, w: f32, h: f32, c: [f32; 4], alpha: f32) -> Draw {
@@ -424,6 +461,30 @@ pub fn draw_slot_name(name: Printed, alpha: f32, out: &mut Vec<Draw>) {
     draw_slot_name_at_scale(name, alpha, 1.0, out);
 }
 
+/// How far a title too long for its window has to scroll (0 when it fits).
+pub fn slot_title_travel(title: Printed) -> f32 {
+    (title.w as f32 - crate::plate::title_line_window()).max(0.0)
+}
+
+/// The title in its window (#119): centred when it fits, else cut at the
+/// window's edges with a fade and moved `shift` px along, as the menus'
+/// long values.
+pub fn draw_slot_title_scrolled(title: Printed, alpha: f32, shift: f32, out: &mut Vec<Draw>) {
+    let travel = slot_title_travel(title);
+    if travel <= 0.5 { return draw_slot_title(title, alpha, out); }
+    let (Some(tex), true) = (title.face, alpha > 0.0) else { return };
+    let (w, h) = (title.w as f32, crate::plate::TITLE_LINE_H as f32);
+    let window = crate::plate::title_line_window();
+    let left = cx() - window / 2.0;
+    const FEATHER: f32 = 18.0;
+    out.push(Draw::Span(Some(slot_gfx::Span {
+        left, right: left + window,
+        feather_left: shift.min(FEATHER), feather_right: (travel - shift).min(FEATHER),
+    })));
+    out.push(Draw::Tex { x: left - shift, y: SLOT_NAME_Y + HINT_H as f32 - h, w, h, tex, alpha });
+    out.push(Draw::Span(None));
+}
+
 /// Original Slot v1.7 title overlay: 32px high and eight pixels above
 /// the shelf platform text, with the same centred slot-mouth origin.
 pub fn draw_slot_title(title: Printed, alpha: f32, out: &mut Vec<Draw>) {
@@ -451,6 +512,10 @@ pub fn draw_empty_slot_with(faces: Option<(TexId, TexId)>, out: &mut Vec<Draw>) 
 
 /// The empty slot with its closer shut.
 pub fn draw_empty_slot_closed(faces: Option<(TexId, TexId)>, closer: Option<SlotCloser>, out: &mut Vec<Draw>) {
+    // The resting shelf's bar too, not only while a cart goes in.
+    if faces.is_some() {
+        draw_bar_shadow(1.0, out);
+    }
     draw_slot_back_with(faces.map(|pair| pair.0), 1.0, out);
     if let Some(closer) = closer {
         closer.draw(0.0, 1.0, out);
@@ -480,5 +545,37 @@ mod upstream_slot_name_geometry_tests {
     fn title_and_platform_share_official_v17_name_baseline() {
         assert_eq!(SLOT_NAME_Y, 392.0);
         assert_eq!(SLOT_NAME_Y + HINT_H as f32 - crate::plate::TITLE_LINE_H as f32, 384.0);
+    }
+}
+
+#[cfg(test)]
+mod bar_shadow_tests {
+    use super::*;
+    use crate::menu_style::MenuPalette;
+
+    #[test]
+    fn dark_and_oled_bars_keep_their_own_rim() {
+        assert!(bar_shadow_bands_for(None).is_empty());
+    }
+
+    #[test]
+    fn a_light_bar_gets_a_soft_shadow_fading_upwards() {
+        let bands = bar_shadow_bands_for(Some(MenuPalette::LIGHT));
+        assert!(!bands.is_empty());
+        // Right above the bar, then upwards, lighter each time.
+        assert_eq!(bands[0].0 + BAR_SHADOW_STEP, BAND_Y);
+        for pair in bands.windows(2) {
+            assert!(pair[1].0 < pair[0].0 && pair[1].1[3] <= pair[0].1[3]);
+        }
+        assert!(bands[0].1[3] < 0.35 && bands.last().unwrap().1[3] < 0.02);
+        // A darker shade of the shelf, not black.
+        assert!(bands[0].1[0] > 0.3);
+    }
+
+    #[test]
+    fn dark_plastic_bars_get_less() {
+        let gba = bar_shadow_bands_for(Some(MenuPalette::original(6)));
+        let nes = bar_shadow_bands_for(Some(MenuPalette::original(1)));
+        assert!(gba[0].1[3] < nes[0].1[3]);
     }
 }

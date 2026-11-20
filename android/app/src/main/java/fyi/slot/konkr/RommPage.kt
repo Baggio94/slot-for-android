@@ -104,10 +104,10 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
 
     /** Once the page is left: the games are on the shelf (Siham 2026-11-16:
      *  the player must never wonder whether they were added). */
-    private fun shelfToast(added: Int, failed: Int) {
+    private fun shelfToast(added: Int, failed: Int, note: String = "") {
         val games = if (added == 1) "1 game" else "$added games"
         SlotToast.makeText(activity,
-            if (failed == 0) "$games added to your shelf." else "$games added to your shelf, $failed failed.",
+            (if (failed == 0) "$games added to your shelf." else "$games added to your shelf, $failed failed.") + note,
             Toast.LENGTH_SHORT).show()
     }
 
@@ -569,6 +569,18 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                     if (ok) refreshIfLeft(done = false)
                 }
             }
+            // The BIOS these games can use, from the same server, where slot.
+            // has none yet (Siham 2026-11-17).
+            val bios = if (saved == 0 || out) emptyList() else try {
+                val missing = BiosLibrary.missing(activity, chosen.map { it.platform }.toSet())
+                if (missing.isEmpty()) emptyList() else Romm.fetchBios(activity, missing)
+            } catch (error: Exception) {
+                Log.w(TAG, "BIOS not fetched from RomM", error)
+                emptyList()
+            }
+            if (bios.isNotEmpty()) Log.i(TAG, "BIOS added from RomM: ${bios.joinToString()}")
+            val biosNote = if (bios.isEmpty()) "" else
+                " BIOS added: " + bios.map(BiosLibrary::systemOf).distinct().joinToString(", ") + "."
             batch = null
             Log.i(TAG, "Download batch done: $saved saved, $failed failed")
             activity.runOnUiThread {
@@ -576,13 +588,13 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                 activity.nativeRommProgress(chosen.size, chosen.size, -1)
                 if (out && saved == 0) return@runOnUiThread
                 val added = refreshIfLeft(done = true)
-                if (added > 0) { shelfToast(added, failed); return@runOnUiThread }
+                if (added > 0) { shelfToast(added, failed, biosNote); return@runOnUiThread }
                 val text = when {
                     failed == 0 && saved == 1 -> "1 game downloaded."
                     failed == 0 -> "$saved games downloaded."
                     saved == 0 -> "Download failed. Check your Wi-Fi and the ROM folder."
                     else -> "$saved downloaded, $failed failed."
-                }
+                } + biosNote
                 SlotToast.makeText(activity, text, Toast.LENGTH_SHORT).show()
             }
         }

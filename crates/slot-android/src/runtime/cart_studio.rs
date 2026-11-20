@@ -28,9 +28,102 @@ const ROW_FINISH: usize = 3;
 const ROW_SHAPE: usize = 4;
 /// The rows start higher than a settings page's: the finish strip goes under.
 const ROWS_TOP: f32 = 84.0;
+/// The page's middle line: the cart's and the rows' centre, as low as the
+/// rows and the finish strip under them allow above the legend (Siham
+/// 2026-11-19).
+const STUDIO_MID: f32 = 222.0;
+/// Every row's words, chosen or not (Siham 2026-11-19: Finish grew when
+/// its value was short); smaller on a narrow page (studio_text).
+const STUDIO_TEXT: f32 = 0.72;
+/// Each row's usual longest value, which a narrow page's words are sized
+/// to hold, carets aside (the RG Rotate's, the RPC's): the chosen row's
+/// scrolls when its carets take the room (Siham 2026-11-19).
+const STUDIO_TYPICAL: [&str; 5] = ["CURRENT", "\u{2014}", "ORIGINAL", "ORIGINAL", "AUTOMATIC"];
+
+/// Values a little smaller than their labels (Siham 2026-11-19).
+const STUDIO_VALUE: f32 = 0.9;
+
+/// The size of every row's label on a page `room` wide (values are
+/// STUDIO_VALUE of it): STUDIO_TEXT, or less where a row's label and its
+/// usual value would not fit, the same for every row. Measured once per
+/// page width.
+fn studio_text(room: f32) -> f32 {
+    thread_local! { static SIZED: std::cell::Cell<Option<(u32, f32)>> = const { std::cell::Cell::new(None) }; }
+    let key = room.to_bits();
+    if let Some((at, scale)) = SIZED.with(|c| c.get()) { if at == key { return scale; } }
+    let pad = slot_ui::MENU_PAD as f32;
+    let free = room - 18.0;
+    let scale = ROWS.iter().zip(STUDIO_TYPICAL).map(|(label, value)| {
+        let need = slot_ui::quick_face_width(&label.to_uppercase()) as f32 - pad
+            + slot_ui::quick_face_width(value) as f32 * STUDIO_VALUE;
+        free / need.max(1.0)
+    }).fold(STUDIO_TEXT, f32::min);
+    let scale = ((scale * 100.0).floor() / 100.0).clamp(0.5, STUDIO_TEXT);
+    SIZED.with(|c| c.set(Some((key, scale))));
+    scale
+}
+
+/// The cart's flight between the shelf and Cart Studio, X or a long press
+/// (Siham 2026-11-17).
+const FLIGHT_S: f32 = 0.25;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StudioFlight {
+    pub(super) opening: bool,
+    started: Instant,
+    from: [f32; 4],
+    /// Where the cart takes off from: `from` lifted. X lifts it first, over
+    /// `lead` seconds, as a long press already has (Siham 2026-11-17).
+    lifted: [f32; 4],
+    lead: f32,
+    to: [f32; 4],
+    tex: slot_gfx::TexId,
+}
+
+/// X's short lift before the cart takes off.
+const LEAD_S: f32 = 0.07;
+
+impl StudioFlight {
+    fn elapsed(&self) -> f32 { self.started.elapsed().as_secs_f32() }
+
+    /// The flight itself, 0 to 1 (0 during the lift).
+    fn progress(&self) -> f32 {
+        ((self.elapsed() - self.lead) / FLIGHT_S).clamp(0.0, 1.0)
+    }
+
+    pub(super) fn flying(&self) -> bool { self.elapsed() < self.lead + FLIGHT_S }
+
+    /// Eased out: quick off the mark, settling into place. X's lift before
+    /// it keeps the start from looking abrupt, as a long press's does
+    /// (Siham 2026-11-17: the gentler start felt slower).
+    fn eased(&self) -> f32 {
+        let t = self.progress();
+        1.0 - (1.0 - t).powi(3)
+    }
+
+    fn at(&self) -> [f32; 4] {
+        if self.lead > 0.0 && self.elapsed() < self.lead {
+            let t = (self.elapsed() / self.lead).clamp(0.0, 1.0);
+            let k = t * t * (3.0 - 2.0 * t);
+            return std::array::from_fn(|i| self.from[i] + (self.lifted[i] - self.from[i]) * k);
+        }
+        let k = self.eased();
+        std::array::from_fn(|i| self.lifted[i] + (self.to[i] - self.lifted[i]) * k)
+    }
+
+    fn draw(&self, rect: [f32; 4], out: &mut Vec<Draw>) {
+        out.push(Draw::Tex { x: rect[0], y: rect[1], w: rect[2], h: rect[3], tex: self.tex, alpha: 1.0 });
+    }
+}
+
+/// Where Cart Studio draws a cart of this size (its preview's).
+fn studio_cart_rect(size: (u32, u32)) -> [f32; 4] {
+    let layout = studio_layout(Some(size));
+    [layout.cart_x + (layout.cart_room - layout.cart_w) / 2.0, layout.cart_y, layout.cart_w, layout.cart_h]
+}
 const STRIP_BOTTOM: f32 = 414.0;
 /// The finish strip's height under the rows.
-const FINISH_STRIP_H: f32 = 70.0;
+const FINISH_STRIP_H: f32 = 68.0;
 /// Search game's keyboard, QWERTY: ten keys a row; "<" deletes, "_" is a space.
 const KEYS: [char; 40] = [
     '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
@@ -120,7 +213,7 @@ pub(super) struct Studio {
     /// The cart's automatic shell, and the Studio choice it had on opening.
     auto: Option<ShellChoice>,
     stored: Option<ShellChoice>,
-    row: usize,
+    pub(super) row: usize,
     label: usize,
     background: usize,
     colour: usize,
@@ -144,6 +237,12 @@ pub(super) struct Studio {
     /// The colour chart is open; the colour it was opened on.
     chart: Option<usize>,
     preview: Option<(slot_gfx::TexId, u32, u32)>,
+    /// The cart as it stands, being drawn on a worker (50 to 110 ms on the
+    /// RG Rotate): the preview on screen stays until it is ready.
+    preview_rx: Option<std::sync::mpsc::Receiver<(slot_ui::CartFace, (u32, u32))>>,
+    /// The last page's preview texture, reused for this cart's first one:
+    /// never shown with the other cart on it (a flash of its label).
+    spare: Option<slot_gfx::TexId>,
     minis: Minis,
     stale: bool,
     /// Opened from the library page: B and A go back there.
@@ -388,7 +487,7 @@ impl Studio {
             uri, original: cart, auto, stored, row: 0, label: 0, background: 0,
             colour: start.0, finish: start.1, outline: start.2, start, colours, fun_start, pending_label,
             real_png: None, real: None, logo: None, waiting: true, alt: None, picture: None, search: None,
-            chart: None, preview: None, minis: Minis::default(), stale: true, from_library,
+            chart: None, preview: None, preview_rx: None, spare: None, minis: Minis::default(), stale: true, from_library,
         }
     }
 
@@ -629,7 +728,80 @@ impl Engine {
     pub(super) fn open_cart_studio(&mut self) {
         let shelf = &self.shelves[self.active];
         let Some(cart) = shelf.carts.get(shelf.index).cloned() else { return };
+        // The cart leaves the shelf from where it is drawn (lifted by a long
+        // press) for its place on the page.
+        let pressed = self.press_lift() > 0.0;
+        let flight = shelf.selected_rect().zip(shelf.face(shelf.index)).map(|((x, y, w, h), tex)| {
+            let (cw, ch) = slot_ui::shelf_box_for(&cart);
+            // A long press has lifted it already; X lifts it first.
+            let (from, lifted, lead) = if pressed {
+                let lifted = self.lifted([x, y, w, h]);
+                (lifted, lifted, 0.0)
+            } else {
+                ([x, y, w, h], super::touch::lifted_fully([x, y, w, h]), LEAD_S)
+            };
+            StudioFlight {
+                opening: true,
+                started: Instant::now(),
+                from,
+                lifted,
+                lead,
+                to: studio_cart_rect(((cw * 10.0) as u32, (ch * 10.0) as u32)),
+                tex,
+            }
+        });
+        self.studio_when_settled = false;
         self.open_cart_studio_on(cart, None, false);
+        self.studio_flight = flight;
+    }
+
+    /// Back to the shelf: the cart flies to its place, as saved, or as the
+    /// shelf still has it when B left the changes.
+    fn fly_back_to_shelf(&mut self, saved: bool) {
+        let shelf = &self.shelves[self.active];
+        // Only to the cart it came from.
+        let same = shelf.carts.get(shelf.index).zip(self.studio.as_ref())
+            .is_some_and(|(cart, studio)| cart.rom.to_string_lossy() == studio.uri.as_str());
+        let to = shelf.selected_rect().filter(|_| same);
+        let shelf_face = shelf.face(shelf.index);
+        let from = self.studio.as_ref().and_then(|studio| studio.preview)
+            .map(|(tex, w, h)| (studio_cart_rect((w, h)), tex))
+            .or_else(|| self.studio_flight.filter(|f| f.opening).map(|f| (f.to, f.tex)))
+            .and_then(|(rect, preview)| if saved { Some((rect, preview)) } else { shelf_face.map(|f| (rect, f)) });
+        self.studio_flight = to.zip(from).map(|((x, y, w, h), (from, tex))| StudioFlight {
+            opening: false,
+            started: Instant::now(),
+            from,
+            lifted: from,
+            lead: 0.0,
+            to: [x, y, w, h],
+            tex,
+        });
+    }
+
+    /// Per frame: a finished flight ends (the opening one once the page's
+    /// own preview is there to take over).
+    pub(super) fn settle_studio_flight(&mut self) {
+        let Some(flight) = self.studio_flight else { return };
+        if flight.flying() { return; }
+        let previewed = self.studio.as_ref().is_some_and(|s| s.preview.is_some());
+        if !flight.opening || previewed || !matches!(self.overlay, ShelfOverlay::CartStudio) {
+            self.studio_flight = None;
+        }
+    }
+
+    /// The selected cart hides from the shelf while it flies.
+    pub(super) fn studio_flight_hides_cart(&self) -> bool {
+        self.studio_flight.is_some_and(|f| f.flying() || f.opening)
+    }
+
+    /// Closing: the page fades off the shelf as the cart lands.
+    pub(super) fn draw_studio_return(&self, out: &mut Vec<Draw>) {
+        let Some(flight) = self.studio_flight.filter(|f| !f.opening && f.flying()) else { return };
+        let mut ground = menu_ground();
+        ground[3] *= 1.0 - flight.eased();
+        out.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32, colour: ground });
+        self.with_cart_ink(out, |out| flight.draw(flight.at(), out));
     }
 
     /// Cart Studio on `cart`; `pending` is a label the library session chose
@@ -638,7 +810,7 @@ impl Engine {
         let uri = cart.rom.to_string_lossy().into_owned();
         let mut studio = Studio::new(cart, pending, from_library);
         if let Some(old) = self.studio.take() {
-            studio.preview = old.preview;
+            studio.spare = old.preview.map(|(tex, _, _)| tex).or(old.spare);
             self.studio_pool.extend(old.minis.tex.into_iter().flatten().map(|(tex, _, _)| tex));
         }
         self.studio = Some(studio);
@@ -813,7 +985,9 @@ impl Engine {
             self.return_to_cart_library();
             return;
         }
+        self.fly_back_to_shelf(save);
         self.overlay = ShelfOverlay::None;
+        let Some(studio) = self.studio.as_ref() else { return };
         if !save { return; }
         let uri = studio.uri.clone();
         let outcome = studio.outcome();
@@ -893,11 +1067,25 @@ impl Engine {
         }
     }
 
+    /// The game's name under the cart: up to two lines, one when a tall
+    /// cart (a shape changed in this page) leaves less room above the
+    /// legend (Siham 2026-11-19). The same lines for prepare and draw.
+    pub(super) fn studio_name_lines(&self, studio: &Studio) -> (Vec<String>, f32) {
+        let layout = studio_layout(studio.preview.map(|(_, w, h)| (w, h)));
+        let below = layout.cart_y + layout.cart_h + 12.0;
+        let line_h = self.controls_faces.get(&Self::face_key("CART STUDIO", true))
+            .map(|&(_, _, h)| super::romm::caption_line_h(h, STUDIO_NAME_SCALE));
+        let most = line_h.map_or(2, |line_h| (((self.legend_y() - 10.0 - below) / line_h).floor() as usize).clamp(1, 2));
+        super::romm::caption_lines(&slot_ui::label_text(&studio.original), layout.cart_room,
+            STUDIO_NAME_SCALE, most, false)
+    }
+
     /// Before drawing: the faces of the page and the cart as it stands.
     pub(super) fn prepare_cart_studio(&mut self) {
         if !matches!(self.overlay, ShelfOverlay::CartStudio) { return; }
         let Some(studio) = self.studio.as_ref() else { return };
-        let mut texts = vec![("CART STUDIO".to_owned(), true), (slot_ui::label_text(&studio.original), true)];
+        let mut texts = vec![("CART STUDIO".to_owned(), true)];
+        for line in self.studio_name_lines(studio).0 { texts.push((line, true)); }
         for row in studio.rows() {
             let (value, lit) = studio.value(row);
             texts.push((ROWS[row].to_owned(), lit || row != ROW_BACKGROUND));
@@ -937,16 +1125,47 @@ impl Engine {
                              ("A", "TYPE"), ("A", "USE")] {
             self.controls_hint(key, label);
         }
+        // The heavy drawing (the page's own cart, the colour tiles) waits for
+        // the cart to land: drawn mid-flight, it cost the flight frames
+        // (Siham 2026-11-17). The flying cart stands in meanwhile.
+        if self.studio_flight.is_some_and(|f| f.opening && f.flying()) { return; }
         self.prepare_minis(wanted);
-        if !stale { return; }
-        let face = slot_ui::cart_face_with_material(&cart, art.map(|(rgba, _, _)| rgba));
-        let (w, h) = slot_ui::cart_box_for(&cart);
+        let art = art.map(|(rgba, _, _)| rgba);
         let studio = self.studio.as_mut().expect("checked above");
-        studio.preview = Some(match studio.preview {
-            Some((tex, _, _)) => { self.gpu.update_face(tex, &face); (tex, w, h) }
+        if stale {
+            studio.stale = false;
+            // The first one at once: the page never opens without its cart.
+            // Then each change on a worker, the newest winning.
+            let first = studio.preview.is_none() || cfg!(test);
+            let make = move || (slot_ui::cart_face_with_material(&cart, art), slot_ui::cart_box_for(&cart));
+            if first {
+                studio.preview_rx = None;
+                let made = make();
+                self.show_studio_preview(made);
+                return;
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            match std::thread::Builder::new().name("slot-studio-cart".into())
+                .spawn(move || { let _ = tx.send(make()); }) {
+                Ok(_) => studio.preview_rx = Some(rx),
+                Err(error) => {
+                    crate::log_warn(&format!("cart studio worker failed: {error}"));
+                    studio.stale = true;
+                    return;
+                }
+            }
+        }
+        let Some(made) = studio.preview_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else { return };
+        studio.preview_rx = None;
+        self.show_studio_preview(made);
+    }
+
+    fn show_studio_preview(&mut self, (face, (w, h)): (slot_ui::CartFace, (u32, u32))) {
+        let Some(studio) = self.studio.as_mut() else { return };
+        studio.preview = Some(match studio.preview.map(|(tex, _, _)| tex).or(studio.spare.take()) {
+            Some(tex) => { self.gpu.update_face(tex, &face); (tex, w, h) }
             None => (self.gpu.create_face(&face), w, h),
         });
-        studio.stale = false;
     }
 
     /// The tiles: keep the ones still right, draw the missing ones.
@@ -985,9 +1204,20 @@ impl Engine {
 
     pub(super) fn draw_cart_studio(&self, out: &mut Vec<Draw>) {
         let Some(studio) = self.studio.as_ref() else { return };
-        self.draw_menu_ground(0.0, out);
+        // Opening from the shelf: the page arrives around the flying cart,
+        // its rows in the second half of the flight.
+        let opening = self.studio_flight.filter(|f| f.opening);
+        let flying = opening.filter(|f| f.flying());
+        if let Some(flight) = flying {
+            let mut ground = menu_ground();
+            ground[3] *= flight.eased();
+            out.push(Draw::Rect { x: 0.0, y: 0.0, w: out_w() as f32, h: OUT_H as f32, colour: ground });
+        } else {
+            self.draw_menu_ground(0.0, out);
+        }
         let width = out_w() as f32;
         let fade = slot_ui::ease((self.menu_opened.elapsed().as_secs_f32() / 0.16).clamp(0.0, 1.0));
+        let fade = flying.map_or(fade, |f| fade.min(((f.progress() - 0.45) / 0.55).clamp(0.0, 1.0)));
         let face = |text: &str, lit: bool| self.controls_faces.get(&Self::face_key(text, lit)).copied();
         self.draw_page_title(out, "CART STUDIO", fade);
         // The cart and the rows as one block, centred, with a clear gap.
@@ -996,7 +1226,13 @@ impl Engine {
         let (left, right_edge) = (layout.cart_x, layout.cart_x + layout.cart_room);
         let mut below = 300.0;
         let mut cart_top = ROWS_TOP;
-        if let Some((tex, _, _)) = studio.preview {
+        if let Some(flight) = opening.filter(|_| flying.is_some() || studio.preview.is_none()) {
+            // In flight, then in its place until the page's preview is ready.
+            let rect = flight.at();
+            self.with_cart_ink(out, |out| flight.draw(rect, out));
+            cart_top = rect[1];
+            below = rect[1] + rect[3] + 12.0;
+        } else if let Some((tex, _, _)) = studio.preview {
             let (dw, dh) = (layout.cart_w, layout.cart_h);
             let (x, y) = (left + (layout.cart_room - dw) / 2.0, layout.cart_y);
             cart_top = y;
@@ -1004,17 +1240,17 @@ impl Engine {
             below = y + dh + 12.0;
         }
         let centre = (left + right_edge) / 2.0;
-        if let Some((tex, w, h)) = face(&slot_ui::label_text(&studio.original), true) {
-            let scale = 0.66f32.min((right_edge - left) / w.max(1) as f32);
-            let dw = w as f32 * scale;
-            out.push(Draw::Tex { x: centre - dw / 2.0, y: below, w: dw, h: h as f32 * scale, tex, alpha: 0.85 * fade });
-        }
+        // The game's name on up to two lines (Siham
+        // 2026-11-19: shrunk to one line, it was unreadable on the Rotate).
+        let (lines, scale) = self.studio_name_lines(studio);
+        let tall = self.draw_caption(out, &lines, centre, right_edge - left, below, scale,
+            0.85 * fade, (usize::MAX - 3, 0));
         let cart = studio.draft_cart();
         if let Some(note) = studio.label_art(&cart).1 {
             if let Some((tex, w, h)) = face(&note, false) {
                 let scale = 0.56f32.min((right_edge - left) / w.max(1) as f32);
                 let dw = w as f32 * scale;
-                out.push(Draw::Tex { x: centre - dw / 2.0, y: below + 30.0, w: dw, h: h as f32 * scale, tex, alpha: fade });
+                out.push(Draw::Tex { x: centre - dw / 2.0, y: below + tall.max(24.0) + 6.0, w: dw, h: h as f32 * scale, tex, alpha: fade });
             }
         }
         if let Some(search) = &studio.search {
@@ -1027,10 +1263,13 @@ impl Engine {
             vec![("B", "BACK"), ("SWAP", "MOVE"), ("A", "CHOOSE")]
         } else {
             // The rows, on the right half: Label level with the cart's top,
-            // as low as the finish strip under them allows.
+            // as low as the finish strip under them allows (kept as it was,
+            // Siham 2026-11-19).
             let rows = studio.rows();
-            let lowest = STRIP_BOTTOM - FINISH_STRIP_H - rows.len() as f32 * QUICK_PITCH;
-            let rows_top = (cart_top - 8.0).clamp(ROWS_TOP, lowest.max(ROWS_TOP));
+            // The rows centred on the page's middle line, with the cart.
+            let block = (rows.len() as f32 - 1.0) * QUICK_PITCH + 44.0;
+            let rows_top = (STUDIO_MID - 4.0 - block / 2.0).round().max(ROWS_TOP);
+            let _ = cart_top;
             self.draw_menu_pill(x0 - 8.0, x1 + 8.0,
                 rows_top + studio.row as f32 * QUICK_PITCH + 4.0, fade, out);
             for (slot, &row) in rows.iter().enumerate() {
@@ -1038,31 +1277,57 @@ impl Engine {
                 let (value, lit) = studio.value(row);
                 let chosen = slot == studio.row;
                 let carets = chosen && lit;
-                let mut label_room = x1 - x0;
-                if let Some((tex, w, h)) = face(&value, lit) {
-                    let scale = 0.72f32.min(((x1 - x0) * 0.6) / w.max(1) as f32);
-                    let vw = w as f32 * scale;
-                    let x = x1 - vw - if carets { 22.0 } else { 0.0 };
-                    label_room = (x - x0 - 12.0 - if carets { 20.0 } else { 0.0 }).max(50.0);
-                    out.push(Draw::Tex { x, y, w: vw, h: h as f32 * scale, tex,
-                        alpha: if chosen { fade } else { 0.62 * fade } });
+                let label_lit = lit || row != ROW_BACKGROUND;
+                let label = face(ROWS[row], label_lit);
+                let value_face = face(&value, lit);
+                // Every label at one size, every value a little smaller; a
+                // value too long scrolls in its room while chosen (Siham
+                // 2026-11-19).
+                let text = studio_text(x1 - x0);
+                // Smaller words stay centred in their row.
+                let y = y + label.map_or(0.0, |l| l.2 as f32) * (STUDIO_TEXT - text) / 2.0;
+                let scale = text;
+                let label_w = label.map_or(0.0, |l| l.1 as f32 * scale);
+                if let Some((tex, w, h)) = value_face {
+                    let end = x1 - if carets { 22.0 } else { 0.0 };
+                    let from = x0 + label_w + 18.0 - slot_ui::MENU_PAD as f32 * scale
+                        + if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
+                    let vscale = scale * STUDIO_VALUE;
+                    let vw = w as f32 * vscale;
+                    let (y, scale) = (y + h as f32 * (scale - vscale) / 2.0, vscale);
+                    let alpha = if chosen { fade } else { 0.62 * fade };
+                    let x = if end - vw >= from {
+                        out.push(Draw::Tex { x: end - vw, y, w: vw, h: h as f32 * scale, tex, alpha });
+                        end - vw
+                    } else {
+                        let travel = vw - (end - from);
+                        let shift = if chosen { self.marquee_offset((usize::MAX - 1, row), travel) } else { 0.0 };
+                        const FEATHER: f32 = 18.0;
+                        out.push(Draw::Span(Some(slot_gfx::Span {
+                            left: from, right: end,
+                            feather_left: shift.min(FEATHER), feather_right: (travel - shift).min(FEATHER),
+                        })));
+                        out.push(Draw::Tex { x: from - shift, y, w: vw, h: h as f32 * scale, tex, alpha });
+                        out.push(Draw::Span(None));
+                        from
+                    };
                     if carets {
                         let (lt, lw, lh) = self.setting_carets[0];
                         let (rt, rw, rh) = self.setting_carets[1];
-                        let y = self.caret_y(y, scale);
+                        let y = self.caret_y(y - h as f32 * (text - scale) / 2.0, text);
                         out.push(Draw::Tex { x: x - lw as f32 - 8.0, y, w: lw as f32, h: lh as f32, tex: lt, alpha: fade });
                         out.push(Draw::Tex { x: x1 - rw as f32, y, w: rw as f32, h: rh as f32, tex: rt, alpha: fade });
                     }
                 }
-                let label_lit = lit || row != ROW_BACKGROUND;
-                if let Some((tex, w, h)) = face(ROWS[row], label_lit) {
-                    let scale = 0.72f32.min(label_room / w.max(1) as f32);
+                if let Some((tex, w, h)) = label {
+                    let scale = text;
                     out.push(Draw::Tex { x: x0, y, w: w as f32 * scale, h: h as f32 * scale, tex,
                         alpha: if label_lit { fade } else { 0.45 * fade } });
                 }
             }
             if studio.row_id() == ROW_FINISH {
-                let top = rows_top + rows.len() as f32 * QUICK_PITCH + 6.0;
+                // Just under the last row's bar, its own height.
+                let top = rows_top + 4.0 + block + 4.0;
                 self.draw_finish_strip(studio, x0, x1, top, fade, out);
             }
             let a = match (studio.row_id(), studio.label) {
@@ -1162,16 +1427,18 @@ impl Engine {
         let n = FINISHES.len();
         let cell = (x1 - x0) / n as f32;
         let name_h = 18.0;
-        let box_h = (STRIP_BOTTOM - top - name_h - 6.0).max(20.0);
+        let bottom = top + FINISH_STRIP_H;
+        let box_h = (bottom - top - name_h - 6.0).max(20.0);
         for i in 0..n {
             let cx = x0 + i as f32 * cell;
             if i == studio.finish {
-                out.push(Draw::Rect { x: cx + 1.0, y: top, w: cell - 2.0, h: STRIP_BOTTOM - top,
+                out.push(Draw::Rect { x: cx + 1.0, y: top, w: cell - 2.0, h: bottom - top,
                     colour: { let mut c = menu_style::highlight(); c[3] *= 0.8 * fade; c } });
             }
             self.draw_mini(studio, i, cx + 4.0, top + 3.0, cell - 8.0, box_h, fade, out);
             if let Some((tex, w, h)) = face(FINISHES[i], i == studio.finish) {
-                let s = 0.4f32.min((cell - 6.0) / w.max(1) as f32);
+                // Readable names (Siham 2026-11-19), as wide as the cell allows.
+                let s = 0.5f32.min((cell - 6.0) / w.max(1) as f32);
                 let dw = w as f32 * s;
                 out.push(Draw::Tex { x: cx + (cell - dw) / 2.0, y: top + box_h + 6.0, w: dw, h: h as f32 * s, tex,
                     alpha: if i == studio.finish { fade } else { 0.6 * fade } });
@@ -1250,6 +1517,10 @@ fn studio_columns() -> (f32, f32) {
 
 /// Gap between the cart and the rows' highlight.
 const CART_GAP: f32 = 40.0;
+/// The game's name under the cart: one size, never shrunk to fit.
+const STUDIO_NAME_SCALE: f32 = 0.6;
+/// The same gap on a square screen's narrow canvas.
+const NARROW_CART_GAP: f32 = 24.0;
 /// The widest the cart is drawn, so a wide cart never crowds the rows.
 const CART_MAX_W: f32 = 264.0;
 
@@ -1273,9 +1544,15 @@ fn studio_layout(cart: Option<(u32, u32)>) -> StudioLayout {
 }
 
 fn studio_layout_in(width: f32, cart: Option<(u32, u32)>) -> StudioLayout {
-    let rows_w = (width - 22.0) - ((width * 0.5).round() + 4.0);
+    // A square screen's canvas (480 wide, the RG Rotate's): the rows take a
+    // little more than half and the cart sits closer, so a label and its
+    // value fit side by side (beta41, Siham 2026-11-19).
+    let narrow = width < 600.0;
+    let gap = if narrow { NARROW_CART_GAP } else { CART_GAP };
+    let rows_w = if narrow { (width * 0.52).round() }
+        else { (width - 22.0) - ((width * 0.5).round() + 4.0) };
     let box_w = rows_w + 16.0;
-    let room = CART_MAX_W.min(width - 32.0 - CART_GAP - box_w).max(80.0);
+    let room = CART_MAX_W.min(width - 32.0 - gap - box_w).max(80.0);
     let (cart_w, cart_h) = match cart {
         Some((cw, ch)) => {
             let scale = (room / cw.max(1) as f32).min(250.0 / ch.max(1) as f32).min(1.7);
@@ -1283,12 +1560,12 @@ fn studio_layout_in(width: f32, cart: Option<(u32, u32)>) -> StudioLayout {
         }
         None => (room, 250.0),
     };
-    let cart_left = ((width - (cart_w + CART_GAP + box_w)) / 2.0).max(16.0).round();
-    let x0 = cart_left + cart_w + CART_GAP + 8.0;
+    let cart_left = ((width - (cart_w + gap + box_w)) / 2.0).max(16.0).round();
+    let x0 = cart_left + cart_w + gap + 8.0;
     StudioLayout {
         cart_x: cart_left + (cart_w - room) / 2.0,
         cart_room: room,
-        cart_y: 84.0 + (250.0 - cart_h) / 2.0,
+        cart_y: STUDIO_MID - cart_h / 2.0,
         cart_w,
         cart_h,
         x0,
@@ -1299,6 +1576,39 @@ fn studio_layout_in(width: f32, cart: Option<(u32, u32)>) -> StudioLayout {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[cfg(feature = "runtime-tests")]
+    #[test]
+    fn the_cart_flies_from_the_shelf_to_its_place_on_the_page() {
+        let to = studio_cart_rect((1080, 636));
+        let shelf = [228.0, 130.0, 264.0, 156.0];
+        let lifted = super::touch::lifted_fully(shelf);
+        let flight = |ago: f32, lead: f32| StudioFlight {
+            opening: true,
+            started: Instant::now() - std::time::Duration::from_secs_f32(ago),
+            from: shelf,
+            lifted: if lead > 0.0 { lifted } else { shelf },
+            lead,
+            to,
+            tex: slot_gfx::TexId::from_raw(1),
+        };
+        let start = flight(0.0, 0.0).at();
+        assert!((start[0] - 228.0).abs() < 2.0 && (start[2] - 264.0).abs() < 2.0);
+        let landed = flight(1.0, 0.0);
+        assert!(!landed.flying());
+        assert_eq!(landed.at(), to);
+        // Eased out: well past halfway by half the time.
+        assert!(flight(FLIGHT_S / 2.0, 0.0).eased() > 0.8);
+        // X: lifted first, as a long press has, then the same flight.
+        let x = flight(LEAD_S, LEAD_S);
+        assert!(x.flying() && x.progress() < 0.05);
+        assert!((x.at()[1] - lifted[1]).abs() < 1.0);
+        assert_eq!(flight(1.0, LEAD_S).at(), to);
+        // Where the page draws a cart of that size.
+        let layout = studio_layout(Some((1080, 636)));
+        assert_eq!(to[1], layout.cart_y);
+        assert_eq!(to[2], layout.cart_w);
+    }
 
     #[test]
     fn editor_keeps_a_gap_and_centres_cart_and_rows() {

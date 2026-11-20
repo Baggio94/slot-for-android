@@ -250,10 +250,15 @@ internal class SlotUpdater(private val context: Context, private val notify: (In
 
     /** Called ONLY after pressing A on Install in Slot's native UI. */
     fun downloadAndInstall(onVerified: (File) -> Unit) {
-        val release = latest ?: return
+        val cached = latest ?: return
         if (!running.compareAndSet(false, true)) return
-        publish(DOWNLOADING, release.version)
+        publish(DOWNLOADING, cached.version)
         worker.execute {
+            // What was found up to a day ago may be outdated: ask GitHub again
+            // and take the newest (a 2.4.0 found yesterday was installed
+            // while 2.4.2 was out, 2026-11-17). Unreachable: the one found.
+            val release = freshest(cached)
+            if (release !== cached) publish(DOWNLOADING, release.version)
             val destination = File(context.cacheDir, "slot-updates").apply { mkdirs() }
                 .resolve("slot-update.apk")
             try {
@@ -305,6 +310,22 @@ internal class SlotUpdater(private val context: Context, private val notify: (In
                 publish(FAILED, release.version)
             } finally { running.set(false) }
         }
+    }
+
+    private fun freshest(cached: Release): Release = try {
+        val found = findRelease()
+        if (found != null && SlotUpdatePolicy.newer(found.version, cached.version)) {
+            Log.i(TAG, "Newer release since the last check: ${found.version} (was ${cached.version})")
+            latest = found
+            prefs.edit().putString("installed", version())
+                .putString("latest", found.version).putString("page", found.page)
+                .putString("apk", found.apk).putString("sha", found.sha)
+                .putLong("success", System.currentTimeMillis()).apply()
+            found
+        } else cached
+    } catch (error: Exception) {
+        Log.w(TAG, "Release re-check before download failed; using ${cached.version}", error)
+        cached
     }
 
     private fun validPackage(file: File): Boolean {

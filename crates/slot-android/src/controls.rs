@@ -812,6 +812,16 @@ impl Controls {
     /// Every level of a game removed (in-game Controls > Reset to Default).
     pub fn reset_game(&mut self, game: &str) { self.games.remove(game); }
 
+    /// Moves a game's Controls from its old name (its Android address, slot.
+    /// 2.4) to its portable one. True when something moved.
+    pub fn carry_game(&mut self, old: &str, new: &str) -> bool {
+        if old == new || self.games.contains_key(new) { return false; }
+        match self.games.remove(old) {
+            Some(layout) => { self.games.insert(new.to_owned(), layout); true }
+            None => false,
+        }
+    }
+
     /// What a port plays in a game of `system` (`game`: its key, if any).
     pub fn resolve(&self, system: &'static str, game: Option<&str>, port: usize,
                    default_xy: XyRole) -> Resolved {

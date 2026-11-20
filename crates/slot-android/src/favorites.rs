@@ -1,5 +1,6 @@
-//! Slot v1.7 favorites keyed by stable Android SAF URI, not an ambiguous filename.
-//! ROMs, RetroArch saves, RTC and per-core emulation profiles remain untouched.
+//! Favorites by each game's portable name (`library::game_key`, slot. 2.5),
+//! so they follow the games to another handheld. Entries from 2.4, by
+//! Android address, still match and take the name when next saved.
 use slot_store::Cart;
 use std::path::Path;
 const FILE: &str = "konkr-favorites.json";
@@ -16,13 +17,32 @@ pub fn load(root: &Path) -> Vec<String> {
 }
 pub fn toggle(root: &Path, uri: &str) -> std::io::Result<bool> {
     if uri.is_empty() { return Ok(false); }
-    let mut list = load(root);
-    let added = if list.iter().any(|s|s==uri) {
-        list.retain(|item|item!=uri);
+    let name = crate::library::game_key(uri);
+    let mut list = named(load(root));
+    let added = if list.iter().any(|s| *s == name || s == uri) {
+        list.retain(|item| *item != name && item != uri);
         false
-    } else { list.push(uri.to_owned()); true };
+    } else { list.push(name); true };
     store(root,&list)?;
     Ok(added)
+}
+
+/// 2.4's entries by Android address, by name where the library knows them.
+pub fn named(list: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(list.len());
+    for item in list {
+        let name = if item.starts_with("content://") { crate::library::game_key(&item) } else { item };
+        if !out.contains(&name) { out.push(name); }
+    }
+    out
+}
+
+/// Whether this cart is in the list, by name or by its 2.4 address.
+pub fn holds(list: &[String], uri: &str) -> bool {
+    list.iter().any(|item| item == uri) || {
+        let name = crate::library::game_key(uri);
+        list.iter().any(|item| *item == name)
+    }
 }
 fn store(root: &Path, list: &[String]) -> std::io::Result<()> {
     std::fs::create_dir_all(root)?;
@@ -32,9 +52,13 @@ fn store(root: &Path, list: &[String]) -> std::io::Result<()> {
 /// Every cart by its URI, the first one when two share it: found at once
 /// rather than by walking every shelf for each URI (thousands of carts).
 pub fn by_uri<'a>(sources: &[&'a [Cart]]) -> std::collections::HashMap<String, &'a Cart> {
+    let keys = crate::library::LIBRARY.lock().unwrap_or_else(|e| e.into_inner()).keys.clone();
     let mut carts = std::collections::HashMap::new();
     for cart in sources.iter().flat_map(|items| items.iter()) {
-        carts.entry(cart.rom.to_string_lossy().into_owned()).or_insert(cart);
+        let uri = cart.rom.to_string_lossy().into_owned();
+        // By portable name too (2.5): lists saved on another handheld.
+        if let Some(name) = keys.get(&uri) { carts.entry(name.clone()).or_insert(cart); }
+        carts.entry(uri).or_insert(cart);
     }
     carts
 }

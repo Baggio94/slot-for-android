@@ -47,7 +47,18 @@ internal class SlotModalDialog(
     private var onR1: (() -> Unit)? = null
     private lateinit var legend: LinearLayout
     private val dialog = object : Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
+        /** Closing: its window still takes the keys while it fades out,
+         *  so an A pressed right after B reached it and was lost; they go
+         *  to slot. instead (Siham 2026-11-17, Settings after RA). */
+        private var closing = false
+
+        override fun dismiss() {
+            closing = true
+            super.dismiss()
+        }
+
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+            if (closing) return activity.dispatchKeyEvent(event)
             // Physical KONKR buttons, never synthetic Mac keyboard mapping.
             val keyCode = event.keyCode
             when (keyCode) {

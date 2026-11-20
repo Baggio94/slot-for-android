@@ -10,6 +10,14 @@ pub fn cover_bytes(bytes: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     cover_rgba(&src, sw, sh, w, h)
 }
 
+/// Wallpaper imports keep their centred cover framing, but integrate fractional
+/// source pixels correctly. Cartridge labels deliberately keep their own path.
+pub(crate) fn wallpaper_cover(path: &Path, w: u32, h: u32) -> Option<Vec<u8>> {
+    let (src, sw, sh) = decode(path)?;
+    let crop = crate::wallpaper_scale::Crop::cover(sw, sh, w, h)?;
+    crate::wallpaper_scale::sample::<4>(&src, sw, sh, crop, w, h)
+}
+
 /// A NES / Super Nintendo / Mega Drive label for its well: the label is
 /// printed at the well's shape and scans differ only by their margins, so a
 /// scan is shown whole, squeezed up to LABEL_SQUEEZE one way to fit, instead

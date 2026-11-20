@@ -171,6 +171,23 @@ pub fn lookup(platform: Platform, checksums: &[u32], rom_stem: &str) -> Vec<Sour
     sources.into_iter().map(|(_, s)| s).filter(|s| !s.cheats.is_empty()).collect()
 }
 
+/// The player's own cheat file for a game (slot. 2.5): put in the slot.
+/// folder's CustomCheats/<system>/<game>.cht, it reaches slot.'s files with
+/// the folder. Named like the ROM, as RetroArch's; else like the game's
+/// title. Every cheat in it is offered, on or off. `Err` for a file that
+/// holds no cheat slot. can read.
+pub fn custom(storage: &Path, platform: Platform, rom_stem: &str, title: &str)
+    -> Option<Result<Source, ()>> {
+    let dir = storage.join("CustomCheats").join(platform.dir_name());
+    let file = [rom_stem, title].into_iter().filter(|n| !n.is_empty())
+        .flat_map(|name| [name.to_owned(), file_safe(name)])
+        .map(|name| dir.join(format!("{name}.cht")))
+        .find(|path| path.is_file())?;
+    let text = std::fs::read_to_string(&file).ok()?;
+    let cheats: Vec<Cheat> = parse_cht(&text).into_iter().map(|(cheat, _)| cheat).collect();
+    Some(if cheats.is_empty() { Err(()) } else { Ok(Source { label: "My Cheats".into(), cheats }) })
+}
+
 /// Where a game's cheats turned on are kept.
 pub fn saved_path(storage: &Path, platform: Platform, rom_stem: &str) -> PathBuf {
     storage.join("Cheats").join(platform.dir_name()).join(format!("{rom_stem}.cht"))
@@ -227,6 +244,22 @@ pub fn write_saved(path: &Path, cheats: &[Cheat]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_players_own_cheat_file_comes_first_by_rom_name() {
+        let root = std::env::temp_dir().join(format!("slot-custom-cheats-{}", std::process::id()));
+        let dir = root.join("CustomCheats").join(Platform::Gba.dir_name());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Pokemon Emerald (USA).cht"),
+            "cheats = 1\ncheat0_desc = \"Rare Candy\"\ncheat0_code = \"ABCD1234\"\ncheat0_enable = false\n").unwrap();
+        let found = custom(&root, Platform::Gba, "Pokemon Emerald (USA)", "").unwrap().unwrap();
+        assert_eq!(found.label, "My Cheats");
+        assert_eq!(found.cheats, vec![Cheat { desc: "Rare Candy".into(), code: "ABCD1234".into() }]);
+        std::fs::write(dir.join("Broken.cht"), "nothing here").unwrap();
+        assert!(custom(&root, Platform::Gba, "Broken", "").unwrap().is_err());
+        assert!(custom(&root, Platform::Gba, "Missing", "").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn every_pack_opens() {

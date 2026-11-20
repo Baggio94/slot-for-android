@@ -70,7 +70,15 @@ internal class SlotLibraryRefreshIndicator(context: Context, rail: LinearLayout)
         }
     }
 
+    /** What the task pill says for it (beta39: drawn by the engine), with
+     *  its progress, -1 without a count; null when idle. */
+    @Volatile var pillWords: String? = null
+        private set
+    @Volatile var pillProgress = -1f
+        private set
+
     fun show() {
+        pillWords = "UPDATING LIBRARY"; pillProgress = -1f
         caption.text = "UPDATING LIBRARY"
         root.visibility = View.VISIBLE
         spinner.invalidate()
@@ -80,6 +88,12 @@ internal class SlotLibraryRefreshIndicator(context: Context, rail: LinearLayout)
      * labels' (Siham 2026-11-10); carts found so far while the folders are
      * listed. */
     fun showScan(done: Int, total: Int) {
+        pillWords = when {
+            total > 0 -> "SCANNING ${done.coerceAtMost(total)}/$total"
+            done > 0 -> "SCANNING $done"
+            else -> "SCANNING"
+        }
+        pillProgress = if (total > 0) done.coerceAtMost(total).toFloat() / total else -1f
         caption.text = when {
             total > 0 -> "SCANNING ${done.coerceAtMost(total)}/$total"
             done > 0 -> "SCANNING $done"
@@ -92,11 +106,16 @@ internal class SlotLibraryRefreshIndicator(context: Context, rail: LinearLayout)
      *  (Siham 2026-11-16), the game being downloaded counted. */
     fun showDownload(done: Int, total: Int) {
         val text = "DOWNLOADING ${(done + 1).coerceAtMost(total)}/$total"
+        pillWords = text
+        pillProgress = if (total > 0) done.coerceIn(0, total).toFloat() / total else -1f
         if (caption.text != text) caption.text = text
         if (root.visibility != View.VISIBLE) {
             root.visibility = View.VISIBLE
             spinner.invalidate()
         }
     }
-    fun hide() { root.visibility = View.GONE }
+    fun hide() {
+        pillWords = null
+        root.visibility = View.GONE
+    }
 }

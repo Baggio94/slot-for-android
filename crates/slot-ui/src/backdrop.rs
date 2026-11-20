@@ -25,7 +25,7 @@ pub fn blur_background() -> Option<&'static [u8]> {
 /// Preserve native pixels from custom HD wallpapers: decode directly to
 /// panel size (960x640 on the KONKR) instead of downsampling to 720x480 and scaling a second time.
 pub fn wallpaper_face_native(path: &Path) -> Option<Vec<u8>> {
-    art::cover(path, crate::native_w(), crate::native_h())
+    art::wallpaper_cover(path, crate::native_w(), crate::native_h())
 }
 /// The upstream default is embedded verbatim and resampled once for GLES.
 /// Its master is 3x, covered straight onto the panel's own pixels.
@@ -65,7 +65,7 @@ pub fn top_line_luma(rgba: &[u8], w: u32) -> f32 {
 pub const LIGHT_WALLPAPER: f32 = 0.6;
 
 pub fn wallpaper_face(path: &Path) -> Option<Vec<u8>> {
-    art::cover(path, out_w(), OUT_H)
+    art::wallpaper_cover(path, out_w(), OUT_H)
 }
 
 pub fn bezel_face(path: &Path, w: u32, h: u32) -> Option<Vec<u8>> {

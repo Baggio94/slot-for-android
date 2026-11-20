@@ -1,6 +1,50 @@
 //! Android host for the unmodified Slot cartridge graphics and shelf behavior.
 //!
 //! Stage M1: display-only preview carts, not executable games.
+
+#[cfg(target_os = "android")]
+#[link(name = "log")]
+unsafe extern "C" {
+    fn __android_log_write(priority: i32, tag: *const std::ffi::c_char,
+        text: *const std::ffi::c_char) -> i32;
+}
+
+/// slot.'s own journal, native side (2.5.0-beta38): the last lines of the
+/// launch timings and warnings, "epoch-ms|line", for About's X Logs on
+/// handhelds whose Android log keeps only errors.
+static JOURNAL: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+#[allow(dead_code)]
+pub(crate) fn journal(level: char, message: &str) {
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let mut lines = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
+    if lines.len() >= 400 { lines.pop_front(); }
+    lines.push_back(format!("{at}|{level} SlotKONKR: {message}"));
+}
+
+#[allow(dead_code)]
+pub(crate) fn journal_text() -> String {
+    JOURNAL.lock().unwrap_or_else(|e| e.into_inner()).iter()
+        .map(String::as_str).collect::<Vec<_>>().join("\n")
+}
+
+/// A save, a state or a file slot. could not use: a warning in Android's
+/// log, where the player's exported logs show it. stderr goes nowhere on
+/// Android, so these were lost before 2.5.0-beta37.
+#[allow(dead_code)]
+pub(crate) fn log_warn(message: &str) {
+    journal('W', message);
+    #[cfg(target_os = "android")]
+    if let Ok(text) = std::ffi::CString::new(message) {
+        unsafe {
+            __android_log_write(5, c"SlotKONKR".as_ptr(), text.as_ptr());
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("SlotKONKR: {message}");
+}
 mod library;
 mod cart_disk_cache;
 mod settings;
@@ -12,6 +56,7 @@ mod gambatte_state;
 mod recents;
 mod favorites;
 mod selection;
+mod later_write;
 mod emulation;
 // VSync-clock experiment: host-tested, Android-only active mode.
 mod ra_clock_lab;
@@ -144,6 +189,8 @@ mod game;
 mod cart_render;
 #[cfg(any(target_os = "android", all(test, feature = "runtime-tests")))]
 mod runtime;
+#[cfg(any(target_os = "android", all(test, feature = "runtime-tests")))]
+mod frame_watch;
 #[cfg(target_os = "android")]
 mod egl_presentation;
 

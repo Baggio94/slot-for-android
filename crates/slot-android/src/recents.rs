@@ -11,6 +11,11 @@ pub fn load(root: &Path) -> Vec<String> {
         .unwrap_or_default().into_iter().filter(|v| !v.is_empty())
         .take(MAX).collect()
 }
+/// The list with this game first, by its portable name (2.5).
+pub fn append(previous: &[String], uri: &str) -> Vec<String> {
+    let named = crate::favorites::named(previous.to_vec());
+    append_previous(&named, &crate::library::game_key(uri))
+}
 pub fn append_previous(previous: &[String], uri: &str) -> Vec<String> {
     let mut output=Vec::with_capacity(MAX);
     if !uri.is_empty() { output.push(uri.to_owned()); }

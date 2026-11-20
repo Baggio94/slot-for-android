@@ -684,6 +684,23 @@ impl Shelf {
         });
     }
 
+    /// The selected cart alone at (x, y, w, h): lifted by a long press, or
+    /// on its way to or from Cart Studio (Siham 2026-11-17).
+    pub fn draw_selected_at(&self, x: f32, y: f32, w: f32, h: f32, alpha: f32, out: &mut Vec<Draw>) {
+        let Some(cart) = self.carts.get(self.index) else { return };
+        let body = self.shells.get(self.index).copied().unwrap_or_else(|| body_of(cart));
+        let backing = match body {
+            Body::Gba => self.shadow,
+            Body::Gb(GbShell::Notched) => self.gb_shadow,
+            Body::Gb(GbShell::Rounded) => self.gbc_shadow,
+            Body::Home(m) => self.home_shadows[m.index()],
+        };
+        out.push(match self.face(self.index).or(backing) {
+            Some(tex) => Draw::Tex { x, y, w, h, tex, alpha },
+            None => Draw::Rect { x, y, w, h, colour: [0.14, 0.14, 0.16, alpha] },
+        });
+    }
+
     pub fn draw_row(
         &self,
         hidden: Option<&str>,

@@ -5,6 +5,8 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.system.Os
 import android.util.AtomicFile
+import android.util.JsonReader
+import android.util.JsonToken
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
@@ -35,6 +37,8 @@ import java.util.Locale
 internal object Romm {
     private const val TAG = "SlotRomm"
     private const val MAX_JSON = 32 * 1024 * 1024
+    /** An in-game save: a few hundred KB at most (GBA 128 KB, N64 none). */
+    private const val MAX_SAVE = 4 * 1024 * 1024
     private const val PAGE = 500
     /** Asked first; a viewer account only holds the read ones. */
     // collections.read: the account's favourites, for the page's filter.
@@ -156,11 +160,36 @@ internal object Romm {
         fun detail(): String = json()?.optString("detail").orEmpty()
     }
 
-    private fun open(url: String, method: String, auth: String?): HttpURLConnection =
+    /** When the requests of this thread must be done by (System.nanoTime),
+     *  for a launch that never waits long on the server (beta37). */
+    private val deadline = ThreadLocal<Long?>()
+
+    /** Runs [block] with its requests cut short after [millis]: a server
+     *  that doesn't answer (RomM at home, the handheld elsewhere) costs the
+     *  launch at most that, not 10 to 40 seconds. */
+    internal fun <T> within(millis: Long, block: () -> T): T {
+        val before = deadline.get()
+        deadline.set(System.nanoTime() + millis * 1_000_000)
+        try {
+            return block()
+        } finally {
+            deadline.set(before)
+        }
+    }
+
+    /** A timeout for the next step: [usual], or what's left of the time. */
+    private fun timeLeft(usual: Int): Int {
+        val by = deadline.get() ?: return usual
+        val left = (by - System.nanoTime()) / 1_000_000
+        if (left <= 0) throw java.net.SocketTimeoutException("RomM didn't answer in time")
+        return minOf(usual.toLong(), left).toInt()
+    }
+
+    internal fun open(url: String, method: String, auth: String?): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            connectTimeout = 10_000
-            readTimeout = 30_000
+            connectTimeout = timeLeft(10_000)
+            readTimeout = timeLeft(30_000)
             instanceFollowRedirects = true
             setRequestProperty("User-Agent", "slot. for Android")
             setRequestProperty("Accept", "application/json")
@@ -176,6 +205,7 @@ internal object Romm {
                 val n = it.read(buffer)
                 if (n < 0) break
                 if (out.size() + n > limit) throw IOException("RomM reply too large")
+                timeLeft(1)
                 out.write(buffer, 0, n)
             }
         }
@@ -258,7 +288,7 @@ internal object Romm {
                 else -> Result.Failed("RomM refused the code (HTTP ${reply.code}).")
             }
         } catch (error: Exception) {
-            Log.w(TAG, "Pairing failed", error)
+            SlotLog.w(TAG, "Pairing failed", error)
             Result.Failed(unreachable(error))
         }
     }
@@ -282,7 +312,7 @@ internal object Romm {
                 else -> Result.Failed("RomM refused the token (HTTP ${reply.code}).")
             }
         } catch (error: Exception) {
-            Log.w(TAG, "Token check failed", error)
+            SlotLog.w(TAG, "Token check failed", error)
             Result.Failed(unreachable(error))
         }
     }
@@ -313,7 +343,7 @@ internal object Romm {
                 else -> Result.Failed("RomM refused the sign in (HTTP ${reply.code}).")
             }
         } catch (error: Exception) {
-            Log.w(TAG, "Sign in failed", error)
+            SlotLog.w(TAG, "Sign in failed", error)
             Result.Failed(unreachable(error))
         }
     }
@@ -406,38 +436,336 @@ internal object Romm {
     }
 
     /** Every game of one system, page by page; [counted] hears how many so
-     *  far after each page. */
+     *  far after each page. Each page is read as it arrives, keeping only
+     *  what slot. uses: a page held whole (up to 15 MB of JSON, three
+     *  systems at once) ran the RG Rotate out of memory (beta42, 2026-11-19). */
     fun games(context: Context, system: Console, counted: (Int) -> Unit = {}): List<Game> {
         val games = ArrayList<Game>()
         var offset = 0
         while (true) {
             // platform_ids for RomM 4.4 and later, platform_id before: an
             // unknown parameter is ignored either way.
-            val reply = authorized(context, "/api/roms?platform_ids=${system.id}&platform_id=${system.id}" +
+            val page = authorizedJson(context, "/api/roms?platform_ids=${system.id}&platform_id=${system.id}" +
                 "&limit=$PAGE&offset=$offset&order_by=name&order_dir=asc" +
                 "&with_char_index=false&with_filter_values=false&with_rom_id_index=false" +
-                "&with_provider_metadata=false")
-            if (reply.code != 200) throw IOException("RomM roms HTTP ${reply.code}")
-            val text = String(reply.body, Charsets.UTF_8).trim()
-            // A page ({items, total}) since RomM 3.x, a plain list before.
-            val (items, total) = if (text.startsWith("[")) JSONArray(text) to -1
-                else JSONObject(text).let { it.optJSONArray("items") to it.optInt("total", -1) }
-            if (items == null) break
-            for (i in 0 until items.length()) {
-                val rom = items.optJSONObject(i) ?: continue
-                if (rom.optBoolean("missing_from_fs", false)) continue
-                val file = rom.optString("fs_name")
-                if (file.isBlank() || file.contains('/')) continue
-                val title = rom.optString("fs_name_no_ext").ifBlank { file.substringBeforeLast('.') }
-                games.add(Game(rom.optLong("id"), system.platform, system.slug, file, title.trim(),
-                    rom.optLong("fs_size_bytes", -1), crcOf(rom), joined(rom.optJSONArray("regions")),
-                    rom.optString("revision").takeIf { it != "null" }.orEmpty().trim()))
-            }
-            offset += items.length()
+                "&with_provider_metadata=false") { reader -> readGamesPage(reader, system, games) }
+            offset += page.items
             counted(games.size)
-            if (text.startsWith("[") || items.length() < PAGE || (total in 0..offset)) break
+            if (page.plainList || page.items < PAGE || (page.total in 0..offset)) break
         }
         return games
+    }
+
+    private class GamesPage(val items: Int, val total: Int, val plainList: Boolean)
+
+    /** One page of /api/roms: {items, total} since RomM 3.x, a plain list
+     *  before. Games go into [into]. */
+    private fun readGamesPage(reader: JsonReader, system: Console, into: MutableList<Game>): GamesPage {
+        var items = 0
+        var total = -1
+        fun list() {
+            reader.beginArray()
+            while (reader.hasNext()) {
+                items++
+                readGame(reader, system)?.let { into.add(it) }
+            }
+            reader.endArray()
+        }
+        if (reader.peek() == JsonToken.BEGIN_ARRAY) {
+            list()
+            return GamesPage(items, -1, true)
+        }
+        reader.beginObject()
+        while (reader.hasNext()) {
+            when (reader.nextName()) {
+                "items" -> if (reader.peek() == JsonToken.BEGIN_ARRAY) list() else reader.skipValue()
+                "total" -> total = if (reader.peek() == JsonToken.NUMBER) reader.nextInt() else { reader.skipValue(); -1 }
+                else -> reader.skipValue()
+            }
+        }
+        reader.endObject()
+        return GamesPage(items, total, false)
+    }
+
+    /** One game of a page, with only the fields slot. keeps; null when it
+     *  is missing from the server's disk or has no plain file name. */
+    private fun readGame(reader: JsonReader, system: Console): Game? {
+        if (reader.peek() != JsonToken.BEGIN_OBJECT) { reader.skipValue(); return null }
+        var id = 0L
+        var missing = false
+        var file = ""
+        var stem = ""
+        var size = -1L
+        var crc = ""
+        val fileCrcs = ArrayList<String>()
+        var fileCount = 0
+        val regions = ArrayList<String>()
+        var revision = ""
+        fun string(): String = when (reader.peek()) {
+            JsonToken.STRING, JsonToken.NUMBER -> reader.nextString()
+            JsonToken.BOOLEAN -> reader.nextBoolean().toString()
+            JsonToken.NULL -> { reader.nextNull(); "null" }
+            else -> { reader.skipValue(); "" }
+        }
+        reader.beginObject()
+        while (reader.hasNext()) {
+            when (reader.nextName()) {
+                "id" -> id = string().toLongOrNull() ?: 0L
+                "missing_from_fs" -> missing = if (reader.peek() == JsonToken.BOOLEAN) reader.nextBoolean() else { reader.skipValue(); false }
+                "fs_name" -> file = string()
+                "fs_name_no_ext" -> stem = string()
+                "fs_size_bytes" -> size = string().toLongOrNull() ?: -1L
+                "crc_hash" -> crc = string()
+                "revision" -> revision = string()
+                "regions" -> if (reader.peek() == JsonToken.BEGIN_ARRAY) {
+                    reader.beginArray()
+                    while (reader.hasNext()) string().takeIf { it.isNotBlank() && it != "null" }?.let { regions.add(it) }
+                    reader.endArray()
+                } else reader.skipValue()
+                "files" -> if (reader.peek() == JsonToken.BEGIN_ARRAY) {
+                    reader.beginArray()
+                    while (reader.hasNext()) {
+                        fileCount++
+                        if (reader.peek() != JsonToken.BEGIN_OBJECT) { reader.skipValue(); continue }
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            if (reader.nextName() == "crc_hash") fileCrcs.add(string()) else reader.skipValue()
+                        }
+                        reader.endObject()
+                    }
+                    reader.endArray()
+                } else reader.skipValue()
+                else -> reader.skipValue()
+            }
+        }
+        reader.endObject()
+        if (missing) return null
+        if (file.isBlank() || file == "null" || file.contains('/')) return null
+        val title = stem.takeIf { it.isNotBlank() && it != "null" } ?: file.substringBeforeLast('.')
+        val crcHash = crc.takeIf { it.length == 8 }
+            ?: fileCrcs.singleOrNull()?.takeIf { fileCount == 1 && it.length == 8 }
+        return Game(id, system.platform, system.slug, file, title.trim(), size,
+            crcHash?.uppercase(Locale.ROOT).orEmpty(), regions.joinToString(", "),
+            revision.takeIf { it != "null" }.orEmpty().trim())
+    }
+
+    /** An authorized GET whose JSON reply is read as it arrives by [parse]
+     *  (no copy of it held whole). */
+    private fun <T> authorizedJson(context: Context, path: String, parse: (JsonReader) -> T): T {
+        val account = account(context) ?: throw SignedOut()
+        fun attempt(): Pair<Int, T?> {
+            val connection = open(account.server + path, "GET", authorization(context, account))
+            try {
+                val code = connection.responseCode
+                if (code != 200) {
+                    runCatching { connection.errorStream?.close() }
+                    return code to null
+                }
+                return code to JsonReader(connection.inputStream.bufferedReader(Charsets.UTF_8)).use { reader ->
+                    try { parse(reader) } catch (error: IllegalStateException) { throw IOException("RomM reply unreadable", error) }
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
+        var (code, result) = attempt()
+        if (code == 401) {
+            if (account.kind == "client") { signOut(context); throw SignedOut() }
+            synchronized(this) { access = null }
+            val again = attempt()
+            code = again.first
+            result = again.second
+            if (code == 401) { signOut(context); throw SignedOut() }
+        }
+        if (code != 200 || result == null) throw IOException("RomM roms HTTP $code")
+        return result
+    }
+
+    // ---------------------------------------------------------------------
+    // Saves (slot. 2.5, Sync Saves with RomM): a game's in-game save kept on
+    // the server under its RomM game, with the core's name as "emulator",
+    // as other RetroArch-core clients do. Plain /api/saves calls, which RomM
+    // has had since 3.x: no device registration needed.
+
+    /** One save the server holds for a game. */
+    class ServerSave(val id: Long, val fileName: String, val updatedAt: String,
+                     val emulator: String, val downloadPath: String)
+
+    /** The account can be asked about saves: signed in. */
+    fun signedIn(context: Context): Boolean = account(context) != null
+
+    /** The RomM game a cart is: same system, same file name without its
+     *  extension, from the library kept, else by asking the server. */
+    /** A file name as Android's storage writes it: `: ? * " < > | \` and
+     *  control characters become `_` (FileUtils.buildValidFatFilename), so
+     *  `Zelda: Minish Cap.gba` is `Zelda_ Minish Cap.gba` on the handheld. */
+    internal fun storedName(name: String): String = buildString {
+        for (c in name) append(if (c.code < 0x20 || c.code == 0x7f || c in "\"*/:<>?\\|") '_' else c)
+    }
+
+    /** The same game's name, on the server and on the handheld. */
+    internal fun sameName(server: String, handheld: String): Boolean =
+        storedName(server).lowercase(Locale.ROOT) == storedName(handheld).lowercase(Locale.ROOT)
+
+    fun romIdFor(context: Context, platform: String, stem: String): Long? {
+        cachedLibrary(context)?.first?.firstOrNull {
+            it.platform == platform && sameName(it.file.substringBeforeLast('.'), stem)
+        }?.let { return it.id }
+        val console = consoles(context).firstOrNull { it.platform == platform } ?: return null
+        val reply = authorized(context, "/api/roms?platform_ids=${console.id}&platform_id=${console.id}" +
+            "&search_term=" + URLEncoder.encode(stem, "UTF-8") + "&limit=50" +
+            "&with_char_index=false&with_filter_values=false&with_rom_id_index=false" +
+            "&with_provider_metadata=false")
+        if (reply.code != 200) throw IOException("RomM search HTTP ${reply.code}")
+        val text = String(reply.body, Charsets.UTF_8).trim()
+        val items = if (text.startsWith("[")) JSONArray(text) else JSONObject(text).optJSONArray("items")
+            ?: return null
+        for (i in 0 until items.length()) {
+            val rom = items.optJSONObject(i) ?: continue
+            val name = rom.optString("fs_name_no_ext").ifBlank { rom.optString("fs_name").substringBeforeLast('.') }
+            if (sameName(name, stem)) return rom.optLong("id")
+        }
+        return null
+    }
+
+    /** The saves the server holds for a game. */
+    fun saves(context: Context, romId: Long): List<ServerSave> {
+        val reply = authorized(context, "/api/saves?rom_id=$romId")
+        if (reply.code != 200) throw IOException("RomM saves HTTP ${reply.code}")
+        val list = JSONArray(String(reply.body, Charsets.UTF_8))
+        return (0 until list.length()).mapNotNull { i ->
+            val save = list.optJSONObject(i) ?: return@mapNotNull null
+            if (save.optLong("rom_id", romId) != romId) return@mapNotNull null
+            ServerSave(save.optLong("id"), save.optString("file_name"), save.optString("updated_at"),
+                save.optString("emulator").takeIf { it != "null" }.orEmpty(),
+                save.optString("download_path").takeIf { it != "null" }.orEmpty())
+        }
+    }
+
+    /** A save's bytes: /api/saves/{id}/content, or its download path on
+     *  an older RomM. */
+    fun downloadSave(context: Context, save: ServerSave): ByteArray {
+        val reply = authorizedRaw(context, "/api/saves/${save.id}/content")
+        if (reply.code == 200) return reply.body
+        if (reply.code == 404 && save.downloadPath.isNotBlank()) {
+            val path = if (save.downloadPath.startsWith("/")) save.downloadPath else "/" + save.downloadPath
+            val old = authorizedRaw(context, path)
+            if (old.code == 200) return old.body
+            throw IOException("RomM save download HTTP ${old.code}")
+        }
+        throw IOException("RomM save download HTTP ${reply.code}")
+    }
+
+    /** Deletes saves from the server (POST /api/saves/delete, RomM 3 and
+     *  later): a save the player deleted everywhere (SaveDeletes). */
+    fun deleteSaves(context: Context, ids: List<Long>) {
+        if (ids.isEmpty()) return
+        val account = account(context) ?: throw SignedOut()
+        val body = JSONObject().put("saves", JSONArray(ids))
+        var reply = call(account.server + "/api/saves/delete", "POST", authorization(context, account), json = body)
+        if (reply.code == 401 && account.kind != "client") {
+            synchronized(this) { access = null }
+            reply = call(account.server + "/api/saves/delete", "POST", authorization(context, account), json = body)
+        }
+        if (reply.code == 401) { signOut(context); throw SignedOut() }
+        if (reply.code !in 200..299) throw IOException("RomM save delete HTTP ${reply.code}")
+    }
+
+    /** Sends a game's save, replacing the one of the same name and emulator. */
+    fun uploadSave(context: Context, romId: Long, emulator: String, fileName: String,
+                   bytes: ByteArray): ServerSave {
+        val account = account(context) ?: throw SignedOut()
+        val url = account.server + "/api/saves?rom_id=$romId&emulator=" + URLEncoder.encode(emulator, "UTF-8")
+        fun send(auth: String): Reply {
+            val boundary = "slot" + System.nanoTime()
+            val head = ("--$boundary\r\nContent-Disposition: form-data; name=\"saveFile\"; filename=\"" +
+                fileName.replace("\"", "") + "\"\r\nContent-Type: application/octet-stream\r\n\r\n")
+                .toByteArray(Charsets.UTF_8)
+            val tail = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+            val connection = open(url, "POST", auth)
+            try {
+                connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                connection.doOutput = true
+                connection.setFixedLengthStreamingMode(head.size + bytes.size + tail.size)
+                connection.outputStream.use { it.write(head); it.write(bytes); it.write(tail) }
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                return Reply(code, read(stream, MAX_JSON))
+            } finally {
+                connection.disconnect()
+            }
+        }
+        var reply = send(authorization(context, account))
+        if (reply.code == 401 && account.kind != "client") {
+            synchronized(this) { access = null }
+            reply = send(authorization(context, account))
+        }
+        if (reply.code == 401) { signOut(context); throw SignedOut() }
+        if (reply.code == 403) throw IOException("This RomM account can't keep saves")
+        if (reply.code !in 200..299) throw IOException("RomM save upload HTTP ${reply.code}")
+        val save = reply.json() ?: throw IOException("RomM save upload unreadable")
+        return ServerSave(save.optLong("id"), save.optString("file_name"), save.optString("updated_at"),
+            save.optString("emulator"), save.optString("download_path"))
+    }
+
+    /** The firmware the player keeps on RomM for one platform; none when
+     *  the server or this account doesn't offer it. */
+    private fun firmware(context: Context, platformId: Int): List<Pair<Long, String>> {
+        val reply = authorized(context, "/api/firmware?platform_id=$platformId")
+        if (reply.code != 200) return emptyList()
+        val list = try { JSONArray(String(reply.body, Charsets.UTF_8)) } catch (_: Exception) { return emptyList() }
+        return (0 until list.length()).mapNotNull { i ->
+            val f = list.optJSONObject(i) ?: return@mapNotNull null
+            if (f.optBoolean("missing_from_fs")) return@mapNotNull null
+            val name = f.optString("file_name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            f.optLong("id") to name
+        }
+    }
+
+    /** Fetches the BIOS named in `wanted` (gba_bios.bin…) from the player's
+     *  GB, GBC and GBA platforms on RomM; returns those slot. kept. */
+    fun fetchBios(context: Context, wanted: Set<String>): List<String> {
+        val left = wanted.toMutableSet()
+        val added = mutableListOf<String>()
+        val systems = setOf(Systems.GB, Systems.GBC, Systems.GBA)
+        for (console in consoles(context).filter { it.platform in systems }) {
+            if (left.isEmpty()) break
+            for ((id, file) in firmware(context, console.id)) {
+                val name = file.lowercase(Locale.ROOT)
+                if (name !in left) continue
+                val reply = authorizedRaw(context, "/api/firmware/$id/content/" +
+                    URLEncoder.encode(file, "UTF-8").replace("+", "%20"))
+                if (reply.code != 200) continue
+                if (BiosLibrary.addIfMissing(context, name, reply.body)) {
+                    added += name
+                    left -= name
+                }
+            }
+        }
+        return added
+    }
+
+    /** As `authorized`, for a file rather than JSON. */
+    private fun authorizedRaw(context: Context, path: String): Reply {
+        val account = account(context) ?: throw SignedOut()
+        fun get(auth: String): Reply {
+            val connection = open(account.server + path, "GET", auth)
+            connection.setRequestProperty("Accept", "*/*")
+            try {
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                return Reply(code, read(stream, MAX_SAVE))
+            } finally {
+                connection.disconnect()
+            }
+        }
+        var reply = get(authorization(context, account))
+        if (reply.code == 401 && account.kind != "client") {
+            synchronized(this) { access = null }
+            reply = get(authorization(context, account))
+        }
+        if (reply.code == 401) { signOut(context); throw SignedOut() }
+        return reply
     }
 
     // The library as last loaded, shown at once when the page opens again
@@ -461,7 +789,7 @@ internal object Romm {
             atomic.finishWrite(out)
         } catch (error: Exception) {
             atomic.failWrite(out)
-            Log.w(TAG, "RomM library not kept", error)
+            SlotLog.w(TAG, "RomM library not kept", error)
         }
     }
 
@@ -486,13 +814,9 @@ internal object Romm {
             }
         }
     } catch (error: Exception) {
-        Log.w(TAG, "RomM library kept unreadable", error)
+        SlotLog.w(TAG, "RomM library kept unreadable", error)
         null
     }
-
-    private fun joined(array: JSONArray?): String =
-        if (array == null) "" else (0 until array.length()).mapNotNull { array.optString(it).takeIf { s -> s.isNotBlank() } }
-            .joinToString(", ")
 
     /**
      * The games in the account's RomM favourites (its "Favourites"
@@ -511,15 +835,6 @@ internal object Romm {
             for (k in 0 until roms.length()) ids.add(roms.optLong(k))
         }
         return ids
-    }
-
-    /** The game file's CRC32: the ROM's own, else its single file's. */
-    private fun crcOf(rom: JSONObject): String {
-        rom.optString("crc_hash").takeIf { it.length == 8 }?.let { return it.uppercase(Locale.ROOT) }
-        val files = rom.optJSONArray("files") ?: return ""
-        if (files.length() != 1) return ""
-        return files.optJSONObject(0)?.optString("crc_hash")?.takeIf { it.length == 8 }
-            ?.uppercase(Locale.ROOT).orEmpty()
     }
 
     // ---------------------------------------------------------------------
@@ -560,7 +875,7 @@ internal object Romm {
             else JSONObject(String(response.data.use { it.readBytes() }, Charsets.UTF_8))
                 .also { oldIndex = it }
         } catch (error: Exception) {
-            Log.w(TAG, "slot.'s art set index unavailable for RomM", error)
+            SlotLog.w(TAG, "slot.'s art set index unavailable for RomM", error)
             null
         }
     }
@@ -589,7 +904,7 @@ internal object Romm {
                 ownLabel(context, game, (listOf(game.crc) + crcsByName(context, game))
                     .filter { it.isNotBlank() }.distinct())
             } catch (error: Exception) {
-                Log.w(TAG, "Label lookup failed for ${game.file}", error)
+                SlotLog.w(TAG, "Label lookup failed for ${game.file}", error)
                 failed = true
                 null
             }
@@ -823,9 +1138,15 @@ internal object Romm {
     fun download(context: Context, tree: Uri, game: Game, progress: (Long, Long) -> Unit): RomLibrary.SavedFile {
         val account = account(context) ?: throw SignedOut()
         val (folder, folderName) = systemFolder(context, tree, game)
-        childNamed(context, tree, folder, game.file)?.let { return RomLibrary.SavedFile(it, folderName) }
-        childNamed(context, tree, folder, game.file + ".part")?.let {
-            DocumentsContract.deleteDocument(context.contentResolver, it)
+        // Already there, under its name or the one Android gave it.
+        val stored = storedName(game.file)
+        (childNamed(context, tree, folder, game.file)
+            ?: stored.takeIf { it != game.file }?.let { childNamed(context, tree, folder, it) })
+            ?.let { return RomLibrary.SavedFile(it, folderName) }
+        for (part in setOf(game.file + ".part", stored + ".part")) {
+            childNamed(context, tree, folder, part)?.let {
+                DocumentsContract.deleteDocument(context.contentResolver, it)
+            }
         }
         val path = "/api/roms/${game.id}/content/" + URLEncoder.encode(game.file, "UTF-8").replace("+", "%20")
         var connection = open(account.server + path, "GET", authorization(context, account))

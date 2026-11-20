@@ -37,13 +37,13 @@ internal class CartSounds(context: Context) {
     init {
         soundPool.setOnLoadCompleteListener { _, id, result ->
             if (result == 0) synchronized(loaded) { loaded.add(id) }
-            else Log.w("SlotKonkr", "SoundPool loading failed: " + id + " (" + result + ")")
+            else SlotLog.w("SlotKonkr", "SoundPool loading failed: " + id + " (" + result + ")")
         }
         for ((kind, name) in arrayOf(INSERT to "insert", EJECT to "eject")) {
             try {
                 samples[kind] = soundPool.load(makeWav(context, name).absolutePath, 1)
             } catch (error: Exception) {
-                Log.w("SlotKonkr", "Failed to load original Slot sound: " + name, error)
+                SlotLog.w("SlotKonkr", "Failed to load original Slot sound: " + name, error)
             }
         }
     }
@@ -51,9 +51,18 @@ internal class CartSounds(context: Context) {
     fun play(kind: Int) {
         if (closed || kind !in INSERT..EJECT) return
         val id = samples[kind]
-        if (id == 0 || !synchronized(loaded) { loaded.contains(id) }) return
+        if (id == 0 || !synchronized(loaded) { loaded.contains(id) }) {
+            SlotLog.w("SlotKonkr", "Cart sound $kind not ready: no click this time")
+            return
+        }
+        val queued = android.os.SystemClock.uptimeMillis()
         playerHandler.post {
-            if (!closed) soundPool.play(id, CART_SFX_VOLUME, CART_SFX_VOLUME, 1, 0, 1f)
+            if (closed) return@post
+            val started = android.os.SystemClock.uptimeMillis()
+            soundPool.play(id, CART_SFX_VOLUME, CART_SFX_VOLUME, 1, 0, 1f)
+            // How late the click went out (beta37): its wait, then Android's.
+            SlotLog.i("SlotKonkr", "Cart sound ${if (kind == INSERT) "insert" else "eject"}: " +
+                "${started - queued}ms waiting, ${android.os.SystemClock.uptimeMillis() - started}ms to play")
         }
     }
 

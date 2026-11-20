@@ -145,4 +145,66 @@ class RommTest {
         assertEquals("00000006", crc("Crash Bandicoot XS (USA)"))
         assertNull(crc("Celeste Classic (World) (v1.2) (Aftermarket)"))
     }
+
+    @Test
+    fun aServerThatNeverAnswersCostsTheLaunchOnlyItsBudget() {
+        // RomM at home, the handheld elsewhere: the connection is taken,
+        // nothing ever comes back (beta37).
+        java.net.ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress()).use { silent ->
+            val url = "http://127.0.0.1:${silent.localPort}/api/platforms"
+            val started = System.nanoTime()
+            val failed = try {
+                Romm.within(300) { Romm.open(url, "GET", null).responseCode }
+                false
+            } catch (_: java.net.SocketTimeoutException) {
+                true
+            }
+            val took = (System.nanoTime() - started) / 1_000_000
+            assertTrue(failed)
+            assertTrue("took ${took}ms", took < 2_000)
+        }
+    }
+
+    @Test
+    fun withoutABudgetTheUsualTimeoutsStay() {
+        java.net.ServerSocket(0, 50, java.net.InetAddress.getLoopbackAddress()).use { silent ->
+            val connection = Romm.open("http://127.0.0.1:${silent.localPort}/", "GET", null)
+            assertEquals(10_000, connection.connectTimeout)
+            assertEquals(30_000, connection.readTimeout)
+            val bounded = Romm.within(500) { Romm.open("http://127.0.0.1:${silent.localPort}/", "GET", null) }
+            assertTrue(bounded.connectTimeout in 1..500)
+            assertTrue(bounded.readTimeout in 1..500)
+        }
+    }
+
+    @Test
+    fun aGameAndroidRenamedIsStillTheServersGame() {
+        assertEquals("Zelda_ The Minish Cap (USA).gba", Romm.storedName("Zelda: The Minish Cap (USA).gba"))
+        assertEquals("Who_ What_ (A_B).gb", Romm.storedName("Who? What* (A|B).gb"))
+        assertEquals("Pokemon Emerald (USA).gba", Romm.storedName("Pokemon Emerald (USA).gba"))
+        assertTrue(Romm.sameName("Zelda: The Minish Cap (USA)", "zelda_ the minish cap (usa)"))
+        assertTrue(Romm.sameName("Pokemon Emerald (USA)", "Pokemon Emerald (USA)"))
+        assertFalse(Romm.sameName("Pokemon Ruby (USA)", "Pokemon Emerald (USA)"))
+    }
+
+    private fun gba(core: String, shared: Boolean): RetroArchStorage.Target {
+        val f = java.io.File("x")
+        return RetroArchStorage.Target("content://roms/gba/Emerald.gba", "Emerald", core, f, f, f, f, f, f,
+            null, null, true, "id", shared)
+    }
+
+    @Test
+    fun withShareCoreSavesTheNewestOfBothCoresWins() {
+        val saves = listOf(
+            Romm.ServerSave(1, "Emerald.srm", "2026-11-18T10:00:00", "mgba", ""),
+            Romm.ServerSave(2, "Emerald.srm", "2026-11-18T12:00:00", "gpsp", ""),
+            Romm.ServerSave(3, "Emerald.rtc", "2026-11-18T13:00:00", "gpsp", ""),
+        )
+        // Shared: gpSP's newer save, never the clock.
+        assertEquals(2L, RommSaves.newest(saves, gba("mGBA", true))?.id)
+        // Not shared: mGBA's own, as before.
+        assertEquals(1L, RommSaves.newest(saves, gba("mGBA", false))?.id)
+        assertEquals(setOf("mgba", "gpsp"), RommSaves.emulators(gba("gpSP", true)))
+        assertEquals(setOf("gpsp"), RommSaves.emulators(gba("gpSP", false)))
+    }
 }

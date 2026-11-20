@@ -31,9 +31,12 @@ impl Engine {
     pub(super) fn persist_controls(&mut self) {
         self.controls_rev = self.controls_rev.wrapping_add(1);
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = self.controls.save(root) {
-                set_error_message("Couldn't save controls.", &error);
-            }
+            let (root, controls) = (root.clone(), self.controls.clone());
+            crate::later_write::write(root.join("Controls.json"), move || {
+                if let Err(error) = controls.save(&root) {
+                    set_error_message("Couldn't save controls.", &error);
+                }
+            });
         }
     }
 
@@ -54,8 +57,12 @@ impl Engine {
         fp == BUILTIN || self.pad_devices.iter().any(|d| d.fp == fp)
     }
 
+    /// Built-in on a square screen, where Controller and its value share
+    /// too narrow a row (the RG Rotate, Siham 2026-11-19).
     fn builtin_name() -> &'static str {
-        if is_konkr() { "KONKR Controls" } else { "Built-in Controls" }
+        if is_konkr() { "KONKR Controls" }
+        else if slot_gfx::out_w() < 520 { "Built-in" }
+        else { "Built-in Controls" }
     }
 
     /// A controller's name as the Controls pages show it.
@@ -86,9 +93,10 @@ impl Engine {
         }
     }
 
-    /// The game being played, as its Controls are filed: its library URI.
+    /// The game being played, as its Controls are filed: its portable name
+    /// (`library::game_key`) since 2.5, its library URI before.
     fn game_key(&self) -> Option<String> {
-        self.game.as_ref().and(self.requested_uri.clone())
+        self.game.as_ref().and(self.requested_uri.as_deref()).map(crate::library::game_key)
     }
 
     fn layout_scope(&self, platform: Platform, game: bool) -> Scope {
@@ -113,6 +121,10 @@ impl Engine {
         if game.has_layouts() && self.layouts_for == Some(wanted) { return; }
         let system = Self::system_key(self.current_cart_platform());
         let key = self.game_key();
+        // A game's Controls filed by its URI in 2.4 move to its name.
+        if let (Some(key), Some(uri)) = (key.as_deref(), self.requested_uri.clone()) {
+            if self.controls.carry_game(&uri, key) { self.persist_controls(); }
+        }
         let default_xy = if turbo { XyRole::TurboAB } else { XyRole::BA };
         let layouts = [0, 1].map(|port| self.controls.resolve(system, key.as_deref(), port, default_xy));
         if let Some(game) = self.game.as_mut() { game.set_layouts(layouts); }
@@ -468,13 +480,14 @@ impl Engine {
         match self.overlay {
             ShelfOverlay::ControlsSettings { row } => match code {
                 19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::ControlsSettings {
-                    row: move_menu_row(row, code, 5, self.menu_repeat_dispatch),
+                    row: move_menu_row(row, code, controls_rows(), self.menu_repeat_dispatch),
                 },
                 96 if row < PORTS => self.overlay = ShelfOverlay::ControlsPort { port: row, row: 0 },
                 96 if row == PORTS => self.overlay = ShelfOverlay::Hotkeys { row: 0 },
                 // Touchscreen: swipe the shelf, tap or pull down the middle
-                // cart (Siham 2026-11-16, off by default).
-                21 | 22 | 96 if row == PORTS + 1 => {
+                // cart (Siham 2026-11-16, off by default); only on a
+                // handheld with a touchscreen (beta41).
+                21 | 22 | 96 if row == PORTS + 1 && has_touchscreen() => {
                     self.settings.touchscreen = !self.settings.touchscreen;
                     self.persist_settings();
                 }
@@ -652,13 +665,14 @@ impl Engine {
         };
         let dim = |mut line: ControlsLine, lit: bool| { line.lit = lit; line };
         match self.overlay {
-            ShelfOverlay::ControlsSettings { row } => Some(("CONTROLS".into(), vec![
+            ShelfOverlay::ControlsSettings { row } => Some(("CONTROLS".into(), [
                 line("Port 1", self.pad_name(self.controls.on_port(0)), false),
                 line("Port 2", self.pad_name(self.controls.on_port(1)), false),
                 line("Hotkeys", String::new(), false),
-                line("Touchscreen", if self.settings.touchscreen { "On" } else { "Off" }.into(), true),
-                line("Reset to Default", String::new(), false),
-            ], row, vec![("A", "Select"), ("B", "Back")])),
+            ].into_iter().chain(has_touchscreen().then(||
+                line("Touchscreen", if self.settings.touchscreen { "On" } else { "Off" }.into(), true)))
+            .chain([line("Reset to Default", String::new(), false)]).collect(),
+            row, vec![("A", "Select"), ("B", "Back")])),
             ShelfOverlay::ControlsPort { port, row } => {
                 let fp = self.controls.on_port(port);
                 let pad = fp.map(|fp| self.controls.pad(fp)).unwrap_or_default();
@@ -925,33 +939,60 @@ impl Engine {
             let rest = if chosen { 1.0 } else { menu_look::ROW_REST };
             let mut label_room = width - 70.0;
             let right = width - 34.0;
-            if let Some((tex, w, h)) = face(&line.value, line.lit) {
+            let value_face = face(&line.value, line.lit);
+            let label_face = face(&line.label, true);
+            // Every row at one size (Siham 2026-11-19: rows of different
+            // sizes looked wrong): a few pixels too long gives way a touch
+            // (6 % at most), longer scrolls while chosen, cut with a fade
+            // otherwise. A label of a few words (Port 1, Save and Eject)
+            // stays whole and its value scrolls, as on the settings pages;
+            // a long one (a cheat's name) scrolls beside a value taking at
+            // most 55 % of the width (Siham 2026-11-19).
+            let fit_by = |w: f32, room: f32, most: f32| if w * 0.79 > room && w * 0.79 * most <= room { room / w } else { 0.79 };
+            let fit = |w: f32, room: f32| fit_by(w, room, 0.94);
+            let pad = slot_ui::MENU_PAD as f32 * 0.79;
+            let label_w = label_face.map_or(0.0, |(_, w, _)| w as f32 * 0.79);
+            let short_label = label_w <= width * 0.6;
+            if let Some((tex, w, h)) = value_face {
                 let carets = chosen && line.cycles;
-                let scale = 0.79f32.min((width * 0.55) / w.max(1) as f32);
+                let caret = if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
+                let window = if short_label {
+                    (right - if carets { 22.0 } else { 0.0 } - (37.0 + label_w - pad + 18.0 + caret)).max(60.0)
+                } else { width * 0.55 };
+                // A value up to 10 % smaller (Siham 2026-11-19).
+                let scale = fit_by(w as f32, window, 0.9);
                 let vw = w as f32 * scale;
-                let x = right - vw - if carets { 22.0 } else { 0.0 };
-                label_room = (x - 37.0 - 16.0 - if carets { 20.0 } else { 0.0 }).max(80.0);
-                out.push(Draw::Tex { x, y, w: vw, h: h as f32 * scale, tex,
-                    alpha: fade * shows * rest });
+                let shown = vw.min(window);
+                let x = right - shown - if carets { 22.0 } else { 0.0 };
+                // The faces' clear margins (MENU_PAD) need no room.
+                label_room = (x - 37.0 - 18.0 + slot_ui::MENU_PAD as f32 * 0.79
+                    - if carets { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 }).max(80.0);
+                let vy = y + h as f32 * (0.79 - scale) / 2.0;
+                let alpha = fade * shows * rest;
+                if vw <= window {
+                    out.push(Draw::Tex { x, y: vy, w: vw, h: h as f32 * scale, tex, alpha });
+                } else {
+                    let travel = vw - window;
+                    let shift = if chosen { self.marquee_offset((page + 500, i), travel) } else { 0.0 };
+                    out.push(Draw::Span(Some(slot_gfx::Span {
+                        left: x, right: x + window,
+                        feather_left: shift.min(18.0), feather_right: (travel - shift).min(18.0),
+                    })));
+                    out.push(Draw::Tex { x: x - shift, y: vy, w: vw, h: h as f32 * scale, tex, alpha });
+                    out.push(Draw::Span(None));
+                }
                 if carets {
                     let (left, lw, lh) = self.setting_carets[0];
                     let (right_tex, rw, rh) = self.setting_carets[1];
-                    let y = self.caret_y(y, scale);
+                    let y = self.caret_y(y, 0.79);
                     out.push(Draw::Tex { x: x - lw as f32 - 8.0, y, w: lw as f32, h: lh as f32,
                         tex: left, alpha: fade * shows });
                     out.push(Draw::Tex { x: right - rw as f32, y, w: rw as f32, h: rh as f32,
                         tex: right_tex, alpha: fade * shows });
                 }
             }
-            if let Some((tex, w, h)) = face(&line.label, true) {
-                // Always at 0.79: a name too long for its room is cut with a
-                // fade, and scrolls through while chosen (a cheat's, Siham
-                // 2026-11-15).
-                let mut k = 0.79;
-                // A few pixels too long: a touch smaller, not a tiny scroll.
-                if w as f32 * k > label_room && w as f32 * k * 0.94 <= label_room {
-                    k *= label_room / (w as f32 * k);
-                }
+            if let Some((tex, w, h)) = label_face {
+                let k = fit(w as f32, label_room);
                 let (lw, lh) = (w as f32 * k, h as f32 * k);
                 let y = y + h as f32 * (0.79 - k) / 2.0;
                 let alpha = fade * shows * rest;
@@ -983,3 +1024,15 @@ impl Engine {
 
 /// A slot. button's bit in a joypad mask (the same buttons as Port 1).
 fn controls_mask(slot: i32) -> u16 { super::controls(slot) }
+
+/// Whether the handheld has a touchscreen (Android's input devices, read
+/// at start; true until known, so the option never hides by mistake).
+pub(super) fn has_touchscreen() -> bool {
+    super::HAS_TOUCHSCREEN.load(Ordering::Acquire)
+}
+
+/// Rows of Settings > Controls: two ports, Hotkeys, Touchscreen on a
+/// touchscreen handheld, Reset to Default.
+fn controls_rows() -> usize {
+    if has_touchscreen() { 5 } else { 4 }
+}

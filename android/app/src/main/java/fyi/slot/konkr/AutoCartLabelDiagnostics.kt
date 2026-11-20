@@ -33,6 +33,13 @@ internal object AutoCartLabelDiagnostics {
 
     fun snapshot(): Snapshot = slots.reduce { a, b -> a + b }
 
+    /** Whether the running pass has carts to look at (a start() since
+     *  passBegins()): the indicator and the summary only follow such a pass. */
+    @Volatile var passLooked = false
+        private set
+
+    fun passBegins() { passLooked = false }
+
     fun clear() { slots = listOf(Snapshot(), Snapshot()) }
 
     private fun put(source: Int, value: Snapshot) {
@@ -41,6 +48,7 @@ internal object AutoCartLabelDiagnostics {
 
     // Only the single label worker writes these snapshots.
     fun start(checked: Int, total: Int, saved: Int, source: Int = HANDHELD) {
+        passLooked = true
         put(source, Snapshot(
             checked = checked.coerceAtLeast(0),
             total = total.coerceAtLeast(0),

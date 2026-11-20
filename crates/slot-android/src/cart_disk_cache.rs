@@ -22,6 +22,10 @@ impl DiskCache {
             theme: fs::read(root.join("Config/theme.txt")).unwrap_or_default(),
         }
     }
+    /// A cache of other pictures in [dir] (the cold renderer's, beta42).
+    pub fn at(dir: PathBuf) -> Self {
+        Self { dir, theme: Vec::new() }
+    }
     pub fn key(&self, cart: &Cart) -> String {
         // Rust Cart debug covers URI, platform, name, code, label and shell.
         // The revision invalidates old faces when rendering algorithms change.

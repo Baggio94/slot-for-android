@@ -192,7 +192,9 @@ impl Toast {
     }
 }
 
-const TOAST_W: u32 = 240;
+// Wide enough for every banner at full size ("Shader: Sharp Bilinear",
+// "Shader: CRT Geom Deluxe" shrank to 15 px in 240); centred.
+const TOAST_W: u32 = 320;
 const TOAST_H: u32 = 22;
 const TOAST_PX: f32 = 16.0;
 const TOAST_MIN_PX: f32 = 12.0;

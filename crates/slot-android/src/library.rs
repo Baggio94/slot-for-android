@@ -4,6 +4,7 @@ use serde::Deserialize;
 use slot_store::{sort_key, Cart, Outline, Platform, ShellChoice, ShellFinish};
 use slot_store::gb::{Class, Header};
 use std::path::PathBuf;
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 const MAX_ROMS: usize = 5000;
@@ -11,6 +12,9 @@ const MAX_ROMS: usize = 5000;
 #[derive(Clone, Debug, Deserialize)]
 pub struct RomEntry {
     pub title: String,
+    /// The file's name with its extension, as the scan found it.
+    #[serde(default)]
+    pub filename: String,
     pub platform: String,
     pub uri: String,
     #[serde(default)]
@@ -47,12 +51,83 @@ pub struct LibraryState {
     /// None: no folder selected yet, show empty shelf and onboarding.
     /// Some([]): scanned folder has no supported games; show empty shelf.
     pub entries: Option<Vec<RomEntry>>,
+    /// Each cart's portable name (see `game_key`), by its Android address.
+    pub keys: BTreeMap<String, String>,
 }
 
 pub static LIBRARY: Mutex<LibraryState> = Mutex::new(LibraryState {
     version: 0,
     entries: None,
+    keys: BTreeMap::new(),
 });
+
+/// A game's name that stays the same on another handheld: its system and
+/// its file name, in lower case (`gba/pokemon emerald (usa).gba`), where
+/// the Android address of the file changes with each device and card
+/// (Siham 2026-11-16, slot. 2.5 portability). Two games of a system with
+/// the same file name in different folders take their path in the ROM
+/// folder instead. A cart outside the library keeps its address.
+pub fn game_key(uri: &str) -> String {
+    let library = LIBRARY.lock().unwrap_or_else(|e| e.into_inner());
+    library.keys.get(uri).cloned().unwrap_or_else(|| uri.to_owned())
+}
+
+/// Every cart's portable name (see `game_key`).
+pub fn game_keys(entries: &[RomEntry]) -> BTreeMap<String, String> {
+    let named: Vec<(String, String)> = entries.iter().map(|entry| {
+        let name = if entry.filename.trim().is_empty() { file_name_of(&entry.uri) }
+            else { entry.filename.trim().to_owned() };
+        (entry.uri.clone(), format!("{}/{}", entry.platform.to_lowercase(), name.to_lowercase()))
+    }).collect();
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (_, key) in &named { *seen.entry(key.as_str()).or_default() += 1; }
+    let mut keys = BTreeMap::new();
+    for ((uri, key), entry) in named.iter().zip(entries) {
+        let key = if seen[key.as_str()] > 1 {
+            match path_in_tree(uri) {
+                Some(path) => format!("{}/{}", entry.platform.to_lowercase(), path.to_lowercase()),
+                None => uri.clone(),
+            }
+        } else { key.clone() };
+        keys.insert(uri.clone(), key);
+    }
+    keys
+}
+
+/// The file's path inside the folder chosen in Android's picker, from a
+/// tree document address (`.../tree/primary%3ARoms/document/primary%3ARoms%2FGBA%2Fx.gba`
+/// gives `GBA/x.gba`).
+pub fn path_in_tree(uri: &str) -> Option<String> {
+    let rest = uri.split_once("/tree/")?.1;
+    let (tree, document) = rest.split_once("/document/")?;
+    let (tree, document) = (percent_decode(tree)?, percent_decode(document)?);
+    let path = document.strip_prefix(&tree)?.strip_prefix('/')?;
+    (!path.is_empty()).then(|| path.to_owned())
+}
+
+/// The file's name from its address, when the scan didn't give one.
+fn file_name_of(uri: &str) -> String {
+    let last = uri.rsplit('/').next().unwrap_or(uri);
+    let decoded = percent_decode(last).unwrap_or_else(|| last.to_owned());
+    decoded.rsplit(['/', ':']).next().unwrap_or(&decoded).to_owned()
+}
+
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
 
 /// Select the next shelf with games in the given direction, skipping empty
 /// GB/GBC/GBA systems. Returns the current shelf if no alternative exists.
@@ -125,7 +200,7 @@ pub fn remote_shell(platform: Platform, title: &str, gb: Option<RemoteGbHeader>)
         title: title.to_owned(), platform: String::new(), uri: String::new(), code: String::new(),
         color_only: gb.cgb_flag == Some(0xc0), shell_override: None, gb_title: gb.title,
         gb_code: gb.code, gb_japan: gb.japan, gb_cgb_flag: gb.cgb_flag, home_title: String::new(),
-        home_region: String::new(), home_battery: false, home_maker: String::new(),
+        home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
     };
     auto_shell(&entry, platform)
 }
@@ -234,7 +309,9 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetLibrary(
     if entries.len() > MAX_ROMS { return -1; }
     keep_saved_shells(&mut entries);
     let count = entries.len() as i32;
+    let keys = game_keys(&entries);
     let mut state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
+    state.keys = keys;
     state.entries = Some(entries);
     state.version = state.version.wrapping_add(1);
     crate::game::log_launch_timing(&format!(
@@ -245,6 +322,47 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetLibrary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn named(platform: &str, filename: &str, uri: &str) -> RomEntry {
+        RomEntry {
+            platform: platform.into(), title: filename.into(), uri: uri.into(),
+            code: String::new(), color_only: false, shell_override: None,
+            gb_title: String::new(), gb_code: String::new(), gb_japan: false, gb_cgb_flag: None,
+            home_title: String::new(), home_region: String::new(), home_battery: false,
+            home_maker: String::new(), filename: filename.into(),
+        }
+    }
+
+    #[test]
+    fn a_game_keeps_its_name_on_another_handheld() {
+        // The same game on a KPA's card and on a Retroid's internal storage.
+        let kpa = "content://com.android.externalstorage.documents/tree/1234-ABCD%3ARoms/document/1234-ABCD%3ARoms%2FGBA%2FPokemon%20Emerald%20(USA).gba";
+        let rp = "content://com.android.externalstorage.documents/tree/primary%3AGames/document/primary%3AGames%2FGame%20Boy%20Advance%2FPokemon%20Emerald%20(USA).gba";
+        let a = game_keys(&[named("GBA", "Pokemon Emerald (USA).gba", kpa)]);
+        let b = game_keys(&[named("GBA", "Pokemon Emerald (USA).gba", rp)]);
+        assert_eq!(a[kpa], "gba/pokemon emerald (usa).gba");
+        assert_eq!(a[kpa], b[rp]);
+    }
+
+    #[test]
+    fn two_games_with_one_name_keep_their_folders() {
+        let one = "content://com.android.externalstorage.documents/tree/primary%3ARoms/document/primary%3ARoms%2FGBA%2FTetris.gba";
+        let two = "content://com.android.externalstorage.documents/tree/primary%3ARoms/document/primary%3ARoms%2FGBA%2FHacks%2FTetris.gba";
+        let keys = game_keys(&[named("GBA", "Tetris.gba", one), named("GBA", "Tetris.gba", two)]);
+        assert_eq!(keys[one], "gba/gba/tetris.gba");
+        assert_eq!(keys[two], "gba/gba/hacks/tetris.gba");
+        // Another system's Tetris is a different game already.
+        let gb = game_keys(&[named("GBA", "Tetris.gba", one), named("GB", "Tetris.gb", "content://x/Tetris.gb")]);
+        assert_eq!(gb[one], "gba/tetris.gba");
+    }
+
+    #[test]
+    fn an_old_library_without_file_names_reads_them_from_the_address() {
+        let uri = "content://com.android.externalstorage.documents/tree/primary%3ARoms/document/primary%3ARoms%2FSNES%2FChrono%20Trigger.sfc";
+        let mut entry = named("SNES", "", uri);
+        entry.title = "Chrono Trigger".into();
+        assert_eq!(game_keys(&[entry])[uri], "snes/chrono trigger.sfc");
+    }
     #[test]
     fn shelf_navigation_skips_empty_platforms() {
         assert_eq!(next_populated(0, 1, &[]), 0);
@@ -265,7 +383,7 @@ mod tests {
             code: String::new(), color_only: false, shell_override: Some("old".into()),
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
         };
         let mut entries = vec![entry("content://roms/studio-test"), entry("content://roms/other")];
         keep_saved_shells(&mut entries);
@@ -280,7 +398,7 @@ mod tests {
             code: String::new(), color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
         };
         let grouped = carts_by_platform(&[
             example("GBA", "Zelda", "content://roms/z"),
@@ -302,7 +420,7 @@ mod tests {
             color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
         };
         let grouped = carts_by_platform(&[
             entry("GBA", "gba"), entry("GB", "gb"), entry("GBC", "gbc"),
@@ -338,7 +456,7 @@ mod tests {
                 color_only: flag == 0xc0, shell_override: None,
                 gb_title: title.into(), gb_code: code.into(),
                 gb_japan: false, gb_cgb_flag: Some(flag),
-                home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(),
+                home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
             }
         };
         let mut manual = entry("GB", "Manual", "POKEMON RED", "", 0);

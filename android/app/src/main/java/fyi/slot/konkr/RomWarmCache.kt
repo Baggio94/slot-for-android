@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import java.io.File
-import java.security.MessageDigest
 
 /**
  * Best-effort cartridge ROM warming on an independent, low-priority executor.
@@ -69,9 +68,7 @@ internal object RomWarmCache {
                 } ?: return
             } catch (_: Exception) { return }
         } else name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest(rawUri.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        val digest = GameKeys.digest(rawUri)
         val dir = File(context.cacheDir, "rom-cache").apply { mkdirs() }
         val target = File(dir, "$digest.$ext")
         if (target.isFile && target.length() >= 0x150L) return

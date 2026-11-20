@@ -423,6 +423,29 @@ fn game_error_text(message: &str) -> &'static str {
 }
 
 /// Short user-facing sentence on screen; the technical cause goes to logcat.
+/// Writes a game's settings off the GL thread (beta42); false without a
+/// folder to write them in.
+fn save_profile_later(profile: EmulationProfile, uri: &str, core: Core) -> bool {
+    let Some(root) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(root, _)| root.clone())
+    else { return false };
+    let uri = uri.to_owned();
+    crate::later_write::write(root.join(format!("game settings\u{1f}{uri}\u{1f}{core:?}")), move || {
+        if let Err(error) = profile.save(&root, &uri, core) {
+            set_error_message("Couldn't save this game's settings.", &error);
+        }
+    });
+    true
+}
+
+/// Android's SystemClock.uptimeMillis(), to set native moments against the
+/// Kotlin side's in the journal.
+pub(crate) fn uptime_ms() -> i64 {
+    let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: a valid out pointer for clock_gettime.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    now.tv_sec as i64 * 1000 + now.tv_nsec as i64 / 1_000_000
+}
+
 fn set_error_message(message: &str, detail: &dyn std::fmt::Display) {
     crate::game::log_launch_timing(&format!("{message} ({detail})"));
     set_message(message.into());
@@ -512,6 +535,8 @@ enum ShelfOverlay {
     None,
     Menu { row: usize },
     Library { row: usize },
+    /// Library > Saves & States.
+    SavesStates { row: usize },
     Settings { row: usize },
     ScreenSettings { row: usize },
     ScreenSystemSettings { platform: Platform, row: usize },
@@ -553,7 +578,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 149] = [
+const MENU_TEXT: [&str; 156] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -705,6 +730,15 @@ const MENU_TEXT: [&str; 149] = [
     "Handheld",                           // 146, Settings: this console's own page (Siham 2026-11-14)
     "HANDHELD \u{b7} RG ROTATE",            // 147
     "WALLPAPER",                          // 148, Interface > Wallpaper
+    // 149-152: Library in 2.5 (Siham 2026-11-16)
+    "slot. Folder",                       // 149, its place at right (Siham 2026-11-19)
+    "Saves & States",                     // 150, Library's page
+    "SAVES & STATES",                     // 151
+    "Sync Saves with RomM",               // 152
+    // 153-155: Interface > Wallpaper's looks (Siham 2026-11-19).
+    "Blur",                               // 153
+    "Halo",                               // 154
+    "Tint",                               // 155, Darken in 2.5's first betas
 ];
 
 /// Settings > Systems, top to bottom.
@@ -718,7 +752,7 @@ const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 143] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -751,6 +785,14 @@ const SETTING_VALUE_NAMES: [&str; 143] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "MAX", "crt-royale", "OLED",
                                // 121: a shelf showing General's wallpaper.
                                "GENERAL",
+                               // 122-123: the wood that was Default until 2.5.
+                               "slot.", "slot. Blur",
+                               // 124: the mosaic in a soft glow.
+                               "Default Halo",
+                               // 125-134 (PERCENT_VALUES): Wallpaper's Blur,
+                               // Halo and Tint; 0 % shows OFF (5).
+                               "10%", "20%", "30%", "40%", "50%",
+                               "60%", "70%", "80%", "90%", "100%",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -760,6 +802,61 @@ const SETTING_VALUE_NAMES: [&str; 143] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "TITLE", "TIME", "ALL"];
 /// The first RG Rotate value in SETTING_VALUE_NAMES.
 const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
+/// Library's values (2.5): where the slot. folder is, and RomM's sync
+/// before RomM is connected.
+const LIBRARY_VALUE_NAMES: [&str; 3] = ["INTERNAL STORAGE", "SD CARD", "NEEDS ROMM"];
+/// Values' short forms, shown only where the whole one has no room even
+/// 10 % smaller (the RG Rotate, Siham 2026-11-19); others scroll.
+const SHORT_VALUES: [(&str, &str); 3] = [
+    ("ORIGINAL RATIO", "ORIG. RATIO"),
+    ("INTERNAL STORAGE", "INTERNAL"),
+    ("Genesis Plus GX", "GPGX"),
+];
+/// Labels too long for their value on a narrow screen (the RG Rotate's
+/// square one, Siham 2026-11-19).
+fn narrow_label(label: &str) -> &str {
+    if out_w() >= 600 { return label; }
+    match label {
+        "Fast Forward Sound" => "FF Sound",
+        "Sync Saves with RomM" => "Sync with RomM",
+        "Wi-Fi & Bluetooth" => "Wi-Fi & BT",
+        _ => label,
+    }
+}
+/// The slot. folder's place: 0 none, 1 internal storage, 2 SD card.
+static SLOT_FOLDER: AtomicU8 = AtomicU8::new(0);
+/// The slot. folder's first copy under way: its percent, -1 none.
+static SLOT_FOLDER_COPY: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+/// The task pill (beta39): Android's long tasks, most important first, a
+/// line each, "kind<TAB>progress<TAB>words" (progress -1 for none); its
+/// revision changes with it.
+static TASK_PILL: Mutex<String> = Mutex::new(String::new());
+static TASK_PILL_REV: AtomicU64 = AtomicU64::new(0);
+/// Android saw a touchscreen among the input devices (beta41): Controls
+/// shows Touchscreen only then. True until known.
+static HAS_TOUCHSCREEN: AtomicBool = AtomicBool::new(true);
+/// Wi-Fi and Bluetooth's width on the status line, from Android.
+static STATUS_ICONS_W: AtomicU32 = AtomicU32::new(0);
+/// When the GL surface was last made (uptime ms), until its first frame is
+/// drawn and timed: after sleep, how long the screen stays black (beta43).
+static FIRST_FRAME_SINCE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// The last frame drawn (uptime ms): a frame after a long gap (sleep, the
+/// screen off) is written down with its gap.
+static LAST_FRAME_AT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+const TASK_PROBLEM: u8 = 0;
+const TASK_COPY: u8 = 1;
+const TASK_DOWNLOADS: u8 = 3;
+const TASK_SCAN: u8 = 5;
+/// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
+static ROMM_SYNC: AtomicU8 = AtomicU8::new(0);
+/// The ROM folder's SD card isn't in this handheld.
+static ROMS_MISSING: AtomicBool = AtomicBool::new(false);
+/// Carts whose SD card is out: grey, as a handheld switched off, opaque
+/// (Siham 2026-11-18). Lighter than beta38's (Siham 2026-11-19, beta39):
+/// "D" over a light ground, "C" over a dark one, which look alike there.
+const MISSING_INK_LIGHT: slot_gfx::InkMap = slot_gfx::InkMap { paper: [0.36, 0.36, 0.37], ink: [0.80, 0.80, 0.82] };
+const MISSING_INK_DARK: slot_gfx::InkMap = slot_gfx::InkMap { paper: [0.22, 0.22, 0.23], ink: [0.68, 0.68, 0.70] };
+const MISSING_FADE_S: f32 = 0.3;
 /// Settings > Interface > RG Rotate: its rows and their keys (85, Sleep
 /// When Closed, is Android's "Lock the screen" right, not a setting).
 /// Game Info (84) right under Playing, which it shows on; Animations are
@@ -891,6 +988,9 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             crate::settings::WallpaperPick::Shelf => 65,
             crate::settings::WallpaperPick::Default => 19,
             crate::settings::WallpaperPick::Blur => 20,
+            crate::settings::WallpaperPick::Halo => HALO_WALLPAPER_VALUE,
+            crate::settings::WallpaperPick::Slot => SLOT_WALLPAPER_VALUE,
+            crate::settings::WallpaperPick::SlotBlur => SLOT_BLUR_WALLPAPER_VALUE,
             crate::settings::WallpaperPick::File(_) => 26,
         },
         17 => match settings.wallpaper_tint {
@@ -984,11 +1084,24 @@ fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
     let mut systems: Vec<Vec<slot_store::Cart>> = grouped.into_iter().collect();
     systems.push(video);
     if let Some(root) = root {
+        // Labels by each game's portable name (2.5); a 2.4 label, named by
+        // the Android address, is carried over. One listing of the folder
+        // rather than a check per cart (thousands at startup).
+        let keys = crate::library::game_keys(library.unwrap_or_default());
+        let labels = root.join("Labels");
+        let present: std::collections::HashSet<std::ffi::OsString> = std::fs::read_dir(&labels)
+            .map(|dir| dir.flatten().map(|f| f.file_name()).collect()).unwrap_or_default();
         for cart in systems.iter_mut().flatten() {
-            let uri = cart.rom.to_string_lossy();
-            let filename = format!("{}.png", core_selection::key(&uri));
+            let uri = cart.rom.to_string_lossy().into_owned();
+            let name = keys.get(&uri).map(String::as_str).unwrap_or(&uri);
+            let filename = format!("{}.png", core_selection::key_of_name(name));
+            let legacy = format!("{}.png", core_selection::legacy_key(&uri));
+            if !present.contains(std::ffi::OsStr::new(&filename))
+                && present.contains(std::ffi::OsStr::new(&legacy)) {
+                core_selection::carry(&labels.join(&legacy), &labels.join(&filename));
+            }
             // Only app-private labels are used; never rewrite ROMs.
-            cart.label = Some(root.join("Labels").join(filename));
+            cart.label = Some(labels.join(filename));
         }
     }
     let video = systems.pop().unwrap_or_default();
@@ -1049,6 +1162,12 @@ const PICKER_LID_WAIT_MS: u64 = 600;
 const SHELF_PICK_KEY: usize = 101;
 /// "GENERAL" among the setting values: a shelf showing General's wallpaper.
 const GENERAL_VALUE: usize = 121;
+/// About's X: MainActivity saves slot.'s logs where the player picks (#107).
+const EXPORT_LOGS_ACTION: i32 = 80;
+/// Wallpaper slot. and slot. Blur's value faces.
+const SLOT_WALLPAPER_VALUE: usize = 122;
+const SLOT_BLUR_WALLPAPER_VALUE: usize = 123;
+const HALO_WALLPAPER_VALUE: usize = 124;
 /// Interface > Wallpaper > Wallpaper's value: the edited shelf's own
 /// wallpaper (GENERAL when it shows General's), or General's.
 const WALLPAPER_PICK_KEY: usize = 103;
@@ -1098,15 +1217,35 @@ const INTERFACE_PAGE_ROWS: [usize; 5] = [85, 83, 86, 87, 58];
 const INTERFACE_PAGE_KEYS: [usize; 5] = [18, usize::MAX, 19, 20, usize::MAX];
 const INTERFACE_WALLPAPER_ROW: usize = 1;
 const INTERFACE_STATUS_ROW: usize = 4;
-/// Settings > Interface > Wallpaper: Shelf (General or a shelf), its
-/// Wallpaper, Wallpaper Tint (for every image), Import, Delete.
-const WALLPAPER_ROWS: [usize; 5] = [133, 83, 84, 43, 45];
-const WALLPAPER_KEYS: [usize; 5] = [SHELF_PICK_KEY, WALLPAPER_PICK_KEY, 17, usize::MAX, usize::MAX];
+/// Settings > Interface > Wallpaper (Engine::wallpaper_rows): Shelf
+/// (General or a shelf), its Wallpaper, Blur, then Halo with Default or
+/// Tint (idle but for an image), Import, Delete.
+const BLUR_ROW: usize = 153;
+const HALO_ROW: usize = 154;
+const DARKEN_ROW: usize = 155;
+const BLUR_KEY: usize = 104;
+const HALO_KEY: usize = 105;
+const DARKEN_KEY: usize = 106;
+/// "10%" among the setting values; 20 % to 100 % follow.
+const PERCENT_VALUES: usize = 125;
+/// A look's value face: OFF at 0 %, then 10 % to 100 %.
+fn percent_value(percent: u8) -> usize {
+    match percent.min(100) / 10 { 0 => 5, tens => PERCENT_VALUES + usize::from(tens) - 1 }
+}
 
 /// Library: ROM folder, RomM, BIOS, Save and State folders, Share Saves,
 /// Refresh. Seven rows: the page scrolls, six shown (Siham 2026-11-09).
-const LIBRARY_ROWS: [usize; 7] = [6, 135, 24, 7, 8, 79, 9];
-const LIBRARY_SHARE_ROW: usize = 5;
+/// Library, six rows (Siham 2026-11-16, slot. 2.5): slot. Folder, ROM,
+/// BIOS, Saves & States, RomM Server, Refresh Library.
+const LIBRARY_ROWS: [usize; 6] = [149, 6, 24, 150, 135, 9];
+const LIBRARY_SLOT_ROW: usize = 0;
+const LIBRARY_SAVES_ROW: usize = 3;
+const LIBRARY_ROMM_ROW: usize = 4;
+/// Library > Saves & States: Save Folder, Save State Folder, Share Core
+/// Saves, Sync Saves with RomM.
+const SAVES_ROWS: [usize; 4] = [7, 8, 79, 152];
+const SAVES_SHARE_ROW: usize = 2;
+const SAVES_ROMM_ROW: usize = 3;
 
 /// X/Y Buttons (38, key 7) moved to Systems > Controls (X / Y), where its
 /// old value is the default until a system or game chooses.
@@ -1180,6 +1319,9 @@ struct Engine {
     /// cart one per frame when the shelf isn't moving: no wait for a still
     /// carousel or a closed menu (RetroPup's video, 2026-11-16).
     relabel: VecDeque<String>,
+    /// Carts whose new label is being drawn by the raster workers: their
+    /// old face stays on the shelf until the new one replaces it (beta41).
+    relabelled: Vec<(usize, usize)>,
     last_cart_navigation: Instant,
     cart_render: CartRender,
     clear_material: Option<ClearMaterial>,
@@ -1302,6 +1444,10 @@ struct Engine {
     /// L2 / R2 on the carousel: delete held, GBA Video tapped.
     triggers: carousel_delete::Triggers,
     touch: Option<touch::Touch>,
+    /// The cart flying between the shelf and Cart Studio (cart_studio.rs).
+    studio_flight: Option<cart_studio::StudioFlight>,
+    /// A long press on a side cart: Cart Studio once it reaches the middle.
+    studio_when_settled: bool,
     /// The GBA Video shelf was the one of the two used last.
     gba_video: bool,
     /// Textures Cart Studio drew its small carts in, free to draw again.
@@ -1318,9 +1464,12 @@ struct Engine {
     shelf_wallpaper_texs: Vec<Option<slot_gfx::TexId>>,
     shelf_wallpaper_ready: Vec<bool>,
     shelf_wallpaper_luma: Vec<Option<f32>>,
-    /// A shelf's own wallpaper is an image (Wallpaper Tint darkens it).
+    /// A shelf's own wallpaper is an image (its Tint shades it).
     shelf_wallpaper_personal: Vec<bool>,
     shelf_wallpaper_rx: Option<std::sync::mpsc::Receiver<(usize, Vec<u8>, f32, bool)>>,
+    /// General's wallpaper being made (reload_wallpaper): the one on screen
+    /// stays until it is ready.
+    wallpaper_rx: Option<std::sync::mpsc::Receiver<(Option<Vec<u8>>, bool)>>,
     wallpaper_name_face: Option<(slot_gfx::TexId, u32, u32)>,
     /// Interface > Wallpaper > Shelf: None for General, else the shelf
     /// (SHELF_KEYS) whose own wallpaper the page shows and changes.
@@ -1383,6 +1532,8 @@ struct Engine {
     /// The long text scrolling now (page, row) and since when.
     /// (page, row, travel), since when, last drawn.
     marquee: std::cell::Cell<Option<((usize, usize, u32), Instant, Instant)>>,
+    /// The selected game's title's own scroll, apart from the menus' (#119).
+    title_marquee: std::cell::Cell<Option<((usize, usize, u32), Instant, Instant)>>,
     menu_cursor_y: f32,
     /// A long page's first row shown, and where its list is on the way there.
     menu_scroll_top: usize,
@@ -1394,13 +1545,33 @@ struct Engine {
     pill_band: std::cell::Cell<Option<[f32; 4]>>,
     /// The mark on a row that opens a page.
     menu_opens: (slot_gfx::TexId, u32, u32),
+    /// About's yellow "Update available" capsule.
+    update_badge: (slot_gfx::TexId, u32, u32),
+    /// LIBRARY_VALUE_NAMES' faces.
+    library_values: [(slot_gfx::TexId, u32, u32); 3],
+    /// Library's slot. folder row while the first copy runs: COPYING n%.
+    slot_copy_face: (slot_gfx::TexId, u32, u32),
+    slot_copy_shown: i32,
+    /// The task pill: the tasks as last read, and its face (beta39).
+    task_pill_rev: u64,
+    task_pill: Vec<(u8, f32, String)>,
+    task_pill_face: Option<(slot_gfx::TexId, u32, u32)>,
+    task_pill_key: String,
+    /// How grey the carts are without their SD card (0 normal, 1 grey) and
+    /// when it was last moved: a 0.3 s fade (beta38).
+    missing_mix: f32,
+    missing_at: Instant,
     /// Each page's path line, made when first shown.
     menu_paths: std::collections::HashMap<&'static str, (slot_gfx::TexId, u32, u32)>,
     /// The cart beside the main and game menus: its name, then its title
     /// and system lines.
     menu_side: Option<(String, [(slot_gfx::TexId, u32, u32); 2])>,
     menu_textures: Vec<(slot_gfx::TexId, u32, u32)>,
+    /// Values' short forms where the whole word has no room (SHORT_VALUES).
+    short_values: Vec<(slot_gfx::TexId, (slot_gfx::TexId, u32, u32))>,
     menu_hints: [(slot_gfx::TexId, u32); 2],
+    /// About's third legend, X Logs: saves slot.'s logs to a file (#107).
+    about_logs_hint: (slot_gfx::TexId, u32),
     first_run_hint: (slot_gfx::TexId, u32),
     onboarding_note: (slot_gfx::TexId, u32),
     shelf_no_games_hint: (slot_gfx::TexId, u32),
@@ -1431,6 +1602,8 @@ struct Engine {
     link_inet_hints: [[(slot_gfx::TexId, u32); 6]; 2],
     board_texture: Option<slot_gfx::TexId>,
     picker: Option<CorePicker>,
+    /// A finger chose a core: A once the chip has hopped there (ms, born).
+    picker_auto_seat: Option<u64>,
     socket_textures: [slot_gfx::TexId; Core::ALL.len()],
     chip_textures: [slot_gfx::TexId; Core::ALL.len()],
     chip_blank: slot_gfx::TexId,
@@ -1440,6 +1613,9 @@ struct Engine {
     home_chip_blanks: [slot_gfx::TexId; 3],
     chip_shadow: slot_gfx::TexId,
     core_legend_faces: [(slot_gfx::TexId, u32); 3],
+    /// The same, their words in Light's dark ink: over a light shelf
+    /// (shelf_ink), as the shelf's name (Siham 2026-11-18).
+    core_legend_dark: [(slot_gfx::TexId, u32); 3],
     a_down_at: Option<Instant>,
     home_launch_held: bool,
     fresh_launch: bool,
@@ -1480,6 +1656,10 @@ struct Engine {
     clock_texture: Option<slot_gfx::TexId>,
     clock_face: Printed,
     battery_percent: Option<u8>,
+    /// The percent printed in red, the battery low (#87).
+    battery_low_shown: bool,
+    /// The game's blinking low battery sign (#87).
+    low_battery_badge: slot_gfx::TexId,
     battery_texture: Option<slot_gfx::TexId>,
     battery_face: Printed,
     battery: Option<Battery>,
@@ -1508,7 +1688,7 @@ struct Engine {
 /// Android's fresh app-private filesDir does not necessarily contain it yet.
 fn pick_wallpaper_android(root: &Path) -> Option<PathBuf> {
     if let Err(error) = std::fs::create_dir_all(root.join("Config")) {
-        eprintln!("slot-konkr: cannot initialize wallpaper deck: {error}");
+        crate::log_warn(&format!("cannot initialize wallpaper deck: {error}"));
     }
     crate::wallpaper::pick(root, 0)
 }
@@ -1536,16 +1716,27 @@ fn user_wallpaper_stamp(root: &Path) -> Option<std::time::SystemTime> {
 }
 
 /// Wallpapers/ files are eligible: never access ROMs or external SAF paths.
-fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperPick)
+/// Default is shelf `shelf`'s mosaic in `theme`; with no shelf yet (the
+/// engine is being built) there is none to make. `look`'s Blur softens
+/// every wallpaper and its Halo lights Default's lines.
+fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperPick,
+    look: crate::settings::WallpaperLook, shelf: Option<usize>, theme: slot_ui::MosaicTheme)
     -> (Option<Vec<u8>>, bool)
 {
     use crate::settings::WallpaperPick;
-    let default = || slot_ui::default_background_native().map(|v|v.to_vec());
+    let blurred = |mut rgba: Vec<u8>| {
+        slot_ui::blur_wallpaper(&mut rgba, slot_ui::native_w(), slot_ui::native_h(), look.blur);
+        rgba
+    };
+    let mosaic = || shelf.and_then(|shelf| slot_ui::mosaic_native(shelf, theme, look.mosaic()));
+    let wood = || slot_ui::default_background_native().map(|v| blurred(v.to_vec()));
+    let default = || if shelf.is_some() { mosaic() } else { wood() };
     let personal = match (selection, root) {
         (WallpaperPick::None, _) => return (None, false),
-        (WallpaperPick::Default, _) => return (default(), false),
-        (WallpaperPick::Blur, _) =>
-            return (slot_ui::blur_background_native().map(|v|v.to_vec()), false),
+        // Default Blur and Halo are read as Default with their look.
+        (WallpaperPick::Default | WallpaperPick::Blur | WallpaperPick::Halo, _) =>
+            return (mosaic(), false),
+        (WallpaperPick::Slot | WallpaperPick::SlotBlur, _) => return (wood(), false),
         // Shelves without their own file show the bundled default.
         (WallpaperPick::Shelf, _) => return (default(), false),
         (WallpaperPick::File(name), Some(root)) => {
@@ -1557,7 +1748,7 @@ fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperP
         _ => None,
     };
     if let Some(image) = personal.and_then(|p|slot_ui::wallpaper_face_native(&p)) {
-        (Some(image), true)
+        (Some(blurred(image)), true)
     } else {
         // Official Slot falls back to the bundled default for an empty random
         // deck or a deleted file. Never silently mutate the saved selection.
@@ -1565,15 +1756,40 @@ fn wallpaper_pixels(root: Option<&Path>, selection: &crate::settings::WallpaperP
     }
 }
 
+/// A shelf's own wallpaper as its worker makes it: None when its image is
+/// gone (the shelf shows General's).
+fn shelf_wallpaper_pixels(root: Option<&Path>, pick: &crate::settings::WallpaperPick,
+    look: crate::settings::WallpaperLook, shelf: usize, theme: slot_ui::MosaicTheme)
+    -> (Option<Vec<u8>>, bool)
+{
+    use crate::settings::WallpaperPick;
+    match pick {
+        WallpaperPick::File(name) => (root
+            .map(|root| root.join("Wallpapers").join(name))
+            .filter(|path| path.is_file())
+            .and_then(|path| slot_ui::wallpaper_face_native(&path))
+            .map(|mut rgba| {
+                slot_ui::blur_wallpaper(&mut rgba, slot_ui::native_w(), slot_ui::native_h(), look.blur);
+                rgba
+            }), true),
+        WallpaperPick::Default | WallpaperPick::Blur | WallpaperPick::Halo
+        | WallpaperPick::Slot | WallpaperPick::SlotBlur =>
+            wallpaper_pixels(root, pick, look, Some(shelf), theme),
+        _ => (None, false),
+    }
+}
+
 impl Engine {
     fn new(library_version: u64, library: Option<&[RomEntry]>) -> Result<Self, String> {
+        let mut steps = crate::frame_watch::Steps::new();
         let size = panel_size();
         // The canvas stays 480 high and takes the panel's shape (720 wide on
         // the KONKR's 3:2). Text, glyphs and vector art are drawn for the
         // panel, not stretched. Set both before the first face is built.
         slot_gfx::set_canvas_for_panel(size);
         slot_ui::density::set_scale(size.1 as f32 / OUT_H as f32);
-        let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
+        // The slot bars and bezels decode on worker threads while GL starts.
+        let start_pixels = start_pixels();
         let device = crate::settings::Device {
             konkr: is_konkr(),
             retroid_pocket_classic: RPC_DEFAULT_RESPONSIVE.load(Ordering::Acquire),
@@ -1582,6 +1798,20 @@ impl Engine {
         let settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| Settings::load_for_device(root, device))
             .unwrap_or_else(|| Settings::first_install_defaults_for_device(device));
+        // General's wallpaper too (a blur takes a moment): Default's mosaic
+        // follows the shelf on screen, not known yet, and is made once the
+        // engine is (with_shelf_wallpapers).
+        let visuals_root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|(root, _)| root.clone());
+        let general_wallpaper = {
+            let (root, pick, look) = (visuals_root.clone(), settings.wallpaper.clone(), settings.wallpaper_look);
+            let theme = settings.appearance.mosaic_theme();
+            let make = move || wallpaper_pixels(root.as_deref(), &pick, look, None, theme);
+            std::thread::Builder::new().name("slot-wallpaper-start".into()).spawn(make.clone())
+                .map_err(|_| make)
+        };
+        let mut gpu = Compositor::new(&AndroidSurface { size }).map_err(|e| e.to_string())?;
+        steps.mark("gl");
         let mut controls = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| crate::controls::Controls::load(root))
             .unwrap_or_default();
@@ -1593,55 +1823,41 @@ impl Engine {
         menu_style::set_oled(settings.appearance == crate::settings::Appearance::Oled);
         gpu.set_colour_correction(false);
         FF_AUDIO_ENABLED.store(settings.ff_sound, Ordering::Release);
-        let visuals_root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
-            .as_ref().map(|(root, _)| root.clone());
         if let Some(root) = visuals_root.as_deref() {
             slot_ui::set_theme(slot_store::Theme::read(root));
         }
         let custom_wallpaper_present = visuals_root.as_deref()
             .is_some_and(|root| root.join("Wallpapers/user.png").is_file());
         let user_wallpaper_stamp = visuals_root.as_deref().and_then(user_wallpaper_stamp);
-        let (wallpaper_pixels, wallpaper_personal) =
-            wallpaper_pixels(visuals_root.as_deref(), &settings.wallpaper);
+        let (wallpaper_pixels, wallpaper_personal) = match general_wallpaper {
+            Ok(worker) => worker.join().unwrap_or((None, false)),
+            Err(make) => make(),
+        };
+        steps.mark("settings and wallpaper read");
         let wallpaper_top_luma = wallpaper_pixels.as_deref()
             .map(|rgba| slot_ui::top_line_luma(rgba, slot_ui::native_w()));
         let wallpaper_texture = wallpaper_pixels.map(|rgba|
             gpu.create_texture(slot_ui::native_w(), slot_ui::native_h(), &rgba));
         // Preserve existing Config/theme.txt custom colours as an opt-out.
+        steps.mark("wallpaper upload");
         let custom_colours = visuals_root.as_deref()
             .is_some_and(|root| root.join("Config/theme.txt").exists());
-        let mut make_slot = |light: bool| {
-            let (back, front) = slot_ui::bitmaps::slot_bar_png(light);
-            // The 720-wide band is refitted to the canvas: same mouth and
-            // ends, longer or shorter housing on either side. Its 3x master
-            // is filtered straight to the panel's density.
-            let mut band = |png: &[u8]| {
-                let (rgba, w, h) = slot_ui::native_png(
-                    png, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
-                let wide = (w as f32 * out_w() as f32 / slot_ui::bitmaps::SLOT_W as f32)
-                    .round() as u32;
-                gpu.create_texture(wide, h, &slot_ui::refit_band(&rgba, w, h, wide))
-            };
-            let rear = band(back);
-            let front = band(front);
-            (rear, front)
+        let mut pixels = start_pixels.join().unwrap_or_else(|_| {
+            crate::log_warn("start pictures decoded on the GL thread (a worker failed)");
+            StartJob::all().iter().map(StartJob::make).collect()
+        }).into_iter();
+        let mut upload = |gpu: &mut Compositor| match pixels.next().expect("every start picture decoded") {
+            StartPicture::Texture(rgba, w, h) => gpu.create_texture(w, h, &rgba),
+            StartPicture::Face(face) => gpu.create_face(&face),
         };
         // Both official themes are cached once. Toggling doesn't allocate
         // textures on the GL thread or shift the original Slot animation.
-        let slot_dark_faces=make_slot(false);
-        let slot_light_faces=make_slot(true);
+        let slot_dark_faces = (upload(&mut gpu), upload(&mut gpu));
+        let slot_light_faces = (upload(&mut gpu), upload(&mut gpu));
         let footer_inked_dark_at_start = settings.appearance == crate::settings::Appearance::Light;
-        let home_slot_themes=[0usize, 1, 2].map(|theme| [0usize, 1, 2, 3, 4, 5, 6].map(|family| {
-            let (back, front) = slot_ui::bitmaps::home_slot_png(family, theme);
-            let mut band = |png: &[u8]| {
-                let (rgba, w, h) = slot_ui::native_png(
-                    png, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
-                let wide = (w as f32 * out_w() as f32 / slot_ui::bitmaps::SLOT_W as f32)
-                    .round() as u32;
-                gpu.create_texture(wide, h, &slot_ui::refit_band(&rgba, w, h, wide))
-            };
-            (band(back), band(front))
-        }));
+        let home_slot_themes = [0usize, 1, 2].map(|_| [0usize, 1, 2, 3, 4, 5, 6]
+            .map(|_| (upload(&mut gpu), upload(&mut gpu))));
+        steps.mark("slot bars");
         let home_slot_faces = home_slot_themes[settings.appearance.bar_theme()];
         // The home consoles' bars are open recesses like the GB/GBA bar
         // (Siham 2026-11-02): no flap or doors close them any more.
@@ -1651,11 +1867,10 @@ impl Engine {
                 Some(slot_light_faces)
             } else { Some(slot_dark_faces) };
         // Official 720x480 GB/GBC screen bezels, sampled once for KONKR.
-        let (gb, w, h)=slot_ui::native_png(slot_ui::bitmaps::bezel_master(false),720,480);
-        let gb_bezel_tex=gpu.create_texture(w,h,&gb);
-        let (gbc,w,h)=slot_ui::native_png(slot_ui::bitmaps::bezel_master(true),720,480);
-        let gbc_bezel_tex=gpu.create_texture(w,h,&gbc);
+        let gb_bezel_tex = upload(&mut gpu);
+        let gbc_bezel_tex = upload(&mut gpu);
 
+        steps.mark("bezels");
         let mut shelves = Vec::new();
 
         // First-run empty shelf: never synthesize fake demo cartridges.
@@ -1688,6 +1903,7 @@ impl Engine {
         // Game Boy, Game Boy Color. Keep the existing 3x antialiased 16px
         // font, centered placement and official 200/1200/800ms fade.
         // Cache textures once rather than rebuilding on every L1/R1.
+        steps.mark("library");
         let platform_faces = Platform::ALL.map(|platform| {
             let face = platform_name_face(platform.name());
             let tex = gpu.create_face(&face);
@@ -1705,15 +1921,13 @@ impl Engine {
         let video_label=platform_name_face("Game Boy Advance Video");
         let video_platform_face=Printed::new(gpu.create_face(&video_label), video_label.w);
 
-        let shadow = cart_shadow();
-        let gba = gpu.create_face(&shadow);
-        let shadow = gb_cart_shadow(GbShell::Notched);
-        let gb = gpu.create_face(&shadow);
-        let shadow = gb_cart_shadow(GbShell::Rounded);
-        let gbc = gpu.create_face(&shadow);
-        let home_shadows = slot_ui::HomeMould::ALL
-            .map(|m| (m, gpu.create_face(&slot_ui::home_cart_shadow(m))));
+        steps.mark("platform names");
+        let gba = upload(&mut gpu);
+        let gb = upload(&mut gpu);
+        let gbc = upload(&mut gpu);
+        let home_shadows = slot_ui::HomeMould::ALL.map(|m| (m, upload(&mut gpu)));
         // The exact original Slot 9x9 pixel star, bright yellow with dark rim.
+        steps.mark("shadows");
         let star=slot_ui::star_face(2, [0xf6,0xc3,0x2c]);
         let star_tex=gpu.create_face(&star);
         for shelf in &mut shelves {
@@ -1722,10 +1936,11 @@ impl Engine {
             shelf.set_gb_shadow(GbShell::Rounded, gbc);
             for (m, tex) in home_shadows { shelf.set_home_shadow(m, tex); }
             shelf.set_star(star_tex,star.w,star.h);
-            shelf.mark_starred(|cart|favorite_ids.iter()
-                .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
+            shelf.mark_starred(|cart|crate::favorites::holds(&favorite_ids,
+                cart.rom.to_string_lossy().as_ref()));
         }
 
+        steps.mark("shelf faces");
         let art = slot_ui::link_marks();
         let mut sprite = |face: slot_ui::CartFace| Sprite {
             tex: gpu.create_face(&face), w: face.w, h: face.h,
@@ -1738,7 +1953,7 @@ impl Engine {
             arrow_right: sprite(art.arrow_right),
         };
         let menu_textures = MENU_TEXT.iter().map(|label| {
-            let face = quick_value_face(label, true);
+            let face = quick_value_face(narrow_label(label), true);
             let tex = gpu.create_face(&face);
             (tex, face.w, face.h)
         }).collect();
@@ -1747,6 +1962,10 @@ impl Engine {
             let tex = gpu.create_face(&face);
             (tex, face.w)
         });
+        let about_logs_hint = {
+            let face = hint_face("X", "Logs");
+            (gpu.create_face(&face), face.w)
+        };
         // Authentic Slot raster/keycap for a clean library. Render it in the
         // GL scene rather than above it in an Android TextView.
         let first_run_hint = {
@@ -1819,12 +2038,29 @@ impl Engine {
             let face = slot_ui::arrows_hint_face_ink("", ink);
             (gpu.create_face(&face), face.w)
         });
+        steps.mark("link faces");
         let setting_values = SETTING_VALUE_NAMES
             .into_iter().map(|value| {
                 let face = quick_value_face(value, true);
                 let tex = gpu.create_face(&face);
                 (tex, face.w, face.h)
-            }).collect();
+            }).collect::<Vec<_>>();
+        // Library's own values (2.5): the slot. folder's place, RomM's sync.
+        let library_values = LIBRARY_VALUE_NAMES.map(|value| {
+            let face = quick_value_face(value, true);
+            (gpu.create_face(&face), face.w, face.h)
+        });
+        let short_values = SHORT_VALUES.iter().filter_map(|&(whole, short)| {
+            let full = SETTING_VALUE_NAMES.iter().position(|v| *v == whole)
+                .and_then(|at| setting_values.get(at))
+                .or_else(|| LIBRARY_VALUE_NAMES.iter().position(|v| *v == whole).map(|at| &library_values[at]))?;
+            let face = quick_value_face(short, true);
+            Some((full.0, (gpu.create_face(&face), face.w, face.h)))
+        }).collect::<Vec<_>>();
+        let slot_copy_face = {
+            let face = quick_value_face("COPYING...", true);
+            (gpu.create_face(&face), face.w, face.h)
+        };
         let palette_values = slot_store::GbPalette::all().map(|palette| {
             let face = quick_value_face(palette.label(), true);
             (gpu.create_face(&face), face.w, face.h)
@@ -1851,6 +2087,10 @@ impl Engine {
             let face = menu_style::menu_opens_face();
             (gpu.create_face(&face), face.w, face.h)
         };
+        let update_badge = {
+            let face = menu_style::update_badge_face();
+            (gpu.create_face(&face), face.w, face.h)
+        };
         let setting_carets = [false, true].map(|right| {
             let face = quick_caret_face(right);
             let tex = gpu.create_face(&face);
@@ -1870,6 +2110,7 @@ impl Engine {
             .map(|face| (gpu.create_face(&face), face.w));
         // Rasterize the detailed barcode About label only when opened.
         // Creating SVG / fonts during every cold boot needlessly delays shelf.
+        steps.mark("menu faces");
         let about_texture = None;
         let chip = chip_face(Some(Core::Mgba));
         let chip_texture = gpu.create_face(&chip);
@@ -1901,8 +2142,19 @@ impl Engine {
             let texture = gpu.create_face(&face);
             (texture, face.w)
         });
+        let low_battery_badge = gpu.create_face(&slot_ui::low_battery_badge());
+        let dark_ink = menu_style::MenuPalette::LIGHT.ink.unwrap_or([0; 3]);
+        let core_legend_dark = [
+            slot_ui::hint_face_ink("B", "Cancel", dark_ink),
+            slot_ui::arrows_hint_face_ink("Swap", dark_ink),
+            slot_ui::hint_face_ink("A", "Choose", dark_ink),
+        ].map(|face| {
+            let texture = gpu.create_face(&face);
+            (texture, face.w)
+        });
 
         // Use the original Slot toast faces and HUD, not Android text banners.
+        steps.mark("chips");
         let mut hud = Hud::new();
         let toasts = Toast::all().into_iter().map(|toast| {
             let face = toast_face(toast);
@@ -1932,12 +2184,15 @@ impl Engine {
         let bolt_light_texture = gpu.create_face(&bolt);
 
         // On a GBA-only library do not begin on an empty GB or GBC shelf.
+        steps.mark("hud");
         let saved_focus=visuals_root.as_deref().and_then(crate::selection::load);
         let active=saved_focus.as_ref().and_then(|focus|restore_saved_focus(&mut shelves,focus))
             .unwrap_or_else(||shelves.iter().position(|s|!s.carts.is_empty()).unwrap_or(0));
         let active = gba_before_video(&shelves, active);
         let now = Instant::now();
         let has_multiple_systems = shelves.iter().filter(|s| !s.carts.is_empty()).count() > 1;
+        steps.mark("rest");
+        crate::game::log_launch_timing(&steps.line());
         Ok(Self {
             gpu,
             size,
@@ -1962,6 +2217,7 @@ impl Engine {
             has_library: library.is_some(),
             texture_cache: VecDeque::new(),
             relabel: VecDeque::new(),
+            relabelled: Vec::new(),
             last_cart_navigation: now,
             cart_render: CartRender::start(visuals_root.as_deref())?,
             clear_material: None,
@@ -2050,6 +2306,8 @@ impl Engine {
             romm: None,
             triggers: Default::default(),
             touch: None,
+            studio_flight: None,
+            studio_when_settled: false,
             gba_video: false,
             studio_pool: Vec::new(),
             settings,
@@ -2064,6 +2322,7 @@ impl Engine {
             shelf_wallpaper_luma: Vec::new(),
             shelf_wallpaper_personal: Vec::new(),
             shelf_wallpaper_rx: None,
+            wallpaper_rx: None,
             wallpaper_name_face,
             wallpaper_edit: None,
             wallpaper_import: None,
@@ -2100,16 +2359,29 @@ impl Engine {
             menu_seen: 0,
             menu_opened: now,
             marquee: std::cell::Cell::new(None),
+            title_marquee: std::cell::Cell::new(None),
             menu_cursor_y: 0.0,
             menu_scroll_top: 0,
             menu_scroll_y: 0.0,
             menu_pill,
             pill_band: std::cell::Cell::new(None),
             menu_opens,
+            update_badge,
+            library_values,
+            slot_copy_face,
+            slot_copy_shown: -1,
+            task_pill_rev: 0,
+            task_pill: Vec::new(),
+            task_pill_face: None,
+            task_pill_key: String::new(),
+            missing_mix: if ROMS_MISSING.load(Ordering::Acquire) { 1.0 } else { 0.0 },
+            missing_at: Instant::now(),
             menu_paths: Default::default(),
             menu_side: None,
             menu_textures,
+            short_values,
             menu_hints,
+            about_logs_hint,
             first_run_hint,
             onboarding_note,
             shelf_no_games_hint,
@@ -2134,6 +2406,7 @@ impl Engine {
             link_inet_hints,
             board_texture: None,
             picker: None,
+            picker_auto_seat: None,
             socket_textures,
             chip_textures,
             chip_blank,
@@ -2142,6 +2415,7 @@ impl Engine {
             home_chip_blanks,
             chip_shadow,
             core_legend_faces,
+            core_legend_dark,
             a_down_at: None,
             home_launch_held: false,
             fresh_launch: false,
@@ -2167,6 +2441,8 @@ impl Engine {
             clock_texture: None,
             clock_face: Printed::default(),
             battery_percent: None,
+            battery_low_shown: false,
+            low_battery_badge,
             battery_texture: None,
             battery_face: Printed::default(),
             battery: None,
@@ -2191,7 +2467,11 @@ impl Engine {
     }
 
     fn with_shelf_wallpapers(mut self, root: Option<&Path>) -> Self {
-        self.reload_shelf_wallpapers(root);
+        if self.settings.wallpaper.is_mosaic() {
+            self.reload_wallpaper(root);
+        } else {
+            self.reload_shelf_wallpapers(root);
+        }
         self
     }
 
@@ -2203,49 +2483,68 @@ impl Engine {
         use crate::settings::WallpaperPick;
         let count = self.shelves.len();
         self.shelf_wallpaper_texs.resize(count, None);
-        self.shelf_wallpaper_ready = vec![false; count];
-        self.shelf_wallpaper_luma = vec![None; count];
-        self.shelf_wallpaper_personal = vec![false; count];
+        self.shelf_wallpaper_ready.resize(count, false);
+        self.shelf_wallpaper_luma.resize(count, None);
+        self.shelf_wallpaper_personal.resize(count, false);
         self.shelf_wallpaper_rx = None;
         let mut order: Vec<usize> = (0..count).collect();
         order.sort_by_key(|i| *i != self.active);
-        let jobs: Vec<(usize, WallpaperPick)> = order.into_iter()
-            .filter_map(|i| self.settings.shelf_wallpaper(i).cloned().map(|pick| (i, pick)))
-            .filter(|(_, pick)| matches!(pick,
-                WallpaperPick::Default | WallpaperPick::Blur | WallpaperPick::File(_)))
+        // A shelf's own wallpaper, and General's Default: each shelf has its
+        // own mosaic. Each with the look it shows (Blur, Halo).
+        let jobs: Vec<(usize, WallpaperPick, crate::settings::WallpaperLook)> = order.into_iter()
+            .filter_map(|i| self.settings.shelf_wallpaper(i).cloned()
+                .or_else(|| self.settings.wallpaper.is_mosaic().then(|| self.settings.wallpaper.clone()))
+                .map(|pick| (i, pick, self.settings.look_on(i))))
+            .filter(|(_, pick, _)| matches!(pick, WallpaperPick::Default | WallpaperPick::Blur
+                | WallpaperPick::Halo | WallpaperPick::Slot | WallpaperPick::SlotBlur | WallpaperPick::File(_)))
             .collect();
+        // A shelf being remade keeps its wallpaper until the new one is
+        // ready (no flash of General's while Blur or Halo change); the
+        // others show General's.
+        for shelf in 0..count {
+            if !jobs.iter().any(|(i, _, _)| *i == shelf) {
+                self.shelf_wallpaper_ready[shelf] = false;
+                self.shelf_wallpaper_luma[shelf] = None;
+                self.shelf_wallpaper_personal[shelf] = false;
+            }
+        }
         if jobs.is_empty() { return; }
         let root = root.map(Path::to_path_buf);
+        let theme = self.settings.appearance.mosaic_theme();
         let (tx, rx) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new().name("slot-wallpaper".into()).spawn(move || {
-            for (index, pick) in jobs {
-                let (rgba, personal) = match &pick {
-                    WallpaperPick::Default =>
-                        (slot_ui::default_background_native().map(|v| v.to_vec()), false),
-                    WallpaperPick::Blur =>
-                        (slot_ui::blur_background_native().map(|v| v.to_vec()), false),
-                    WallpaperPick::File(name) => (root.as_ref()
-                        .map(|root| root.join("Wallpapers").join(name))
-                        .filter(|path| path.is_file())
-                        .and_then(|path| slot_ui::wallpaper_face_native(&path)), true),
-                    _ => (None, false),
-                };
+            for (index, pick, look) in jobs {
+                let (rgba, personal) = shelf_wallpaper_pixels(root.as_deref(), &pick, look, index, theme);
                 // A missing or unreadable image: the shelf shows General's.
-                let Some(rgba) = rgba else { continue };
+                let Some(rgba) = rgba else {
+                    if tx.send((index, Vec::new(), 0.0, false)).is_err() { return; }
+                    continue
+                };
                 let luma = slot_ui::top_line_luma(&rgba, slot_ui::native_w());
                 if tx.send((index, rgba, luma, personal)).is_err() { return; }
             }
         });
         match spawned {
             Ok(_) => self.shelf_wallpaper_rx = Some(rx),
-            Err(error) => eprintln!("slot-konkr: shelf wallpaper worker failed: {error}"),
+            Err(error) => crate::log_warn(&format!("shelf wallpaper worker failed: {error}")),
         }
     }
 
     /// Upload at most one decoded shelf wallpaper per frame.
     fn poll_shelf_wallpapers(&mut self) {
         let Some(rx) = self.shelf_wallpaper_rx.as_ref() else { return };
-        let Ok((index, rgba, luma, personal)) = rx.try_recv() else { return };
+        let (index, rgba, luma, personal) = match rx.try_recv() {
+            Ok(made) => made,
+            // Every shelf done: nothing more to wait for.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => { self.shelf_wallpaper_rx = None; return; }
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        };
+        if rgba.is_empty() {
+            // Its image is gone: General's shows.
+            if let Some(ready) = self.shelf_wallpaper_ready.get_mut(index) { *ready = false; }
+            return;
+        }
+        crate::frame_watch::did(crate::frame_watch::WORK_WALLPAPER);
         let Some(slot) = self.shelf_wallpaper_texs.get_mut(index) else { return };
         // The size General's wallpaper is made at (reload_wallpaper).
         let (w, h) = (slot_ui::native_w(), slot_ui::native_h());
@@ -2260,22 +2559,25 @@ impl Engine {
         if let Some(slot) = self.shelf_wallpaper_personal.get_mut(index) { *slot = personal; }
     }
 
-    /// The wallpaper the shelf on screen shows: its own once decoded, else
-    /// General's; with whether it is an image (tinted) and its top line's
+    /// The wallpaper the shelf on screen shows: its own once decoded (its
+    /// own pick, or its mosaic for General's Default), else General's; with
+    /// how much its Tint shades it (an image only) and its top line's
     /// luma. None for Wallpaper None, the theme's ground.
-    fn active_wallpaper(&self) -> Option<(slot_gfx::TexId, bool, Option<f32>)> {
+    fn active_wallpaper(&self) -> Option<(slot_gfx::TexId, f32, Option<f32>)> {
         use crate::settings::WallpaperPick;
         let shelf = self.active;
         if *self.settings.wallpaper_on(shelf) == WallpaperPick::None { return None; }
-        if self.settings.shelf_wallpaper(shelf).is_some()
+        if (self.settings.shelf_wallpaper(shelf).is_some() || self.settings.wallpaper.is_mosaic())
             && self.shelf_wallpaper_ready.get(shelf).copied().unwrap_or(false) {
             if let Some(tex) = self.shelf_wallpaper_texs.get(shelf).copied().flatten() {
-                return Some((tex, self.shelf_wallpaper_personal.get(shelf).copied().unwrap_or(false),
-                    self.shelf_wallpaper_luma.get(shelf).copied().flatten()));
+                let personal = self.shelf_wallpaper_personal.get(shelf).copied().unwrap_or(false);
+                let darken = if personal { self.settings.look_on(shelf).darken_alpha() } else { 0.0 };
+                return Some((tex, darken, self.shelf_wallpaper_luma.get(shelf).copied().flatten()));
             }
         }
         if self.settings.wallpaper == WallpaperPick::None { return None; }
-        self.wallpaper_texture.map(|tex| (tex, self.wallpaper_personal, self.wallpaper_top_luma))
+        let darken = if self.wallpaper_personal { self.settings.wallpaper_look.darken_alpha() } else { 0.0 };
+        self.wallpaper_texture.map(|tex| (tex, darken, self.wallpaper_top_luma))
     }
 
     /// The shelf on screen shows Wallpaper None: the theme's own colour.
@@ -2290,18 +2592,136 @@ impl Engine {
     fn top_line_dark_ink(&self) -> bool {
         // None is the theme's own colour (menu_style::shelf_ground).
         if self.wallpaper_none() { return menu_style::shelf_takes_dark_ink(); }
-        let Some((_, personal, luma)) = self.active_wallpaper() else { return false };
-        let tint = if personal { self.settings.wallpaper_tint.alpha() } else { 0.0 };
+        let Some((_, tint, luma)) = self.active_wallpaper() else { return false };
         luma.unwrap_or(0.0) * (1.0 - tint) > slot_ui::LIGHT_WALLPAPER
     }
 
-    /// The shelf's name and game title in dark ink over the light colour
-    /// Wallpaper None shows in Light, and Original's GBA and Game Boy Color.
+    /// The shelf's name, letter and game title in dark ink over the light
+    /// colour Wallpaper None shows in Light, and Original's GBA and Game Boy
+    /// Color; and over a light mosaic (Default, Default Blur: every one in
+    /// Light, all but the Mega Drive's in Original. Siham 2026-11-18).
     fn shelf_ink(&self) -> Option<slot_gfx::InkMap> {
-        if !self.wallpaper_none() || !menu_style::shelf_takes_dark_ink() { return None; }
-        let [r, g, b, _] = menu_style::shelf_ground();
         let ink = menu_style::MenuPalette::LIGHT.ink.unwrap_or([0; 3]).map(|v| v as f32 / 255.0);
-        Some(slot_gfx::InkMap { paper: [r, g, b], ink })
+        if self.wallpaper_none() {
+            if !menu_style::shelf_takes_dark_ink() { return None; }
+            let [r, g, b, _] = menu_style::shelf_ground();
+            return Some(slot_gfx::InkMap { paper: [r, g, b], ink });
+        }
+        if !self.settings.wallpaper_on(self.active).is_mosaic() { return None; }
+        let ground = slot_ui::mosaic_ground(self.active, self.settings.appearance.mosaic_theme())?
+            .map(|v| v as f32 / 255.0);
+        let light = 0.299 * ground[0] + 0.587 * ground[1] + 0.114 * ground[2] > 0.5;
+        light.then_some(slot_gfx::InkMap { paper: ground, ink })
+    }
+
+    fn refresh_task_pill(&mut self) {
+        let rev = TASK_PILL_REV.load(Ordering::Acquire);
+        if rev == self.task_pill_rev { return; }
+        self.task_pill_rev = rev;
+        let spec = TASK_PILL.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.task_pill = spec.lines().filter_map(|line| {
+            let mut parts = line.splitn(3, '\t');
+            let kind = parts.next()?.parse::<u8>().ok()?;
+            let progress = parts.next()?.parse::<f32>().ok()?;
+            let words = parts.next()?.trim();
+            (!words.is_empty()).then(|| (kind, progress, words.to_string()))
+        }).collect();
+    }
+
+    /// The task the pill shows here: the first its own page doesn't show
+    /// already (the copy and the scan on Library, the downloads on RomM's),
+    /// with how many others run.
+    fn task_pill_now(&self) -> Option<(u8, f32, String, usize)> {
+        let hidden = |kind: u8| match self.overlay {
+            ShelfOverlay::Library { .. } => kind == TASK_COPY || kind == TASK_SCAN,
+            ShelfOverlay::Romm => kind == TASK_DOWNLOADS,
+            _ => false,
+        };
+        let shown: Vec<&(u8, f32, String)> = self.task_pill.iter().filter(|t| !hidden(t.0)).collect();
+        let first = shown.first()?;
+        Some((first.0, first.1, first.2.clone(), shown.len() - 1))
+    }
+
+    /// The pill's texture now, made again only when what it says changes
+    /// (its ring in 40 steps); its logical size.
+    fn task_pill_tex(&mut self) -> Option<(u8, slot_gfx::TexId, f32, f32)> {
+        self.refresh_task_pill();
+        let (kind, progress, words, more) = self.task_pill_now()?;
+        let filled = (progress >= 0.0).then(|| (progress.min(1.0) * 40.0).round() / 40.0);
+        let key = format!("{kind}|{words}|{more}|{filled:?}");
+        if key != self.task_pill_key || self.task_pill_face.is_none() {
+            let face = slot_ui::task_pill_face(&words, more, filled, kind == TASK_PROBLEM);
+            let tex = match self.task_pill_face {
+                Some((tex, _, _)) => { self.gpu.update_face(tex, &face); tex }
+                None => self.gpu.create_face(&face),
+            };
+            self.task_pill_face = Some((tex, face.w, face.h));
+            self.task_pill_key = key;
+        }
+        self.task_pill_face.map(|(tex, w, h)| (kind, tex, w as f32, h as f32))
+    }
+
+    /// The pill at `x`, `y`, white or inked as `ink` (a problem stays red).
+    fn push_task_pill(kind: u8, tex: slot_gfx::TexId, x: f32, y: f32, w: f32, h: f32,
+                      ink: Option<slot_gfx::InkMap>, out: &mut Vec<Draw>) {
+        let ink = ink.filter(|_| kind != TASK_PROBLEM);
+        out.push(Draw::Ink(ink));
+        out.push(Draw::Tex { x: x.round(), y, w, h, tex, alpha: 1.0 });
+        out.push(Draw::Ink(None));
+    }
+
+    /// On the shelf: by the battery when they share the top line, else at
+    /// the top right (below the icons when they hold that corner). The room
+    /// it takes beside the battery, for the icons Android places there.
+    fn draw_shelf_task_pill(&mut self, clock_top: bool, icons_top: bool, battery_w: f32,
+                            dark_ink: bool, out: &mut Vec<Draw>) -> f32 {
+        let Some((kind, tex, w, h)) = self.task_pill_tex() else { return 0.0 };
+        let margin = if out_w() < 640 { 12.0 } else { 24.0 };
+        let (x, y, room) = if clock_top {
+            // Before Wi-Fi and Bluetooth when they show (Android places them
+            // 10.75 before the battery), else by the battery.
+            let icons = STATUS_ICONS_W.load(Ordering::Acquire) as f32;
+            if icons > 0.0 {
+                (out_w() as f32 - margin - battery_w - 10.75 - icons - 12.0 - w, 14.0, 0.0)
+            } else {
+                (out_w() as f32 - margin - battery_w - 12.0 - w, 14.0, w + 12.0)
+            }
+        } else if icons_top {
+            (out_w() as f32 - margin - w, 40.0, 0.0)
+        } else {
+            (out_w() as f32 - margin - w, 14.0, 0.0)
+        };
+        let ink = dark_ink.then_some(slot_gfx::InkMap { paper: [0.0; 3], ink: [0.0; 3] });
+        Self::push_task_pill(kind, tex, x, y, w, h, ink, out);
+        room
+    }
+
+    /// Over a menu page: at the top right, in the page's colours.
+    fn draw_menu_task_pill(&mut self, out: &mut Vec<Draw>) {
+        if self.game.is_some() || self.progress > 0.0
+            || matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::CartStudio) { return; }
+        let Some((kind, tex, w, h)) = self.task_pill_tex() else { return };
+        let margin = if out_w() < 640 { 12.0 } else { 24.0 };
+        let ink = self.menu_ink();
+        Self::push_task_pill(kind, tex, out_w() as f32 - margin - w, 14.0, w, h, ink, out);
+    }
+
+    /// The grey of carts whose card is out, for the ground behind them: the
+    /// shelf's own colour or mosaic as its words see it (the Mega Drive's
+    /// dark Original mosaic takes the dark ground's grey), else the image's
+    /// brightness, as the clock's ink.
+    fn missing_ink(&self) -> slot_gfx::InkMap {
+        let light = if self.wallpaper_none() || self.settings.wallpaper_on(self.active).is_mosaic() {
+            self.shelf_ink().is_some()
+        } else { self.top_line_dark_ink() };
+        if light { MISSING_INK_LIGHT } else { MISSING_INK_DARK }
+    }
+
+    /// The carts' ink while their card is out (most of the fade), for the
+    /// paths that draw carts outside the shelf's own row: the core picker's
+    /// neighbours and Cart Studio's flight (beta39: they showed in colour).
+    pub(super) fn cart_ink(&self) -> Option<slot_gfx::InkMap> {
+        (self.missing_mix > 0.5).then(|| self.missing_ink())
     }
 
     /// Whether Delete Wallpaper has a file to remove: the edited shelf's own
@@ -2344,7 +2764,7 @@ impl Engine {
             self.clock_face = Printed::new(tex, face.w);
         }
         if let (Some(tex), Some(percent)) = (self.battery_texture, self.battery_percent) {
-            let face = slot_ui::word_ink(&format!("{percent}%"), ink);
+            let face = slot_ui::word_ink(&format!("{percent}%"), self.battery_ink(ink));
             self.gpu.update_face(tex, &face);
             self.battery_face = Printed::new(tex, face.w);
         }
@@ -2371,8 +2791,10 @@ impl Engine {
         self.battery = status.battery;
         self.date_text = status.date;
         let percent = self.battery.map(|b| b.percent);
-        if percent != self.battery_percent {
+        let low = slot_ui::battery_low(self.battery, slot_ui::LOW_PERCENT);
+        if percent != self.battery_percent || low != self.battery_low_shown {
             self.battery_percent = percent;
+            self.battery_low_shown = low;
             // Just as with original Slot, the About label reflects the live
             // battery without rebuilding it on every animation frame.
             if let Some(tex) = self.about_texture {
@@ -2385,7 +2807,8 @@ impl Engine {
                 self.gpu.update_face(tex, &sticker);
             }
             if let Some(percent) = percent {
-                let face = slot_ui::word_ink(&format!("{percent}%"), slot_ui::footer_ink(self.footer_inked_dark));
+                let face = slot_ui::word_ink(&format!("{percent}%"),
+                    self.battery_ink(slot_ui::footer_ink(self.footer_inked_dark)));
                 let tex = match self.battery_texture {
                     Some(tex) => { self.gpu.update_face(tex, &face); tex }
                     None => { let tex = self.gpu.create_face(&face);
@@ -2394,6 +2817,50 @@ impl Engine {
                 self.battery_face = Printed::new(tex, face.w);
             } else { self.battery_face = Printed::default(); }
         }
+    }
+
+    /// The battery percent's ink: red while it is low (#87).
+    fn battery_ink(&self, ink: [u8; 3]) -> [u8; 3] {
+        if slot_ui::battery_low(self.battery, slot_ui::LOW_PERCENT) { slot_ui::LOW_RED } else { ink }
+    }
+
+    /// Over the game, under 10 % and not charging: a small red battery in
+    /// the top right corner, a second on, a second off (#87).
+    fn push_low_battery(&self, out: &mut Vec<Draw>) {
+        if !slot_ui::battery_low(self.battery, slot_ui::VERY_LOW_PERCENT) { return; }
+        if (self.born.elapsed().as_millis() / 1000) % 2 == 1 { return; }
+        out.push(Draw::Tex {
+            x: out_w() as f32 - 12.0 - slot_ui::BADGE_W, y: 10.0,
+            w: slot_ui::BADGE_W, h: slot_ui::BADGE_H, tex: self.low_battery_badge, alpha: 1.0,
+        });
+    }
+
+    /// COPYING n% on Library's slot. folder row, redrawn as it moves.
+    /// Moves the carts' grey toward the card's state: 0.3 s each way.
+    fn advance_missing(&mut self) -> f32 {
+        let target = if ROMS_MISSING.load(Ordering::Acquire) { 1.0 } else { 0.0 };
+        let dt = self.missing_at.elapsed().as_secs_f32().min(0.1);
+        self.missing_at = Instant::now();
+        let step = dt / MISSING_FADE_S;
+        self.missing_mix = if self.missing_mix < target { (self.missing_mix + step).min(target) }
+            else { (self.missing_mix - step).max(target) };
+        self.missing_mix
+    }
+
+    fn refresh_slot_copy_face(&mut self) {
+        let percent = SLOT_FOLDER_COPY.load(Ordering::Acquire);
+        if percent == self.slot_copy_shown { return; }
+        self.slot_copy_shown = percent;
+        if percent < 0 { return; }
+        // "COPYING n%", or just "n%" where it would reach the row's own
+        // label (a square screen like the Pocket Classic's, beta38).
+        let long = quick_value_face(&format!("COPYING {percent}%"), true);
+        let label = self.menu_textures[LIBRARY_ROWS[LIBRARY_SLOT_ROW]].1 as f32 * 0.79;
+        let room = out_w() as f32 - 34.0 - 37.0 - label - 24.0;
+        let face = if long.w as f32 * 0.79 <= room { long }
+            else { quick_value_face(&format!("{percent}%"), true) };
+        self.gpu.update_face(self.slot_copy_face.0, &face);
+        self.slot_copy_face = (self.slot_copy_face.0, face.w, face.h);
     }
 
     fn reset_time_controls(&mut self) {
@@ -3594,13 +4061,13 @@ impl Engine {
                 // A ROM, BIOS or slot. folder chosen from Library: the shelf,
                 // as before 2.4, so its scan shows (Siham 2026-11-16). A
                 // cancelled picker keeps Library and its row (ExternalReturn).
-                if self.external_pending {
-                    self.external_pending = false;
-                    self.menu_held = None;
-                    self.menu_seen = 0;
-                    if matches!(self.overlay, ShelfOverlay::Library { .. }) {
-                        self.overlay = ShelfOverlay::None;
-                    }
+                // Also after a picker slot. opened by itself (the ROM folder
+                // a slot folder names), with nothing pending.
+                self.external_pending = false;
+                self.menu_held = None;
+                self.menu_seen = 0;
+                if matches!(self.overlay, ShelfOverlay::Library { .. }) {
+                    self.overlay = ShelfOverlay::None;
                 }
             }
             Input::ExternalReturn => {
@@ -3744,6 +4211,7 @@ impl Engine {
                 // only live emulator state. Keep gameplay and the save menu
                 // available so a storage issue can be resolved and retried.
                 let with_state = self.live_game_options().eject_save;
+                let mut eject_save_took = None;
                 let eject_saved = match self.game.as_mut() {
                     Some(session) if session.runahead_rollback_failed() => {
                         // The in-memory core may be from speculative time.
@@ -3760,7 +4228,12 @@ impl Engine {
                             "Unsafe Run-Ahead core discarded WITHOUT SRAM/state/RetroArch export");
                         false
                     }
-                    Some(session) => match session.save_for_eject(with_state) {
+                    Some(session) => match {
+                        let save_at = Instant::now();
+                        let saved = session.save_for_eject(with_state);
+                        eject_save_took = Some(save_at.elapsed());
+                        saved
+                    } {
                         Ok(saved) => {
                             if session.take_kept_flash_save() {
                                 set_message("In-game save kept: this state has none yet.".into());
@@ -3787,6 +4260,7 @@ impl Engine {
                 // power-off before the mechanical 450ms cartridge ejection.
                 if self.game.is_some() {
                     self.exiting_screen = true;
+                    crate::frame_watch::eject_started(eject_save_took);
                     self.eject_hold_remaining = EJECT_HOLD_S;
                     // The next input is most likely a scroll: keep the shelf
                     // at full rate (no 4 Hz idle) for 3.2 s after the eject.
@@ -3873,7 +4347,17 @@ impl Engine {
                 {
                     return;
                 }
-                set_error_message(game_error_text(&message), &message);
+                // "say:" a sentence for the player as is; "quiet:" the player
+                // chose not to play (B in a window): no message (beta38).
+                if let Some(text) = message.strip_prefix("say:") {
+                    crate::game::log_launch_timing(&format!("Launch held: {text}"));
+                    set_message(text.to_string());
+                } else if let Some(why) = message.strip_prefix("quiet:") {
+                    crate::game::log_launch_timing(&format!("Launch cancelled: {why}"));
+                } else {
+                    set_error_message(game_error_text(&message), &message);
+                }
+                crate::frame_watch::cancel();
                 self.awaiting_game = false;
                 self.inserted = false;
                 self.requested_uri = None;
@@ -3887,6 +4371,7 @@ impl Engine {
                 {
                     self.awaiting_game = false;
                     self.prepared_rom = Some(path);
+                    crate::frame_watch::rom_ready();
                 }
             }
             Input::PadKey { device, code, pressed, stick } =>
@@ -4431,21 +4916,17 @@ impl Engine {
                                     let next = move_menu_row(row, code, n, self.menu_repeat_dispatch);
                                     self.overlay = ShelfOverlay::Library { row: next };
                                 }
-                                // Identical left/right + A toggle to Settings.
-                                // Keep the selected row and refresh value in place.
-                                21 | 22 | 96 if row == LIBRARY_SHARE_ROW => {
-                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
-                                        .push_back(17);
-                                }
-                                // RomM, right after the ROM folder (Siham 2026-11-09).
-                                96 if row == 1 && !self.external_pending => self.open_romm(),
+                                96 if row == LIBRARY_SAVES_ROW =>
+                                    self.overlay = ShelfOverlay::SavesStates { row: 0 },
+                                // RomM, after Saves & States (Siham 2026-11-16).
+                                96 if row == LIBRARY_ROMM_ROW && !self.external_pending => self.open_romm(),
                                 96 if !self.external_pending => if let Some(action) = match row {
-                                    // ROM, BIOS, SRAM root, State root, Refresh.
-                                    0 => Some(1),
+                                    // slot. Folder (its window, then Android's
+                                    // picker), ROM, BIOS, Refresh.
+                                    LIBRARY_SLOT_ROW => Some(70),
+                                    1 => Some(1),
                                     2 => Some(4),
-                                    3 => Some(5),
-                                    4 => Some(6),
-                                    6 => Some(2),
+                                    5 => Some(2),
                                     _ => None,
                                 } {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
@@ -4457,6 +4938,29 @@ impl Engine {
                                     else { self.external_pending = true; }
                                 },
                                 97 => self.overlay = ShelfOverlay::Menu { row: 0 },
+                                108 => self.overlay = ShelfOverlay::None,
+                                _ => {}
+                            },
+                            ShelfOverlay::SavesStates { row } => match code {
+                                19 | 20 | 102 | 103 => {
+                                    let next = move_menu_row(row, code, SAVES_ROWS.len(), self.menu_repeat_dispatch);
+                                    self.overlay = ShelfOverlay::SavesStates { row: next };
+                                }
+                                // Identical left/right + A toggle to Settings.
+                                // Keep the selected row and refresh value in place.
+                                21 | 22 | 96 if row == SAVES_SHARE_ROW => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(17);
+                                }
+                                21 | 22 | 96 if row == SAVES_ROMM_ROW => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(71);
+                                }
+                                96 if row < SAVES_SHARE_ROW && !self.external_pending => {
+                                    // SRAM root, State root.
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                        .push_back(if row == 0 { 5 } else { 6 });
+                                    self.external_pending = true;
+                                }
+                                97 => self.overlay = ShelfOverlay::Library { row: LIBRARY_SAVES_ROW },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
@@ -4495,14 +4999,20 @@ impl Engine {
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
                             },
-                            ShelfOverlay::WallpaperSettings { row } => match code {
-                                19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::WallpaperSettings {
-                                    row: move_menu_row(row, code, WALLPAPER_ROWS.len(), self.menu_repeat_dispatch),
-                                },
-                                21 | 22 | 96 => self.cycle_wallpaper_row(row, code != 21, code == 96),
-                                97 => self.overlay = ShelfOverlay::GeneralSettings { row: INTERFACE_WALLPAPER_ROW },
-                                108 => self.overlay = ShelfOverlay::None,
-                                _ => {}
+                            ShelfOverlay::WallpaperSettings { row } => {
+                                // Six rows; a row past the end (an older
+                                // page) comes back onto it.
+                                let count = self.wallpaper_rows().0.len();
+                                let row = row.min(count - 1);
+                                match code {
+                                    19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::WallpaperSettings {
+                                        row: move_menu_row(row, code, count, self.menu_repeat_dispatch),
+                                    },
+                                    21 | 22 | 96 => self.cycle_wallpaper_row(row, code != 21, code == 96),
+                                    97 => self.overlay = ShelfOverlay::GeneralSettings { row: INTERFACE_WALLPAPER_ROW },
+                                    108 => self.overlay = ShelfOverlay::None,
+                                    _ => {}
+                                }
                             },
                             ShelfOverlay::InterfaceSettings { row } => match code {
                                 19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::InterfaceSettings {
@@ -4597,6 +5107,9 @@ impl Engine {
                                 },
                                 21 | 22 if row == 1 =>
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(22),
+                                // X: slot.'s logs saved to a file (#107).
+                                99 => UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
+                                    .push_back(EXPORT_LOGS_ACTION),
                                 97 => self.overlay = ShelfOverlay::Menu { row: 5 },
                                 108 => self.overlay = ShelfOverlay::None,
                                 _ => {}
@@ -4607,38 +5120,7 @@ impl Engine {
                                     match code {
                                         21 => { picker.press(Press::Left, now); }
                                         22 => { picker.press(Press::Right, now); }
-                                        96 => {
-                                            let core = picker.seat();
-                                            let cart = &self.shelves[self.active].carts
-                                                [self.shelves[self.active].index];
-                                            let uri = cart.rom.to_string_lossy().into_owned();
-                                            let platform = cart.platform;
-                                            let paths = PATHS.lock()
-                                                .unwrap_or_else(|e| e.into_inner()).clone();
-                                            if let Some((storage, library)) = paths {
-                                                let core_file = library.join(
-                                                    format!("lib{}_libretro.so", core.as_str()));
-                                                if !core_file.is_file() {
-                                                    set_message(format!(
-                                                        "{} isn't installed.", core.text()));
-                                                } else {
-                                                    match core_selection::choose(&storage, &uri, platform, core) {
-                                                        Ok(()) => {
-                                                            // A core swap must invalidate the
-                                                            // previous core's cached profile
-                                                            // immediately, even when Y was
-                                                            // opened before selecting this chip.
-                                                            self.game_emulation =
-                                                                EmulationProfile::load(
-                                                                    &storage, &uri, core);
-                                                            picker.press(Press::Keep, now);
-                                                        }
-                                                        Err(err) => set_error_message(
-                                                            "Couldn't save the selected core.", &err),
-                                                    }
-                                                }
-                                            }
-                                        }
+                                        96 => self.seat_core_picker(),
                                         97 | 109 => { picker.press(Press::Back, now); }
                                         _ => {}
                                     }
@@ -4677,29 +5159,7 @@ impl Engine {
                             return;
                         }
                         109 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
-                            let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
-                            let face = board_face(selected);
-                            if let Some(texture) = self.board_texture {
-                                self.gpu.update_face(texture, &face);
-                            } else {
-                                self.board_texture = Some(self.gpu.create_face(&face));
-                            }
-                            let now = self.born.elapsed().as_millis() as u64;
-                            let current_core = PATHS.lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .as_ref()
-                                .map(|(storage, _)| core_selection::selected_for(
-                                    storage, &selected.rom.to_string_lossy(), selected.platform))
-                                .unwrap_or_else(|| Core::default_for(selected.platform));
-                            let mut picker = CorePicker::open_between(current_core,
-                                Core::primary_for(selected.platform),
-                                Core::alternate_for(selected.platform), now);
-                            // A clear cart's lid waits for its plastic without
-                            // the board (start_waiting_picker), or the shelf
-                            // face would lift with the board drawn on it.
-                            if self.picker_lid_ready() { picker.start(now); }
-                            self.picker = Some(picker);
-                            self.overlay = ShelfOverlay::Core;
+                            self.open_core_picker();
                             return;
                         }
                         102 | 103 if !self.inserted => {
@@ -4721,6 +5181,12 @@ impl Engine {
                                 self.born.elapsed().as_millis() as u64));
                             return;
                         }
+                        96 if !self.inserted && ROMS_MISSING.load(Ordering::Acquire) => {
+                            self.refusal = Some(slot_ui::Refusal::started(
+                                self.born.elapsed().as_millis() as u64));
+                            set_message("The SD card with your games isn't in.".into());
+                            return;
+                        }
                         96 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
                             self.load_selected_emulation();
                             self.inserted = true;
@@ -4729,6 +5195,7 @@ impl Engine {
                                         self.prepared_rom = None;
                             self.pending_game = None;
                             self.insert_started = Some(Instant::now());
+                            crate::frame_watch::insert_started();
                             self.a_down_at = self.insert_started;
                             self.fresh_launch = false;
                             if uri.starts_with("content://") {
@@ -4748,6 +5215,7 @@ impl Engine {
                             if self.inserted && self.progress > 0.0 {
                                 self.eject_sound_armed = true;
                             }
+                            if self.inserted { crate::frame_watch::cancel(); }
                             self.inserted = false;
                             self.a_down_at = None;
                             self.fresh_launch = false;
@@ -4802,6 +5270,62 @@ impl Engine {
         };
         self.clear_material=Some(ClearMaterial{key,tex:textures});
     }
+    /// Select's core picker for the selected cart (also a finger pushing
+    /// the middle cart up, touch.rs).
+    pub(super) fn open_core_picker(&mut self) {
+        let Some(selected) = self.shelves[self.active].carts.get(self.shelves[self.active].index) else { return };
+        let face = board_face(selected);
+        if let Some(texture) = self.board_texture {
+            self.gpu.update_face(texture, &face);
+        } else {
+            self.board_texture = Some(self.gpu.create_face(&face));
+        }
+        let now = self.born.elapsed().as_millis() as u64;
+        let current_core = PATHS.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|(storage, _)| core_selection::selected_for(
+                storage, &selected.rom.to_string_lossy(), selected.platform))
+            .unwrap_or_else(|| Core::default_for(selected.platform));
+        let mut picker = CorePicker::open_between(current_core,
+            Core::primary_for(selected.platform),
+            Core::alternate_for(selected.platform), now);
+        // A clear cart's lid waits for its plastic without
+        // the board (start_waiting_picker), or the shelf
+        // face would lift with the board drawn on it.
+        if self.picker_lid_ready() { picker.start(now); }
+        self.picker = Some(picker);
+        self.picker_auto_seat = None;
+        self.overlay = ShelfOverlay::Core;
+    }
+
+    /// A on the core picker: the chip's core becomes the cart's.
+    pub(super) fn seat_core_picker(&mut self) {
+        let now = self.born.elapsed().as_millis() as u64;
+        let Some(core) = self.picker.map(|picker| picker.seat()) else { return };
+        let cart = &self.shelves[self.active].carts[self.shelves[self.active].index];
+        let uri = cart.rom.to_string_lossy().into_owned();
+        let platform = cart.platform;
+        let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some((storage, library)) = paths {
+            let core_file = library.join(format!("lib{}_libretro.so", core.as_str()));
+            if !core_file.is_file() {
+                set_message(format!("{} isn't installed.", core.text()));
+            } else {
+                match core_selection::choose(&storage, &uri, platform, core) {
+                    Ok(()) => {
+                        // A core swap must invalidate the previous core's
+                        // cached profile immediately, even when Y was opened
+                        // before selecting this chip.
+                        self.game_emulation = EmulationProfile::load(&storage, &uri, core);
+                        if let Some(picker) = self.picker.as_mut() { picker.press(Press::Keep, now); }
+                    }
+                    Err(err) => set_error_message("Couldn't save the selected core.", &err),
+                }
+            }
+        }
+    }
+
     /// Whether the selected cart's lid can lift: not clear, or its clear
     /// layers are uploaded.
     fn picker_lid_ready(&self) -> bool {
@@ -4840,8 +5364,13 @@ impl Engine {
         if self.relabel.is_empty() || self.game.is_some() || self.inserted || self.awaiting_game
             || self.pending_game.is_some()
             || self.shelves.get(self.active).is_some_and(|s| s.is_scrolling())
-            || self.last_cart_navigation.elapsed() < Duration::from_millis(250) { return; }
-        if let Some(uri) = self.relabel.pop_front() { self.reload_cart_label(&uri); }
+            || self.last_cart_navigation.elapsed() < Duration::from_millis(250)
+            // Nor while a cart flies to or from Cart Studio.
+            || self.studio_flight.is_some_and(|f| f.flying()) { return; }
+        if let Some(uri) = self.relabel.pop_front() {
+            self.reload_cart_label(&uri);
+            crate::frame_watch::did(crate::frame_watch::WORK_LABEL);
+        }
     }
 
     fn reload_cart_label(&mut self, uri: &str) {
@@ -4850,9 +5379,12 @@ impl Engine {
                 if cart.rom.to_string_lossy() == uri {
                     // A face rendered before the label came is never shown.
                     self.cart_render.invalidate((sid, index));
-                    if let Some(tex) = shelf.face(index) {
-                        let face = cart_face_with_material(cart, None);
-                        self.gpu.update_face(tex, &face);
+                    // A face on the shelf is drawn again by the raster
+                    // workers, not here: drawing it on this thread held the
+                    // shelf up to 250ms per label on the KONKR (beta41).
+                    if shelf.face(index).is_some() {
+                        if !self.relabelled.contains(&(sid, index)) { self.relabelled.push((sid, index)); }
+                        self.cart_render.request((sid, index), cart, false);
                     }
                 }
             }
@@ -4872,6 +5404,7 @@ impl Engine {
         for _ in 0..limit {
             if upload_started.elapsed()>=CART_GPU_UPLOAD_BUDGET {break}
             let Some(((shelf_id,index),face,layers))=self.cart_render.ready() else {break};
+            crate::frame_watch::did(crate::frame_watch::WORK_LABEL);
             // Library > RomM's carts live on its page, not on a shelf.
             if shelf_id==romm::ROMM_RACK { self.romm_face(index,&face); continue; }
             let Some(shelf)=self.shelves.get(shelf_id) else {continue};
@@ -4881,7 +5414,14 @@ impl Engine {
                     self.upload_clear_material((shelf_id,index),layers);
                 }
             }
-            if self.shelves[shelf_id].face(index).is_some() {continue}
+            if let Some(tex) = self.shelves[shelf_id].face(index) {
+                // A new label's face over the old one.
+                if let Some(at) = self.relabelled.iter().position(|k| *k == (shelf_id, index)) {
+                    self.relabelled.swap_remove(at);
+                    self.gpu.update_face(tex, &face);
+                }
+                continue
+            }
             let texture = if self.texture_cache.len() >= CART_TEXTURE_CACHE_CAPACITY {
                 // Pin selected +/- one cart from each nonempty shelf (up to
                 // 15 across GBA/GB/GBC/Recents/Favorites). Preserve warm art
@@ -4991,7 +5531,7 @@ impl Engine {
                         self.texture_cache.push_back(entry);
                     }
                 }
-                if !wants_material {continue;}
+                if !wants_material && !self.relabelled.contains(&(sid, index)) {continue;}
             }
             // A freshly configured AVD has no ROMs yet. Skip the empty
             // shelf instead of indexing carts[0] and aborting the GL thread.
@@ -5777,12 +6317,7 @@ impl Engine {
                 self.persist_settings();
             }
         }
-        if let Some((root,_))=PATHS.lock().unwrap_or_else(|e|e.into_inner()).as_ref() {
-            if let Err(error)=profile.save(root,&uri,core) {
-                set_error_message("Couldn't save this game's settings.", &error);
-                return;
-            }
-        } else { return; }
+        if !save_profile_later(profile, &uri, core) { return; }
         self.game_emulation=Some(profile);
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
@@ -5841,12 +6376,7 @@ impl Engine {
             .unwrap_or_else(|| EmulationProfile::from_settings(&self.settings));
         profile.show_fps = profile.show_fps_override.unwrap_or(self.settings.show_fps);
         if !profile.change(key, right) { return; }
-        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = profile.save(root, &uri, core) {
-                set_error_message("Couldn't save this game's settings.", &error);
-                return;
-            }
-        } else { return; }
+        if !save_profile_later(profile, &uri, core) { return; }
         self.game_emulation = Some(profile);
         // Avoid reinterpreting a frame debt accumulated under the previous
         // timing policy, and discard any prior predictive video/audio frame.
@@ -5914,22 +6444,12 @@ impl Engine {
         self.save_game_motion(profile, &uri, core);
     }
     fn save_game_motion(&mut self, profile: EmulationProfile, uri: &str, core: Core) {
-        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = profile.save(root, uri, core) {
-                set_error_message("Couldn't save this game's settings.", &error);
-                return;
-            }
-        } else { return; }
+        if !save_profile_later(profile, uri, core) { return; }
         self.game_emulation = Some(profile);
         apply_motion(self.game.as_ref(), profile.motion());
     }
     fn save_game_sun(&mut self, profile: EmulationProfile, uri: &str, core: Core) {
-        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = profile.save(root, uri, core) {
-                set_error_message("Couldn't save this game's settings.", &error);
-                return;
-            }
-        } else { return; }
+        if !save_profile_later(profile, uri, core) { return; }
         self.game_emulation = Some(profile);
         if let Some(session) = self.game.as_mut() {
             session.set_sun(profile.sun(light_sensor(), session.sun_top()));
@@ -5967,14 +6487,52 @@ impl Engine {
     }
     fn persist_settings(&self) {
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if let Err(error) = self.settings.save(root) {
-                set_error_message("Couldn't save settings.", &error);
-            }
+            let (root, settings) = (root.clone(), self.settings.clone());
+            crate::later_write::write(root.join("Settings.json"), move || {
+                if let Err(error) = settings.save(&root) {
+                    set_error_message("Couldn't save settings.", &error);
+                }
+            });
         }
     }
 
+    /// General's wallpaper, made on a worker (a Blur takes a moment): the
+    /// one on screen stays until it is ready. In tests, at once.
     fn reload_wallpaper(&mut self, root: Option<&Path>) {
-        let (image, personal) = wallpaper_pixels(root, &self.settings.wallpaper);
+        let (pick, look) = (self.settings.wallpaper.clone(), self.settings.wallpaper_look);
+        let (shelf, theme) = (Some(self.active), self.settings.appearance.mosaic_theme());
+        self.wallpaper_rx = None;
+        if cfg!(test) {
+            let made = wallpaper_pixels(root, &pick, look, shelf, theme);
+            self.take_wallpaper(made);
+        } else {
+            let owned = root.map(Path::to_path_buf);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new().name("slot-wallpaper-general".into())
+                .spawn(move || { let _ = tx.send(wallpaper_pixels(owned.as_deref(), &pick, look, shelf, theme)); });
+            match spawned {
+                Ok(_) => self.wallpaper_rx = Some(rx),
+                Err(error) => {
+                    crate::log_warn(&format!("wallpaper worker failed: {error}"));
+                    let made = wallpaper_pixels(root, &self.settings.wallpaper,
+                        self.settings.wallpaper_look, shelf, theme);
+                    self.take_wallpaper(made);
+                }
+            }
+        }
+        self.reload_shelf_wallpapers(root);
+    }
+
+    /// General's new wallpaper, once made; true when it was uploaded.
+    fn poll_wallpaper(&mut self) -> bool {
+        let Some(made) = self.wallpaper_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else { return false };
+        self.wallpaper_rx = None;
+        crate::frame_watch::did(crate::frame_watch::WORK_WALLPAPER);
+        self.take_wallpaper(made);
+        true
+    }
+
+    fn take_wallpaper(&mut self, (image, personal): (Option<Vec<u8>>, bool)) {
         self.wallpaper_personal = personal;
         if let Some(rgba) = image.as_deref() {
             self.wallpaper_top_luma = Some(slot_ui::top_line_luma(rgba, slot_ui::native_w()));
@@ -5989,7 +6547,6 @@ impl Engine {
         }
         // None deliberately leaves the texture allocated for quick reactivation
         // but never draws it, avoiding repeated GL allocations on toggling.
-        self.reload_shelf_wallpapers(root);
     }
 
     fn refresh_wallpaper_name(&mut self) {
@@ -6034,9 +6591,11 @@ impl Engine {
             if let Some((rack,uri))=self.focus_seen.as_ref() {
                 if let Some(root)=Self::recents_root() {
                     let focus=crate::selection::Focus { rack:*rack,uri:uri.clone() };
-                    if let Err(err)=crate::selection::store(&root,&focus) {
-                        eprintln!("slot-konkr: last selection could not persist: {err}");
-                    }
+                    crate::later_write::write(root.join("selection"), move || {
+                        if let Err(err)=crate::selection::store(&root,&focus) {
+                            crate::log_warn(&format!("last selection could not persist: {err}"));
+                        }
+                    });
                 }
             }
         }
@@ -6125,9 +6684,8 @@ impl Engine {
             let last=self.shelves[FAVORITES_RACK].carts.len()-1;
             self.shelves[FAVORITES_RACK].select(previous_index.min(last));
         }
-        let starred: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
         for shelf in &mut self.shelves {
-            shelf.mark_starred(|cart|starred.contains(cart.rom.to_string_lossy().as_ref()));
+            shelf.mark_starred(|cart|crate::favorites::holds(&ids, cart.rom.to_string_lossy().as_ref()));
         }
         if was_favorite && self.shelves[FAVORITES_RACK].carts.is_empty() {
             self.active=self.next_shelf(0,1);
@@ -6172,8 +6730,8 @@ impl Engine {
         // Restocking Recents must not erase Favorite stars: its Shelf rebuild
         // necessarily reconstructs the per-cart starred flags from scratch.
         let favorites=crate::favorites::load(&root);
-        self.shelves[RECENTS_RACK].mark_starred(|cart|favorites.iter()
-            .any(|uri|uri==cart.rom.to_string_lossy().as_ref()));
+        self.shelves[RECENTS_RACK].mark_starred(|cart|crate::favorites::holds(&favorites,
+            cart.rom.to_string_lossy().as_ref()));
         if was_recent && self.shelves[RECENTS_RACK].carts.is_empty() {
             self.active=self.next_shelf(0,1);
         }
@@ -6185,29 +6743,78 @@ impl Engine {
         // game identity now, rather than relying on a 500ms idle debounce.
         let focus=crate::selection::Focus {rack:self.active,uri:uri.clone()};
         if let Err(err)=crate::selection::store(&root,&focus) {
-            eprintln!("slot-konkr: launch shelf-focus save failed: {err}");
+            crate::log_warn(&format!("launch shelf-focus save failed: {err}"));
         } else {
             self.focus_seen=Some((focus.rack,focus.uri));
             self.focus_dirty_since=None;
         }
-        let next=crate::recents::append_previous(&crate::recents::load(&root),&uri);
+        let next=crate::recents::append(&crate::recents::load(&root),&uri);
         if let Err(err)=crate::recents::store(&root,&next) {
-            eprintln!("slot-konkr: unable to update recents rack: {err}");
+            crate::log_warn(&format!("unable to update recents rack: {err}"));
         } else {
             self.rebuild_recents();
         }
     }
     /// Settings > Interface's rows.
     fn general_rows(&self) -> Vec<usize> { INTERFACE_PAGE_ROWS.to_vec() }
-    /// Interface > Wallpaper's rows shown but idle, so the list never jumps
-    /// (Siham 2026-11-09): Wallpaper Tint with no image anywhere, Delete
-    /// Wallpaper with nothing to delete.
+    /// Interface > Wallpaper's rows shown but idle (Siham 2026-11-09):
+    /// Blur over None, a shelf's looks while it shows General's (they are
+    /// General's), Delete Wallpaper with nothing to delete.
     fn general_row_dimmed(&self, item: usize) -> bool {
         match item {
-            84 => !self.show_general_tint(),
+            BLUR_ROW | HALO_ROW | DARKEN_ROW => self.wallpaper_look_idle(item),
             45 => !self.removable_wallpaper(),
             _ => false,
         }
+    }
+    /// The wallpaper the page's shelf shows (General's for General).
+    fn edited_wallpaper(&self) -> &crate::settings::WallpaperPick {
+        match self.wallpaper_edit {
+            Some(shelf) => self.settings.wallpaper_on(shelf),
+            None => &self.settings.wallpaper,
+        }
+    }
+    /// The look the page's shelf shows.
+    fn edited_look(&self) -> crate::settings::WallpaperLook {
+        match self.wallpaper_edit {
+            Some(shelf) => self.settings.look_on(shelf),
+            None => self.settings.wallpaper_look,
+        }
+    }
+    fn wallpaper_look_idle(&self, row: usize) -> bool {
+        use crate::settings::WallpaperPick;
+        let pick = self.edited_wallpaper();
+        self.wallpaper_edit.is_some_and(|shelf| self.settings.shelf_wallpaper(shelf).is_none())
+            || (row == BLUR_ROW && *pick == WallpaperPick::None)
+            || (row == DARKEN_ROW && !matches!(pick, WallpaperPick::File(_) | WallpaperPick::Random))
+    }
+    /// Interface > Wallpaper's six rows, whatever the wallpaper, and their
+    /// values' keys: the third is Halo with Default, Tint otherwise, idle
+    /// but for an image (Random deals images) (Siham 2026-11-19).
+    fn wallpaper_rows(&self) -> (Vec<usize>, Vec<usize>) {
+        let (third, key) = if self.edited_wallpaper().is_mosaic() { (HALO_ROW, HALO_KEY) }
+            else { (DARKEN_ROW, DARKEN_KEY) };
+        (vec![133, 83, BLUR_ROW, third, 43, 45],
+         vec![SHELF_PICK_KEY, WALLPAPER_PICK_KEY, BLUR_KEY, key, usize::MAX, usize::MAX])
+    }
+    /// Blur, Halo or Tint one step, on General or the page's shelf; a new
+    /// Blur or Halo remakes the wallpapers it shows on.
+    fn cycle_wallpaper_look(&mut self, row: usize, right: bool) {
+        use crate::settings::WallpaperLook;
+        let mut look = self.edited_look();
+        let value = match row { BLUR_ROW => &mut look.blur, HALO_ROW => &mut look.halo, _ => &mut look.darken };
+        let next = WallpaperLook::step(*value, right);
+        if next == *value { return; }
+        *value = next;
+        self.settings.set_look(self.wallpaper_edit, look);
+        if row != DARKEN_ROW {
+            let root = Self::recents_root();
+            match self.wallpaper_edit {
+                None => self.reload_wallpaper(root.as_deref()),
+                Some(_) => self.reload_shelf_wallpapers(root.as_deref()),
+            }
+        }
+        self.persist_settings();
     }
     /// Interface > Wallpaper > Shelf: General, then the shelves with carts
     /// (Recents while it is on, Favorites once a cart is in it).
@@ -6277,11 +6884,12 @@ impl Engine {
         }
     }
     fn cycle_wallpaper_row(&mut self, row: usize, right: bool, confirm: bool) {
-        let Some(which)=WALLPAPER_ROWS.get(row).copied() else {return};
+        let Some(which)=self.wallpaper_rows().0.get(row).copied() else {return};
         match which {
             133 => self.cycle_wallpaper_shelf(right),
             83 => self.cycle_edited_wallpaper(right),
-            84 if self.show_general_tint() => self.cycle_wallpaper_tint(right),
+            BLUR_ROW | HALO_ROW | DARKEN_ROW if !confirm && !self.wallpaper_look_idle(which) =>
+                self.cycle_wallpaper_look(which, right),
             43 if confirm => {
                 self.wallpaper_import = self.wallpaper_edit;
                 self.set_wallpaper_target();
@@ -6377,6 +6985,11 @@ impl Engine {
                 menu_style::shelf_ground()
             } else { menu_style::page_ground([0.085, 0.085, 0.093, 1.0]) },
         });
+        // A wallpaper stays under the cart as on the shelf, tinted the same:
+        // no dark screen before it on insert or eject (Siham 2026-11-18).
+        if let Some((tex, tint, _)) = self.active_wallpaper() {
+            slot_ui::draw_ground_tinted(Some(tex), tint, commands);
+        }
         if let Some(shelf) = self.shelves.get(self.active) {
             if let Some(cart) = shelf.carts.get(shelf.index) {
                 let (rest, scale) = shelf.selected_at();
@@ -6416,7 +7029,8 @@ impl Engine {
         let Some(uri) = crate::recents::load(&root).into_iter().next() else { return };
         for (rack, shelf) in self.shelves.iter_mut().enumerate() {
             if rack >= RECENTS_RACK { break; }
-            if let Some(i) = shelf.carts.iter().position(|c| c.rom.to_string_lossy() == uri.as_str()) {
+            if let Some(i) = shelf.carts.iter().position(|c|
+                crate::favorites::holds(std::slice::from_ref(&uri), c.rom.to_string_lossy().as_ref())) {
                 self.active = rack;
                 shelf.select(i);
                 return;
@@ -6448,7 +7062,7 @@ impl Engine {
             f.2.filter(|_| f.3 > 0).map_or(Printed::default(), |tex| Printed::new(tex, f.3));
         let (clock, percent) = (printed(&self.lid_faces[0]), printed(&self.lid_faces[1]));
         let bolt = Some(if dark { self.bolt_light_texture } else { self.bolt_texture });
-        slot_ui::draw_status_clock_grown(true, 1.0 + self.lid_t, self.battery, percent, bolt,
+        slot_ui::draw_status_clock_grown(true, 1.0 + self.lid_k(), self.battery, percent, bolt,
             clock, slot_ui::footer_ink(dark), alpha, commands);
     }
 
@@ -6581,8 +7195,15 @@ impl Engine {
 
     /// The closed Rotate in a game (Settings > Interface > RG Rotate > In
     /// Game): the screen switches off like a CRT, then the cover comes in.
+    /// How far the lid's animation is, eased: it starts and ends softly,
+    /// as the screen's own turn does (beta42).
+    fn lid_k(&self) -> f32 {
+        let t = self.lid_t.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
     fn draw_lid_game(&mut self) {
-        let t = self.lid_t;
+        let t = self.lid_k();
         let mode = self.settings.rotate_game_cover;
         let mut commands = Vec::new();
         if mode == 2 {
@@ -6595,9 +7216,17 @@ impl Engine {
         } else {
             let screen = (1.0 - t * 2.0).clamp(0.0, 1.0);
             let cover = ((t - 0.5) * 2.0).clamp(0.0, 1.0);
+            // First half: the game's screen switching off, alone. The cover
+            // drawn over it hid it under black (beta42: the first 225 ms
+            // were a black screen, then the cover all at once).
             if screen > 0.0 {
                 self.gpu.set_screen_power(screen);
                 commands.push(Draw::Game);
+                self.gpu.fit(self.size);
+                self.gpu.begin_frame();
+                self.gpu.draw_list(&commands);
+                self.gpu.end_frame(self.size);
+                return;
             }
             let mut scene = Vec::new();
             if mode == 0 {
@@ -6658,7 +7287,7 @@ impl Engine {
     /// `row`: the shelf's carts in `commands`, all Drifting Shelf shrinks
     /// (the slot bar keeps its size, Siham 2026-11-14).
     fn push_lid_shelf(&mut self, commands: &mut Vec<Draw>, row: std::ops::Range<usize>) {
-        let t = self.lid_t;
+        let t = self.lid_k();
         match self.settings.rotate_shelf_cover {
             0 => {
                 // Shrunk from its foot, the shelf leaves the top line free.
@@ -6731,8 +7360,11 @@ impl Engine {
         let name=self.shelves.get(self.active)
             .and_then(|s|s.carts.get(s.index))
             .map(slot_ui::label_text).unwrap_or_default();
+        // The screen's width is part of it: the title fits its window.
+        let name=format!("{name}\u{1f}{}", out_w());
         if name==self.selected_title_name {return;}
         self.selected_title_name=name.clone();
+        let name=name.split('\u{1f}').next().unwrap_or_default().to_string();
         if name.is_empty(){self.selected_title_face=Printed::default();return;}
         let image=slot_ui::title_line_face(&name);
         if image.w==0 || image.h==0 {
@@ -6750,18 +7382,6 @@ impl Engine {
         self.selected_title_face=Printed::new(tex,image.w);
     }
 
-    /// Wallpaper Tint darkens images only: General's, or a shelf's own.
-    fn show_general_tint(&self) -> bool {
-        (self.wallpaper_personal && self.settings.wallpaper != crate::settings::WallpaperPick::None)
-            || self.settings.wallpaper_shelves.values()
-                .any(|pick| matches!(pick, crate::settings::WallpaperPick::File(_)))
-    }
-
-    fn cycle_wallpaper_tint(&mut self, right: bool) {
-        self.settings.wallpaper_tint=self.settings.wallpaper_tint.step(right);
-        self.persist_settings();
-    }
-
     fn cycle_appearance(&mut self, right: bool) {
         self.settings.appearance=self.settings.appearance.step(right);
         menu_style::set_oled(self.settings.appearance == crate::settings::Appearance::Oled);
@@ -6774,6 +7394,13 @@ impl Engine {
                 Some(self.slot_light_faces)
             } else { Some(self.slot_dark_faces) };
         self.recolour_footer_text();
+        // Default's mosaics take the theme's colours.
+        if self.settings.wallpaper.is_mosaic()
+            || self.settings.wallpaper_shelves.values().any(|pick| pick.is_mosaic()) {
+            let root = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+                .as_ref().map(|(root, _)| root.clone());
+            self.reload_wallpaper(root.as_deref());
+        }
         self.persist_settings();
     }
 
@@ -6839,21 +7466,105 @@ impl Engine {
             self.current_cart_platform(), video, &self.default_cores)
     }
 
-    /// Exact Settings ON/OFF texture and carets on Library row 4.
-    fn draw_library_share_value(&self, row: usize, out: &mut Vec<Draw>) {
-        let which = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
-        let (tex, width, height) = self.setting_values[which];
-        // Its row among the six shown while Library scrolls.
-        let Some((dy, shows)) = self.menu_row_place(LIBRARY_SHARE_ROW, LIBRARY_ROWS.len()) else { return };
-        let y = self.menu_rows_top(LIBRARY_ROWS.len().min(self.visible_rows())) + dy + 8.0;
-        let scale = 0.79f32;
-        let w = width as f32 * scale;
+    /// Library's values: the slot. folder's place (nothing without one);
+    /// COPYING n% while its first copy runs. (row, face, toggle)
+    fn library_value_faces(&self) -> Vec<(usize, (slot_gfx::TexId, u32, u32), bool)> {
+        if SLOT_FOLDER_COPY.load(Ordering::Acquire) >= 0 {
+            return vec![(LIBRARY_SLOT_ROW, self.slot_copy_face, false)];
+        }
+        let place = SLOT_FOLDER.load(Ordering::Acquire);
+        if (1..=2).contains(&place) {
+            vec![(LIBRARY_SLOT_ROW, self.library_values[usize::from(place) - 1], false)]
+        } else { Vec::new() }
+    }
+
+    /// Saves & States' values: Share Core Saves and Sync Saves with RomM,
+    /// with the exact Settings ON/OFF textures and carets.
+    fn saves_value_faces(&self) -> Vec<(usize, (slot_gfx::TexId, u32, u32), bool)> {
+        let share = if SHARE_SAVES_ENABLED.load(Ordering::Acquire) { 4 } else { 5 };
+        // Without RomM it reads OFF; turning it on says where to connect
+        // (Siham 2026-11-19).
+        let romm = match ROMM_SYNC.load(Ordering::Acquire) {
+            2 => self.setting_values[4],
+            _ => self.setting_values[5],
+        };
+        vec![(SAVES_SHARE_ROW, self.setting_values[share], true), (SAVES_ROMM_ROW, romm, true)]
+    }
+
+    /// A value's short form when the whole one has no room at `scale`,
+    /// even 10 % smaller, and the short one has more.
+    fn value_within(&self, value: (slot_gfx::TexId, u32, u32), scale: f32, room: f32)
+        -> (slot_gfx::TexId, u32, u32) {
+        if value.1 as f32 * scale * 0.9 <= room { return value; }
+        self.short_values.iter().find(|(whole, _)| *whole == value.0).map_or(value, |&(_, short)| short)
+    }
+
+    fn draw_page_values(&self, heading: usize, items: &[usize], row: usize,
+                        values: &[(usize, (slot_gfx::TexId, u32, u32), bool)],
+                        scales: &[(f32, f32)], out: &mut Vec<Draw>) {
+        for &(at, face, toggle) in values {
+            let scale = scales.get(at).map_or(0.79, |s| s.1);
+            let label_w = items.get(at).and_then(|&l| self.menu_textures.get(l)).map_or(0, |t| t.1) as f32;
+            self.draw_row_value((heading, at), items.len(), row, face, toggle, scale, label_w * 0.79, out);
+        }
+    }
+
+    /// A label beside its value gives way to it (beta39: on the RG Rotate's
+    /// square screen, SD CARD and ON / OFF lay over their labels): the room
+    /// the value and its carets leave, the same selected or not. Rows
+    /// without a value fit as before (0.0).
+    fn value_row_scales(&self, items: &[usize],
+                        values: &[(usize, (slot_gfx::TexId, u32, u32), bool)]) -> Vec<(f32, f32)> {
+        // Every label at one size, as on every value page (Siham
+        // 2026-11-19): a value too long for its room scrolls instead.
+        (0..items.len()).map(|i| if values.iter().any(|v| v.0 == i) { (0.79, 0.79) } else { (0.0, 0.79) })
+            .collect()
+    }
+
+    /// A value at the right of a menu row; a toggle shows its carets when
+    /// selected.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_row_value(&self, (heading, at): (usize, usize), rows: usize, row: usize,
+                      (tex, width, height): (slot_gfx::TexId, u32, u32), toggle: bool,
+                      scale: f32, label_w: f32, out: &mut Vec<Draw>) {
+        // Its row among the six shown while the page scrolls.
+        let Some((dy, shows)) = self.menu_row_place(at, rows) else { return };
         let right = out_w() as f32 - 34.0;
-        let selected = row == LIBRARY_SHARE_ROW;
-        let x = right - w - if selected { 22.0 } else { 0.0 };
-        out.push(Draw::Tex { x, y, w, h: height as f32 * scale, tex,
-            alpha: shows * if selected { 1.0 } else { menu_look::ROW_REST } });
-        if selected {
+        let selected = row == at;
+        let carets = toggle && selected;
+        let caret = if toggle { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
+        // Past its label, a gap and the left caret: a little too long, up
+        // to 10 % smaller (Siham 2026-11-19); longer, it scrolls (as
+        // draw_values).
+        // Faces carry clear margins (MENU_PAD): the label's right one needs
+        // no room of its own.
+        let from = 37.0 + label_w + 18.0 + caret - slot_ui::MENU_PAD as f32 * 0.79;
+        let end = right - if toggle { 22.0 } else { 0.0 };
+        let (tex, width, height) = self.value_within((tex, width, height), scale, end - from);
+        let scale = match width as f32 * scale {
+            w if w > end - from && w * 0.9 <= end - from => scale * (end - from) / w,
+            _ => scale,
+        };
+        let y = self.menu_rows_top(rows.min(self.visible_rows())) + dy + 8.0
+            + height as f32 * (0.79 - scale) / 2.0;
+        let w = width as f32 * scale;
+        let end = right - if carets { 22.0 } else { 0.0 };
+        let alpha = shows * if selected { 1.0 } else { menu_look::ROW_REST };
+        let x = if end - w >= from {
+            out.push(Draw::Tex { x: end - w, y, w, h: height as f32 * scale, tex, alpha });
+            end - w
+        } else {
+            let travel = w - (end - from);
+            let shift = if selected { self.marquee_offset((heading, at), travel) } else { 0.0 };
+            out.push(Draw::Span(Some(slot_gfx::Span {
+                left: from, right: end,
+                feather_left: shift.min(18.0), feather_right: (travel - shift).min(18.0),
+            })));
+            out.push(Draw::Tex { x: from - shift, y, w, h: height as f32 * scale, tex, alpha });
+            out.push(Draw::Span(None));
+            from
+        };
+        if carets {
             let (left, lw, lh) = self.setting_carets[0];
             let (right_tex, rw, rh) = self.setting_carets[1];
             let y = self.caret_y(y, scale);
@@ -6892,8 +7603,16 @@ impl Engine {
                         Some(WallpaperPick::None) => self.setting_values[17],
                         Some(WallpaperPick::Random) => self.setting_values[18],
                         Some(WallpaperPick::Blur) => self.setting_values[20],
+                        Some(WallpaperPick::Halo) => self.setting_values[HALO_WALLPAPER_VALUE],
+                        Some(WallpaperPick::Slot) => self.setting_values[SLOT_WALLPAPER_VALUE],
+                        Some(WallpaperPick::SlotBlur) => self.setting_values[SLOT_BLUR_WALLPAPER_VALUE],
                         Some(_) => self.setting_values[19],
                     }
+                } else if matches!(key, BLUR_KEY | HALO_KEY | DARKEN_KEY) {
+                    let look = self.edited_look();
+                    self.setting_values[percent_value(match key {
+                        BLUR_KEY => look.blur, HALO_KEY => look.halo, _ => look.darken,
+                    })]
                 } else if key == 16 && matches!(self.settings.wallpaper,
                     crate::settings::WallpaperPick::File(_)) {
                     self.wallpaper_name_face.unwrap_or(self.setting_values[26])
@@ -6905,26 +7624,11 @@ impl Engine {
                 } else { return None })
     }
 
-    /// The room a row's value has, from the label's x to the value's right
-    /// edge, less the carets and a 12 px gap: the same selected or not, so
-    /// nothing moves as the selection does.
-    fn value_room(&self) -> f32 {
-        let caret = self.setting_carets[0].1 as f32 + 8.0;
-        out_w() as f32 - 34.0 - 22.0 - caret - 12.0 - 37.0
-    }
-
-    /// Each row's label and value scales. Labels stay at 0.79 (they gave
-    /// way first on narrow screens, Siham 2026-11-15): only one too long to
-    /// leave a value 80 px shrinks, down to 0.55. A value too long for what
-    /// is left is cut (draw_values), never shrunk.
-    fn fit_scales(&self, items: &[usize], keys: &[usize]) -> Vec<(f32, f32)> {
-        let room = self.value_room();
-        items.iter().enumerate().map(|(i, &label)| {
-            let lw = self.menu_textures.get(label).map_or(0, |t| t.1) as f32;
-            let has_value = keys.get(i).and_then(|&k| self.value_face(k)).is_some();
-            if !has_value || lw * 0.79 <= room - 80.0 { return (0.79, 0.79); }
-            (((room - 80.0) / lw.max(1.0)).clamp(0.55, 0.79), 0.79)
-        }).collect()
+    /// Every label and value at one size (Siham 2026-11-19: rows of
+    /// different sizes looked wrong); a value too long scrolls
+    /// (draw_values).
+    fn fit_scales(&self, items: &[usize], _keys: &[usize]) -> Vec<(f32, f32)> {
+        vec![(0.79, 0.79); items.len()]
     }
 
     /// A settings page: its rows, then their values, fitted together.
@@ -6940,25 +7644,59 @@ impl Engine {
     /// still a moment, along at an even pace, still a moment at its end,
     /// then back to its start. 0 for text that fits.
     pub(super) fn marquee_offset(&self, what: (usize, usize), travel: f32) -> f32 {
+        marquee_shift(&self.marquee, what, travel)
+    }
+
+    /// The selected game's title too long for its window (#119): from the
+    /// moment it shows, three passes as the menus' long values (a moment
+    /// still, along, a moment at its end), then at rest at its start, so
+    /// the settled shelf still dozes. With whether it is moving.
+    fn title_scroll(&self) -> (f32, bool) {
+        let travel = slot_ui::slot_title_travel(self.selected_title_face);
+        if !self.settings.show_titles || travel <= 0.5 { return (0.0, false); }
+        let now = Instant::now();
+        let key = (self.active, self.shelves[self.active].index, travel.to_bits());
+        let since = match self.title_marquee.get() {
+            Some((seen, at, _)) if seen == key => at,
+            _ => now,
+        };
+        self.title_marquee.set(Some((key, since, now)));
+        const HOLD: f32 = 1.2;
+        const PACE: f32 = 40.0;
+        const PASSES: f32 = 3.0;
+        let run = travel / PACE;
+        let pass = HOLD + run + HOLD;
+        let t = now.duration_since(since).as_secs_f32();
+        if t >= PASSES * pass { return (0.0, false); }
+        (((t % pass - HOLD) / run).clamp(0.0, 1.0) * travel, true)
+    }
+}
+
+/// How far a long text has scrolled, kept in `cell` (see marquee_offset).
+fn marquee_shift(cell: &std::cell::Cell<Option<((usize, usize, u32), Instant, Instant)>>,
+                 what: (usize, usize), travel: f32) -> f32 {
+    {
         if travel <= 0.5 { return 0.0; }
         let now = Instant::now();
         // From its start whenever it comes back into view or changes
         // (another value is another travel): it once picked up where an
         // earlier pass had left off, at its end (Siham 2026-11-15).
         let key = (what.0, what.1, travel.to_bits());
-        let since = match self.marquee.get() {
+        let since = match cell.get() {
             Some((seen, at, last)) if seen == key
                 && now.duration_since(last) < Duration::from_millis(200) => at,
             _ => now,
         };
-        self.marquee.set(Some((key, since, now)));
+        cell.set(Some((key, since, now)));
         const HOLD: f32 = 1.2;
         const PACE: f32 = 40.0;
         let run = travel / PACE;
         let t = now.duration_since(since).as_secs_f32() % (HOLD + run + HOLD);
         ((t - HOLD) / run).clamp(0.0, 1.0) * travel
     }
+}
 
+impl Engine {
     fn draw_values(&self, heading: usize, items: &[usize], row: usize, keys: &[usize],
                    scales: &[(f32, f32)], out: &mut Vec<Draw>) {
         // Six rows at most on screen; a longer page scrolls (as Controls).
@@ -6973,20 +7711,29 @@ impl Engine {
             // left caret.
             let label_w = items.get(index).and_then(|&l| self.menu_textures.get(l))
                 .map_or(0, |t| t.1) as f32 * label_scale;
-            let from = 37.0 + label_w + 12.0 + caret;
-            // A few pixels too long beside the carets: a touch smaller, the
-            // same chosen or not, rather than a scroll of a few pixels
-            // (Last Played, Siham 2026-11-15).
+            // Faces carry clear margins (MENU_PAD): the label's right one
+            // needs no room of its own.
+            let from = 37.0 + label_w + 18.0 + caret - slot_ui::MENU_PAD as f32 * 0.79;
+            // A little too long beside the carets: up to 10 % smaller, the
+            // same chosen or not, rather than a scroll (Last Played, Siham
+            // 2026-11-15; 10 %, 2026-11-19).
             let room = right - 22.0 - from;
+            // Too long even so: its short form, if it has one (ORIG. RATIO).
+            let (tex, width, height) = self.value_within((tex, width, height), scale, room);
             let scale = match width as f32 * scale {
-                w if w > room && w * 0.94 <= room => scale * room / w,
+                w if w > room && w * 0.9 <= room => scale * room / w,
                 _ => scale,
             };
             let y = top + dy + 8.0 + height as f32 * (0.79 - scale) / 2.0;
             let w = width as f32 * scale;
-            // Interface's Wallpaper Tint, idle over no personal image.
-            let idle = key == 17 && matches!(self.overlay, ShelfOverlay::WallpaperSettings { .. })
-                && !self.show_general_tint();
+            // Interface > Wallpaper's looks, idle over None or General's.
+            let idle = matches!(self.overlay, ShelfOverlay::WallpaperSettings { .. })
+                && match key {
+                    BLUR_KEY => self.wallpaper_look_idle(BLUR_ROW),
+                    HALO_KEY => self.wallpaper_look_idle(HALO_ROW),
+                    DARKEN_KEY => self.wallpaper_look_idle(DARKEN_ROW),
+                    _ => false,
+                };
             let chosen = row == index && !idle;
             let end = right - if chosen { 22.0 } else { 0.0 };
             let alpha = shows * if chosen { 1.0 } else if idle { 0.3 } else { menu_look::ROW_REST };
@@ -7165,8 +7912,8 @@ impl Engine {
             let alpha = fade * shows * if idle { 0.4 } else if chosen { 1.0 } else { menu_look::ROW_REST };
             let opens = self.menu_row_opens(heading, index);
             match scales.get(i) {
-                Some(&(scale, _)) => self.text_scaled(index, x, y, scale, alpha, out),
-                None => self.text_fit(index, x, y, x1 - x - if opens { 36.0 } else { 14.0 }, alpha, out),
+                Some(&(scale, _)) if scale > 0.0 => self.text_scaled(index, x, y, scale, alpha, out),
+                _ => self.text_fit(index, x, y, x1 - x - if opens { 36.0 } else { 14.0 }, alpha, out),
             }
             if opens {
                 let (tex, w, h) = self.menu_opens;
@@ -7216,8 +7963,8 @@ impl Engine {
             // A paused Link never offers save/load, even in its keycap hints.
             if linked { &self.game_menu_hints[..1] } // B Back only
             else { &self.game_menu_hints }
-        } else if heading == 5 && selected == LIBRARY_SHARE_ROW {
-            // Library's Share Saves row is a toggle, not a submenu.
+        } else if heading == 151 && selected >= SAVES_SHARE_ROW {
+            // Share Core Saves and Sync Saves with RomM are toggles.
             &self.settings_hints
         } else { &self.menu_hints };
         let gap = if !values && heading == 19 { 15.0 } else { LEGEND_GAP };
@@ -7443,25 +8190,41 @@ impl Engine {
                 let items = [1, 2, 3, 48, 25, 31];
                 self.draw_original_style_menu(0, &items, row, out);
                 if self.update_status == 1 {
-                    // At the right of About's row, as in 2.3 (2.4 put it
-                    // against the label), and drawn as the rows are: the
-                    // theme's ink and their contrast on any wallpaper
-                    // (Siham 2026-11-16).
+                    // A butter-yellow capsule at the right of About's row,
+                    // a little before its › so they never touch, in its own
+                    // colours on every theme and wallpaper (Siham 2026-11-17).
                     let x1 = out_w() as f32 - self.menu_side_room(0, &items).unwrap_or(PILL_RIGHT);
-                    let label_end = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round() + 24.0;
-                    let (_, w, _) = self.menu_textures[106];
-                    let room = (x1 - 18.0 - label_end).clamp(40.0, 175.0);
-                    let width = w as f32 * (room / w.max(1) as f32).min(0.79);
-                    let fade = self.menu_fade(0);
-                    let alpha = fade * if row == 5 { 1.0 } else { menu_look::ROW_REST };
-                    self.draw_update_status_centered(106, (x1 - 18.0 - width).round().max(label_end),
-                        settings_row_top(6) + 5.5 * QUICK_PITCH, room, alpha, out);
+                    let chevron = (x1 - 14.0 - self.menu_opens.1 as f32 * 0.79).round();
+                    let label_end = (37.0 + self.menu_textures[31].1 as f32 * 0.79).round() + 16.0;
+                    let (tex, w, h) = self.update_badge;
+                    let right = chevron - 12.0;
+                    let scale = ((right - label_end) / w.max(1) as f32).min(1.0);
+                    if w > 0 && scale >= 0.6 {
+                        let (w, h) = (w as f32 * scale, h as f32 * scale);
+                        let centre = settings_row_top(6) + 5.5 * QUICK_PITCH;
+                        let ink = self.menu_ink();
+                        if ink.is_some() { out.push(Draw::Ink(None)); }
+                        out.push(Draw::Tex {
+                            x: (right - w).round(), y: (centre - h / 2.0).round(), w, h, tex,
+                            alpha: self.menu_fade(0),
+                        });
+                        if ink.is_some() { out.push(Draw::Ink(ink)); }
+                    }
                 }
             }
             ShelfOverlay::Library { row } => {
-                self.draw_menu_rows(5, &LIBRARY_ROWS, row, &[], out);
-                self.draw_library_share_value(row, out);
+                let values = self.library_value_faces();
+                let scales = self.value_row_scales(&LIBRARY_ROWS, &values);
+                self.draw_menu_rows(5, &LIBRARY_ROWS, row, &scales, out);
+                self.draw_page_values(5, &LIBRARY_ROWS, row, &values, &scales, out);
                 self.draw_menu_chrome(5, LIBRARY_ROWS.len(), row, false, out);
+            }
+            ShelfOverlay::SavesStates { row } => {
+                let values = self.saves_value_faces();
+                let scales = self.value_row_scales(&SAVES_ROWS, &values);
+                self.draw_menu_rows(151, &SAVES_ROWS, row, &scales, out);
+                self.draw_page_values(151, &SAVES_ROWS, row, &values, &scales, out);
+                self.draw_menu_chrome(151, SAVES_ROWS.len(), row, false, out);
             }
             ShelfOverlay::Settings { row } => {
                 self.draw_original_style_menu(26, settings_rows(), row, out);
@@ -7470,7 +8233,8 @@ impl Engine {
                 self.draw_settings_menu(82, &INTERFACE_PAGE_ROWS, row, &INTERFACE_PAGE_KEYS, out);
             }
             ShelfOverlay::WallpaperSettings { row } => {
-                self.draw_settings_menu(148, &WALLPAPER_ROWS, row, &WALLPAPER_KEYS, out);
+                let (rows, keys) = self.wallpaper_rows();
+                self.draw_settings_menu(148, &rows, row.min(rows.len() - 1), &keys, out);
             }
             ShelfOverlay::InterfaceSettings { row } => {
                 let (rows, keys) = interface_rows();
@@ -7591,7 +8355,8 @@ impl Engine {
                     self.draw_update_status_centered(status, 37.0,
                         status_center, 610.0 + narrower, 0.78 * fade, out);
                 }
-                for (tex,w,x) in centred_hints(&self.menu_hints, LEGEND_GAP) {
+                let hints = [self.menu_hints[0], self.menu_hints[1], self.about_logs_hint];
+                for (tex,w,x) in centred_hints(&hints, LEGEND_GAP) {
                     out.push(Draw::Tex {
                         x, y: 427.0, w: w as f32, h: HINT_H as f32,
                         tex, alpha: fade,
@@ -7731,9 +8496,10 @@ impl Engine {
         // anchor Cancel to the board's left edge, Swap in the centre and
         // Choose to the board's right edge. Shrink uniformly only if needed
         // to preserve >=12px spacing on small screens / font changes.
-        let widths = self.core_legend_faces.map(|(_, w)| w.saturating_sub(HINT_EDGE));
+        let legends = if self.shelf_ink().is_some() { self.core_legend_dark } else { self.core_legend_faces };
+        let widths = legends.map(|(_, w)| w.saturating_sub(HINT_EDGE));
         let positions = crate::core_legend::positions(widths);
-        for ((tex, w), (x, scale)) in self.core_legend_faces.into_iter().zip(positions) {
+        for ((tex, w), (x, scale)) in legends.into_iter().zip(positions) {
             let height = HINT_H as f32 * scale;
             out.push(Draw::Tex {
                 x: x.round(),
@@ -7869,7 +8635,13 @@ impl Engine {
             | u32::from(self.settings.rotate_shelf_cover == 3) << 30
             | 1 << 31, Ordering::Release);
         self.refresh_system_status();
-        self.poll_shelf_wallpapers();
+        self.refresh_slot_copy_face();
+        let missing_mix = self.advance_missing();
+        let wallpaper_at = Instant::now();
+        // One wallpaper upload a frame.
+        if !self.poll_wallpaper() { self.poll_shelf_wallpapers(); }
+        crate::frame_watch::part(crate::frame_watch::PART_WALLPAPER, wallpaper_at.elapsed());
+        let before_at = Instant::now();
         // Poll the already-running achievement evaluator without blocking GL.
         // Only Android's foreground UI displays notices; the worker never
         // touches JNI, an Activity, the renderer or the filesystem here.
@@ -7926,6 +8698,12 @@ impl Engine {
             // step is one display frame; after that real time, so a slow
             // frame does not stretch the animation.
             let at_rest = self.lid_t == 0.0 || self.lid_t == 1.0;
+            // The lid's first animated frame, timed on Android's uptime, to
+            // set against the lid's key and the display's turn (beta43).
+            if at_rest && self.lid_t != goal {
+                crate::game::log_launch_timing(&format!("Rotate: [{}] lid animation starts ({})",
+                    uptime_ms(), if self.lid_covered { "closing" } else { "opening" }));
+            }
             let lid_dt = if at_rest { 1.0 / 60.0 } else { elapsed.min(0.1) };
             let step = lid_dt / LID_ANIMATION_S;
             self.lid_t = if goal > self.lid_t { (self.lid_t + step).min(goal) } else { (self.lid_t - step).max(goal) };
@@ -8016,6 +8794,17 @@ impl Engine {
             self.picker = None;
             self.overlay = ShelfOverlay::None;
         }
+        self.settle_studio_flight();
+        self.touch_tick();
+        if let Some(at) = self.picker_auto_seat {
+            let now = self.born.elapsed().as_millis() as u64;
+            if !matches!(self.overlay, ShelfOverlay::Core) || self.picker.is_none_or(|p| p.closing()) {
+                self.picker_auto_seat = None;
+            } else if now >= at {
+                self.picker_auto_seat = None;
+                self.seat_core_picker();
+            }
+        }
         if self.menu_reveal_at.is_some_and(|at| Instant::now() >= at) {
             self.menu_reveal_at = None;
             self.menu_seen = 0; // the menu's own fade-in, now
@@ -8053,16 +8842,32 @@ impl Engine {
                 self.net_switch_t = wan;
             }
         }
-        self.prepare_controls();
-        self.prepare_menu_look();
-        self.prepare_cart_studio();
-        self.prepare_cart_library();
-        self.prepare_romm();
+        let menus_at = Instant::now();
+        {
+            use crate::frame_watch::{span, SPAN_MENU_CONTROLS, SPAN_MENU_LIBRARY, SPAN_MENU_LOOK, SPAN_MENU_ROMM, SPAN_MENU_STUDIO};
+            let at = Instant::now();
+            self.prepare_controls();
+            span(SPAN_MENU_CONTROLS, at.elapsed());
+            let at = Instant::now();
+            self.prepare_menu_look();
+            span(SPAN_MENU_LOOK, at.elapsed());
+            let at = Instant::now();
+            self.prepare_cart_studio();
+            span(SPAN_MENU_STUDIO, at.elapsed());
+            let at = Instant::now();
+            self.prepare_cart_library();
+            span(SPAN_MENU_LIBRARY, at.elapsed());
+            let at = Instant::now();
+            self.prepare_romm();
+            span(SPAN_MENU_ROMM, at.elapsed());
+        }
+        crate::frame_watch::span(crate::frame_watch::SPAN_MENUS, menus_at.elapsed());
         // Update full-screen menus and spring-smooth the selection bar.
         // Keep animation entirely in rendering: never delay controller input.
         let (kind, selected, count) = match self.overlay {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, LIBRARY_ROWS.len()),
+            ShelfOverlay::SavesStates { row } => (33u8, row, SAVES_ROWS.len()),
             ShelfOverlay::GameMenu { row } => (3u8, row, pause_rows(
                 self.game.as_ref().is_some_and(GameSession::linked),
                 self.game.as_ref().is_some_and(GameSession::requires_relaunch)).len()),
@@ -8081,7 +8886,7 @@ impl Engine {
             ShelfOverlay::About { row } => (17u8, row, 2usize),
             ShelfOverlay::InterfaceSettings { row } => (10u8, row, interface_rows().0.len()),
             ShelfOverlay::RotateSettings { row } => (18u8, row, ROTATE_ROWS.len()),
-            ShelfOverlay::WallpaperSettings { row } => (19u8, row, WALLPAPER_ROWS.len()),
+            ShelfOverlay::WallpaperSettings { row } => (19u8, row, self.wallpaper_rows().0.len()),
             ShelfOverlay::EmulationSettings { row } => (8u8, row, 3usize),
             ShelfOverlay::PauseEmulationSettings { row } =>
                 (9u8, row, self.pause_emulation_rows().len()),
@@ -8178,7 +8983,10 @@ impl Engine {
                 && self.pending_game.is_none()
             {
                 if let Some(local) = self.prepared_rom.take() {
+                    let core_at = Instant::now();
                     self.prepare_game_core(&local);
+                    crate::frame_watch::did(crate::frame_watch::WORK_CORE);
+                    crate::frame_watch::core_prepared(core_at.elapsed());
                 }
             }
             // Re-read wall time after core.load() and save-state import.
@@ -8189,6 +8997,7 @@ impl Engine {
                         "Start CRT: {}ms since A (upstream target 730ms)",
                         self.insert_started.map_or(0, |at| at.elapsed().as_millis())
                     ));
+                    crate::frame_watch::insert_done();
                     self.buttons = 0;
                     // RETROARCH resamples to 48kHz; open AudioTrack there once.
                     let ra_sync = !session.linked();
@@ -8300,7 +9109,10 @@ impl Engine {
             self.buttons |= ButtonMask::SELECT;
         }
         let profile = self.current_emulation();
-        let bezel=self.game_bezel(); // resolved before mutably borrowing GameSession
+        // Only a game draws its bezel: fitting one on the shelf, each time
+        // the selected cart's system changed, held a shelf switch ~200ms on
+        // the KONKR (beta41 bench); the game's first frame fits it.
+        let bezel = if self.game.is_some() { self.game_bezel() } else { None }; // resolved before mutably borrowing GameSession
         let cart_platform=self.current_cart_platform();
         let live=self.live_game_options(); // Copy, zero allocations on 60/120Hz callback
         FF_AUDIO_ENABLED.store(live.ff_sound,Ordering::Release);
@@ -8335,6 +9147,9 @@ impl Engine {
         // The slot sliding back down over the game just resumed.
         let mut footer_draws = Vec::new();
         self.draw_game_footer(&mut footer_draws);
+        // Read before the session's borrow: the low battery sign (#87).
+        let mut low_battery = Vec::new();
+        self.push_low_battery(&mut low_battery);
         if let Some(session) = self.game.as_mut() {
             // Resume only after the remote has also left its pause menu;
             // LinkPlay::frame holds either core while peer_paused is true.
@@ -8657,6 +9472,7 @@ impl Engine {
                 commands.push(Draw::Tex { x,y,w,h,tex,alpha:1.0 });
             }
             commands.extend_from_slice(&footer_draws);
+            commands.append(&mut low_battery);
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
             frame_phases.submit_build_us = build_started.elapsed().as_micros() as u64;
             let draw_started = Instant::now();
@@ -8707,10 +9523,15 @@ impl Engine {
             false
         };
         if repeated_letter { self.show_selected_letter(); }
+        let tick_at = Instant::now();
         self.shelves[self.active].update(dt);
         self.tick_triggers();
+        crate::frame_watch::span(crate::frame_watch::SPAN_TICK, tick_at.elapsed());
+        crate::frame_watch::span(crate::frame_watch::SPAN_BEFORE, before_at.elapsed());
+        let upload_at = Instant::now();
         self.relabel_one();
         self.prepare_visible();
+        crate::frame_watch::part(crate::frame_watch::PART_UPLOAD, upload_at.elapsed());
         self.start_waiting_picker();
         // Only warm a settled carousel selection. Actual ROM I/O takes place
         // on an independently cancelable Android background executor.
@@ -8728,8 +9549,13 @@ impl Engine {
         let mut last = WARM_ROM_URI.lock().unwrap_or_else(|e|e.into_inner());
         if *last != candidate { *last = candidate; }
         drop(last);
+        let title_at = Instant::now();
         self.refresh_selected_title();
+        crate::frame_watch::span(crate::frame_watch::SPAN_TITLE, title_at.elapsed());
+        let focus_at = Instant::now();
         self.persist_focus_if_idle();
+        crate::frame_watch::span(crate::frame_watch::SPAN_FOCUS, focus_at.elapsed());
+        let state_at = Instant::now();
         // Resolve the optional transparent material before mutably borrowing
         // the selected rack, otherwise Rust rejects the overlapping borrows.
         let (selected_clear_back, selected_clear_front) = self.clear_layers();
@@ -8741,6 +9567,20 @@ impl Engine {
         // is borrowed for drawing.
         let wallpaper_none = self.wallpaper_none();
         let wallpaper = self.active_wallpaper();
+        // A long press lifts the selected cart; it hides while it flies to or
+        // from Cart Studio (Siham 2026-11-17). Read before the shelf's borrow.
+        let press_lift = self.press_lift();
+        let flight_hides = self.studio_flight_hides_cart();
+        // A title too long for a narrow screen scrolls (#119).
+        let (title_shift, _) = self.title_scroll();
+        let lifted = self.shelves[self.active].selected_rect().map(|(x, y, w, h)| self.lifted([x, y, w, h]));
+        let mut studio_return = Vec::new();
+        self.draw_studio_return(&mut studio_return);
+        // The grey of carts whose card is out (beta39), read before the
+        // shelf is borrowed.
+        let (missing_ink, cart_ink) = (self.missing_ink(), self.cart_ink());
+        crate::frame_watch::span(crate::frame_watch::SPAN_STATE, state_at.elapsed());
+        let shelf_at = Instant::now();
         let shelf = &mut self.shelves[self.active];
 
         // Original Slot: 450ms seating + 280ms hold. Start the original
@@ -8752,12 +9592,17 @@ impl Engine {
             && self.progress >= INSERT_SOUND_PROGRESS
         {
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_INSERT_SFX);
+            crate::frame_watch::sound();
         }
         if !self.inserted && self.eject_sound_armed
             && self.progress < previous_progress
             && self.progress <= EJECT_SOUND_PROGRESS {
             self.eject_sound_armed = false;
             CART_SFX.lock().unwrap_or_else(|e| e.into_inner()).push_back(CART_EJECT_SFX);
+            crate::frame_watch::sound();
+        }
+        if previous_progress > 0.0 && self.progress <= 0.0 && !self.inserted {
+            crate::frame_watch::cart_out();
         }
 
         // The shelf's carts in `commands` (the closed RG Rotate shrinks them).
@@ -8774,12 +9619,10 @@ impl Engine {
             } else { menu_style::page_ground(menu_style::DARK_SHELF) },
         }];
         // Slot v1.7 carousel ground: None has no wallpaper; personal images
-        // receive only the selected Wallpaper Tint (never a fixed scrim).
+        // receive only their Tint (never a fixed scrim).
         // The shelf's own wallpaper, else General's (Interface > Wallpaper).
         // OLED blackens only the ground: a chosen wallpaper shows as in Dark.
-        let tint = if wallpaper.is_some_and(|(_, personal, _)| personal) {
-            self.settings.wallpaper_tint.alpha()
-        } else { 0.0 };
+        let tint = wallpaper.map_or(0.0, |(_, tint, _)| tint);
         slot_ui::draw_ground_tinted(wallpaper.map(|(tex, _, _)| tex), tint, &mut commands);
         if self.progress == 0.0 {
             if let Some(picker) = self.picker {
@@ -8789,7 +9632,10 @@ impl Engine {
                 let span = Some(picker_span(shelf, openness));
                 let selected = shelf.carts.get(shelf.index).map(|c| c.stem.as_str());
                 let row_from = commands.len();
+                let grey = cart_ink;
+                if grey.is_some() { commands.push(Draw::Ink(grey)); }
                 shelf.draw_row_clear_of(selected, 0.0, 0.26 * t, dim, span, &mut commands);
+                if grey.is_some() { commands.push(Draw::Ink(None)); }
                 lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),
@@ -8799,7 +9645,27 @@ impl Engine {
                 // The physical slot stays fixed; no input delay or layout changes.
                 let shake = self.refusal.map_or(0.0, |r| r.offset(ms));
                 let row_from = commands.len();
-                shelf.draw_row(ejecting_stem.as_deref(), shake, 0.0, 1.0, &mut commands);
+                let hidden = ejecting_stem.as_deref().or_else(|| {
+                    (press_lift > 0.0 || flight_hides)
+                        .then(|| shelf.carts.get(shelf.index).map(|c| c.stem.as_str())).flatten()
+                });
+                // In colour, then grey over it as the card goes (a crossfade
+                // while it changes; one row only otherwise).
+                let grey = missing_mix;
+                if grey < 1.0 {
+                    shelf.draw_row(hidden, shake, 0.0, 1.0, &mut commands);
+                    if let Some([x, y, w, h]) = lifted.filter(|_| press_lift > 0.0 && !flight_hides) {
+                        shelf.draw_selected_at(x, y, w, h, 1.0, &mut commands);
+                    }
+                }
+                if grey > 0.0 {
+                    commands.push(Draw::Ink(Some(missing_ink)));
+                    shelf.draw_row(hidden, shake, 0.0, grey, &mut commands);
+                    if let Some([x, y, w, h]) = lifted.filter(|_| press_lift > 0.0 && !flight_hides) {
+                        shelf.draw_selected_at(x, y, w, h, grey, &mut commands);
+                    }
+                    commands.push(Draw::Ink(None));
+                }
                 lid_row = row_from..commands.len();
                 slot_ui::draw_empty_slot_closed(
                     pick_slot_faces(self.slot_faces, self.home_slot_faces, shelf.carts.get(shelf.index)),
@@ -8846,9 +9712,10 @@ impl Engine {
                 // HOLD TO DELETE takes the title's place while L2 + R2 are held.
                 if self.settings.show_titles && self.triggers.hold.is_none() && self.triggers.ejecting.is_none() {
                     let alpha=name.map_or(1.0,|(_,elapsed,_)|slot_title_alpha(elapsed));
-                    slot_ui::draw_slot_title(self.selected_title_face,alpha,&mut commands);
+                    slot_ui::draw_slot_title_scrolled(self.selected_title_face,alpha,title_shift,&mut commands);
                 }
                 if shelf_ink.is_some() { commands.push(Draw::Ink(None)); }
+                commands.append(&mut studio_return);
             }
         } else {
             let cart = &shelf.carts[shelf.index];
@@ -8936,7 +9803,12 @@ impl Engine {
                 });
             }
         }
+        crate::frame_watch::span(crate::frame_watch::SPAN_SHELF, shelf_at.elapsed());
+        let overlay_at = Instant::now();
         self.draw_overlay(&mut commands);
+        crate::frame_watch::span(crate::frame_watch::SPAN_OVERLAY, overlay_at.elapsed());
+        let chrome_at = Instant::now();
+        self.draw_menu_task_pill(&mut commands);
         if cover_with_hold {
             let mut hold = Vec::with_capacity(commands.len() + 8);
             self.push_hold_scene(&mut hold);
@@ -8997,6 +9869,12 @@ impl Engine {
                     Some(if dark_ink {self.bolt_light_texture} else {self.bolt_texture}),
                     self.clock_face, slot_ui::footer_ink(dark_ink), &mut commands)
             };
+            // The task pill (beta39), by the battery: Android's icons go
+            // before it.
+            let battery_w = if lid { battery_w } else {
+                let icons_top = icons && !icons_bottom;
+                battery_w + self.draw_shelf_task_pill(clock_top, icons_top, battery_w, top_dark, &mut commands)
+            };
             // Sharing the line, the icons sit after the clock and before the
             // battery: Android places them from these widths (8 bits each).
             if grouped {
@@ -9005,10 +9883,13 @@ impl Engine {
             }
         }
         SHELF_INDICATOR_FLAGS.store(indicator_flags, Ordering::Release);
+        crate::frame_watch::span(crate::frame_watch::SPAN_CHROME, chrome_at.elapsed());
+        let gpu_at = Instant::now();
         self.gpu.fit(self.size);
         self.gpu.begin_frame();
         self.gpu.draw_list(&commands);
         self.gpu.end_frame(self.size);
+        crate::frame_watch::part(crate::frame_watch::PART_GPU, gpu_at.elapsed());
         // Idle throttle is an output-only pacing hint; never change upstream
         // animation timings, input handling, or cartridge prefetch priorities.
         let quiet = !self.inserted
@@ -9025,6 +9906,9 @@ impl Engine {
             && self.triggers.hold.is_none() && self.triggers.ejecting.is_none()
             // The RG Rotate's cover animation (clock and battery growing).
             && self.lid_t == if self.lid_covered { 1.0 } else { 0.0 }
+            // A long title scrolling its passes (#119).
+            && !self.title_scroll().1
+            && self.missing_mix == if ROMS_MISSING.load(Ordering::Acquire) { 1.0 } else { 0.0 }
             && self.cart_render.is_idle();
         CAROUSEL_QUIET.store(quiet, Ordering::Release);
     }
@@ -9428,6 +10312,130 @@ fn next_nonempty_shelf(shelves: &[Shelf], current: usize, delta: i32) -> usize {
 /// for every system.
 /// The GBA's bar in `home_slot`'s order.
 const GBA_SLOT: usize = 6;
+
+
+/// A picture the cold renderer needs from its first frame, made off the GL
+/// thread (beta41): the slot bars in both themes, every console's bars in
+/// the three bar themes, the GB and GBC bezels, the carts' shadows. In
+/// upload order.
+enum StartJob { Band(&'static [u8]), Bezel(bool), Shadow(Option<GbShell>), HomeShadow(slot_ui::HomeMould) }
+
+/// A StartJob's result, ready for the GPU.
+enum StartPicture { Texture(Vec<u8>, u32, u32), Face(slot_ui::CartFace) }
+
+impl StartJob {
+    fn all() -> Vec<StartJob> {
+        use slot_ui::bitmaps::{home_slot_png, slot_bar_png};
+        let mut jobs = Vec::new();
+        for light in [false, true] {
+            let (back, front) = slot_bar_png(light);
+            jobs.extend([StartJob::Band(back), StartJob::Band(front)]);
+        }
+        for theme in 0..3 {
+            for family in 0..7 {
+                let (back, front) = home_slot_png(family, theme);
+                jobs.extend([StartJob::Band(back), StartJob::Band(front)]);
+            }
+        }
+        jobs.extend([StartJob::Bezel(false), StartJob::Bezel(true)]);
+        jobs.extend([StartJob::Shadow(None), StartJob::Shadow(Some(GbShell::Notched)),
+            StartJob::Shadow(Some(GbShell::Rounded))]);
+        jobs.extend(slot_ui::HomeMould::ALL.map(StartJob::HomeShadow));
+        jobs
+    }
+
+    fn make(&self) -> StartPicture {
+        match *self {
+            StartJob::Band(png) => {
+                let (rgba, w, h) = slot_ui::native_png(
+                    png, slot_ui::bitmaps::SLOT_W, slot_ui::bitmaps::SLOT_H);
+                let wide = (w as f32 * out_w() as f32 / slot_ui::bitmaps::SLOT_W as f32)
+                    .round() as u32;
+                StartPicture::Texture(slot_ui::refit_band(&rgba, w, h, wide), wide, h)
+            }
+            StartJob::Bezel(gbc) => {
+                let (rgba, w, h) = slot_ui::native_png(slot_ui::bitmaps::bezel_master(gbc), 720, 480);
+                StartPicture::Texture(rgba, w, h)
+            }
+            StartJob::Shadow(None) => StartPicture::Face(cart_shadow()),
+            StartJob::Shadow(Some(shell)) => StartPicture::Face(gb_cart_shadow(shell)),
+            StartJob::HomeShadow(mould) => StartPicture::Face(slot_ui::home_cart_shadow(mould)),
+        }
+    }
+}
+
+impl StartJob {
+    /// Its cache name: what it is drawn from and at what size. Only the
+    /// pictures decoded from a PNG are kept (the shadows are quick).
+    fn cache_key(&self, scale: f32) -> Option<String> {
+        // The shadows are drawn by code, not from a PNG: kept per build (the
+        // CI's commit), so a changed shadow is never read from an old cache.
+        let build = option_env!("GITHUB_SHA").unwrap_or("dev");
+        let shadow = match *self {
+            StartJob::Shadow(shell) => format!("shadow {shell:?} {build}"),
+            StartJob::HomeShadow(mould) => format!("home shadow {mould:?} {build}"),
+            _ => String::new(),
+        };
+        let (png, what): (&[u8], &str) = match *self {
+            StartJob::Band(png) => (png, "band"),
+            StartJob::Bezel(gbc) => (slot_ui::bitmaps::bezel_master(gbc), "bezel"),
+            StartJob::Shadow(_) | StartJob::HomeShadow(_) => (&[], shadow.as_str()),
+        };
+        if build == "dev" && png.is_empty() { return None; }
+        let mut input = format!("slot-start-v1:{what}:{}:{}:", scale.to_bits(), out_w()).into_bytes();
+        input.extend_from_slice(png);
+        let hash = ring::digest::digest(&ring::digest::SHA256, &input);
+        Some(hash.as_ref().iter().map(|b| format!("{b:02x}")).collect())
+    }
+
+    /// From the cache when drawn there before at this size (beta42: the
+    /// KONKR spent 2.2 s on these on every start), else made and kept.
+    fn make_cached(&self, cache: Option<&crate::cart_disk_cache::DiskCache>, scale: f32) -> StartPicture {
+        let key = cache.and(self.cache_key(scale));
+        let face_kind = matches!(self, StartJob::Shadow(_) | StartJob::HomeShadow(_));
+        if let (Some(cache), Some(key)) = (cache, key.as_deref()) {
+            if let Some(face) = cache.read(key) {
+                return if face_kind { StartPicture::Face(face) }
+                    else { StartPicture::Texture(face.rgba, face.w, face.h) };
+            }
+        }
+        let picture = self.make();
+        if let (Some(cache), Some(key)) = (cache, key.as_deref()) {
+            let _ = match &picture {
+                StartPicture::Texture(rgba, w, h) =>
+                    cache.write(key, &slot_ui::CartFace { rgba: rgba.clone(), w: *w, h: *h }),
+                StartPicture::Face(face) => cache.write(key, face),
+            };
+        }
+        picture
+    }
+}
+
+/// Makes StartJob::all() on up to four threads; joined once GL is up.
+fn start_pixels() -> std::thread::JoinHandle<Vec<StartPicture>> {
+    let scale = slot_ui::density::scale();
+    let cache = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+        .map(|(root, _)| crate::cart_disk_cache::DiskCache::at(root.join("Cache").join("start-pictures")));
+    std::thread::spawn(move || {
+        let cache = cache.as_ref();
+        let jobs = StartJob::all();
+        let n = std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, 4);
+        let mut out: Vec<Option<StartPicture>> = (0..jobs.len()).map(|_| None).collect();
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..n).map(|k| {
+                let jobs = &jobs;
+                scope.spawn(move || slot_ui::density::with_scale(scale, || {
+                    jobs.iter().enumerate().skip(k).step_by(n)
+                        .map(|(i, job)| (i, job.make_cached(cache, scale))).collect::<Vec<_>>()
+                }))
+            }).collect();
+            for worker in workers {
+                for (i, picture) in worker.join().expect("a start picture worker") { out[i] = Some(picture); }
+            }
+        });
+        out.into_iter().map(|p| p.expect("every start picture made")).collect()
+    })
+}
 
 fn pick_slot_faces(
     faces: Option<(slot_gfx::TexId, slot_gfx::TexId)>,

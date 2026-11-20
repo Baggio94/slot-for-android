@@ -73,7 +73,7 @@ pub fn pick(root: &Path, seed: u64) -> Option<PathBuf> {
     let next = queued.remove(0);
     shown.push(next.clone());
     if let Err(e) = slot_store::atomic_write(&path, write_deck(&shown, &queued).as_bytes()) {
-        eprintln!("slot: wallpaper.deck: {e}");
+        crate::log_warn(&format!("wallpaper.deck: {e}"));
     }
     Some(dir.join(next))
 }

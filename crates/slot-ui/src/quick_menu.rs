@@ -228,6 +228,13 @@ pub fn quick_value_width(label: &str) -> u32 {
     quick_value_width_within(label, out_w())
 }
 
+/// The width quick_value_face really gives `text` (its faces go up to
+/// QUICK_FACE_MAX_W, wider than quick_value_width measures on a narrow
+/// screen: names under carts wrapped wrong on the Rotate).
+pub fn quick_face_width(label: &str) -> u32 {
+    quick_value_width_within(label, out_w().max(QUICK_FACE_MAX_W))
+}
+
 /// quick_value_width for a face up to `max_w` pixels wide.
 pub fn quick_value_width_within(label: &str, max_w: u32) -> u32 {
     let Some(font) = text::label_font() else { return 0 };

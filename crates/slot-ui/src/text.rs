@@ -123,6 +123,16 @@ pub fn line_width(font: &Font, line: &str, px: f32, tracking: f32) -> f32 {
     w + tracking * (n as f32 - 1.0).max(0.0)
 }
 
+/// Whether `text` holds on one line `max_w` wide at `px`, as fit lays it.
+pub fn fits_line(font: &Font, text: &str, max_w: f32, px: f32) -> bool {
+    line_width(font, &text.to_uppercase(), px, tracking_for(px)) <= max_w
+}
+
+/// `text` whole on one line at `px`, however long: for a line that scrolls.
+pub fn one_line(text: &str, px: f32) -> Layout {
+    Layout { lines: vec![text.to_uppercase()], px, tracking: tracking_for(px) }
+}
+
 fn tracking_for(px: f32) -> f32 {
     (px * 0.10).round()
 }

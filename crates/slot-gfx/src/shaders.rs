@@ -270,12 +270,30 @@ vec3 simpletex(vec3 c, vec2 f, float bias) {
     // the light grid over dark colours and wash the picture out (Siham
     // 2026-11-10, 2.2.1-beta1 on device).
     c = pow(c, vec3(1.0 + 0.25));
-    vec2 d = abs(f - 0.5);
-    float x2 = max(d.x, d.y);
-    x2 = x2 * x2;
-    float x4 = x2 * x2;
-    float w = 48.0 * (x4 - (8.0 / 3.0) * x4 * x2);
-    w = w * (w + (1.0 - w) * 0.65) * 0.65;
+    // Screen pixels per game pixel. At a whole scale (the GBA on the RG
+    // Rotate x3, the KPA x4) simpletex_lcd's thin grid; between two (the
+    // Game Boy on the Rotate x4.5, the KPA x4.44, the Retroid Pocket
+    // Classic x7.5) its lines fell one pixel here, two there: jdgleaver's
+    // simpletex_lcd_720p grid instead, a soft wave made for such scales:
+    // Grid Width 0.95 and Intensity 1.0, as strong as the thin grid's
+    // lines at a whole scale (upstream's 0.9 and 0.9 nearly vanished).
+    vec2 scale = (u_rect.zw * u_fbo) / (u_uv.zw * u_src);
+    vec2 off = abs(scale - floor(scale + 0.5));
+    float w;
+    if (max(off.x, off.y) < 0.02) {
+        vec2 d = abs(f - 0.5);
+        float x2 = max(d.x, d.y);
+        x2 = x2 * x2;
+        float x4 = x2 * x2;
+        w = 48.0 * (x4 - (8.0 / 3.0) * x4 * x2);
+        w = w * (w + (1.0 - w) * 0.65) * 0.65;
+    } else {
+        // Grid lines between pixels: the 0.25 offset, as upstream.
+        vec2 angle = 6.283185307 * (f - 0.25);
+        float wf = 1.0 + 31.0 * (1.0 - 0.95);
+        vec2 k = (vec2(wf) + sin(angle)) / (wf + 1.0);
+        w = 1.0 - k.x * k.y;
+    }
     float luma = dot(c, luma_coeff);
     w = w * (luma + (1.0 - luma) * (1.0 - bias));
     c = mix(c, vec3(1.0 - 0.15), w);
