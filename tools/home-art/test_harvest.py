@@ -595,5 +595,22 @@ game (
             self.assertEqual(list(harvest.VIDEO_SEARCH), searches)
 
 
+class PlatformTests(unittest.TestCase):
+    def test_every_platform_is_complete(self):
+        for platform in harvest.PLATFORMS:
+            self.assertIn(platform, harvest.SS_SYSTEM)
+            self.assertIn(platform, harvest.SS_EXPECT)
+            self.assertTrue(harvest.EXTENSION[platform].startswith('.'))
+        self.assertEqual(len(set(harvest.SS_SYSTEM.values())), len(harvest.SS_SYSTEM))
+        for group in harvest.GROUPS.values():
+            self.assertTrue(set(group) <= set(harvest.PLATFORMS))
+
+    def test_new_systems_keep_every_region(self):
+        medias = [{'type': harvest.SCAN, 'region': r, 'url': f'https://ss/{r}.png'}
+                  for r in ('us', 'eu', 'jp')]
+        kept = harvest.select('WSC', 'Final Fantasy (Japan)', medias)
+        self.assertEqual(['us', 'eu', 'jp'], [m['region'] for m in kept])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -17,10 +17,10 @@ on:
     inputs:
       platform:
         type: choice
-        options: [all, GB, GBC, GBA, NES, SNES, MD]
+        options: [all, '3.0', GB, GBC, GBA, NES, SNES, MD, NGP, NGPC, WS, WSC, GG, SMS, LYNX, POKEMINI]
         default: all
       limit:
-        description: Games to ask ScreenScraper about (empty for no limit)
+        description: Games to ask ScreenScraper about, per platform (empty for no limit)
         default: ''
       match:
         description: Only dat names matching this regex (empty for all)
@@ -104,8 +104,9 @@ jobs:
       - name: Contact sheet
         if: always() && github.event_name != 'schedule'
         run: python3 tools/home-art/preview.py --out art --platform "$PLATFORM" | tail -5 || true
+      # Trials (a push, or a run by hand that publishes nothing) are kept as an artifact.
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'push'
+        if: always() && (github.event_name == 'push' || env.PUBLISH != 'true')
         with:
           name: cart-art-trial-${{ github.run_number }}
           path: |
