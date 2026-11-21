@@ -774,6 +774,33 @@ pub struct Settings {
     /// None (Siham 2026-11-21). Taken at the game's next start.
     #[serde(default)]
     pub pokemini_lcd_filter: u8,
+    /// The 3.0 systems' own core options (Siham 2026-11-22), each off or
+    /// at the core's own default so games start as on the real console:
+    /// Master System and Game Gear's sprite limit removed, the Neo Geo
+    /// Pocket's language, the WonderSwan's palette for black-and-white
+    /// games, the Pokemon mini's palette and LCD mode.
+    #[serde(default)]
+    pub no_sprite_limit_sms: bool,
+    #[serde(default)]
+    pub no_sprite_limit_gg: bool,
+    #[serde(default)]
+    pub ngp_language: u8,
+    #[serde(default)]
+    pub ws_palette: u8,
+    #[serde(default)]
+    pub pokemini_palette: u8,
+    #[serde(default)]
+    pub pokemini_lcd_mode: u8,
+    /// The Master System's left column hidden, its FM sound off, the
+    /// WonderSwan's language, the Pokemon mini's screen shake off.
+    #[serde(default)]
+    pub hide_left_bar_sms: bool,
+    #[serde(default)]
+    pub fm_off_sms: bool,
+    #[serde(default)]
+    pub ws_language: u8,
+    #[serde(default)]
+    pub pokemini_no_shake: bool,
     /// Set once the home consoles' 3:2 default (no overlay) was applied.
     #[serde(default)]
     pub home_bezel_three_two: bool,
@@ -900,6 +927,9 @@ impl Default for Settings {
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
             show_recents: false, show_titles: false, test_shelf: false, touchscreen: true, home_bezel_three_two: false,
             pokemini_lcd_filter: 0,
+            no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
+            ws_palette: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
+            hide_left_bar_sms: false, fm_off_sms: false, ws_language: 0, pokemini_no_shake: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, own_bezels_room: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
@@ -1478,6 +1508,18 @@ impl Settings {
             45 => self.step_bezel(slot_store::Platform::Snes,right),
             46 => self.step_bezel(slot_store::Platform::Md,right),
             POKEMINI_FILTER_KEY => self.pokemini_lcd_filter = step_index(self.pokemini_lcd_filter, 3, right),
+            SPRITE_LIMIT_SMS_KEY => self.no_sprite_limit_sms = !self.no_sprite_limit_sms,
+            SPRITE_LIMIT_GG_KEY => self.no_sprite_limit_gg = !self.no_sprite_limit_gg,
+            NGP_LANGUAGE_KEY => self.ngp_language = step_index(self.ngp_language, 2, right),
+            WS_PALETTE_KEY => self.ws_palette = step_index(self.ws_palette, WS_PALETTES.len() as u8, right),
+            POKEMINI_PALETTE_KEY => self.pokemini_palette =
+                step_index(self.pokemini_palette, POKEMINI_PALETTES.len() as u8, right),
+            POKEMINI_LCD_MODE_KEY => self.pokemini_lcd_mode =
+                step_index(self.pokemini_lcd_mode, POKEMINI_LCD_MODES.len() as u8, right),
+            LEFT_BAR_SMS_KEY => self.hide_left_bar_sms = !self.hide_left_bar_sms,
+            FM_SMS_KEY => self.fm_off_sms = !self.fm_off_sms,
+            WS_LANGUAGE_KEY => self.ws_language = step_index(self.ws_language, 2, right),
+            POKEMINI_SHAKE_KEY => self.pokemini_no_shake = !self.pokemini_no_shake,
             BEZEL_SMS_KEY..=BEZEL_POKEMINI_KEY => {
                 let Some(platform) = Self::bezel_platform(key) else { return false };
                 self.step_bezel(platform,right);
@@ -1569,9 +1611,103 @@ pub const BEZEL_POKEMINI_KEY: usize = 129;
 /// Settings > Systems > Pokemon mini > LCD Filter.
 pub const POKEMINI_FILTER_KEY: usize = 130;
 
+/// The 3.0 systems' own core options (3.0.0-materials3), as Settings keys.
+pub const SPRITE_LIMIT_SMS_KEY: usize = 131;
+pub const SPRITE_LIMIT_GG_KEY: usize = 132;
+pub const NGP_LANGUAGE_KEY: usize = 133;
+pub const WS_PALETTE_KEY: usize = 134;
+pub const POKEMINI_PALETTE_KEY: usize = 135;
+pub const POKEMINI_LCD_MODE_KEY: usize = 136;
+pub const LEFT_BAR_SMS_KEY: usize = 137;
+pub const FM_SMS_KEY: usize = 138;
+pub const WS_LANGUAGE_KEY: usize = 139;
+pub const POKEMINI_SHAKE_KEY: usize = 140;
+
+/// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
+/// grey first, then the three consoles' screens.
+pub const WS_PALETTES: [&str; 4] = ["default", "wonderswan", "wondeswan_color", "swancrystal"];
+/// PokeMini's palettes, its Default (the real console's) first.
+pub const POKEMINI_PALETTES: [&str; 7] = ["Default", "Old", "Monochrome", "Green", "Red", "Blue", "Sepia"];
+/// PokeMini's LCD modes: Analog (the real LCD's ghosting) first.
+pub const POKEMINI_LCD_MODES: [&str; 3] = ["analog", "3shades", "2shades"];
+
 /// The Pokemon mini's LCD Filter for the next game started (the settings
 /// stay with the runtime; the core options are set in game.rs).
 pub static POKEMINI_LCD_FILTER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The 3.0 systems' core options a game starts with, kept by the runtime
+/// whenever Settings change (as POKEMINI_LCD_FILTER).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CoreExtras {
+    pub no_sprite_limit_sms: bool,
+    pub no_sprite_limit_gg: bool,
+    pub ngp_language: u8,
+    pub ws_palette: u8,
+    pub pokemini_filter: u8,
+    pub pokemini_palette: u8,
+    pub pokemini_lcd_mode: u8,
+    pub hide_left_bar_sms: bool,
+    pub fm_off_sms: bool,
+    pub ws_language: u8,
+    pub pokemini_no_shake: bool,
+}
+pub static CORE_EXTRAS: std::sync::Mutex<CoreExtras> = std::sync::Mutex::new(CoreExtras {
+    no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
+    ws_palette: 0, pokemini_filter: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
+    hide_left_bar_sms: false, fm_off_sms: false, ws_language: 0, pokemini_no_shake: false });
+
+impl CoreExtras {
+    pub fn of(s: &Settings) -> Self {
+        Self { no_sprite_limit_sms: s.no_sprite_limit_sms, no_sprite_limit_gg: s.no_sprite_limit_gg,
+            ngp_language: s.ngp_language, ws_palette: s.ws_palette,
+            pokemini_filter: s.pokemini_lcd_filter, pokemini_palette: s.pokemini_palette,
+            pokemini_lcd_mode: s.pokemini_lcd_mode, hide_left_bar_sms: s.hide_left_bar_sms,
+            fm_off_sms: s.fm_off_sms, ws_language: s.ws_language, pokemini_no_shake: s.pokemini_no_shake }
+    }
+    pub fn store(s: &Settings) {
+        POKEMINI_LCD_FILTER.store(s.pokemini_lcd_filter, std::sync::atomic::Ordering::Release);
+        *CORE_EXTRAS.lock().unwrap_or_else(|e| e.into_inner()) = Self::of(s);
+    }
+    pub fn current() -> Self { *CORE_EXTRAS.lock().unwrap_or_else(|e| e.into_inner()) }
+    /// The core options these choices set for a system's core.
+    pub fn options(&self, platform: slot_store::Platform, core: slot_store::Core) -> Vec<(&'static str, &'static str)> {
+        use slot_store::{Core, Platform};
+        let pick = |list: &[&'static str], at: u8| list[(at as usize).min(list.len() - 1)];
+        match (platform, core) {
+            (Platform::Sms, Core::GenesisPlusGx) => vec![
+                ("genesis_plus_gx_no_sprite_limit", if self.no_sprite_limit_sms { "enabled" } else { "disabled" }),
+                ("genesis_plus_gx_left_border", if self.hide_left_bar_sms { "left border" } else { "disabled" }),
+                ("genesis_plus_gx_ym2413", if self.fm_off_sms { "disabled" } else { "auto" }),
+            ],
+            (Platform::Gg, Core::GenesisPlusGx) => vec![
+                ("genesis_plus_gx_no_sprite_limit", if self.no_sprite_limit_gg { "enabled" } else { "disabled" }),
+            ],
+            (Platform::Sms, Core::Gearsystem) => vec![
+                ("gearsystem_no_sprite_limit", if self.no_sprite_limit_sms { "Enabled" } else { "Disabled" }),
+                ("gearsystem_hide_left_bar", if self.hide_left_bar_sms { "Always" } else { "No" }),
+                ("gearsystem_ym2413", if self.fm_off_sms { "Disabled" } else { "Auto" }),
+            ],
+            (Platform::Gg, Core::Gearsystem) => vec![
+                ("gearsystem_no_sprite_limit", if self.no_sprite_limit_gg { "Enabled" } else { "Disabled" }),
+            ],
+            (Platform::Ngp, Core::Neopop) =>
+                vec![("ngp_language", if self.ngp_language == 1 { "japanese" } else { "english" })],
+            (Platform::Ngp, Core::Race) =>
+                vec![("race_language", if self.ngp_language == 1 { "japanese" } else { "english" })],
+            (Platform::Ws, _) => vec![
+                ("wswan_mono_palette", pick(&WS_PALETTES, self.ws_palette)),
+                ("wswan_language", if self.ws_language == 1 { "japanese" } else { "english" }),
+            ],
+            (Platform::Pokemini, _) => vec![
+                ("pokemini_lcdfilter", pokemini_lcd_filter_option(self.pokemini_filter)),
+                ("pokemini_palette", pick(&POKEMINI_PALETTES, self.pokemini_palette)),
+                ("pokemini_lcdmode", pick(&POKEMINI_LCD_MODES, self.pokemini_lcd_mode)),
+                ("pokemini_screen_shake_lv", if self.pokemini_no_shake { "0" } else { "3" }),
+            ],
+            _ => Vec::new(),
+        }
+    }
+}
 
 /// PokeMini's pokemini_lcdfilter value for a Settings choice.
 pub fn pokemini_lcd_filter_option(choice: u8) -> &'static str {

@@ -193,16 +193,16 @@ fn paused_game_controls_inherit_globals_until_overridden() {
 
 #[test]
 fn eject_to_play_solo_is_an_action_not_a_noop() {
-    assert_eq!(pause_rows(false,false),
+    assert_eq!(pause_rows(false,false,true),
         &[PauseRow::Resume,PauseRow::States,PauseRow::Multiplayer,
             PauseRow::Cheats,PauseRow::Settings,PauseRow::SaveEject]);
-    assert_eq!(pause_rows(true,false),
+    assert_eq!(pause_rows(true,false,true),
         &[PauseRow::Resume,PauseRow::Multiplayer,PauseRow::Settings,
             PauseRow::SaveEject]);
-    assert_eq!(pause_rows(false,true),
+    assert_eq!(pause_rows(false,true,true),
         &[PauseRow::SaveEject,PauseRow::Multiplayer]);
     for (linked,needs_eject) in [(false,false),(true,false),(false,true),(true,true)] {
-        for (index,item) in pause_rows(linked,needs_eject).iter().enumerate() {
+        for (index,item) in pause_rows(linked,needs_eject,true).iter().enumerate() {
             assert_eq!(game_menu_ejects(index,linked,needs_eject),
                 *item==PauseRow::SaveEject,
                 "never save/eject from States, Settings or Multiplayer");
@@ -212,9 +212,18 @@ fn eject_to_play_solo_is_an_action_not_a_noop() {
     assert!(!game_menu_ejects(0,true,false));
     assert_eq!(pause_row_text(PauseRow::SaveEject,true),78);
     assert_eq!(pause_row_text(PauseRow::Settings,false),25);
-    assert!(!pause_rows(true,false).contains(&PauseRow::States));
+    assert!(!pause_rows(true,false,true).contains(&PauseRow::States));
+    // A system with no Multiplayer shows no Multiplayer row at all.
+    assert!(!pause_rows(false,false,false).contains(&PauseRow::Multiplayer));
+    for platform in [Platform::Gg, Platform::Ngp, Platform::Ws, Platform::Lynx, Platform::Pokemini] {
+        assert!(!multiplayer_offered(platform), "{platform:?}");
+    }
+    for platform in [Platform::Gb, Platform::Gbc, Platform::Gba, Platform::Nes, Platform::Snes,
+        Platform::Md, Platform::Sms] {
+        assert!(multiplayer_offered(platform), "{platform:?}");
+    }
     // Cheats belong to a solo game: none while linked.
-    assert!(!pause_rows(true,false).contains(&PauseRow::Cheats));
+    assert!(!pause_rows(true,false,true).contains(&PauseRow::Cheats));
     assert_eq!(MENU_TEXT[pause_row_text(PauseRow::Cheats,false)],"Cheats");
 }
 

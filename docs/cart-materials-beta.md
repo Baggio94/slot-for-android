@@ -40,6 +40,15 @@ Siham compared both renders and kept the best of each:
   one flat plastic with the frame.
 - The disk cache of cart faces redraws the six 3.0 systems once.
 
+## materials3
+
+- Master System (`assets/home/sms_neutral.png`): the photo grain under the ribs
+  is gone; the body is one flat plastic, the ribs and the side and bottom rims
+  keep their relief without speckles.
+- Pokemon mini: rc2's frosted clear plastic again (only the recalibrated special
+  moulds keep the more translucent one).
+- The disk cache key moves to `materials-3`, so the 3.0 faces are drawn again.
+
 ## Label registration
 
 Logical pixels (panel-density scaling is applied by the renderer):

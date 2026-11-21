@@ -826,12 +826,14 @@ impl GameSession {
             // scale that leaves the screen a whole multiple (KPA: 5x, then
             // x2), else 4x as RetroArch.
             Core::PokeMini => {
-                core.set_option("pokemini_lcdfilter",
-                    crate::settings::pokemini_lcd_filter_option(crate::settings::POKEMINI_LCD_FILTER
-                        .load(std::sync::atomic::Ordering::Acquire)));
                 let scale = crate::video_mode::pokemini_scale(crate::runtime::panel_size());
                 core.set_option("pokemini_video_scale", &format!("{scale}x"));
             }
+        }
+        // The 3.0 systems' own options from Settings > Systems (sprite
+        // limit, language, palettes, the Pokemon mini's LCD).
+        for (key, value) in crate::settings::CoreExtras::current().options(platform, which) {
+            core.set_option(key, value);
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
@@ -1992,6 +1994,14 @@ impl GameSession {
         } else if self.palette_live {
             self.set_core_option("mgba_gb_colors_preset", "0");
             self.set_core_option("mgba_gb_colors", name);
+        }
+    }
+
+    /// The 3.0 systems' own options changed in game: the core takes them
+    /// at its next frame, without restarting.
+    pub fn apply_core_extras(&mut self, extras: crate::settings::CoreExtras, platform: Platform) {
+        for (key, value) in extras.options(platform, self.core_kind) {
+            self.set_core_option(key, value);
         }
     }
 

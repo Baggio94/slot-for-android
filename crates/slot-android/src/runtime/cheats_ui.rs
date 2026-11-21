@@ -110,7 +110,7 @@ impl Engine {
                 let linked = self.game.as_ref().is_some_and(GameSession::linked);
                 let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
                 self.overlay = ShelfOverlay::GameMenu {
-                    row: pause_rows(linked, relaunch).iter()
+                    row: pause_rows(linked, relaunch, self.multiplayer_offered()).iter()
                         .position(|item| *item == PauseRow::Cheats).unwrap_or(0),
                 };
                 self.cheat_sources = Vec::new();

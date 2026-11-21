@@ -109,15 +109,12 @@ pub(crate) fn clean_outline(m: HomeMould, w: u32, h: u32) -> Option<Vec<u8>> {
 
 /// Keep the original map's cutouts (mini cap), with denser plastic at reliefs.
 pub(crate) fn clear_alpha(m: HomeMould, mapped: u8, shade: u8) -> u8 {
-    // Standard moulds keep rc2's clear plastic; the Pokemon mini and the
-    // recalibrated special moulds get the more translucent one.
-    if !(calibrated(m) || m == HomeMould::PokemonMini) { return mapped; }
+    // Standard moulds and the Pokemon mini keep rc2's frosted clear plastic
+    // (Siham 2026-11-22); the recalibrated special moulds get the more
+    // translucent one.
+    if !calibrated(m) { return mapped; }
     if mapped == 0 { return 0; }
-    let (base, original) = match m {
-        HomeMould::PokemonMini => (148u32, 230u32),
-        HomeMould::WonderSwanColor => (146, 204),
-        _ => (162, 204),
-    };
+    let (base, original) = (162u32, 204u32);
     let thickness = u32::from(shade.abs_diff(128)) / 2;
     ((u32::from(mapped) * base + original / 2) / original + thickness).min(220) as u8
 }

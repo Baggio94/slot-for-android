@@ -35,7 +35,7 @@ impl DiskCache {
         // (3.0.0-materials2); the other systems keep their faces.
         use slot_store::Platform::*;
         if matches!(cart.platform, Sms | Gg | Ngp | Ws | Lynx | Pokemini) {
-            input.extend_from_slice(b"materials-2");
+            input.extend_from_slice(b"materials-3");
         }
         // A cart with no label is written by hand since 2.4.1: its old face
         // (a printed text label) is drawn again, the others are kept.

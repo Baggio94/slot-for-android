@@ -501,6 +501,14 @@ impl Studio {
         }
     }
 
+    /// The cart's size on the page: its preview's, or before the preview is
+    /// ready the size the preview will have, so the rows stand where
+    /// they stay from the page's first frame (Siham 2026-11-22: the Game
+    /// Gear's rows slid left once its preview came).
+    fn cart_size(&self) -> (u32, u32) {
+        self.preview.map(|(_, w, h)| (w, h)).unwrap_or_else(|| slot_ui::cart_box_for(&self.draft_cart()))
+    }
+
     /// The rows this cart has: Shape only when its system has several.
     fn rows(&self) -> Vec<usize> {
         let mut rows = vec![ROW_LABEL, ROW_BACKGROUND, ROW_COLOUR, ROW_FINISH];
@@ -746,7 +754,9 @@ impl Engine {
         // press) for its place on the page.
         let pressed = self.press_lift() > 0.0;
         let flight = shelf.selected_rect().zip(shelf.face(shelf.index)).map(|((x, y, w, h), tex)| {
-            let (cw, ch) = slot_ui::shelf_box_for(&cart);
+            // The size the page's preview will have: the cart lands where
+            // it stays (Siham 2026-11-22).
+            let size = slot_ui::cart_box_for(&cart);
             // A long press has lifted it already; X lifts it first.
             let (from, lifted, lead) = if pressed {
                 let lifted = self.lifted([x, y, w, h]);
@@ -760,7 +770,7 @@ impl Engine {
                 from,
                 lifted,
                 lead,
-                to: studio_cart_rect(((cw * 10.0) as u32, (ch * 10.0) as u32)),
+                to: studio_cart_rect(size),
                 tex,
             }
         });
@@ -1085,7 +1095,7 @@ impl Engine {
     /// cart (a shape changed in this page) leaves less room above the
     /// legend (Siham 2026-11-19). The same lines for prepare and draw.
     pub(super) fn studio_name_lines(&self, studio: &Studio) -> (Vec<String>, f32) {
-        let layout = studio_layout(studio.preview.map(|(_, w, h)| (w, h)));
+        let layout = studio_layout(Some(studio.cart_size()));
         let below = layout.cart_y + layout.cart_h + 12.0;
         let line_h = self.controls_faces.get(&Self::face_key("CART STUDIO", true))
             .map(|&(_, _, h)| super::romm::caption_line_h(h, STUDIO_NAME_SCALE));
@@ -1236,7 +1246,7 @@ impl Engine {
         self.draw_page_title(out, "CART STUDIO", fade);
         // The cart and the rows as one block, centred, with a clear gap.
         let split = (width * 0.5).round();
-        let layout = studio_layout(studio.preview.map(|(_, w, h)| (w, h)));
+        let layout = studio_layout(Some(studio.cart_size()));
         let (left, right_edge) = (layout.cart_x, layout.cart_x + layout.cart_room);
         let mut below = 300.0;
         let mut cart_top = ROWS_TOP;

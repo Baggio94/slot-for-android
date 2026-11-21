@@ -55,7 +55,8 @@ fn mini_clear_cap_and_body_reveal_the_same_board_without_fading_the_sticker() {
     let glass = front(&clear);
     let plastic = front(&solid);
     for (x,y) in [(156,40), (156,275)] {
-        assert!((120..195).contains(&pixel(&glass,x,y)[3]));
+        // rc2's frosted plastic (Siham 2026-11-22): see-through, not glass.
+        assert!((120..240).contains(&pixel(&glass,x,y)[3]));
         assert_eq!(pixel(&plastic,x,y)[3], 255);
     }
     assert_eq!(slot_ui::cart_backing(&clear).rgba, slot_ui::cart_backing(&solid).rgba);
@@ -74,7 +75,7 @@ fn clipped_label_corners_have_no_ink_visible_through_clear_plastic() {
         let b = slot_ui::cart_face_with(&c, Some([0,255,0,255].repeat((w*h) as usize)));
         let y = if m == HomeMould::PokemonMini { ly+h-2 } else { ly };
         assert_eq!(pixel(&a,lx,y), pixel(&b,lx,y), "{m:?}: no sticker ink outside the cut");
-        assert!(pixel(&a,lx,y)[3] < 220);
+        assert!(pixel(&a,lx,y)[3] < 240);
         assert_eq!(pixel(&a,lx+w/2,ly+h/2)[3], 255);
     }
 }
