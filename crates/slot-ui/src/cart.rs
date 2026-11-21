@@ -518,7 +518,9 @@ pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
         Some(rgba) => rgba,
         None => generated_label(&s, &label_text(cart)),
     };
-    let bare = scanned.then(|| face.rgba.clone());
+    // The plastic as a cart with no label has it, for the edges laid back
+    // over a real label.
+    let bare = scanned.then(|| shell_face_of(&s, &shell_for(cart), true).rgba);
     paste_label(&s, &mut face, &label);
     if let Body::Home(_) = s.body {
         shade_label_well(&s, &mut face);
@@ -609,12 +611,17 @@ pub fn handwritten_label_art(cart: &Cart) -> (Vec<u8>, u32, u32) {
 fn shade_label_well(s: &Spec, face: &mut CartFace) {
     let (lx, ly, lw, lh) = s.label;
     let k = density::scale();
-    let (x0, y0, x1, y1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    let (x0, y0, x1, y1) = (px(lx), px(ly), px(lx) + px(lw), px(ly) + px(lh));
     let fw = px(s.w);
+    // A shaped well (the Pokemon mini's curved foot, the Game Gear's round
+    // corners): no shade where its plastic rises over the label's box.
+    let shaped = match s.body { Body::Home(m) => Some(m), _ => None };
     for y in y0..y1.min(px(s.h)) {
         for x in x0..x1.min(fw) {
             let d = ((x - x0).min(y - y0) as f32) / k;
-            let shade = 0.28 * (1.0 - d / 6.0).max(0.0);
+            let outside = shaped.map_or(0.0, |m| label_frame(m,
+                (x - x0) as f32 / k, (y - y0) as f32 / k, lw as f32, lh as f32));
+            let shade = 0.28 * (1.0 - d / 6.0).max(0.0) * (1.0 - outside);
             if shade <= 0.0 {
                 continue;
             }
@@ -658,7 +665,10 @@ fn label_frame(m: HomeMould, x: f32, y: f32, w: f32, h: f32) -> f32 {
 fn frame_over_label(s: &Spec, m: HomeMould, face: &mut CartFace, bare: &[u8]) {
     let (lx, ly, lw, lh) = s.label;
     let k = density::scale();
-    let (x0, y0, x1, y1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    // The very texels paste_label covered, so no row of the label is left
+    // out at the bottom or the right.
+    let (x0, y0) = (px(lx), px(ly));
+    let (x1, y1) = (x0 + px(lw), y0 + px(lh));
     let (fw, fh) = (px(s.w), px(s.h));
     let (w, h) = (lw as f32, lh as f32);
     for y in y0..y1.min(fh) {
@@ -683,19 +693,15 @@ fn frame_over_label(s: &Spec, m: HomeMould, face: &mut CartFace, bare: &[u8]) {
                 }
                 continue;
             }
-            // The plastic: what lies just past the well's nearest side.
-            let (dl, dr, dt, db) = (x - x0, x1 - 1 - x, y - y0, y1 - 1 - y);
-            let reach = 2 * k.ceil() as u32 + 1;
-            let (sx, sy) = match dl.min(dr).min(dt).min(db) {
-                d if d == db && m == HomeMould::PokemonMini => (x, (y1 + reach).min(fh - 1)),
-                d if d == dl => (x0.saturating_sub(reach), y),
-                d if d == dr => ((x1 + reach).min(fw - 1), y),
-                d if d == dt => (x, y0.saturating_sub(reach)),
-                _ => (x, (y1 + reach).min(fh - 1)),
-            };
-            let j = ((sy * fw + sx) * 4) as usize;
+            // The plastic itself at this very texel, as the cart without a
+            // label has it (colour, flecks, frost, clearness: Siham
+            // 2026-11-21), laid over the label: clear plastic shows the
+            // label through it.
+            let a = bare[i + 3] as f32 / 255.0;
             for c in 0..3 {
-                face.rgba[i + c] = (bare[j + c] as f32 * cover + face.rgba[i + c] as f32 * (1.0 - cover)).round() as u8;
+                let label = face.rgba[i + c] as f32;
+                let over = bare[i + c] as f32 * a + label * (1.0 - a);
+                face.rgba[i + c] = (over * cover + label * (1.0 - cover)).round() as u8;
             }
         }
     }
@@ -848,7 +854,7 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
     }
     if let Mould::Home(m) = s.mould {
         if let Some(decal) = home::dense_decal(m) {
-            blend_over(&mut rgba, &decal);
+            blend_over(&mut rgba, &tinted_decal(m, &decal, shell.colour));
         }
     }
     if shell.finish.has_flecks() {
@@ -874,6 +880,48 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
         w: s.w,
         h: s.h,
     }
+}
+
+/// The parts of a mould's decal that are its plastic take the cart's colour
+/// as the shell does (Siham 2026-11-21): the WonderSwan's guide tabs beside
+/// its contacts, the Lynx's lip over them, the Pokemon mini's frosted cap.
+/// Boards, contacts and printing keep their own colours.
+fn tinted_decal(m: HomeMould, decal: &[u8], colour: [u8; 3]) -> std::borrow::Cow<'_, [u8]> {
+    // Grey plastic of the decal: its usual grey and where the shell's mid
+    // grey sits for it (the tabs a little lighter than the body, the lip a
+    // little darker).
+    let (grey, at) = match m {
+        HomeMould::WonderSwan | HomeMould::WonderSwanColor => (172i32, 140i32),
+        HomeMould::Lynx => (47, 100),
+        HomeMould::PokemonMini => {
+            let mut out = decal.to_vec();
+            for px in out.chunks_exact_mut(4) {
+                if px[3] == 0 { continue; }
+                let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
+                let sat = px[0].max(px[1]).max(px[2]) - px[0].min(px[1]).min(px[2]);
+                // The screws' dark holes stay as they are.
+                if l < 150 && sat < 18 { continue; }
+                let base = (128 + (l - 225)).clamp(0, 255) as u8;
+                for c in 0..3 {
+                    // Frosted: the plastic's colour, most of the way to white.
+                    let tinted = overlay(base, colour[c]) as u32;
+                    px[c] = ((tinted * 40 + 255 * 60 + 50) / 100) as u8;
+                }
+            }
+            return std::borrow::Cow::Owned(out);
+        }
+        _ => return std::borrow::Cow::Borrowed(decal),
+    };
+    let mut out = decal.to_vec();
+    for px in out.chunks_exact_mut(4) {
+        if px[3] == 0 { continue; }
+        let sat = px[0].max(px[1]).max(px[2]) - px[0].min(px[1]).min(px[2]);
+        if sat >= 18 { continue; }
+        let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
+        let base = (at + (l - grey) * 4 / 5).clamp(0, 255) as u8;
+        for c in 0..3 { px[c] = overlay(base, colour[c]); }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 fn fleck(x: u32, y: u32) -> bool {

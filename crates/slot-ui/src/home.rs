@@ -236,7 +236,14 @@ pub fn home_shell(platform: Platform, stem: &str, region: &str, maker: &str) -> 
         Platform::Gba | Platform::Gb | Platform::Gbc => return None,
     };
     let (mould, colour, glitter) = home_pick(system, stem, region, maker);
-    let finish = if glitter { ShellFinish::Glitter } else { ShellFinish::Solid };
+    // Every Pokemon mini cart is clear plastic, its cap frosted.
+    let finish = if glitter {
+        ShellFinish::Glitter
+    } else if system == HomeSystem::PokemonMini {
+        ShellFinish::Clear
+    } else {
+        ShellFinish::Solid
+    };
     Some(ShellChoice { outline: mould.outline(), colour, finish })
 }
 
