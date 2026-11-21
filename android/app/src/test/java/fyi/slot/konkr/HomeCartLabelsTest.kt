@@ -3,6 +3,7 @@ package fyi.slot.konkr
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.util.zip.CRC32
@@ -64,6 +65,19 @@ class HomeCartLabelsTest {
         assertEquals(false, HomeCartLabels.recut(JSONObject().put(vr.uri, "md_vr"), vr))
         assertEquals(true, HomeCartLabels.recut(JSONObject().put(vr.uri, "md"), vr))
         assertEquals(false, HomeCartLabels.recut(JSONObject(), vr))
+    }
+
+    @Test
+    fun the30SystemsTakeEveryRegionsLabel() {
+        assertEquals("jp", HomeCartLabels.labelRegions(rom(Systems.WS, "Gunpey (Japan)")).first())
+        assertEquals("us", HomeCartLabels.labelRegions(rom(Systems.GG, "Aladdin (USA)")).first())
+        assertEquals("eu", HomeCartLabels.labelRegions(rom(Systems.GG, "Aladdin (Europe)")).first())
+        // A western cart still takes the Japanese label when it's the only one.
+        assertTrue("jp" in HomeCartLabels.labelRegions(rom(Systems.NGP, "Metal Slug - 1st Mission (World)")))
+        assertTrue(Systems.LYNX in HomeCartLabels.LABEL_PLATFORMS)
+        assertEquals(listOf("NGP", "NGPC"), Systems.artKeys(Systems.NGP))
+        assertEquals(listOf("WS", "WSC"), Systems.artKeys(Systems.WS))
+        assertEquals(listOf("GG"), Systems.artKeys(Systems.GG))
     }
 
     @Test

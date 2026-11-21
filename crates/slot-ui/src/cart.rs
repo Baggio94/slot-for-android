@@ -277,9 +277,25 @@ fn mask_of(s: &Spec) -> std::borrow::Cow<'static, [u8]> {
 fn label_art(cart: &Cart, w: u32, h: u32) -> Option<Vec<u8>> {
     let path = cart.label.as_deref()?;
     match body_of(cart) {
-        Body::Home(_) => art::fit_label(path, w, h),
+        Body::Home(m) => {
+            let (src, sw, sh) = art::decode(path)?;
+            label_fits(m, sw, sh).then(|| art::fit_label_rgba(&src, sw, sh, w, h)).flatten()
+        }
         _ => art::cover(path, w, h),
     }
+}
+
+/// Whether a label picture has its well's shape near enough: a 3.0 cart
+/// keeps its title by hand rather than wear another cart's label (a
+/// Master System front label on the end of a western cart, whose well is
+/// the strip on its top).
+fn label_fits(m: HomeMould, sw: u32, sh: u32) -> bool {
+    if m.index() < HomeMould::NeoGeoPocket.index() || sw == 0 || sh == 0 {
+        return true;
+    }
+    let (_, _, lw, lh) = m.art().label;
+    let ratio = (sw as f32 / sh as f32) / (lw as f32 / lh as f32);
+    (1.0 / 1.6..=1.6).contains(&ratio)
 }
 
 /// Cart Studio: a label picture of any size (straight RGBA) fitted to this
@@ -497,13 +513,18 @@ pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
         return face;
     }
     let mut face = shell_face(&s, &shell_for(cart));
+    let scanned = art.is_some();
     let label = match art {
         Some(rgba) => rgba,
         None => generated_label(&s, &label_text(cart)),
     };
+    let bare = scanned.then(|| face.rgba.clone());
     paste_label(&s, &mut face, &label);
     if let Body::Home(_) = s.body {
         shade_label_well(&s, &mut face);
+    }
+    if let (Some(bare), Body::Home(m)) = (bare, s.body) {
+        frame_over_label(&s, m, &mut face, &bare);
     }
     clip_to_silhouette(&s, &mut face);
     face
@@ -600,6 +621,81 @@ fn shade_label_well(s: &Spec, face: &mut CartFace) {
             let i = ((y * fw + x) * 4) as usize;
             for c in 0..3 {
                 face.rgba[i + c] = (face.rgba[i + c] as f32 * (1.0 - shade)).round() as u8;
+            }
+        }
+    }
+}
+
+/// How much of a real label the plastic around it covers, in the label's
+/// logical pixels, at (x, y) from its top left: 0 where the label shows, 1
+/// under the plastic. The Game Gear's recess has round corners and the
+/// Pokemon mini's a curved foot; the scans show the scanner's ground or the
+/// cart's own plastic there (Siham 2026-11-21).
+fn label_frame(m: HomeMould, x: f32, y: f32, w: f32, h: f32) -> f32 {
+    match m {
+        HomeMould::GameGear | HomeMould::GameGearCodemasters => {
+            // A rim over every edge, rounder in the corners; the lower
+            // corners less round (Siham 2026-11-21).
+            let e = 3.0;
+            let r = if y > h / 2.0 { 8.0 } else { 14.0 };
+            let cx = x.clamp(e + r, w - e - r);
+            let cy = y.clamp(e + r, h - e - r);
+            let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+            (d - r + 0.5).clamp(0.0, 1.0)
+        }
+        HomeMould::PokemonMini => {
+            let t = (2.0 * x / w - 1.0).abs();
+            let foot = h - 2.0 - 0.21 * h * t.powf(2.6);
+            let side = (1.5 - x).max(x - (w - 1.5));
+            (y - foot + 0.5).max(side + 0.5).clamp(0.0, 1.0)
+        }
+        _ => 0.0,
+    }
+}
+
+/// The plastic around a real label laid back over its edges (see
+/// `label_frame`), the label shaded where it slips under.
+fn frame_over_label(s: &Spec, m: HomeMould, face: &mut CartFace, bare: &[u8]) {
+    let (lx, ly, lw, lh) = s.label;
+    let k = density::scale();
+    let (x0, y0, x1, y1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    let (fw, fh) = (px(s.w), px(s.h));
+    let (w, h) = (lw as f32, lh as f32);
+    for y in y0..y1.min(fh) {
+        for x in x0..x1.min(fw) {
+            let (fx, fy) = ((x - x0) as f32 / k, (y - y0) as f32 / k);
+            let cover = label_frame(m, fx, fy, w, h);
+            // The label's shade just inside the plastic's edge.
+            let near = (0..=6)
+                .map(|step| label_frame(m, fx, fy - step as f32 * 0.5, w, h)
+                    .max(label_frame(m, fx - step as f32 * 0.5, fy, w, h))
+                    .max(label_frame(m, fx + step as f32 * 0.5, fy, w, h)))
+                .enumerate()
+                .find(|(_, c)| *c > 0.5)
+                .map(|(step, _)| 0.30 * (1.0 - step as f32 / 7.0))
+                .unwrap_or(0.0);
+            let i = ((y * fw + x) * 4) as usize;
+            if cover <= 0.0 {
+                if near > 0.0 {
+                    for c in 0..3 {
+                        face.rgba[i + c] = (face.rgba[i + c] as f32 * (1.0 - near)).round() as u8;
+                    }
+                }
+                continue;
+            }
+            // The plastic: what lies just past the well's nearest side.
+            let (dl, dr, dt, db) = (x - x0, x1 - 1 - x, y - y0, y1 - 1 - y);
+            let reach = 2 * k.ceil() as u32 + 1;
+            let (sx, sy) = match dl.min(dr).min(dt).min(db) {
+                d if d == db && m == HomeMould::PokemonMini => (x, (y1 + reach).min(fh - 1)),
+                d if d == dl => (x0.saturating_sub(reach), y),
+                d if d == dr => ((x1 + reach).min(fw - 1), y),
+                d if d == dt => (x, y0.saturating_sub(reach)),
+                _ => (x, (y1 + reach).min(fh - 1)),
+            };
+            let j = ((sy * fw + sx) * 4) as usize;
+            for c in 0..3 {
+                face.rgba[i + c] = (bare[j + c] as f32 * cover + face.rgba[i + c] as f32 * (1.0 - cover)).round() as u8;
             }
         }
     }
@@ -901,5 +997,39 @@ mod dense_tests {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod real_label_tests {
+    use super::*;
+
+    #[test]
+    fn a_3_0_cart_takes_only_a_label_of_its_wells_shape() {
+        // Game Gear: its scans (600x437) fit; a portrait one does not.
+        assert!(label_fits(HomeMould::GameGear, 600, 437));
+        assert!(!label_fits(HomeMould::GameGear, 300, 600));
+        // The western Master System's well is the strip on its top.
+        assert!(label_fits(HomeMould::MasterSystem, 690, 100));
+        assert!(!label_fits(HomeMould::MasterSystem, 400, 600));
+        // The other moulds keep fitting any picture, as before.
+        assert!(label_fits(HomeMould::MegaDriveSk, 400, 600));
+    }
+
+    #[test]
+    fn the_plastic_covers_the_game_gear_corners_and_the_pokemon_minis_foot() {
+        let (w, h) = (256.0, 185.0);
+        let gg = |x, y| label_frame(HomeMould::GameGear, x, y, w, h);
+        assert_eq!(gg(0.5, 0.5), 1.0);
+        assert_eq!(gg(w / 2.0, h / 2.0), 0.0);
+        assert_eq!(gg(w / 2.0, 1.0), 1.0, "a rim over the edge");
+        // The lower corners are less round than the upper ones.
+        assert!(gg(6.0, h - 6.0) < gg(6.0, 6.0));
+        let mini = |x, y| label_frame(HomeMould::PokemonMini, x, y, 274.0, 149.0);
+        assert_eq!(mini(137.0, 100.0), 0.0);
+        assert_eq!(mini(10.0, 140.0), 1.0, "the foot curves up at the sides");
+        assert_eq!(mini(137.0, 140.0), 0.0);
+        // Other moulds' labels stay whole.
+        assert_eq!(label_frame(HomeMould::Lynx, 0.0, 0.0, 302.0, 211.0), 0.0);
     }
 }

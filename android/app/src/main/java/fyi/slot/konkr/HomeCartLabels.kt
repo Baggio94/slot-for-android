@@ -19,7 +19,8 @@ import java.util.Locale
 import java.util.zip.CRC32
 
 /**
- * Automatic labels for NES / Famicom, Super Nintendo and Mega Drive carts,
+ * Automatic labels for the home systems' carts (NES / Famicom, Super
+ * Nintendo, Mega Drive and the 3.0 systems),
  * from ScreenScraper (jeuInfos.php by CRC, then name and size), with slot.'s
  * own developer credentials: the label scan ("support-texture") of the
  * region the shell is drawn in, else the label cut out of the cart's
@@ -59,9 +60,13 @@ internal object HomeCartLabels {
 
     internal data class Media(val type: String, val region: String, val url: String)
 
-    /** The home systems whose real labels slot. fetches: the Master System's
-     *  and the Game Gear's wait for their label wells (3.0 roadmap, labels). */
-    internal val LABEL_PLATFORMS = setOf(Systems.NES, Systems.SNES, Systems.MD)
+    /** The 3.0 systems: one shell per system, so any region's label fits
+     *  (Japanese ones too: most WonderSwan and Neo Geo Pocket games are). */
+    private val NEW_LABEL_PLATFORMS = setOf(
+        Systems.SMS, Systems.GG, Systems.NGP, Systems.WS, Systems.LYNX, Systems.POKEMINI)
+
+    /** The home systems whose real labels slot. fetches. */
+    internal val LABEL_PLATFORMS = setOf(Systems.NES, Systems.SNES, Systems.MD) + NEW_LABEL_PLATFORMS
 
     /** ScreenScraper's system ids. */
     internal fun systemId(platform: String): Int? =
@@ -166,6 +171,13 @@ internal object HomeCartLabels {
     internal fun labelRegions(rom: Rom): List<String> {
         val europe = listOf("eu", "fr", "de", "uk", "sp", "it", "nl", "se", "au")
         val regions = nameRegions(rom.filename.ifBlank { rom.title })
+        if (rom.platform in NEW_LABEL_PLATFORMS) {
+            val japanOnly = regions?.let { it.first && !it.second && !it.third } ?: (rom.region == "J")
+            val west = if (regions?.second == true && regions.third != true)
+                listOf("us", "wor") + europe else europe + listOf("us", "wor")
+            return if (japanOnly) listOf("jp") + west + listOf("asi", "kr", "ss")
+            else west + listOf("ss", "jp", "asi", "kr")
+        }
         return when (shell(rom)) {
             "fc", "md_jp" -> listOf("jp")
             "snes_us", "md_ea" -> listOf("us")

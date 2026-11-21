@@ -64,6 +64,15 @@ internal object Systems {
     /** Every shelf key, in the native side's order. */
     val PLATFORMS: List<String> = TABLE.map { it.platform }
 
+    /** The art set's indexes a shelf reads, in order: the Neo Geo Pocket's
+     *  and the WonderSwan's shelves hold their Color carts too, which the
+     *  set files apart (NGPC, WSC). */
+    fun artKeys(platform: String): List<String> = when (platform) {
+        NGP -> listOf(NGP, "NGPC")
+        WS -> listOf(WS, "WSC")
+        else -> listOf(platform)
+    }
+
     fun row(platform: String?): SystemRow? = TABLE.firstOrNull { it.platform == platform }
 
     /** Every cartridge extension, without the .zip container. */
