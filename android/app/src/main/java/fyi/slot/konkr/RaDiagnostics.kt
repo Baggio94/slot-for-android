@@ -34,6 +34,9 @@ internal object RaDiagnostics {
         val indexedNes: Int? = null, val cachedNes: Int? = null,
         val indexedSnes: Int? = null, val cachedSnes: Int? = null,
         val indexedMd: Int? = null, val cachedMd: Int? = null,
+        /** Every system's games, by RetroAchievements console id (the 3.0
+         *  systems' rows read these). */
+        val indexedBy: Map<Int, Int>? = null, val cachedBy: Map<Int, Int>? = null,
     )
 
     private data class PatchEntry(
@@ -227,6 +230,8 @@ internal object RaDiagnostics {
             cachedSnes = if (games != null) cachedByConsole.getValue(3) else null,
             indexedMd = if (games != null) indexedByConsole.getValue(1) else null,
             cachedMd = if (games != null) cachedByConsole.getValue(1) else null,
+            indexedBy = if (games != null) HashMap(indexedByConsole) else null,
+            cachedBy = if (games != null) HashMap(cachedByConsole) else null,
             pendingAwards = pending,
             recordedAwards = recorded,
             warning = warning,
@@ -301,6 +306,8 @@ internal object RaDiagnostics {
             cachedSnes = if (games != null) cachedByConsole.getValue(3) else null,
             indexedMd = if (games != null) indexedByConsole.getValue(1) else null,
             cachedMd = if (games != null) cachedByConsole.getValue(1) else null,
+            indexedBy = if (games != null) HashMap(indexedByConsole) else null,
+            cachedBy = if (games != null) HashMap(cachedByConsole) else null,
             pendingAwards = pending,
             recordedAwards = recorded,
             warning = warning,

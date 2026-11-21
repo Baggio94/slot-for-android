@@ -1047,10 +1047,11 @@ fn copy_gb_achievement_map(
     filled
 }
 
-/// Where RetroAchievements reads the home consoles (rcheevos console maps):
-/// the work RAM from 0 and the cart's battery RAM after it. NES: 2 KiB RAM
-/// mirrored up to 0x2000, cart RAM at 0x6000. SNES: 128 KiB WRAM, cart RAM
-/// at 0x20000. Mega Drive: 64 KiB 68000 RAM, cart RAM at 0x10000.
+/// Where RetroAchievements reads the home consoles and the 3.0 handhelds
+/// (rcheevos console maps): the work RAM from 0 and the cart's battery RAM
+/// after it. NES: 2 KiB RAM mirrored up to 0x2000, cart RAM at 0x6000.
+/// SNES: 128 KiB WRAM, cart RAM at 0x20000. Mega Drive: 64 KiB 68000 RAM,
+/// cart RAM at 0x10000.
 struct HomeMap {
     ram: usize,
     mirror_to: usize,
@@ -1066,6 +1067,17 @@ fn home_map(console: u32) -> Option<HomeMap> {
         7 => Some(HomeMap { ram: 0x800, mirror_to: 0x2000, save_at: 0x6000, save_max: 0x2000, bus: 0 }),
         3 => Some(HomeMap { ram: 0x20000, mirror_to: 0x20000, save_at: 0x20000, save_max: 0x20000, bus: 0x7e0000 }),
         1 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0x10000, bus: 0xff0000 }),
+        // Master System and Game Gear: 8 KiB RAM, cart RAM at 0x2000 (32 KiB).
+        11 | 15 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0x8000, bus: 0xc000 }),
+        // Neo Geo Pocket: 16 KiB RAM (0x4000 on the bus), nothing after.
+        14 => Some(HomeMap { ram: 0x4000, mirror_to: 0x4000, save_at: 0x4000, save_max: 0, bus: 0x4000 }),
+        // Lynx: its 64 KiB RAM.
+        13 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0, bus: 0 }),
+        // Pokemon mini: 8 KiB, as RetroArch lays PokeMini's RAM.
+        24 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0, bus: 0 }),
+        // WonderSwan: 64 KiB RAM, cart RAM at 0x10000 (as far as the
+        // 256 KiB window reaches: 192 KiB).
+        53 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0x30000, bus: 0 }),
         _ => None,
     }
 }
@@ -1723,6 +1735,16 @@ mod tests {
         assert_eq!(ram[0x8000 + 0x8000], 0xEE);
         let malformed = test_ra_descriptor(&mut ewram, 0x03000000, usize::MAX - 2, 0x8000);
         assert_eq!(copy_gba_achievement_map(&[malformed], &mut ram), [0, 0, 0]);
+    }
+
+    #[test]
+    fn every_home_map_fits_the_achievement_window() {
+        for console in [1, 3, 7, 11, 13, 14, 15, 24, 53] {
+            let map = home_map(console).expect("mapped console");
+            assert!(map.ram <= map.mirror_to && map.mirror_to <= map.save_at, "{console}");
+            assert!(map.save_at + map.save_max <= 0x40000, "{console}");
+        }
+        assert!(home_map(5).is_none() && home_map(4).is_none());
     }
 
     #[test]

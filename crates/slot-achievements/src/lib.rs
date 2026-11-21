@@ -27,7 +27,10 @@ const COVERAGE_SIZE: usize = 0x40000;
 /// RetroAchievements console IDs slot. evaluates: Mega Drive 1, SNES 3,
 /// GB 4, GBA 5, GBC 6, NES 7.
 pub fn supported_console(console: u32) -> bool {
-    matches!(console, 1 | 3 | 4..=7)
+    // Mega Drive, SNES, GB, GBA, GBC, NES, then the 3.0 systems: Master
+    // System 11, Lynx 13, Neo Geo Pocket 14, Game Gear 15, Pokemon mini 24,
+    // WonderSwan 53.
+    matches!(console, 1 | 3 | 4..=7 | 11 | 13 | 14 | 15 | 24 | 53)
 }
 
 /// Whether a ROM run as `rom` can play `game`'s set: the same console, or a

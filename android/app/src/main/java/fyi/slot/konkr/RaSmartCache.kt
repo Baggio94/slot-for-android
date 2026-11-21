@@ -22,7 +22,12 @@ internal object RaSmartCache {
     private const val MAX_ROM_BYTES = 64L * 1024 * 1024
     private const val INDEX_FILE = "ra-smart-rom-index-v1.json"
 
-    internal data class Fingerprint(val size: Long, val modified: Long, val md5: String)
+    /** RetroAchievements' Lynx id. */
+    private const val LYNX_CONSOLE = 13
+
+    /** [lynxHeaderless]: hashed by 3.0-rc2 or later, a Lynx cart without its header. */
+    internal data class Fingerprint(val size: Long, val modified: Long, val md5: String,
+                                    val lynxHeaderless: Boolean = true)
 
     internal fun canReuse(cached: Fingerprint?, size: Long, modified: Long): Boolean =
         cached != null && size > 0 && modified > 0 &&
@@ -52,6 +57,10 @@ internal object RaSmartCache {
                         if (console == 7 && length > 16 && buffer[0] == 'N'.code.toByte() &&
                             buffer[1] == 'E'.code.toByte() && buffer[2] == 'S'.code.toByte() &&
                             buffer[3] == 0x1a.toByte()) skip = 16
+                        // A .lnx Lynx cart: its 64-byte "LYNX" header is left out too.
+                        if (console == LYNX_CONSOLE && length > 64 && buffer[0] == 'L'.code.toByte() &&
+                            buffer[1] == 'Y'.code.toByte() && buffer[2] == 'N'.code.toByte() &&
+                            buffer[3] == 'X'.code.toByte() && buffer[4] == 0.toByte()) skip = 64
                     }
                     if (copier != null) {
                         val drop = (512 - consumed).coerceIn(0, length.toLong()).toInt()
@@ -84,7 +93,8 @@ internal object RaSmartCache {
                 val uri = item.optString("uri")
                 if (!uri.startsWith("content://")) continue
                 result[uri] = Fingerprint(item.optLong("size", -1),
-                    item.optLong("modified", -1), item.optString("md5"))
+                    item.optLong("modified", -1), item.optString("md5"),
+                    item.optBoolean("lynx_v2", false))
             }
             result
         } catch (_: Exception) {
@@ -96,7 +106,8 @@ internal object RaSmartCache {
         val array = JSONArray()
         for ((uri, value) in entries) {
             array.put(JSONObject().put("uri", uri).put("size", value.size)
-                .put("modified", value.modified).put("md5", value.md5))
+                .put("modified", value.modified).put("md5", value.md5)
+                .put("lynx_v2", value.lynxHeaderless))
         }
         val data = JSONObject().put("schema", SCHEMA).put("root", tree)
             .put("entries", array).toString().toByteArray(Charsets.UTF_8)
@@ -144,8 +155,9 @@ internal object RaSmartCache {
             val size = item.optLong("size", -1)
             val modified = item.optLong("modified", -1)
             try {
+                // 3.0-rc1 fingerprinted Lynx carts with their header: hash them again.
                 val hash = existing[uriText]?.takeIf {
-                    canReuse(it, size, modified)
+                    canReuse(it, size, modified) && (console != LYNX_CONSOLE || it.lynxHeaderless)
                 }?.md5 ?: hashRom(context, Uri.parse(uriText),
                     item.optString("filename").ifBlank {
                         Uri.parse(uriText).lastPathSegment.orEmpty()

@@ -121,6 +121,14 @@ pub(crate) fn content_hash(path: &Path) -> Result<String, String> {
             if read == 4 && (&head == b"NES\x1a" || &head == b"FDS\x1a") { 16 } else { 0 }
         }
         "sfc" | "smc" if size % 0x2000 == 512 => 512,
+        // A .lnx Lynx cart carries a 64-byte "LYNX" header RetroAchievements
+        // leaves out (rc_hash), as No-Intro does.
+        "lnx" | "lyx" => {
+            let mut head = [0u8; 5];
+            let read = file.read(&mut head).map_err(|_| "Cannot read ROM")?;
+            file.seek(SeekFrom::Start(0)).map_err(|_| "Cannot read ROM")?;
+            if read == 5 && &head == b"LYNX\0" { 64 } else { 0 }
+        }
         _ => 0,
     };
     file.seek(SeekFrom::Start(skip)).map_err(|_| "Cannot read ROM")?;
