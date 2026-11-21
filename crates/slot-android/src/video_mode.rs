@@ -325,6 +325,25 @@ fn own_aspects(platform: Platform) -> &'static [f32] {
     }
 }
 
+/// The room a 3.0 system's own overlay has on `panel`, as a share of the
+/// screen's height: its side bar or band at Original Ratio, the widest of
+/// its shapes; 0 where it has none.
+pub fn own_room(platform: Platform, panel: (u32, u32)) -> f32 {
+    let (pw, ph) = (panel.0.max(1) as f32, panel.1.max(1) as f32);
+    own_aspects(platform).iter().filter_map(|&aspect| {
+        let (place, pic) = own_place(aspect, platform.picture(), VideoMode::Aspect, panel)?;
+        Some(match place {
+            Place::Side => pic[0] / ph,
+            Place::Band => (ph - pic[3]) / ph,
+        })
+    }).fold(0.0, f32::max).min(pw / ph)
+}
+
+/// Under this share of the height the bars are thin: the overlay is there
+/// but starts OFF, as NES, SNES and Mega Drive on 3:2 screens (Siham
+/// 2026-11-21).
+pub const OWN_ROOM_ON: f32 = 0.10;
+
 /// Where `bezel`'s Watomsk overlay goes (Siham's plan, 2026-11-03):
 /// GB/GBC beside the Original Ratio picture (not on near-square screens);
 /// GBA nowhere on 3:2, beside it on wider screens in Original Ratio
@@ -671,6 +690,20 @@ mod tests {
         assert_eq!(Bezel::WsAuto.own(true), Some(Design::WonderSwanColor));
         assert_eq!(Bezel::WsColor.own(false), Some(Design::WonderSwanColor));
         assert_eq!(watomsk_fit(Bezel::None, Platform::Ngp, VideoMode::Aspect, kpa, home), None);
+    }
+
+    #[test]
+    fn thin_bars_start_without_the_overlay() {
+        let thin = |platform, panel| own_room(platform, panel) < OWN_ROOM_ON;
+        // 90 px bars on 1080: the Master System on 3:2, the Pokemon mini on 5:3.
+        assert!(thin(Platform::Sms, (1620, 1080)));
+        assert!(thin(Platform::Pokemini, (1800, 1080)));
+        // Everything else keeps it: the WonderSwan's upright games, the Lynx on 16:9.
+        assert!(!thin(Platform::Ws, (1620, 1080)));
+        assert!(!thin(Platform::Lynx, (1920, 1080)));
+        assert!(!thin(Platform::Ngp, (1620, 1080)));
+        assert!(!thin(Platform::Sms, (1920, 1080)));
+        assert!(!thin(Platform::Pokemini, (1440, 1080)));
     }
 }
 

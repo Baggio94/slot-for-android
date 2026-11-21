@@ -1863,9 +1863,10 @@ impl Engine {
             retroid_pocket_classic: RPC_DEFAULT_RESPONSIVE.load(Ordering::Acquire),
             three_two: crate::settings::Device::is_three_two(size),
         };
-        let settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+        let mut settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| Settings::load_for_device(root, device))
             .unwrap_or_else(|| Settings::first_install_defaults_for_device(device));
+        settings.own_bezels_by_room(size);
         crate::settings::POKEMINI_LCD_FILTER.store(settings.pokemini_lcd_filter, Ordering::Release);
         // General's wallpaper too (a blur takes a moment): Default's mosaic
         // follows the shelf on screen, not known yet, and is made once the

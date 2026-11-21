@@ -573,6 +573,7 @@ struct DeviceSettings {
     #[serde(default="bezel_ws_default")] bezel_ws: Bezel,
     #[serde(default="bezel_lynx_default")] bezel_lynx: Bezel,
     #[serde(default="bezel_pokemini_default")] bezel_pokemini: Bezel,
+    #[serde(default)] own_bezels_room: bool,
     home_bezel_three_two: bool,
     responsive_loop: bool, run_ahead_frames: u8,
     rotate_game_cover: u8, rotate_shelf_cover: u8, rotate_dim: u8, rotate_sleep: u8,
@@ -587,6 +588,7 @@ impl DeviceSettings {
             bezel_nes: s.bezel_nes, bezel_snes: s.bezel_snes, bezel_md: s.bezel_md,
             bezel_sms: s.bezel_sms, bezel_gg: s.bezel_gg, bezel_ngp: s.bezel_ngp,
             bezel_ws: s.bezel_ws, bezel_lynx: s.bezel_lynx, bezel_pokemini: s.bezel_pokemini,
+            own_bezels_room: s.own_bezels_room,
             home_bezel_three_two: s.home_bezel_three_two,
             responsive_loop: s.responsive_loop, run_ahead_frames: s.run_ahead_frames,
             rotate_game_cover: s.rotate_game_cover, rotate_shelf_cover: s.rotate_shelf_cover,
@@ -789,6 +791,10 @@ pub struct Settings {
     /// 3.0 betas saved with none.
     #[serde(default)]
     pub lcd_3_0: bool,
+    /// Set once the 3.0 systems whose overlay has thin bars on this screen
+    /// were started without it (Siham 2026-11-21).
+    #[serde(default)]
+    pub own_bezels_room: bool,
     /// Frame Blending of each system (Systems > [system] > Frame Blending).
     #[serde(default)]
     pub blending_gba: Blending,
@@ -892,7 +898,7 @@ impl Default for Settings {
             show_recents: false, show_titles: false, test_shelf: false, touchscreen: true, home_bezel_three_two: false,
             pokemini_lcd_filter: 0,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
-            simpletex_gba_colour: false, lcd_3_0: false,
+            simpletex_gba_colour: false, lcd_3_0: false, own_bezels_room: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
             blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
             blending_sms: Blending::Off, blending_gg: Blending::Off,
@@ -1393,6 +1399,19 @@ impl Settings {
             slot_store::Platform::Lynx=>BEZEL_LYNX_KEY,
             slot_store::Platform::Pokemini=>BEZEL_POKEMINI_KEY,
         }
+    }
+    /// Once per handheld: a 3.0 system whose overlay would only have thin
+    /// bars on this screen starts with it OFF (the Master System on 3:2,
+    /// the Pokemon mini on 5:3), as NES, SNES and Mega Drive on 3:2.
+    pub fn own_bezels_by_room(&mut self, panel: (u32, u32)) {
+        if self.own_bezels_room { return; }
+        use slot_store::Platform as P;
+        for platform in [P::Sms, P::Gg, P::Ngp, P::Ws, P::Lynx, P::Pokemini] {
+            if crate::video_mode::own_room(platform, panel) < crate::video_mode::OWN_ROOM_ON {
+                self.set_bezel_for(platform, Bezel::None);
+            }
+        }
+        self.own_bezels_room = true;
     }
     /// The system a Bezel row's key belongs to.
     pub fn bezel_platform(key:usize)->Option<slot_store::Platform> {
