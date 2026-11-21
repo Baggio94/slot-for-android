@@ -37,7 +37,7 @@ internal object SaveDeletes {
     fun kindOf(path: String): Kind? {
         val parts = path.split('/')
         if (parts.size == 3 && parts[0] == "Saves" && parts[1] in RetroArchStorage.CORES &&
-            (parts[2].endsWith(".srm") || parts[2].endsWith(".rtc"))) return Kind.SAVE
+            (Systems.isSaveName(parts[2]) || parts[2].endsWith(".rtc"))) return Kind.SAVE
         if (parts.size == 3 && parts[0] == "States" && parts[1] in RetroArchStorage.CORES &&
             parts[2].endsWith(".state.auto")) return Kind.STATE
         if (parts.size == 2 && parts[0] == "Saves") {
@@ -59,7 +59,8 @@ internal object SaveDeletes {
             val parts = path.split('/')
             val ours = when {
                 parts.size == 3 -> parts[1] in (if (kind == Kind.SAVE) cores else setOf(core)) &&
-                    (parts[2] == "$stem.srm" || parts[2] == "$stem.rtc" || parts[2] == "$stem.state.auto")
+                    (parts[2] == "$stem.${Systems.saveExtension(parts[1])}" || parts[2] == "$stem.rtc" ||
+                        parts[2] == "$stem.state.auto")
                 else -> parts[1].startsWith("$id.$lower.") ||
                     (core == "mGBA" && parts[1] == "$id.state")
             }
@@ -114,8 +115,8 @@ internal object SaveDeletes {
     fun markRetroArch(files: File, path: String) {
         val parts = path.split('/')
         val marks = when {
-            parts.size == 3 && parts[2].endsWith(".srm") ->
-                listOf("${parts[1]}/${parts[2]}", "${parts[1]}/${parts[2].removeSuffix(".srm")}.rtc")
+            parts.size == 3 && Systems.isSaveName(parts[2]) ->
+                listOf("${parts[1]}/${parts[2]}", "${parts[1]}/${Systems.saveStem(parts[2])}.rtc")
             parts.size == 3 -> listOf("${parts[1]}/${parts[2]}")
             // slot.'s own state (or a generation of it), not its copies.
             parts.size == 2 && parts[1].endsWith(".state") -> {

@@ -51,13 +51,13 @@ internal object Systems {
         SystemRow(SNES, listOf("sfc", "smc"), listOf("snes", "sfc", "snesna"), listOf("snes", "sfam"), 3, 4, listOf("snes9x", "bsnes"), home = true),
         // .bin is shared with other systems: only a SEGA header makes it a Mega Drive cart.
         SystemRow(MD, listOf("md", "gen", "smd", "bin"), listOf("megadrive", "genesis", "megadrivejp"), listOf("genesis", "megadrive", "genesis-slash-megadrive", "sega-mega-drive"), 1, 1, listOf("genesis_plus_gx", "picodrive"), home = true),
-        SystemRow(SMS, listOf("sms"), listOf("mastersystem"), listOf("sms"), 11, 2, listOf("genesis_plus_gx", "gearsystem"), home = true),
+        SystemRow(SMS, listOf("sms"), listOf("mastersystem"), listOf("sms", "mastersystem", "master-system"), 11, 2, listOf("genesis_plus_gx", "gearsystem"), home = true),
         SystemRow(GG, listOf("gg"), listOf("gamegear"), listOf("gamegear"), 15, 21, listOf("genesis_plus_gx", "gearsystem"), home = true),
         // One shelf for both Neo Geo Pockets, one for both WonderSwans (Beetle Cygne only).
         SystemRow(NGP, listOf("ngp", "ngc", "ngpc"), listOf("ngp", "ngpc"), listOf("neo-geo-pocket", "neo-geo-pocket-color", "ngp", "ngpc"), 14, 25, listOf("mednafen_ngp", "race"), home = true),
         SystemRow(WS, listOf("ws", "wsc"), listOf("wonderswan", "wonderswancolor"), listOf("wonderswan", "wonderswan-color"), 53, 45, listOf("mednafen_wswan", "mednafen_wswan"), home = true),
         // The Lynx (Beetle Lynx needs lynxboot.img) and the Pokemon mini (PokeMini only).
-        SystemRow(LYNX, listOf("lnx", "lyx"), listOf("atarilynx", "lynx"), listOf("lynx", "atari-lynx"), 13, 28, listOf("handy", "mednafen_lynx"), home = true),
+        SystemRow(LYNX, listOf("lnx", "lyx"), listOf("atarilynx", "lynx"), listOf("lynx", "atari-lynx", "atarilynx"), 13, 28, listOf("handy", "mednafen_lynx"), home = true),
         SystemRow(POKEMINI, listOf("min"), listOf("pokemini"), listOf("pokemon-mini", "pokemini"), 24, 211, listOf("pokemini", "pokemini"), home = true),
     )
 
@@ -122,6 +122,28 @@ internal object Systems {
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
+
+    /** The in-game save's extension a core writes, as in RetroArch: Handy
+     *  keeps the Lynx EEPROM in .eeprom, PokeMini the Pokemon mini's in .eep,
+     *  Beetle NeoPop and RACE the Neo Geo Pocket's flash in .flash and .ngf. */
+    fun saveExtension(folder: String): String = when (folder) {
+        "Handy" -> "eeprom"
+        "PokeMini" -> "eep"
+        "Beetle NeoPop" -> "flash"
+        "RACE" -> "ngf"
+        else -> "srm"
+    }
+
+    private val SAVE_SUFFIXES = listOf(".srm", ".eeprom", ".eep", ".flash", ".ngf")
+
+    /** An in-game save's file name, whatever core wrote it. */
+    fun isSaveName(name: String): Boolean =
+        SAVE_SUFFIXES.any { name.endsWith(it, ignoreCase = true) }
+
+    /** A save's file name without its save extension. */
+    fun saveStem(name: String): String =
+        SAVE_SUFFIXES.firstOrNull { name.endsWith(it, ignoreCase = true) }
+            ?.let { name.dropLast(it.length) } ?: name
 
     /** The libretro key of a RetroArch core folder: Slot's private file prefix. */
     fun keyForFolder(folder: String): String =

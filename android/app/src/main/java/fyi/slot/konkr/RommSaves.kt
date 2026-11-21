@@ -13,7 +13,7 @@ import java.util.Locale
  * and a newer one from the server comes back before the game starts, so the
  * same progress follows them on every handheld and in RomM's other clients.
  *
- * Only the in-game save (.srm): save states stay with slot. and its folders.
+ * Only the in-game save (.srm, or .eeprom and .eep for the Lynx and the Pokemon mini): save states stay with slot. and its folders.
  * Off by default. What slot. last exchanged with the server is remembered
  * per game (the server's save and the save's fingerprint), so:
  *  - the server changed, the handheld didn't: the server's save comes in;
@@ -217,7 +217,7 @@ internal object RommSaves {
             val romId = kept?.romId?.takeIf { it > 0 } ?: Romm.romIdFor(context, platform, target.stem) ?: return
             val saves = Romm.saves(context, romId)
             val ours = saves.filter {
-                (it.fileName.endsWith(".srm", ignoreCase = true) || it.fileName.endsWith(".rtc", ignoreCase = true)) &&
+                (Systems.isSaveName(it.fileName) || it.fileName.endsWith(".rtc", ignoreCase = true)) &&
                     isOurs(it, target)
             }
             Romm.deleteSaves(context, ours.map { it.id })
@@ -259,7 +259,7 @@ internal object RommSaves {
                 }
                 unchecked.delete()
             }
-            val sent = Romm.uploadSave(context, romId, emulator(target), target.stem + ".srm", local)
+            val sent = Romm.uploadSave(context, romId, emulator(target), target.saveName, local)
             keep(context, target, Record(romId, sent.id, sent.updatedAt, localSha, sendRtc(context, target, romId, kept)))
             TaskPill.confirm("SAVED TO ROMM")
             null
@@ -300,9 +300,10 @@ internal object RommSaves {
     }
 
     /** The server's newest save for this game: our core's first, else any
-     *  .srm (a save another client sent for the same game). */
+     *  save of the same kind (.srm, .eeprom, .eep) another client sent. */
     internal fun newest(saves: List<Romm.ServerSave>, target: RetroArchStorage.Target): Romm.ServerSave? {
-        val srm = saves.filter { it.fileName.endsWith(".srm", ignoreCase = true) }
+        val kind = "." + target.saveName.substringAfterLast('.')
+        val srm = saves.filter { it.fileName.endsWith(kind, ignoreCase = true) }
         val ours = srm.filter { isOurs(it, target) }
         return (ours.ifEmpty { srm }).maxByOrNull { it.updatedAt }
     }

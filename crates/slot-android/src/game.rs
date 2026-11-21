@@ -843,9 +843,11 @@ impl GameSession {
         // bsnes keeps its battery itself, named after the ROM file and
         // written to the save directory when the game unloads, as in
         // RetroArch. Hand it the cart under its own name, so the file is
-        // Saves/bsnes/<game>.srm like every other core's. Handy (.eeprom)
-        // and PokeMini (.eep) name theirs the same way.
-        let named_rom = if matches!(which, Core::Bsnes | Core::Handy | Core::PokeMini)
+        // Saves/bsnes/<game>.srm like every other core's. Handy (.eeprom),
+        // PokeMini (.eep), Beetle NeoPop (.flash) and RACE (.ngf) name
+        // theirs the same way, as in RetroArch.
+        let named_rom = if matches!(which, Core::Bsnes | Core::Handy | Core::PokeMini
+                | Core::Neopop | Core::Race)
             && linked_boot.is_none() {
             Some(named_rom_alias(storage, rom, rom_stem)?)
         } else { None };

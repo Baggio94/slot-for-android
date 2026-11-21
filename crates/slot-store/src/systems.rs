@@ -77,7 +77,7 @@ pub const SYSTEMS: [System; 12] = [
     System {
         platform: Platform::Sms, name: "Master System", dir: "SMS",
         extensions: &["sms"], folders: &["mastersystem"],
-        romm: &["sms"],
+        romm: &["sms", "mastersystem", "master-system"],
         retroachievements: 11, screenscraper: 2,
         cores: [Core::GenesisPlusGx, Core::Gearsystem], picture: (256, 192), handheld: false,
     },
@@ -110,7 +110,7 @@ pub const SYSTEMS: [System; 12] = [
     System {
         platform: Platform::Lynx, name: "Lynx", dir: "LYNX",
         extensions: &["lnx", "lyx"], folders: &["atarilynx", "lynx"],
-        romm: &["lynx", "atari-lynx"],
+        romm: &["lynx", "atari-lynx", "atarilynx"],
         retroachievements: 13, screenscraper: 28,
         cores: [Core::Handy, Core::BeetleLynx], picture: (160, 102), handheld: false,
     },
