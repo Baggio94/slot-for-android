@@ -13,6 +13,14 @@ pub(crate) fn refined(m: HomeMould) -> bool {
         | Lynx | PokemonMini | MasterSystemJp | MasterSystemCard | GameGearCodemasters)
 }
 
+/// The moulds whose master is a photo of black or white plastic, recalibrated
+/// to the neutral grey every colour is laid on. The standard 3.0 moulds keep
+/// their rc2 masters as they are: sharper reliefs (Siham 2026-11-21).
+pub(crate) fn calibrated(m: HomeMould) -> bool {
+    use HomeMould::*;
+    matches!(m, MasterSystemJp | MasterSystemCard | GameGearCodemasters)
+}
+
 /// Scan black/white is the source material colour, not a permanent shadow.
 /// Values measured on the flat plastic outside the label wells of the masters.
 fn neutral(m: HomeMould, value: u8, in_well: bool) -> u8 {
@@ -67,6 +75,13 @@ pub(crate) fn front(m: HomeMould) -> Arc<Vec<u8>> {
         let (x, y) = (n as u32 % width, n as u32 / width);
         let in_well = (x0..x1).contains(&x) && (y0..y1).contains(&y);
         for c in &mut p[..3] { *c = neutral(m, *c, in_well); }
+        // The Japanese master's lower body was a separate, darker patch of
+        // the photo with ragged edges; on the real cart it is the same flat
+        // plastic as the frame around the label (Siham 2026-11-21).
+        if m == HomeMould::MasterSystemJp && (px(8)..px(304)).contains(&x)
+            && (px(213)..px(354)).contains(&y) {
+            for c in &mut p[..3] { *c = (135 + (*c as i32 - 123).clamp(-3, 3)) as u8; }
+        }
         // This scan retained a narrow strip of the donor game's sticker
         // above the rectangular well. It is plain plastic on a blank cart.
         if m == HomeMould::GameGearCodemasters && (px(41)..px(272)).contains(&x)
@@ -94,7 +109,9 @@ pub(crate) fn clean_outline(m: HomeMould, w: u32, h: u32) -> Option<Vec<u8>> {
 
 /// Keep the original map's cutouts (mini cap), with denser plastic at reliefs.
 pub(crate) fn clear_alpha(m: HomeMould, mapped: u8, shade: u8) -> u8 {
-    if !refined(m) { return mapped; }
+    // Standard moulds keep rc2's clear plastic; the Pokemon mini and the
+    // recalibrated special moulds get the more translucent one.
+    if !(calibrated(m) || m == HomeMould::PokemonMini) { return mapped; }
     if mapped == 0 { return 0; }
     let (base, original) = match m {
         HomeMould::PokemonMini => (148u32, 230u32),

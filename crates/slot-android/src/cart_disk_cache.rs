@@ -31,6 +31,12 @@ impl DiskCache {
         // The revision invalidates old faces when rendering algorithms change.
         let mut input = format!("KONKR-cart-r102-v8-hd3:{cart:?}").into_bytes();
         input.extend_from_slice(&self.theme);
+        // The 3.0 systems' carts are drawn anew once their materials change
+        // (3.0.0-materials2); the other systems keep their faces.
+        use slot_store::Platform::*;
+        if matches!(cart.platform, Sms | Gg | Ngp | Ws | Lynx | Pokemini) {
+            input.extend_from_slice(b"materials-2");
+        }
         // A cart with no label is written by hand since 2.4.1: its old face
         // (a printed text label) is drawn again, the others are kept.
         if cart.label.as_deref().is_none_or(|label| fs::metadata(label).is_err()) {

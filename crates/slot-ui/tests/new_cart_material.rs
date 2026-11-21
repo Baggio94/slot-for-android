@@ -116,3 +116,35 @@ fn fractional_density_leaves_no_opaque_unprinted_strip_beside_a_clear_label() {
         });
     }
 }
+
+#[test]
+fn white_plastic_left_in_decals_takes_the_cart_colour() {
+    // WonderSwan guide tabs (photographed white) and My Card's window rim
+    // must not stay light on a black cart.
+    for (m, x, y) in [(HomeMould::WonderSwan, 6u32, 160u32), (HomeMould::WonderSwanColor, 306, 160),
+        (HomeMould::MasterSystemCard, 18, 332)] {
+        let black = front(&cart(m, [18; 3], ShellFinish::Solid));
+        let face_w = density::px(black.w);
+        let (x0, x1) = (density::px(x.saturating_sub(4)), density::px(x + 4));
+        let (y0, y1) = (density::px(y - 4), density::px(y + 4));
+        for yy in y0..y1 {
+            for xx in x0..x1.min(face_w) {
+                let i = ((yy * face_w + xx) * 4) as usize;
+                let p = &black.rgba[i..i + 4];
+                if p[3] < 128 { continue; }
+                let l = (p[0] as u32 + p[1] as u32 + p[2] as u32) / 3;
+                assert!(l < 110, "{m:?}: light residue {p:?} at {xx},{yy}");
+            }
+        }
+    }
+}
+
+#[test]
+fn japanese_master_system_body_is_one_flat_plastic_in_white() {
+    let white = front(&cart(HomeMould::MasterSystemJp, [240; 3], ShellFinish::Solid));
+    let frame = pixel(&white, 20, 100)[0] as i32;
+    for (x, y) in [(30, 230), (156, 300), (280, 340), (156, 220)] {
+        let v = pixel(&white, x, y)[0] as i32;
+        assert!((v - frame).abs() <= 6, "lower body {v} vs frame {frame} at {x},{y}");
+    }
+}

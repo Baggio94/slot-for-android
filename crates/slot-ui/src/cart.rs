@@ -888,7 +888,7 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
                     }
                 }
                 let body = [rgba[i], rgba[i + 1], rgba[i + 2]];
-                rgba[i..i + 3].copy_from_slice(&lerp(body, [0xff; 3], if refined { 65 } else { 100 }, 255));
+                rgba[i..i + 3].copy_from_slice(&lerp(body, [0xff; 3], 100, 255));
                 // Retain antialiasing at the outline instead of turning a
                 // barely covered edge texel into an opaque white speck.
                 rgba[i + 3] = if refined { rgba[i + 3].max(src[i + 3]) } else { 255 };
@@ -911,8 +911,30 @@ fn tinted_decal(m: HomeMould, decal: &[u8], colour: [u8; 3], clear: bool) -> std
     // grey sits for it (the tabs a little lighter than the body, the lip a
     // little darker).
     let (grey, at) = match m {
-        HomeMould::WonderSwan | HomeMould::WonderSwanColor => (172i32, 140i32),
+        // The tabs were photographed on a white WonderSwan: their white is
+        // the body's own plastic, so it lands on the shell's mid grey and
+        // never shows as a light residue on dark colours (Siham 2026-11-21).
+        HomeMould::WonderSwan | HomeMould::WonderSwanColor => (232i32, 134i32),
         HomeMould::Lynx => (47, 100),
+        // My Card: the white plastic rim of the contact window's photo is
+        // the card itself, so it takes the card's colour (no white corners).
+        HomeMould::MasterSystemCard => {
+            let mut out = decal.to_vec();
+            for px in out.chunks_exact_mut(4) {
+                if px[3] == 0 { continue; }
+                let sat = px[0].max(px[1]).max(px[2]) - px[0].min(px[1]).min(px[2]);
+                let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
+                if l < 24 || sat > 24 { continue; }
+                // Edge texels mix the white rim with the black window: keep
+                // that mix, with the card's colour in place of the white.
+                let t = ((l - 24) * 255 / (235 - 24)).clamp(0, 255) as u32;
+                for c in 0..3 {
+                    let plastic = overlay(128, colour[c]) as u32;
+                    px[c] = ((plastic * t + px[c] as u32 * (255 - t) + 127) / 255) as u8;
+                }
+            }
+            return std::borrow::Cow::Owned(out);
+        }
         HomeMould::PokemonMini => {
             let mut out = decal.to_vec();
             let width = px(m.size().0);
@@ -924,10 +946,10 @@ fn tinted_decal(m: HomeMould, decal: &[u8], colour: [u8; 3], clear: bool) -> std
                 let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
                 let base = (128 + (l - 225)).clamp(0, 255) as u8;
                 for c in 0..3 {
-                    // A lightly frosted cap, not a white paint overlay. Dark
-                    // and saturated Cart Studio colours remain recognisable.
+                    // Frosted: the plastic's colour, most of the way to
+                    // white (rc2's cap, kept by Siham 2026-11-21).
                     let tinted = overlay(base, colour[c]) as u32;
-                    px[c] = ((tinted * 88 + 255 * 12 + 50) / 100) as u8;
+                    px[c] = ((tinted * 40 + 255 * 60 + 50) / 100) as u8;
                 }
                 if clear {
                     let alpha = (148 + base.abs_diff(128) as u32 / 2).min(200);
@@ -946,7 +968,8 @@ fn tinted_decal(m: HomeMould, decal: &[u8], colour: [u8; 3], clear: bool) -> std
         let (x, y) = ((n as u32 % width) as f32 / k, (n as u32 / width) as f32 / k);
         if !crate::home_material::decal_plastic_at(m, x, y) { continue; }
         let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
-        let base = (at + (l - grey) * 4 / 5).clamp(0, 255) as u8;
+        let gain = if matches!(m, HomeMould::WonderSwan | HomeMould::WonderSwanColor) { 3 } else { 4 };
+        let base = (at + (l - grey) * gain / 5).clamp(0, 255) as u8;
         for c in 0..3 { px[c] = overlay(base, colour[c]); }
     }
     std::borrow::Cow::Owned(out)

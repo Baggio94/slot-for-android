@@ -1,7 +1,7 @@
-# 3.0.0-materials1 — cartridge materials
+# 3.0.0-materials2 — cartridge materials
 
 Base: `beta/3.0-rc2`, `dc51f28c776baa23c2e924b1505cd5ceee334cfd`.
-Android version code: 570. This branch builds a signed test APK; it does not publish a stable release.
+Android version code: 571 (materials1 was 570). This branch builds a signed test APK; it does not publish a stable release.
 
 ## Rendering
 
@@ -23,6 +23,22 @@ edge coverage. Explicit plastic regions protect the exposed WS/Lynx contacts,
 My Card contact panel and mini screw holes from tinting/glitter.
 GB/GBC/GBA and the older home moulds retain their existing material path.
 Slot bars, their themes and mechanisms are unchanged by this beta.
+
+## materials2
+
+Siham compared both renders and kept the best of each:
+
+- NGP, Game Gear, Master System, WonderSwan/WSC and Lynx keep the rc2
+  masters (sharper reliefs) and rc2 clear plastic. Only the Japanese Master
+  System, My Card and Game Gear Codemasters are recalibrated
+  (`home_material::calibrated`).
+- The Pokémon mini keeps the more translucent clear body and the rc2 frosted cap.
+- Glitter has the same strength as GB/GBC/GBA on every mould; contacts,
+  the My Card contact panel and the mini's screws stay free of it.
+- WonderSwan guide tabs and the My Card window rim (white plastic in their
+  photos) take the cart colour; the Japanese Master System's lower body is
+  one flat plastic with the frame.
+- The disk cache of cart faces redraws the six 3.0 systems once.
 
 ## Label registration
 
