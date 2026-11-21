@@ -1,0 +1,101 @@
+use std::path::PathBuf;
+use slot_store::{Cart, ShellChoice, ShellFinish};
+use slot_ui::{density, CartFace, HomeMould};
+
+fn cart(m: HomeMould, colour: [u8; 3], finish: ShellFinish) -> Cart {
+    Cart { platform: m.platform(), stem: String::new(), title: String::new(),
+        code: String::new(), rom: PathBuf::from("material-check.rom"), label: None,
+        shell: Some(ShellChoice { outline: m.outline(), colour, finish }), battery: false }
+}
+fn front(cart: &Cart) -> CartFace {
+    let (w, h) = slot_ui::label_size(cart);
+    slot_ui::cart_face_with(cart, Some(vec![0; (density::px(w) * density::px(h) * 4) as usize]))
+}
+fn pixel(face: &CartFace, x: u32, y: u32) -> &[u8] {
+    let i = ((density::px(y) * density::px(face.w) + density::px(x)) * 4) as usize;
+    &face.rgba[i..i + 4]
+}
+
+#[test]
+fn new_moulds_keep_registration_and_take_light_dark_and_saturated_colours() {
+    use HomeMould::*;
+    let cases = [
+        (NeoGeoPocket, 280, (31,66,252,138), (156,230)),
+        (WonderSwan, 188, (10,26,293,108), (156,140)),
+        (WonderSwanColor, 188, (10,26,293,108), (156,140)),
+        (GameGear, 316, (28,58,256,185), (156,282)),
+        (MasterSystem, 200, (8,4,296,42), (156,150)),
+        (Lynx, 326, (5,69,302,211), (156,40)),
+        (PokemonMini, 300, (19,107,274,149), (156,275)),
+        (MasterSystemJp, 360, (29,2,254,209), (156,300)),
+        (MasterSystemCard, 500, (18,21,279,290), (156,320)),
+        (GameGearCodemasters, 367, (41,17,231,295), (156,340)),
+    ];
+    for scale in [1.0, 4.0/3.0, 3.0] {
+        density::with_scale(scale, || for (m, h, label, (x,y)) in cases {
+            let black = cart(m, [18; 3], ShellFinish::Solid);
+            assert_eq!(slot_ui::label_rect(&black), label, "{m:?}");
+            assert_eq!(slot_ui::cart_box_for(&black), (312,h));
+            let dark = front(&black);
+            let white = front(&cart(m, [240; 3], ShellFinish::Solid));
+            let red = front(&cart(m, [210,25,35], ShellFinish::Solid));
+            assert_eq!(dark.rgba.len(), (density::px(312)*density::px(h)*4) as usize);
+            assert!(pixel(&white,x,y)[0] > pixel(&dark,x,y)[0].saturating_add(100), "{m:?}: flat plastic must take white");
+            let p = pixel(&red,x,y);
+            assert!(p[0] > p[1].saturating_add(70), "{m:?}: saturated red must not stay black/grey: {p:?}");
+            assert!(dark.rgba.chunks_exact(4).zip(white.rgba.chunks_exact(4)).all(|(a,b)| a[3] == b[3]), "{m:?}: colour must not change silhouette");
+        });
+    }
+}
+
+#[test]
+fn mini_clear_cap_and_body_reveal_the_same_board_without_fading_the_sticker() {
+    let clear = cart(HomeMould::PokemonMini, [128,150,178], ShellFinish::Clear);
+    let solid = cart(HomeMould::PokemonMini, [128,150,178], ShellFinish::Solid);
+    let glass = front(&clear);
+    let plastic = front(&solid);
+    for (x,y) in [(156,40), (156,275)] {
+        assert!((120..195).contains(&pixel(&glass,x,y)[3]));
+        assert_eq!(pixel(&plastic,x,y)[3], 255);
+    }
+    assert_eq!(slot_ui::cart_backing(&clear).rgba, slot_ui::cart_backing(&solid).rgba);
+    let (w,h) = slot_ui::label_size(&clear);
+    let label = [240,80,140,255].repeat((w*h) as usize);
+    let face = slot_ui::cart_face_with(&clear, Some(label));
+    assert_eq!(pixel(&face,156,170), &[240,80,140,255]);
+}
+
+#[test]
+fn clipped_label_corners_have_no_ink_visible_through_clear_plastic() {
+    for m in [HomeMould::GameGear, HomeMould::GameGearCodemasters, HomeMould::PokemonMini] {
+        let c = cart(m, [124,150,178], ShellFinish::Clear);
+        let (lx,ly,w,h) = slot_ui::label_rect(&c);
+        let a = slot_ui::cart_face_with(&c, Some([255,0,255,255].repeat((w*h) as usize)));
+        let b = slot_ui::cart_face_with(&c, Some([0,255,0,255].repeat((w*h) as usize)));
+        let y = if m == HomeMould::PokemonMini { ly+h-2 } else { ly };
+        assert_eq!(pixel(&a,lx,y), pixel(&b,lx,y), "{m:?}: no sticker ink outside the cut");
+        assert!(pixel(&a,lx,y)[3] < 220);
+        assert_eq!(pixel(&a,lx+w/2,ly+h/2)[3], 255);
+    }
+}
+
+#[test]
+fn contacts_stay_fixed_and_glitter_is_repeatable() {
+    for (m,x,y) in [(HomeMould::WonderSwan,156,168), (HomeMould::WonderSwanColor,156,168),
+        (HomeMould::Lynx,156,300), (HomeMould::MasterSystemCard,156,430)] {
+        let red = front(&cart(m,[210,25,35],ShellFinish::Solid));
+        let c = cart(m,[124,79,184],ShellFinish::ClearGlitter);
+        let glitter = front(&c);
+        assert_eq!(pixel(&red,x,y),pixel(&glitter,x,y), "{m:?}: contacts are not plastic");
+        assert_eq!(glitter.rgba,front(&c).rgba,"{m:?}: no animated glitter randomness");
+    }
+}
+
+#[test]
+fn codemasters_top_has_no_scan_cracks_inside_its_existing_mould() {
+    let face = front(&cart(HomeMould::GameGearCodemasters,[240;3],ShellFinish::Solid));
+    for x in 70..242 {
+        for y in 5..12 { assert_eq!(pixel(&face,x,y)[3],255,"hole at {x},{y}"); }
+    }
+    assert_eq!(pixel(&face,0,0)[3],0);
+}

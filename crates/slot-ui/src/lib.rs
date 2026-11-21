@@ -24,6 +24,7 @@ mod draw;
 mod footer;
 mod home;
 mod home_art;
+mod home_material;
 pub mod logo_label;
 mod hud;
 mod icon;

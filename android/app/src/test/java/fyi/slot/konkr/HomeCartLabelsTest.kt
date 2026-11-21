@@ -124,6 +124,34 @@ class HomeCartLabelsTest {
     }
 
     @Test
+    fun newSystemLabelsFollowTheirActualMoulds() {
+        HomeCartLabels.readShells(java.io.File("../../crates/slot-ui/assets/home_shells.tsv").readText())
+        assertEquals("sms_card", HomeCartLabels.shell(rom(Systems.SMS, "Bomb Jack (Europe)")))
+        assertEquals("sms_jp", HomeCartLabels.shell(rom(Systems.SMS, "Hokuto no Ken (Japan)")))
+        assertEquals("sms_jp", HomeCartLabels.shell(rom(Systems.SMS, "Super Boy 4 (Korea)")))
+        assertEquals("sms", HomeCartLabels.shell(rom(Systems.SMS, "Sonic The Hedgehog (Europe)")))
+        assertEquals("gg_codemasters", HomeCartLabels.shell(rom(Systems.GG, "Micro Machines (Europe)")))
+        assertEquals("gg", HomeCartLabels.shell(rom(Systems.GG, "Sonic The Hedgehog (USA)")))
+        val sms = rom(Systems.SMS, "Sonic The Hedgehog (Europe)")
+        assertTrue("jp" !in HomeCartLabels.labelRegions(sms))
+        assertTrue("us" !in HomeCartLabels.labelRegions(rom(Systems.SMS, "Hokuto no Ken (Japan)")))
+        val gg = rom(Systems.GG, "Micro Machines (Europe)")
+        assertTrue(HomeCartLabels.recut(JSONObject().put(gg.uri, ""), gg))
+        assertEquals(false, HomeCartLabels.recut(JSONObject().put(gg.uri, "gg_codemasters"), gg))
+    }
+
+    @Test
+    fun newSystemRenderFallbacksAreAvailableWhenTheSetHasNoStickerScan() {
+        val render = HomeCartLabels.Media("support-2D", "us", "https://a/cart")
+        val sticker = HomeCartLabels.Media("support-texture", "us", "https://a/label")
+        for (platform in listOf(Systems.SMS, Systems.GG, Systems.NGP, Systems.WS, Systems.LYNX, Systems.POKEMINI)) {
+            val cart = rom(platform, "Example (USA)")
+            assertEquals(render, HomeCartLabels.pick(listOf(render), cart))
+            assertEquals(sticker, HomeCartLabels.pick(listOf(render, sticker), cart))
+        }
+    }
+
+    @Test
     fun checksumsSkipDumpHeaders() {
         val body = ByteArray(40000) { (it * 7).toByte() }
         val ines = byteArrayOf(0x4e, 0x45, 0x53, 0x1a) + ByteArray(12) + body

@@ -643,8 +643,9 @@ fn label_frame(m: HomeMould, x: f32, y: f32, w: f32, h: f32) -> f32 {
         HomeMould::GameGear | HomeMould::GameGearCodemasters => {
             // A rim over every edge, rounder in the corners; the lower
             // corners less round (Siham 2026-11-21).
-            let e = 3.0;
-            let r = if y > h / 2.0 { 8.0 } else { 14.0 };
+            let codemasters = m == HomeMould::GameGearCodemasters;
+            let e = if codemasters { 1.0 } else { 3.0 };
+            let r = if codemasters { 4.0 } else if y > h / 2.0 { 8.0 } else { 14.0 };
             let cx = x.clamp(e + r, w - e - r);
             let cy = y.clamp(e + r, h - e - r);
             let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
@@ -693,16 +694,17 @@ fn frame_over_label(s: &Spec, m: HomeMould, face: &mut CartFace, bare: &[u8]) {
                 }
                 continue;
             }
-            // The plastic itself at this very texel, as the cart without a
-            // label has it (colour, flecks, frost, clearness: Siham
-            // 2026-11-21), laid over the label: clear plastic shows the
-            // label through it.
-            let a = bare[i + 3] as f32 / 255.0;
+            // A clipped sticker has no ink outside its outline, even when
+            // the surrounding plastic is clear. Restore the bare alpha too.
+            let a = bare[i + 3] as f32 / 255.0 * cover;
+            let label_a = face.rgba[i + 3] as f32 / 255.0 * (1.0 - cover);
+            let out_a = a + label_a;
             for c in 0..3 {
-                let label = face.rgba[i + c] as f32;
-                let over = bare[i + c] as f32 * a + label * (1.0 - a);
-                face.rgba[i + c] = (over * cover + label * (1.0 - cover)).round() as u8;
+                face.rgba[i + c] = if out_a > 0.0 {
+                    ((bare[i + c] as f32 * a + face.rgba[i + c] as f32 * label_a) / out_a).round() as u8
+                } else { 0 };
             }
+            face.rgba[i + 3] = (out_a * 255.0).round() as u8;
         }
     }
 }
@@ -846,6 +848,10 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
                 255
             } else if clear {
                 let k = opacity.as_ref().map_or(CLEAR_ALPHA, |o| o[(y * tw + x) as usize]);
+                let k = match s.mould {
+                    Mould::Home(m) => crate::home_material::clear_alpha(m, k, src[i]),
+                    _ => k,
+                };
                 ((own * u32::from(k) + 127) / 255) as u8
             } else {
                 own as u8
@@ -854,7 +860,7 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
     }
     if let Mould::Home(m) = s.mould {
         if let Some(decal) = home::dense_decal(m) {
-            blend_over(&mut rgba, &tinted_decal(m, &decal, shell.colour));
+            blend_over(&mut rgba, &tinted_decal(m, &decal, shell.colour, clear));
         }
     }
     if shell.finish.has_flecks() {
@@ -869,9 +875,17 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
                 if rgba[i + 3] == 0 {
                     continue;
                 }
+                let refined = matches!(s.mould, Mould::Home(m) if crate::home_material::refined(m));
+                if let Mould::Home(m) = s.mould {
+                    if refined && !crate::home_material::plastic_at(m, x as f32 / k, y as f32 / k) {
+                        continue;
+                    }
+                }
                 let body = [rgba[i], rgba[i + 1], rgba[i + 2]];
-                rgba[i..i + 3].copy_from_slice(&lerp(body, [0xff; 3], 100, 255));
-                rgba[i + 3] = 255;
+                rgba[i..i + 3].copy_from_slice(&lerp(body, [0xff; 3], if refined { 65 } else { 100 }, 255));
+                // Retain antialiasing at the outline instead of turning a
+                // barely covered edge texel into an opaque white speck.
+                rgba[i + 3] = if refined { rgba[i + 3].max(src[i + 3]) } else { 255 };
             }
         }
     }
@@ -886,7 +900,7 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
 /// as the shell does (Siham 2026-11-21): the WonderSwan's guide tabs beside
 /// its contacts, the Lynx's lip over them, the Pokemon mini's frosted cap.
 /// Boards, contacts and printing keep their own colours.
-fn tinted_decal(m: HomeMould, decal: &[u8], colour: [u8; 3]) -> std::borrow::Cow<'_, [u8]> {
+fn tinted_decal(m: HomeMould, decal: &[u8], colour: [u8; 3], clear: bool) -> std::borrow::Cow<'_, [u8]> {
     // Grey plastic of the decal: its usual grey and where the shell's mid
     // grey sits for it (the tabs a little lighter than the body, the lip a
     // little darker).
@@ -895,17 +909,23 @@ fn tinted_decal(m: HomeMould, decal: &[u8], colour: [u8; 3]) -> std::borrow::Cow
         HomeMould::Lynx => (47, 100),
         HomeMould::PokemonMini => {
             let mut out = decal.to_vec();
-            for px in out.chunks_exact_mut(4) {
+            let width = px(m.size().0);
+            let k = density::scale();
+            for (n, px) in out.chunks_exact_mut(4).enumerate() {
                 if px[3] == 0 { continue; }
+                let (x, y) = ((n as u32 % width) as f32 / k, (n as u32 / width) as f32 / k);
+                if !crate::home_material::decal_plastic_at(m, x, y) { continue; }
                 let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
-                let sat = px[0].max(px[1]).max(px[2]) - px[0].min(px[1]).min(px[2]);
-                // The screws' dark holes stay as they are.
-                if l < 150 && sat < 18 { continue; }
                 let base = (128 + (l - 225)).clamp(0, 255) as u8;
                 for c in 0..3 {
-                    // Frosted: the plastic's colour, most of the way to white.
+                    // A lightly frosted cap, not a white paint overlay. Dark
+                    // and saturated Cart Studio colours remain recognisable.
                     let tinted = overlay(base, colour[c]) as u32;
-                    px[c] = ((tinted * 40 + 255 * 60 + 50) / 100) as u8;
+                    px[c] = ((tinted * 88 + 255 * 12 + 50) / 100) as u8;
+                }
+                if clear {
+                    let alpha = (148 + base.abs_diff(128) as u32 / 2).min(200);
+                    px[3] = ((px[3] as u32 * alpha + 102) / 204).min(255) as u8;
                 }
             }
             return std::borrow::Cow::Owned(out);
@@ -913,10 +933,12 @@ fn tinted_decal(m: HomeMould, decal: &[u8], colour: [u8; 3]) -> std::borrow::Cow
         _ => return std::borrow::Cow::Borrowed(decal),
     };
     let mut out = decal.to_vec();
-    for px in out.chunks_exact_mut(4) {
+    let width = px(m.size().0);
+    let k = density::scale();
+    for (n, px) in out.chunks_exact_mut(4).enumerate() {
         if px[3] == 0 { continue; }
-        let sat = px[0].max(px[1]).max(px[2]) - px[0].min(px[1]).min(px[2]);
-        if sat >= 18 { continue; }
+        let (x, y) = ((n as u32 % width) as f32 / k, (n as u32 / width) as f32 / k);
+        if !crate::home_material::decal_plastic_at(m, x, y) { continue; }
         let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
         let base = (at + (l - grey) * 4 / 5).clamp(0, 255) as u8;
         for c in 0..3 { px[c] = overlay(base, colour[c]); }

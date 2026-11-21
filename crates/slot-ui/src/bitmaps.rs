@@ -404,6 +404,9 @@ pub(crate) fn dense_shell(mould: Mould, clear: bool) -> Arc<Vec<u8>> {
         (Mould::Notched, true) => (GB_CLEAR_PNG, GB_CART_W, GB_CART_H),
         (Mould::Rounded, true) => (GBC_CLEAR_PNG, GB_CART_W, GB_CART_H),
         (Mould::Home(m), _) => {
+            if crate::home_material::refined(m) {
+                return crate::home_material::front(m);
+            }
             let (w, h) = m.size();
             (m.art().neutral, w, h)
         }

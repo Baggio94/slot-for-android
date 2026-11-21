@@ -165,7 +165,8 @@ pub(crate) fn mask(m: HomeMould) -> &'static [u8] {
             let (w, h) = m.size();
             decoded(png, w, h).iter().skip(3).step_by(4).copied().collect()
         }
-        None => neutral(m).iter().skip(3).step_by(4).copied().collect(),
+        None => crate::home_material::clean_outline(m, m.size().0, m.size().1)
+            .unwrap_or_else(|| neutral(m).iter().skip(3).step_by(4).copied().collect()),
     })
 }
 
