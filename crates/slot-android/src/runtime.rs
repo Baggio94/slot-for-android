@@ -171,6 +171,10 @@ static PANEL_SIZE: AtomicU64 = AtomicU64::new(0);
 /// Paused Screen row choosing the game's size: GBA off the 3:2 KONKR, and
 /// the home consoles everywhere (Integer / Original Ratio / Stretch).
 const SCREEN_SIZE_KEY: usize = 40;
+use crate::settings::{CORE_SMS_KEY, CORE_GG_KEY, CORE_NGP_KEY, CORE_LYNX_KEY,
+    SHADER_SMS_KEY, SHADER_GG_KEY, SHADER_NGP_KEY, SHADER_WS_KEY, SHADER_LYNX_KEY,
+    SHADER_POKEMINI_KEY, BEZEL_SMS_KEY, BEZEL_GG_KEY, BEZEL_NGP_KEY, BEZEL_WS_KEY,
+    BEZEL_LYNX_KEY, BEZEL_POKEMINI_KEY, POKEMINI_FILTER_KEY};
 /// "INTEGER", "ORIGINAL RATIO", "STRETCH" in the setting value faces.
 const SCREEN_SIZE_VALUE: usize = 67;
 
@@ -578,7 +582,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 163] = [
+const MENU_TEXT: [&str; 164] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -746,6 +750,7 @@ const MENU_TEXT: [&str; 163] = [
     "WonderSwan",                         // 160
     "Lynx",                               // 161
     "Pokemon mini",                       // 162
+    "LCD Filter",                         // 163, Pokemon mini (Siham 2026-11-21)
 ];
 
 /// Settings > Systems, top to bottom.
@@ -770,7 +775,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 161] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 171] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -817,6 +822,12 @@ const SETTING_VALUE_NAMES: [&str; 161] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "Beetle NeoPop", "RACE",
                                // 138, 139: the Lynx's two cores.
                                "Handy", "Beetle Lynx",
+                               // 140-148 (OWN_BEZEL_VALUES): slot.'s own 3.0 overlays.
+                               "MASTER SYSTEM", "GAME GEAR", "NEO GEO POCKET", "NGP COLOR",
+                               "WONDERSWAN", "WONDERSWAN COLOR", "LYNX", "LYNX GOLD",
+                               "POKEMON MINI",
+                               // 149: Pokemon mini's LCD Filter (Dot Matrix 105, None 17).
+                               "Scanlines",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -824,6 +835,8 @@ const SETTING_VALUE_NAMES: [&str; 161] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "NEEDS SWIPE LOCK", "DIGITAL CLOCK", "ANALOG CLOCK",
                                // 18-20: Game Info.
                                "TITLE", "TIME", "ALL"];
+/// The first of slot.'s own 3.0 overlays in SETTING_VALUE_NAMES.
+const OWN_BEZEL_VALUES: usize = 140;
 /// The first RG Rotate value in SETTING_VALUE_NAMES.
 const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
 /// Library's values (2.5): where the slot. folder is, and RomM's sync
@@ -1050,6 +1063,11 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         44 => bezel_value(scoped.bezel_nes),
         45 => bezel_value(scoped.bezel_snes),
         46 => bezel_value(scoped.bezel_md),
+        crate::settings::BEZEL_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY =>
+            bezel_value(scoped.bezel_for(Settings::bezel_platform(key)?)),
+        crate::settings::POKEMINI_FILTER_KEY => match settings.pokemini_lcd_filter {
+            1 => 149, 2 => 17, _ => 105,
+        },
         SCREEN_SIZE_KEY => SCREEN_SIZE_VALUE + match video {
             VideoMode::Actual => 0, VideoMode::Aspect => 1, VideoMode::Stretch => 2,
         },
@@ -1234,6 +1252,13 @@ fn bezel_value(bezel: crate::settings::Bezel) -> usize {
         Nes => 81, NesGrayLogo => 82,
         Snes => 83, SnesAlt => 84, SnesGrayLogo => 85, SnesGrayLogoAlt => 86,
         GenesisClassic => 87, Genesis => 88, MegaDrive => 89,
+        // slot.'s own 3.0 overlays: OWN_BEZEL_VALUES on, AUTO is 66.
+        NgpAuto | WsAuto => 66,
+        MasterSystem => OWN_BEZEL_VALUES, GameGear => OWN_BEZEL_VALUES + 1,
+        Ngp => OWN_BEZEL_VALUES + 2, NgpColor => OWN_BEZEL_VALUES + 3,
+        Ws => OWN_BEZEL_VALUES + 4, WsColor => OWN_BEZEL_VALUES + 5,
+        Lynx => OWN_BEZEL_VALUES + 6, LynxGold => OWN_BEZEL_VALUES + 7,
+        PokemonMini => OWN_BEZEL_VALUES + 8,
     }
 }
 
@@ -1841,6 +1866,7 @@ impl Engine {
         let settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| Settings::load_for_device(root, device))
             .unwrap_or_else(|| Settings::first_install_defaults_for_device(device));
+        crate::settings::POKEMINI_LCD_FILTER.store(settings.pokemini_lcd_filter, Ordering::Release);
         // General's wallpaper too (a blur takes a moment): Default's mosaic
         // follows the shelf on screen, not known yet, and is made once the
         // engine is (with_shelf_wallpapers).
@@ -5958,10 +5984,17 @@ impl Engine {
         use crate::settings::Bezel;
         use video_mode::WatomskFit;
         let platform=self.current_cart_platform();
-        let bezel=self.game_settings().bezel_for(platform);
+        // AUTO: the Neo Geo Pocket Color or WonderSwan Color logo for a
+        // Color game, the plain one otherwise.
+        let colour=self.game.as_ref().is_some_and(GameSession::colour);
+        let bezel=match self.game_settings().bezel_for(platform) {
+            Bezel::NgpAuto=>if colour {Bezel::NgpColor} else {Bezel::Ngp},
+            Bezel::WsAuto=>if colour {Bezel::WsColor} else {Bezel::Ws},
+            bezel=>bezel,
+        };
         let panel=panel_size();
         let fit=video_mode::watomsk_fit(bezel,platform,self.video_mode,panel,self.home_shape());
-        let top=matches!(fit,Some(WatomskFit::Band(_)));
+        let top=matches!(fit,Some(WatomskFit::Band(_)|WatomskFit::Own(slot_ui::own_overlay::Place::Band,_)));
         if top!=self.picture_top {
             self.picture_top=top;
             self.apply_video_geometry();
@@ -5987,25 +6020,25 @@ impl Engine {
             (key,fit_overlay(&slot_bezel_sized(&master,(mw,mh)),panel,window))
         } else {
             let fit=fit?;
-            let design=bezel.watomsk()?;
             let key=(bezel,platform,panel,rect(match fit {
-                WatomskFit::Side(_,r)|WatomskFit::Band(r)=>r,
+                WatomskFit::Side(_,r)|WatomskFit::Band(r)|WatomskFit::Own(_,r)=>r,
             }));
             // On the KONKR the 3:2 game frame is the whole panel.
             let area=if fitted_canvas() {whole} else {slot_gfx::default_area()};
             if let Some((tex,fitted))=self.fitted_bezel {
                 if fitted==key {return Some((tex,area));}
             }
-            use slot_ui::{watomsk, fit_overlay::{fit_band, fit_overlay}};
+            use slot_ui::{watomsk, own_overlay, fit_overlay::{fit_band, fit_overlay}};
             let rgba=match fit {
                 WatomskFit::Side(shape,window)=>{
-                    let side=watomsk::side(design,shape)?;
+                    let side=watomsk::side(bezel.watomsk()?,shape)?;
                     fit_overlay(&side.art(),panel,window)
                 }
                 WatomskFit::Band(pic)=>{
-                    let band=watomsk::band(design)?;
+                    let band=watomsk::band(bezel.watomsk()?)?;
                     fit_band(&band.art(),panel,pic)
                 }
+                WatomskFit::Own(place,pic)=>own_overlay::draw(bezel.own(colour)?,place,panel,pic)?,
             };
             let tex=self.bezel_texture(panel,&rgba);
             self.fitted_bezel=Some((tex,key));
@@ -6049,8 +6082,10 @@ impl Engine {
             // Master System, Game Gear and Neo Geo Pocket size with L1/R1,
             // as the NES; the WonderSwan's L1/R1 are its Y buttons, the
             // Lynx's its Options, the Pokemon mini's Shake and C.
-            (Platform::Sms|Platform::Gg|Platform::Ngp,_)=>&[124],
-            (Platform::Ws|Platform::Lynx|Platform::Pokemini,_)=>&[120,124],
+            (Platform::Sms|Platform::Gg|Platform::Ngp,false)=>&[124],
+            (Platform::Sms|Platform::Gg|Platform::Ngp,true)=>&[124,90],
+            (Platform::Ws|Platform::Lynx|Platform::Pokemini,false)=>&[120,124],
+            (Platform::Ws|Platform::Lynx|Platform::Pokemini,true)=>&[120,124,90],
         }
     }
     fn screen_keys(platform: Platform)-> &'static [usize] {
@@ -6071,12 +6106,18 @@ impl Engine {
             (Platform::Nes,true)=>&[47,44],
             (Platform::Snes,true)=>&[SCREEN_SIZE_KEY,48,45],
             (Platform::Md,true)=>&[SCREEN_SIZE_KEY,49,46],
-            (Platform::Sms,_)=>&[crate::settings::SHADER_SMS_KEY],
-            (Platform::Gg,_)=>&[crate::settings::SHADER_GG_KEY],
-            (Platform::Ngp,_)=>&[crate::settings::SHADER_NGP_KEY],
-            (Platform::Ws,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_WS_KEY],
-            (Platform::Lynx,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_LYNX_KEY],
-            (Platform::Pokemini,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_POKEMINI_KEY],
+            (Platform::Sms,false)=>&[SHADER_SMS_KEY],
+            (Platform::Sms,true)=>&[SHADER_SMS_KEY,BEZEL_SMS_KEY],
+            (Platform::Gg,false)=>&[SHADER_GG_KEY],
+            (Platform::Gg,true)=>&[SHADER_GG_KEY,BEZEL_GG_KEY],
+            (Platform::Ngp,false)=>&[SHADER_NGP_KEY],
+            (Platform::Ngp,true)=>&[SHADER_NGP_KEY,BEZEL_NGP_KEY],
+            (Platform::Ws,false)=>&[SCREEN_SIZE_KEY,SHADER_WS_KEY],
+            (Platform::Ws,true)=>&[SCREEN_SIZE_KEY,SHADER_WS_KEY,BEZEL_WS_KEY],
+            (Platform::Lynx,false)=>&[SCREEN_SIZE_KEY,SHADER_LYNX_KEY],
+            (Platform::Lynx,true)=>&[SCREEN_SIZE_KEY,SHADER_LYNX_KEY,BEZEL_LYNX_KEY],
+            (Platform::Pokemini,false)=>&[SCREEN_SIZE_KEY,SHADER_POKEMINI_KEY],
+            (Platform::Pokemini,true)=>&[SCREEN_SIZE_KEY,SHADER_POKEMINI_KEY,BEZEL_POKEMINI_KEY],
         }
     }
     // Settings > Systems opens with the system's default core, then its
@@ -6146,14 +6187,17 @@ impl Engine {
             (Platform::Nes|Platform::Snes|Platform::Md,true,_)=>&[118,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,false)=>&[118,120,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,true)=>&[118,120,124,90],
-            (Platform::Sms|Platform::Gg,true,_)=>&[118,124],
-            (Platform::Sms|Platform::Gg,false,_)=>&[118,120,124],
-            (Platform::Ngp,true,_)=>&[118,124],
-            (Platform::Ngp|Platform::Lynx,true,_)=>&[118,124],
-            (Platform::Ngp|Platform::Lynx,false,_)=>&[118,120,124],
+            (Platform::Sms|Platform::Gg|Platform::Ngp|Platform::Lynx,true,_)=>&[118,124],
+            (Platform::Sms|Platform::Gg|Platform::Ngp|Platform::Lynx,false,false)=>&[118,120,124],
+            (Platform::Sms|Platform::Gg|Platform::Ngp|Platform::Lynx,false,true)=>&[118,120,124,90],
             // One core only: no Default Core row.
-            (Platform::Ws|Platform::Pokemini,true,_)=>&[124],
-            (Platform::Ws|Platform::Pokemini,false,_)=>&[120,124],
+            (Platform::Ws,true,_)=>&[124],
+            (Platform::Ws,false,false)=>&[120,124],
+            (Platform::Ws,false,true)=>&[120,124,90],
+            // Then PokeMini's own LCD Filter.
+            (Platform::Pokemini,true,_)=>&[124,163],
+            (Platform::Pokemini,false,false)=>&[120,124,163],
+            (Platform::Pokemini,false,true)=>&[120,124,90,163],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -6181,18 +6225,24 @@ impl Engine {
             (Platform::Md,true,_)=>&[43,49],
             (Platform::Md,false,false)=>&[43,SCREEN_SIZE_KEY,49],
             (Platform::Md,false,true)=>&[43,SCREEN_SIZE_KEY,49,46],
-            (Platform::Sms,true,_)=>&[crate::settings::CORE_SMS_KEY,crate::settings::SHADER_SMS_KEY],
-            (Platform::Sms,false,_)=>&[crate::settings::CORE_SMS_KEY,SCREEN_SIZE_KEY,crate::settings::SHADER_SMS_KEY],
-            (Platform::Gg,true,_)=>&[crate::settings::CORE_GG_KEY,crate::settings::SHADER_GG_KEY],
-            (Platform::Gg,false,_)=>&[crate::settings::CORE_GG_KEY,SCREEN_SIZE_KEY,crate::settings::SHADER_GG_KEY],
-            (Platform::Ngp,true,_)=>&[crate::settings::CORE_NGP_KEY,crate::settings::SHADER_NGP_KEY],
-            (Platform::Ngp,false,_)=>&[crate::settings::CORE_NGP_KEY,SCREEN_SIZE_KEY,crate::settings::SHADER_NGP_KEY],
-            (Platform::Ws,true,_)=>&[crate::settings::SHADER_WS_KEY],
-            (Platform::Ws,false,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_WS_KEY],
-            (Platform::Lynx,true,_)=>&[crate::settings::CORE_LYNX_KEY,crate::settings::SHADER_LYNX_KEY],
-            (Platform::Lynx,false,_)=>&[crate::settings::CORE_LYNX_KEY,SCREEN_SIZE_KEY,crate::settings::SHADER_LYNX_KEY],
-            (Platform::Pokemini,true,_)=>&[crate::settings::SHADER_POKEMINI_KEY],
-            (Platform::Pokemini,false,_)=>&[SCREEN_SIZE_KEY,crate::settings::SHADER_POKEMINI_KEY],
+            (Platform::Sms,true,_)=>&[CORE_SMS_KEY,SHADER_SMS_KEY],
+            (Platform::Sms,false,false)=>&[CORE_SMS_KEY,SCREEN_SIZE_KEY,SHADER_SMS_KEY],
+            (Platform::Sms,false,true)=>&[CORE_SMS_KEY,SCREEN_SIZE_KEY,SHADER_SMS_KEY,BEZEL_SMS_KEY],
+            (Platform::Gg,true,_)=>&[CORE_GG_KEY,SHADER_GG_KEY],
+            (Platform::Gg,false,false)=>&[CORE_GG_KEY,SCREEN_SIZE_KEY,SHADER_GG_KEY],
+            (Platform::Gg,false,true)=>&[CORE_GG_KEY,SCREEN_SIZE_KEY,SHADER_GG_KEY,BEZEL_GG_KEY],
+            (Platform::Ngp,true,_)=>&[CORE_NGP_KEY,SHADER_NGP_KEY],
+            (Platform::Ngp,false,false)=>&[CORE_NGP_KEY,SCREEN_SIZE_KEY,SHADER_NGP_KEY],
+            (Platform::Ngp,false,true)=>&[CORE_NGP_KEY,SCREEN_SIZE_KEY,SHADER_NGP_KEY,BEZEL_NGP_KEY],
+            (Platform::Ws,true,_)=>&[SHADER_WS_KEY],
+            (Platform::Ws,false,false)=>&[SCREEN_SIZE_KEY,SHADER_WS_KEY],
+            (Platform::Ws,false,true)=>&[SCREEN_SIZE_KEY,SHADER_WS_KEY,BEZEL_WS_KEY],
+            (Platform::Lynx,true,_)=>&[CORE_LYNX_KEY,SHADER_LYNX_KEY],
+            (Platform::Lynx,false,false)=>&[CORE_LYNX_KEY,SCREEN_SIZE_KEY,SHADER_LYNX_KEY],
+            (Platform::Lynx,false,true)=>&[CORE_LYNX_KEY,SCREEN_SIZE_KEY,SHADER_LYNX_KEY,BEZEL_LYNX_KEY],
+            (Platform::Pokemini,true,_)=>&[SHADER_POKEMINI_KEY,POKEMINI_FILTER_KEY],
+            (Platform::Pokemini,false,false)=>&[SCREEN_SIZE_KEY,SHADER_POKEMINI_KEY,POKEMINI_FILTER_KEY],
+            (Platform::Pokemini,false,true)=>&[SCREEN_SIZE_KEY,SHADER_POKEMINI_KEY,BEZEL_POKEMINI_KEY,POKEMINI_FILTER_KEY],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
@@ -6414,7 +6464,8 @@ impl Engine {
         let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
-        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70)) {
+        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70
+            |crate::settings::BEZEL_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY)) {
             set_message("Not available during Multiplayer.".into());
             return;
         }
@@ -6604,6 +6655,7 @@ impl Engine {
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     fn persist_settings(&self) {
+        crate::settings::POKEMINI_LCD_FILTER.store(self.settings.pokemini_lcd_filter,Ordering::Release);
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             let (root, settings) = (root.clone(), self.settings.clone());
             crate::later_write::write(root.join("Settings.json"), move || {
@@ -10774,9 +10826,16 @@ mod settings_value_tests {
         }
         use crate::settings::Bezel;
         for bezel in Bezel::GB.into_iter().chain(Bezel::GBC).chain(Bezel::GBA)
-            .chain(Bezel::NES).chain(Bezel::SNES).chain(Bezel::MD) {
+            .chain(Bezel::NES).chain(Bezel::SNES).chain(Bezel::MD)
+            .chain(Bezel::SMS).chain(Bezel::GG).chain(Bezel::NGP).chain(Bezel::WS)
+            .chain(Bezel::LYNX).chain(Bezel::POKEMINI) {
             assert!(bezel_value(bezel) < SETTING_VALUE_NAMES.len(), "{bezel:?}");
         }
+        // slot.'s own: each its own name, AUTO for the two that follow the game.
+        assert_eq!(SETTING_VALUE_NAMES[bezel_value(Bezel::NgpAuto)], "AUTO");
+        assert_eq!(SETTING_VALUE_NAMES[bezel_value(Bezel::WsColor)], "WONDERSWAN COLOR");
+        assert_eq!(SETTING_VALUE_NAMES[bezel_value(Bezel::PokemonMini)], "POKEMON MINI");
+        assert_eq!(SETTING_VALUE_NAMES[ROTATE_VALUES], "INSERTED CART");
     }
 }
 

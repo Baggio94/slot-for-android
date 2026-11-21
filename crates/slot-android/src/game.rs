@@ -144,6 +144,25 @@ fn solar_cart(rom: &Path, which: Core, platform: Platform) -> Option<Solar> {
     else { None }
 }
 
+/// A Neo Geo Pocket Color game (byte 0x23 of its header is 0x10, 0x00 for
+/// the black and white Neo Geo Pocket) or a WonderSwan Color one (the
+/// footer's second byte, the console it needs, is 1). Read from the ROM,
+/// whatever its file is called.
+pub fn colour_cart(platform: Platform, rom: &Path) -> bool {
+    let read = |from: SeekFrom| -> std::io::Result<u8> {
+        let mut file = std::fs::File::open(rom)?;
+        file.seek(from)?;
+        let mut byte = [0u8; 1];
+        file.read_exact(&mut byte)?;
+        Ok(byte[0])
+    };
+    match platform {
+        Platform::Ngp => read(SeekFrom::Start(0x23)).is_ok_and(|b| b == 0x10),
+        Platform::Ws => read(SeekFrom::End(-9)).is_ok_and(|b| b & 1 != 0),
+        _ => false,
+    }
+}
+
 /// A WonderSwan game made to be held upright: bit 0 of the flags byte in
 /// the footer, the ROM's last 10 bytes (Mednafen reads it there too).
 pub fn ws_upright(rom: &Path) -> bool {
@@ -374,6 +393,8 @@ pub struct GameSession {
     full_pad: bool,
     /// A WonderSwan game held upright: its Controls are "wsv"'s.
     upright: bool,
+    /// A Neo Geo Pocket Color or WonderSwan Color game (its overlay's logo).
+    colour: bool,
     /// NES, SNES and Mega Drive take a second local player on port 2.
     second_player: bool,
     /// Port 2's buttons as slot. read them (Settings > Controls).
@@ -788,9 +809,12 @@ impl GameSession {
             // mode only; slot. never maps SELECT for the Lynx.
             Core::Handy => core.set_option("handy_rot", "Auto"),
             Core::BeetleLynx => core.set_option("lynx_rot_screen", "auto"),
-            // PokeMini runs on its own defaults, as RetroArch starts it: its
-            // dot-matrix LCD at 4x, the cart's rumble on the device.
-            Core::PokeMini => {}
+            // PokeMini runs on its own defaults, as RetroArch starts it (its
+            // LCD at 4x, the cart's rumble on the device), its LCD Filter
+            // the player's (Settings > Systems > Pokemon mini).
+            Core::PokeMini => core.set_option("pokemini_lcdfilter",
+                crate::settings::pokemini_lcd_filter_option(crate::settings::POKEMINI_LCD_FILTER
+                    .load(std::sync::atomic::Ordering::Acquire))),
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
@@ -1056,6 +1080,7 @@ impl GameSession {
             frame_count: 0, palette_live, core_kind: which,
             full_pad: matches!(platform, Platform::Snes | Platform::Md | Platform::Ws),
             upright: which == Core::BeetleCygne && ws_upright(rom),
+            colour: colour_cart(platform, rom),
             // The Game Gear, Neo Geo Pocket and WonderSwan have no second
             // pad: their link cable is another console.
             second_player: !platform.handheld() && !matches!(platform,
@@ -1339,6 +1364,9 @@ impl GameSession {
 
     /// A WonderSwan game held upright (turned on screen).
     pub fn upright(&self) -> bool { self.upright }
+
+    /// A Neo Geo Pocket Color or WonderSwan Color game.
+    pub fn colour(&self) -> bool { self.colour }
 
     /// A home console game whose port 2 is the other console's right now.
     pub fn port2_is_remote(&self) -> bool { self.second_player && self.in_multiplayer() }

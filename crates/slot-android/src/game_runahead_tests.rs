@@ -150,7 +150,7 @@ fn session(root: &Path, failure: Failure) -> (GameSession, Arc<Mutex<Calls>>) {
         rewind_frames: 0,
         frame_count: 0,
         full_pad: false,
-        upright: false,
+        upright: false, colour: false,
         second_player: false,
         port2: 0,
         layouts: [None, None],

@@ -3,6 +3,7 @@ use std::path::Path;
 use slot_gfx::{ScreenEffect, SRC_H, SRC_W, WHOLE_TEXTURE};
 use slot_store::{ini, Platform};
 
+use slot_ui::own_overlay::{self, Place};
 use slot_ui::watomsk::{self, Shape};
 
 use crate::settings::{Bezel, Shader};
@@ -254,6 +255,9 @@ pub enum WatomskFit {
     /// The picture at the top of the screen (this rect), his logo centred
     /// in the band under it (GBA and Mega Drive on narrower screens).
     Band([f32; 4]),
+    /// slot.'s own overlay for a 3.0 system, drawn around the picture at
+    /// this rect (at the top of the screen for a band).
+    Own(Place, [f32; 4]),
 }
 
 /// Under 4% of the panel on each side (or under it) a frame would only
@@ -286,6 +290,41 @@ pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u
     [(ow - pw) / 2.0, y, pw, ph]
 }
 
+/// Where a 3.0 system's own overlay goes on `panel` (Siham 2026-11-21):
+/// in the bars beside the Original Ratio picture when they are at least 8 %
+/// of the screen's height, else in a band of at least as much under the
+/// picture moved to the top, else nowhere. Never in Stretch. The window is
+/// the picture of `mode` itself.
+pub fn own_place(aspect: f32, frame: (u32, u32), mode: VideoMode, panel: (u32, u32))
+    -> Option<(Place, [f32; 4])>
+{
+    if mode == VideoMode::Stretch { return None; }
+    let (pw, ph) = (panel.0.max(1) as f32, panel.1.max(1) as f32);
+    let full = home_rect(VideoMode::Aspect, aspect, frame, panel, false);
+    let min = own_overlay::MIN_BAR * ph;
+    if full[3] >= ph - 0.5 && full[0] >= min {
+        Some((Place::Side, home_rect(mode, aspect, frame, panel, false)))
+    } else if full[2] >= pw - 0.5 && ph - full[3] >= min {
+        Some((Place::Band, home_rect(mode, aspect, frame, panel, true)))
+    } else {
+        None
+    }
+}
+
+/// The shapes a 3.0 system's picture takes: the WonderSwan's games are
+/// also played upright.
+fn own_aspects(platform: Platform) -> &'static [f32] {
+    match platform {
+        Platform::Sms => &[4.0 / 3.0],
+        Platform::Gg => &[160.0 / 144.0],
+        Platform::Ngp => &[160.0 / 152.0],
+        Platform::Ws => &[224.0 / 144.0, 144.0 / 224.0],
+        Platform::Lynx => &[160.0 / 102.0],
+        Platform::Pokemini => &[96.0 / 64.0],
+        _ => &[],
+    }
+}
+
 /// Where `bezel`'s Watomsk overlay goes (Siham's plan, 2026-11-03):
 /// GB/GBC beside the Original Ratio picture (not on near-square screens);
 /// GBA nowhere on 3:2, beside it on wider screens in Original Ratio
@@ -296,8 +335,12 @@ pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u
 pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u32, u32),
     home: (f32, (u32, u32))) -> Option<WatomskFit>
 {
-    let design = bezel.watomsk()?;
     if !bezel_fits(bezel, mode) || !Bezel::list(platform).contains(&bezel) { return None; }
+    if bezel.own(false).is_some() {
+        let (place, pic) = own_place(home.0, home.1, mode, panel)?;
+        return Some(WatomskFit::Own(place, pic));
+    }
+    let design = bezel.watomsk()?;
     let a = panel_aspect(panel);
     let (pw, ph) = (panel.0 as f32, panel.1 as f32);
     let side = |window: [f32; 4]| (window[0] >= ROOM * pw)
@@ -325,7 +368,7 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
                 None
             }
         }
-        // No overlay drawn for them yet.
+        // Their own overlays, above.
         Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
         | Platform::Lynx | Platform::Pokemini => None,
     }
@@ -340,7 +383,8 @@ pub fn bezel_offered(platform: Platform, panel: (u32, u32)) -> bool {
         Platform::Gba | Platform::Md => !screen_fits(platform, panel),
         Platform::Nes | Platform::Snes => a > 4.0 / 3.0 * 1.01,
         Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
-        | Platform::Lynx | Platform::Pokemini => false,
+        | Platform::Lynx | Platform::Pokemini => own_aspects(platform).iter().any(|&aspect|
+            own_place(aspect, platform.picture(), VideoMode::Aspect, panel).is_some()),
     }
 }
 
@@ -583,6 +627,51 @@ mod tests {
         assert!(bezel_hidden_message(Bezel::Default, Aspect).unwrap().contains("Integer"));
         assert_eq!(bezel_hidden_message(Bezel::Gb, Aspect), None);
     }
+
+    /// The 3.0 overlays' places, as in Siham's validated previews (v3,
+    /// 2026-11-21): bars of at least 8 % of the height, else a band.
+    #[test]
+    fn the_new_systems_overlays_go_where_there_is_room() {
+        use VideoMode::*;
+        let panels = [(1620, 1080), (1800, 1080), (1920, 1080), (1440, 1080), (1240, 1080), (1080, 1080)];
+        let place = |aspect: f32, frame, panel| own_place(aspect, frame, Aspect, panel).map(|(p, _)| p);
+        let row = |aspect: f32, frame: (u32, u32)| panels.map(|panel| place(aspect, frame, panel));
+        let (s, b, n) = (Some(Place::Side), Some(Place::Band), None);
+        assert_eq!(row(4.0 / 3.0, (256, 192)), [s, s, s, n, b, b], "Master System");
+        assert_eq!(row(160.0 / 144.0, (160, 144)), [s, s, s, s, n, b], "Game Gear");
+        assert_eq!(row(160.0 / 152.0, (160, 152)), [s, s, s, s, n, n], "Neo Geo Pocket");
+        assert_eq!(row(224.0 / 144.0, (224, 144)), [n, n, s, b, b, b], "WonderSwan");
+        assert_eq!(row(144.0 / 224.0, (144, 224)), [s, s, s, s, s, s], "WonderSwan upright");
+        assert_eq!(row(160.0 / 102.0, (160, 102)), [n, n, s, b, b, b], "Lynx");
+        assert_eq!(row(1.5, (96, 64)), [n, s, s, b, b, b], "Pokemon mini");
+        // Never in Stretch; the window is the picture of the size shown.
+        assert_eq!(own_place(4.0 / 3.0, (256, 192), Stretch, (1620, 1080)), None);
+        let (_, pic) = own_place(160.0 / 152.0, (160, 152), Actual, (1620, 1080)).unwrap();
+        assert_eq!(pic[3], 152.0 * 7.0);
+        let (_, pic) = own_place(224.0 / 144.0, (224, 144), Aspect, (1440, 1080)).unwrap();
+        assert_eq!(pic[1], 0.0, "picture at the top over a band");
+    }
+
+    #[test]
+    fn the_new_systems_offer_their_bezel_where_it_shows() {
+        let kpa = (960, 640);
+        for platform in [Platform::Sms, Platform::Gg, Platform::Ngp, Platform::Ws] {
+            assert!(bezel_offered(platform, kpa), "{platform:?}");
+        }
+        assert!(!bezel_offered(Platform::Lynx, kpa));
+        assert!(!bezel_offered(Platform::Pokemini, kpa));
+        assert!(!bezel_offered(Platform::Ngp, (720, 720)));
+        // A Color game gets the Color overlay with AUTO; both stay choosable.
+        let home = (160.0 / 152.0, (160, 152));
+        let fit = watomsk_fit(Bezel::NgpAuto, Platform::Ngp, VideoMode::Aspect, kpa, home);
+        assert!(matches!(fit, Some(WatomskFit::Own(Place::Side, _))));
+        use slot_ui::own_overlay::Design;
+        assert_eq!(Bezel::NgpAuto.own(true), Some(Design::NeoGeoPocketColor));
+        assert_eq!(Bezel::NgpAuto.own(false), Some(Design::NeoGeoPocket));
+        assert_eq!(Bezel::WsAuto.own(true), Some(Design::WonderSwanColor));
+        assert_eq!(Bezel::WsColor.own(false), Some(Design::WonderSwanColor));
+        assert_eq!(watomsk_fit(Bezel::None, Platform::Ngp, VideoMode::Aspect, kpa, home), None);
+    }
 }
 
 #[cfg(test)]
@@ -615,6 +704,7 @@ mod watomsk_preview {
                             let band = slot_ui::watomsk::band(design).unwrap();
                             (fit_band(&band.art(), panel, pic), pic)
                         }
+                        WatomskFit::Own(..) => continue,
                     };
                     let name = format!("{dir}/{:?}-{:?}-{}-{}x{}-pic{}_{}_{}_{}.rgba", platform, bezel,
                         mode.as_str(), panel.0, panel.1,

@@ -200,7 +200,8 @@ impl EmulationProfile {
             |settings::SHADER_LYNX_KEY|settings::SHADER_POKEMINI_KEY if platform!=Platform::Gba =>
                 self.screen_shader=Some(view.shader_for(platform)),
             2|22|23|24 => self.colour_correction_override=Some(view.colour_for(platform)),
-            25..=27|44..=46 => self.screen_bezel=Some(view.bezel_for(platform)),
+            25..=27|44..=46|settings::BEZEL_SMS_KEY..=settings::BEZEL_POKEMINI_KEY =>
+                self.screen_bezel=Some(view.bezel_for(platform)),
             3 if platform==Platform::Gb =>
                 self.gb_palettes_override=Some(view.gb_palettes),
             4 => self.ff_speed_override=Some(view.ff_speed),

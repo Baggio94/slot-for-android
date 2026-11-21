@@ -111,7 +111,7 @@ pub struct BandArt<'a> {
 const SHADOW: [f32; 13] = [94.0, 94.0, 84.0, 67.0, 53.0, 39.0, 28.0, 19.0, 11.0, 6.0, 2.0, 0.0, 0.0];
 const SHADOW_STEP: f32 = 3.0;
 
-fn shadow(d: f32) -> f32 {
+pub(crate) fn shadow(d: f32) -> f32 {
     let t = (d / SHADOW_STEP).max(0.0);
     let i = t.floor() as usize;
     if i + 1 >= SHADOW.len() { return 0.0; }
