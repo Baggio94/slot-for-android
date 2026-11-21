@@ -50,7 +50,7 @@ internal object RetroArchStorage {
         val shareGbaSaves: Boolean = false
     ) {
         /** The in-game save's name: <rom>.srm, .eeprom (Handy) or .eep (PokeMini). */
-        val saveName: String get() = saveLocal.name
+        val saveName: String get() = "$stem.${Systems.saveExtension(core)}"
     }
 
     fun target(context: Context, rawUri: String, core: String, savesTree: Uri?, statesTree: Uri?,

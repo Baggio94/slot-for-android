@@ -302,7 +302,7 @@ internal object RommSaves {
     /** The server's newest save for this game: our core's first, else any
      *  save of the same kind (.srm, .eeprom, .eep) another client sent. */
     internal fun newest(saves: List<Romm.ServerSave>, target: RetroArchStorage.Target): Romm.ServerSave? {
-        val kind = "." + target.saveName.substringAfterLast('.')
+        val kind = "." + Systems.saveExtension(target.core)
         val srm = saves.filter { it.fileName.endsWith(kind, ignoreCase = true) }
         val ours = srm.filter { isOurs(it, target) }
         return (ours.ifEmpty { srm }).maxByOrNull { it.updatedAt }
