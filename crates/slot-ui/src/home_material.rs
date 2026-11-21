@@ -58,7 +58,7 @@ pub(crate) fn front(m: HomeMould) -> Arc<Vec<u8>> {
     let source = crate::bitmaps::dense_png(m.art().neutral, w, h);
     let mut rgba = source.to_vec();
     let (lx, ly, lw, lh) = m.art().label;
-    let (x0, y0, x1, y1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    let (x0, y0, x1, y1) = (px(lx), px(ly), px(lx) + px(lw), px(ly) + px(lh));
     let width = px(w);
     let outline = clean_outline(m, width, px(h));
     for (n, p) in rgba.chunks_exact_mut(4).enumerate() {

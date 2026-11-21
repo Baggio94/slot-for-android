@@ -825,7 +825,13 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
     // compositor drew underneath (the board) shows through and stays put while the shell moves.
     // The label box stays opaque.
     let (lx, ly, lw, lh) = s.label;
-    let (lx0, ly0, lx1, ly1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    let (lx0, ly0, mut lx1, mut ly1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    if matches!(s.mould, Mould::Home(m) if crate::home_material::refined(m)) {
+        // paste_label scales the origin and size separately. Match its
+        // exact texels on fractional-density panels (e.g. the KPA's 4/3x).
+        lx1 = lx0 + px(lw);
+        ly1 = ly0 + px(lh);
+    }
     // A mould's own clear plastic (the WonderSwan Color's, the Pokémon
     // mini's frosted cap) instead of the same 80% everywhere.
     let opacity = match s.mould {

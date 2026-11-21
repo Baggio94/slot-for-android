@@ -57,6 +57,8 @@ negative results for 3.0 labels are retried once with the new mould rules.
 `new_cart_material` checks colour response, canvas/label registration at
 1×, 4/3× and 3×, transparent mini body/cap, opaque stickers, clipped corners,
 fixed contacts, deterministic glitter and the repaired Codemasters outline.
+An additional regression check prevents an opaque unprinted strip beside
+clear labels when the origin and width round differently at fractional density.
 The existing cartridge/density/upstream asset tests remain in the CI suite.
 Android JVM tests cover special-mould selection, regional label compatibility,
 cached-label recutting and support-2D fallback for all new platforms.

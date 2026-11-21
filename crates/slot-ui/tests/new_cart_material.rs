@@ -99,3 +99,20 @@ fn codemasters_top_has_no_scan_cracks_inside_its_existing_mould() {
     }
     assert_eq!(pixel(&face,0,0)[3],0);
 }
+
+#[test]
+fn fractional_density_leaves_no_opaque_unprinted_strip_beside_a_clear_label() {
+    for scale in [1.0, 4.0/3.0, 1.5, 3.0] {
+        density::with_scale(scale, || {
+            let c = cart(HomeMould::GameGear,[124,150,178],ShellFinish::Clear);
+            let (lx,ly,w,h) = slot_ui::label_rect(&c);
+            let face = slot_ui::cart_face_with(&c, Some([240,80,140,255].repeat((density::px(w)*density::px(h)) as usize)));
+            let bare = front(&c);
+            for (x,y) in [(density::px(lx)+density::px(w), density::px(ly+h/2)),
+                (density::px(lx+w/2), density::px(ly)+density::px(h))] {
+                let a = ((y*density::px(face.w)+x)*4+3) as usize;
+                assert_eq!(face.rgba[a],bare.rgba[a],"density {scale}: opaque strip at {x},{y}");
+            }
+        });
+    }
+}
