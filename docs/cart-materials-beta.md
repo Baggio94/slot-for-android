@@ -43,8 +43,12 @@ Logical pixels (panel-density scaling is applied by the renderer):
 `HomeCartLabels.kt` uses the native mould table for special SMS/GG labels,
 and supplies these windows for support-2D fallback. The own art set remains
 the first source and sticker scans remain preferred. Western and Japanese
-SMS labels are selected for their respective shapes. Cached automatic labels
-cut for a different mould can be fetched again. Custom choices are protected
+SMS labels are selected for their respective shapes.
+For Game Gear Codemasters, the full cart render is preferred exclusively:
+the current Micro Machines sticker scan in the own set is horizontal and
+cannot fit the tall well. If absent from the own set, the existing ScreenScraper
+fallback is used; an unavailable fitting image keeps the handwritten label.
+Cached automatic labels cut for a different mould can be fetched again. Custom choices are protected
 by the existing byte comparison before replacing the displayed label. Old
 negative results for 3.0 labels are retried once with the new mould rules.
 

@@ -138,6 +138,10 @@ class HomeCartLabelsTest {
         val gg = rom(Systems.GG, "Micro Machines (Europe)")
         assertTrue(HomeCartLabels.recut(JSONObject().put(gg.uri, ""), gg))
         assertEquals(false, HomeCartLabels.recut(JSONObject().put(gg.uri, "gg_codemasters"), gg))
+        val render = HomeCartLabels.Media("support-2D", "eu", "https://a/codemasters-cart")
+        val wrongScan = HomeCartLabels.Media("support-texture", "eu", "https://a/horizontal-label")
+        assertEquals(render, HomeCartLabels.pick(listOf(wrongScan, render), gg))
+        assertNull(HomeCartLabels.pick(listOf(wrongScan), gg))
     }
 
     @Test

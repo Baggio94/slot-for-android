@@ -251,7 +251,9 @@ internal object HomeCartLabels {
             medias.firstOrNull { it.type == type && it.region == region }
         }
         return when (val shell = shell(rom)) {
-            "md_vr" -> best("support-2D")
+            // Codemasters' GG scans can be the standard horizontal label
+            // (Micro Machines in our set), not this mould's tall sticker.
+            "md_vr", "gg_codemasters" -> best("support-2D")
             "md_sk" -> best("support-texture")
             else -> best("support-texture") ?: best("support-2D")?.takeIf { shell in WINDOWS }
         }
