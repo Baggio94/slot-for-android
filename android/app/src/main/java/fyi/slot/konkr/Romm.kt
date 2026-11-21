@@ -711,11 +711,13 @@ internal object Romm {
     }
 
     /** Fetches the BIOS named in `wanted` (gba_bios.bin…) from the player's
-     *  GB, GBC and GBA platforms on RomM; returns those slot. kept. */
+     *  platforms on RomM (GB, GBC, GBA, Lynx, Game Gear, Master System, Mega
+     *  Drive, Pokemon mini); returns those slot. kept. */
     fun fetchBios(context: Context, wanted: Set<String>): List<String> {
         val left = wanted.toMutableSet()
         val added = mutableListOf<String>()
-        val systems = setOf(Systems.GB, Systems.GBC, Systems.GBA)
+        val systems = setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX, Systems.GG,
+            Systems.SMS, Systems.MD, Systems.POKEMINI)
         for (console in consoles(context).filter { it.platform in systems }) {
             if (left.isEmpty()) break
             for ((id, file) in firmware(context, console.id)) {

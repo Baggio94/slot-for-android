@@ -792,11 +792,22 @@ impl GameSession {
             Core::GenesisPlusGx => {
                 // Sega CD and the lock-on adapters are not carts slot. shows.
                 core.set_option("genesis_plus_gx_lock_on", "disabled");
+                // The Master System's and Game Gear's own boot screen when
+                // the player's BIOS is there (bios_U/E/J.sms, bios.gg; the
+                // core runs the game alone otherwise). Mega Drive games keep
+                // starting as before.
+                core.set_option("genesis_plus_gx_bios",
+                    if matches!(platform, Platform::Sms | Platform::Gg) { "enabled" } else { "disabled" });
             }
             Core::Picodrive => {}
-            // Gearsystem, NeoPop and RACE run on their own defaults, as
-            // RetroArch starts them.
-            Core::Gearsystem | Core::Neopop | Core::Race => {}
+            // Gearsystem shows the Game Gear's boot screen when bios.gg is
+            // there; NeoPop and RACE run on their own defaults, as RetroArch
+            // starts them.
+            Core::Gearsystem => {
+                let gg = platform == Platform::Gg && bios.join("bios.gg").is_file();
+                core.set_option("gearsystem_bios_gg", if gg { "Enabled" } else { "Disabled" });
+            }
+            Core::Neopop | Core::Race => {}
             // A game held upright is turned on screen, its buttons with it
             // (Beetle Cygne's own Auto mapping); never SELECT to rotate.
             Core::BeetleCygne => {
