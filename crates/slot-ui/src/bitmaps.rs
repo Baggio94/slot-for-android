@@ -286,7 +286,7 @@ pub fn console_slot_takes_dark_ink(family: usize, theme: usize) -> bool {
     match theme {
         1 => false,
         2 => true,
-        _ => !matches!(family, 3 | 6 | 7..=13),
+        _ => !matches!(family, 3 | 6 | 9..=13),
     }
 }
 

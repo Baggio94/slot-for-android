@@ -65,9 +65,9 @@ impl MenuPalette {
             4 => ([178, 178, 170], [206, 206, 198], [202, 211, 168]),  // Game Boy
             5 => ([236, 188, 20], [252, 224, 128], [243, 227, 160]), // Game Boy Color
             // The 3.0 consoles: their bar's plastic, their mosaic's ground.
-            7 => ([46, 46, 46], [78, 78, 80], [207, 219, 232]),     // Neo Geo Pocket
-            8 => ([44, 43, 45], [76, 75, 79], [219, 209, 230]),     // WonderSwan
-            9 => ([58, 57, 57], [90, 89, 90], [219, 209, 230]),     // WonderSwan Color
+            7 => ([186, 188, 194], [214, 216, 222], [207, 219, 232]), // Neo Geo Pocket, platinum silver
+            8 => ([222, 219, 210], [242, 240, 234], [219, 209, 230]), // WonderSwan, pearl white
+            9 => ([112, 138, 188], [138, 162, 206], [219, 209, 230]), // WonderSwan Color, pearl blue
             10 => ([40, 40, 40], [72, 72, 74], [196, 217, 213]),    // Game Gear
             11 => ([40, 40, 40], [72, 72, 74], [220, 196, 192]),    // Master System
             12 => ([40, 39, 39], [72, 71, 72], [232, 214, 182]),    // Lynx
@@ -278,13 +278,18 @@ mod tests {
 
     #[test]
     fn original_menus_write_as_the_clock_on_their_console_bar() {
-        for family in 0..7 {
+        for family in 0..14 {
             let dark = crate::bitmaps::console_slot_takes_dark_ink(family, 0);
             assert_eq!(MenuPalette::original(family).ink.is_some(), dark, "family {family}");
         }
         // The GBA's indigo and the Mega Drive's black keep white text.
         assert!(MenuPalette::original(6).ink.is_none());
         assert!(MenuPalette::original(3).ink.is_none());
+        // The silver Neo Geo Pocket and the pearl WonderSwan write dark; the
+        // pearl blue WonderSwan Color keeps white.
+        assert!(MenuPalette::original(7).ink.is_some());
+        assert!(MenuPalette::original(8).ink.is_some());
+        assert!(MenuPalette::original(9).ink.is_none());
         assert!(MenuPalette::LIGHT.ink.is_some());
     }
 
