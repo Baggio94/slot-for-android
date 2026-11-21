@@ -791,6 +791,9 @@ pub struct Settings {
     /// 3.0 betas saved with none.
     #[serde(default)]
     pub lcd_3_0: bool,
+    /// Set once rc1's LCD Grid v2 / LCD1x handheld defaults became LCD3x.
+    #[serde(default)]
+    pub lcd3x_3_0: bool,
     /// Set once the 3.0 systems whose overlay has thin bars on this screen
     /// were started without it (Siham 2026-11-21).
     #[serde(default)]
@@ -848,16 +851,16 @@ pub struct Settings {
 }
 fn shader_gbav_default() -> Shader { Shader::Lcd3x }
 fn shader_sms_default() -> Shader { Shader::ZfastCrt }
-fn shader_gg_default() -> Shader { Shader::LcdGridV2 }
-fn shader_ws_default() -> Shader { Shader::Lcd1x }
+fn shader_gg_default() -> Shader { Shader::Lcd3x }
+fn shader_ws_default() -> Shader { Shader::Lcd3x }
 fn shader_off() -> Shader { Shader::Off }
 fn blending_ws_default() -> Blending { Blending::Mix }
 /// A 3.0 handheld's LCD shader on a fresh install.
 fn lcd_3_0_default(platform: slot_store::Platform) -> Shader {
     match platform {
-        slot_store::Platform::Ws => Shader::Lcd1x,
         slot_store::Platform::Pokemini => Shader::Off,
-        _ => Shader::LcdGridV2,
+        // LCD3x on every LCD handheld (Siham 2026-11-21).
+        _ => Shader::Lcd3x,
     }
 }
 impl Default for Settings {
@@ -869,9 +872,9 @@ impl Default for Settings {
             shader_gbc: Shader::Off,
             shader_nes: Shader::ZfastCrt, shader_snes: Shader::ZfastCrt,
             shader_md: Shader::ZfastCrt,
-            shader_sms: Shader::ZfastCrt, shader_gg: Shader::LcdGridV2,
-            shader_ngp: Shader::LcdGridV2, shader_ws: Shader::Lcd1x,
-            shader_lynx: Shader::LcdGridV2, shader_pokemini: Shader::Off,
+            shader_sms: Shader::ZfastCrt, shader_gg: Shader::Lcd3x,
+            shader_ngp: Shader::Lcd3x, shader_ws: Shader::Lcd3x,
+            shader_lynx: Shader::Lcd3x, shader_pokemini: Shader::Off,
             colour_correction_gba: false, colour_correction_gb: false,
             colour_correction_gbc: false,
             bezel_gba: Bezel::None, bezel_gbc: Bezel::Default, bezel_gb: Bezel::Default,
@@ -898,7 +901,7 @@ impl Default for Settings {
             show_recents: false, show_titles: false, test_shelf: false, touchscreen: true, home_bezel_three_two: false,
             pokemini_lcd_filter: 0,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
-            simpletex_gba_colour: false, lcd_3_0: false, own_bezels_room: false,
+            simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, own_bezels_room: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
             blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
             blending_sms: Blending::Off, blending_gg: Blending::Off,
@@ -943,6 +946,7 @@ impl Settings {
             gb_overlays_watomsk: true,
             simpletex_gba_colour: true,
             lcd_3_0: true,
+            lcd3x_3_0: true,
             gbav_fsr: true,
             ..Self::default()
         }
@@ -1039,6 +1043,17 @@ impl Settings {
                     }
                     if s.blending_ws == Blending::Off { s.blending_ws = Blending::Mix; }
                     s.lcd_3_0 = true;
+                }
+                // Once: rc1's defaults (LCD Grid v2, LCD1x on the WonderSwan)
+                // become LCD3x (Siham 2026-11-21); any other choice stays.
+                if !s.lcd3x_3_0 {
+                    for platform in [P::Gg, P::Ngp, P::Lynx] {
+                        if s.shader_for(platform) == Shader::LcdGridV2 {
+                            s.set_shader_for(platform, Shader::Lcd3x);
+                        }
+                    }
+                    if s.shader_ws == Shader::Lcd1x { s.shader_ws = Shader::Lcd3x; }
+                    s.lcd3x_3_0 = true;
                 }
                 if s.gb_palette as usize >= GbPalette::COUNT { s.gb_palette = 1; }
                 if !REWIND_SPEEDS.contains(&s.rewind_speed) { s.rewind_speed = 2; }
@@ -2494,7 +2509,7 @@ mod tests {
             "shader_lynx":"off","shader_pokemini":"off","blending_ws":"Off"}"#).unwrap();
         let mut s = Settings::load(&dir);
         assert_eq!((s.shader_gg, s.shader_ngp, s.shader_ws, s.shader_lynx, s.shader_pokemini),
-            (Shader::LcdGridV2, Shader::LcdGridV2, Shader::Lcd1x, Shader::LcdGridV2, Shader::Off));
+            (Shader::Lcd3x, Shader::Lcd3x, Shader::Lcd3x, Shader::Lcd3x, Shader::Off));
         assert_eq!(s.blending_ws, Blending::Mix);
         // Off chosen afterwards stays Off.
         s.shader_ngp = Shader::Off;
@@ -2511,12 +2526,27 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
     #[test]
+    fn rc1_lcd_defaults_become_lcd3x_once() {
+        let dir = std::env::temp_dir().join(format!("slot-lcd3x-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(NAME), r#"{"lcd_3_0":true,"shader_gg":"lcdgridv2","shader_ngp":"dot",
+            "shader_ws":"lcd1x","shader_lynx":"lcdgridv2","shader_pokemini":"off"}"#).unwrap();
+        let mut s = Settings::load(&dir);
+        assert_eq!((s.shader_gg, s.shader_ngp, s.shader_ws, s.shader_lynx),
+            (Shader::Lcd3x, Shader::Dot, Shader::Lcd3x, Shader::Lcd3x));
+        // LCD Grid v2 chosen afterwards stays.
+        s.shader_gg = Shader::LcdGridV2;
+        s.save(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).shader_gg, Shader::LcdGridV2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+    #[test]
     fn roundtrip_and_invalid_values() {
         let dir = std::env::temp_dir().join(format!("slot-konkr-dev14-{}", std::process::id()));
         // Already past the one-time 3:2 home overlay change.
         let mut s = Settings { home_bezel_three_two: true, gb_palette_twb64: true,
             gb_overlays_watomsk: true, simpletex_gba_colour: true, gbav_fsr: true,
-            lcd_3_0: true, ..Settings::default() };
+            lcd_3_0: true, lcd3x_3_0: true, ..Settings::default() };
         s.change(0, true); s.change(6, true); s.gb_palette = 47;
         s.save(&dir).unwrap();
         assert_eq!(Settings::load(&dir), s);

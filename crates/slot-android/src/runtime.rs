@@ -263,6 +263,13 @@ const RA_NOTICE_LIMIT: usize = 8;
 // Up to 96 prepared cartridge faces (~70 MiB worst-case native RGBA artwork).
 // KONKR has 4 GiB shared RAM; the LRU still reuses existing GLES textures.
 const CART_TEXTURE_CACHE_CAPACITY: usize = 160;
+
+/// Steps between two carts on a shelf that wraps around.
+fn cyclic_distance(a: usize, b: usize, len: usize) -> usize {
+    if len == 0 { return 0; }
+    let d = a.abs_diff(b) % len;
+    d.min(len - d)
+}
 const CART_IDLE_PREFETCH_CAP: usize = 155;
 const CART_IDLE_GRACE: Duration = Duration::from_millis(400);
 const CART_GPU_UPLOAD_BUDGET: Duration = Duration::from_millis(2);
@@ -5536,9 +5543,16 @@ impl Engine {
                 // Pin selected +/- one cart from each nonempty shelf (up to
                 // 15 across GBA/GB/GBC/Recents/Favorites). Preserve warm art
                 // while the 96-face LRU bounds shared GPU memory.
+                // Distances wrap: on the first cart the left neighbour is the
+                // last one, and evicting it made it flicker on every upload.
+                // Nothing on screen on the active shelf is ever taken.
+                let active = self.active;
+                let on_screen = self.shelves[active].on_screen();
                 let victim = self.texture_cache.iter().position(|(sid, index, _)| {
                     self.shelves.get(*sid).is_none_or(|shelf|
-                        shelf.carts.is_empty() || shelf.index.abs_diff(*index) > 1)
+                        shelf.carts.is_empty()
+                            || (cyclic_distance(shelf.index, *index, shelf.carts.len()) > 1
+                                && !(*sid == active && on_screen.contains(index))))
                 }).unwrap_or(0);
                 let (old_shelf, old_index, tex) = self.texture_cache
                     .remove(victim).expect("nonempty texture pool");
@@ -5625,6 +5639,19 @@ impl Engine {
         } else {
             self.cart_render.prioritize(&priority);
         }
+        // Touch the LRU least important first, so the selected cart and its
+        // neighbours end up the most recently used.
+        for (sid, index) in priority.iter().rev().copied() {
+            if self.shelves.get(sid).is_some_and(|shelf| shelf.face(index).is_some()) {
+                if let Some(pos) = self.texture_cache.iter()
+                    .position(|(s, i, _)| *s == sid && *i == index)
+                {
+                    if let Some(entry) = self.texture_cache.remove(pos) {
+                        self.texture_cache.push_back(entry);
+                    }
+                }
+            }
+        }
         for (sid, index) in priority {
             // Clear-cart composite is expensive: delay its three material
             // uploads until the carousel has settled.
@@ -5634,13 +5661,6 @@ impl Engine {
                 self.shelves[sid].carts.get(index).is_some_and(slot_ui::is_clear) &&
                 self.clear_material.map(|m|m.key)!=Some((sid,index));
             if self.shelves[sid].face(index).is_some() {
-                if let Some(pos) = self.texture_cache.iter()
-                    .position(|(s, i, _)| *s == sid && *i == index)
-                {
-                    if let Some(entry) = self.texture_cache.remove(pos) {
-                        self.texture_cache.push_back(entry);
-                    }
-                }
                 if !wants_material && !self.relabelled.contains(&(sid, index)) {continue;}
             }
             // A freshly configured AVD has no ROMs yet. Skip the empty
@@ -6065,7 +6085,12 @@ impl Engine {
     }
     fn screen_rows_on(platform: Platform, panel: (u32,u32))-> &'static [usize] {
         let bezel=video_mode::bezel_offered(platform,panel);
+        // A system whose shape the panel already has offers no Screen Size,
+        // in game as on its Settings page (Siham 2026-11-21).
+        let fits=video_mode::screen_fits(platform,panel);
         match (platform,bezel) {
+            (Platform::Snes|Platform::Md|Platform::Ws|Platform::Lynx|Platform::Pokemini,false) if fits=>&[124],
+            (Platform::Snes|Platform::Md|Platform::Ws|Platform::Lynx|Platform::Pokemini,true) if fits=>&[124,90],
             (Platform::Gba,false)=>&[34,29],
             (Platform::Gba,true)=>&[34,29,90],
             (Platform::Gbc,false)=>&[88,29],
@@ -6094,7 +6119,18 @@ impl Engine {
     }
     fn screen_keys_on(platform: Platform, panel: (u32,u32))-> &'static [usize] {
         let bezel=video_mode::bezel_offered(platform,panel);
+        let fits=video_mode::screen_fits(platform,panel);
         match (platform,bezel) {
+            (Platform::Snes,false) if fits=>&[48],
+            (Platform::Md,false) if fits=>&[49],
+            (Platform::Snes,true) if fits=>&[48,45],
+            (Platform::Md,true) if fits=>&[49,46],
+            (Platform::Ws,false) if fits=>&[SHADER_WS_KEY],
+            (Platform::Ws,true) if fits=>&[SHADER_WS_KEY,BEZEL_WS_KEY],
+            (Platform::Lynx,false) if fits=>&[SHADER_LYNX_KEY],
+            (Platform::Lynx,true) if fits=>&[SHADER_LYNX_KEY,BEZEL_LYNX_KEY],
+            (Platform::Pokemini,false) if fits=>&[SHADER_POKEMINI_KEY],
+            (Platform::Pokemini,true) if fits=>&[SHADER_POKEMINI_KEY,BEZEL_POKEMINI_KEY],
             (Platform::Gba,false)=>&[0,22],
             (Platform::Gba,true)=>&[0,22,25],
             (Platform::Gbc,false)=>&[21,23],
@@ -10695,6 +10731,21 @@ pub(crate) use jni_exports::exercise_session_graphics_recovery;
 /// screen shape and for every choice the row cycles through. A key missing
 /// from setting_face would draw a blank value (the NES/SNES/MD Shader row,
 /// 2026-11-04, after the Default Core rows on 2026-11-02).
+#[cfg(test)]
+mod texture_pool_tests {
+    use super::cyclic_distance;
+
+    #[test]
+    fn the_first_carts_left_neighbour_is_the_last_cart() {
+        assert_eq!(cyclic_distance(0, 9, 10), 1);
+        assert_eq!(cyclic_distance(9, 0, 10), 1);
+        assert_eq!(cyclic_distance(0, 5, 10), 5);
+        assert_eq!(cyclic_distance(3, 4, 10), 1);
+        assert_eq!(cyclic_distance(0, 0, 1), 0);
+        assert_eq!(cyclic_distance(0, 0, 0), 0);
+    }
+}
+
 #[cfg(test)]
 mod settings_value_tests {
     use super::*;

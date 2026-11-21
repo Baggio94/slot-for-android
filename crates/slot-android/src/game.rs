@@ -809,12 +809,18 @@ impl GameSession {
             // mode only; slot. never maps SELECT for the Lynx.
             Core::Handy => core.set_option("handy_rot", "Auto"),
             Core::BeetleLynx => core.set_option("lynx_rot_screen", "auto"),
-            // PokeMini runs on its own defaults, as RetroArch starts it (its
-            // LCD at 4x, the cart's rumble on the device), its LCD Filter
-            // the player's (Settings > Systems > Pokemon mini).
-            Core::PokeMini => core.set_option("pokemini_lcdfilter",
-                crate::settings::pokemini_lcd_filter_option(crate::settings::POKEMINI_LCD_FILTER
-                    .load(std::sync::atomic::Ordering::Acquire))),
+            // PokeMini runs on its own defaults, as RetroArch starts it (the
+            // cart's rumble on the device), its LCD Filter the player's
+            // (Settings > Systems > Pokemon mini), and its LCD drawn at the
+            // scale that leaves the screen a whole multiple (KPA: 5x, then
+            // x2), else 4x as RetroArch.
+            Core::PokeMini => {
+                core.set_option("pokemini_lcdfilter",
+                    crate::settings::pokemini_lcd_filter_option(crate::settings::POKEMINI_LCD_FILTER
+                        .load(std::sync::atomic::Ordering::Acquire)));
+                let scale = crate::video_mode::pokemini_scale(crate::runtime::panel_size());
+                core.set_option("pokemini_video_scale", &format!("{scale}x"));
+            }
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.

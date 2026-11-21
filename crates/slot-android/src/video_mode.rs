@@ -136,6 +136,18 @@ pub fn screen_fits(platform: Platform, panel: (u32, u32)) -> bool {
     (panel / shape - 1.0).abs() < 0.01
 }
 
+/// PokeMini's own LCD scale (1x..6x of 96x64) for this panel: the largest
+/// whose picture the panel then shows at a whole multiple, so its dot
+/// matrix stays even; 4x, PokeMini's default, when no scale does.
+pub fn pokemini_scale(panel: (u32, u32)) -> u32 {
+    let (w, h) = panel;
+    let fit = (w / 96).min(h / 64);
+    // Whole only when the limiting side is filled exactly.
+    let exact = fit > 0 && ((w / 96 <= h / 64 && w % 96 == 0) || (h / 64 <= w / 96 && h % 64 == 0));
+    if !exact { return 4; }
+    (1..=6).rev().find(|s| fit % s == 0).unwrap_or(4)
+}
+
 /// Every system starts at Original Ratio, full height (Siham's per-ratio
 /// plan, 2026-11-04: GB, GBC and GBA on every screen; GBA already fills a
 /// 3:2 panel), except NES and SNES on screens narrower than 4:3: Integer
@@ -679,6 +691,13 @@ mod tests {
         }
         assert!(!bezel_offered(Platform::Lynx, kpa));
         assert!(!bezel_offered(Platform::Pokemini, kpa));
+        // KPA 960x640: 5x (480x320), then exactly x2.
+        assert_eq!(pokemini_scale(kpa), 5);
+        assert_eq!(pokemini_scale((1440, 960)), 5);
+        assert_eq!(pokemini_scale((1152, 768)), 6);
+        assert_eq!(pokemini_scale((1920, 1080)), 4);
+        assert_eq!(pokemini_scale((640, 480)), 4);
+        assert_eq!(pokemini_scale((720, 720)), 4);
         assert!(!bezel_offered(Platform::Ngp, (720, 720)));
         // A Color game gets the Color overlay with AUTO; both stay choosable.
         let home = (160.0 / 152.0, (160, 152));
