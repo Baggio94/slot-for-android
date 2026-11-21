@@ -857,6 +857,19 @@ impl GameSession {
         // Saves/bsnes/<game>.srm like every other core's. Handy (.eeprom),
         // PokeMini (.eep), Beetle NeoPop (.flash) and RACE (.ngf) name
         // theirs the same way, as in RetroArch.
+        // 3.0-rc1 let NeoPop and RACE name their flash after the cached ROM
+        // file: that save becomes the game's own once.
+        if linked_boot.is_none() {
+            if let (Some(ext), Some(cached)) = (match which {
+                Core::Neopop => Some("flash"), Core::Race => Some("ngf"), _ => None,
+            }, rom.file_stem().and_then(|s| s.to_str())) {
+                let old = core_root.join(format!("{cached}.{ext}"));
+                let new = core_root.join(format!("{rom_stem}.{ext}"));
+                if cached != rom_stem && old.is_file() && !new.exists() {
+                    let _ = std::fs::rename(&old, &new);
+                }
+            }
+        }
         let named_rom = if matches!(which, Core::Bsnes | Core::Handy | Core::PokeMini
                 | Core::Neopop | Core::Race)
             && linked_boot.is_none() {
