@@ -2366,9 +2366,10 @@ impl GameSession {
         atomic_write(&self.retroarch_export, &container)
             .map_err(|e| format!("RetroArch state export: {e}"))?;
         // Its picture beside it, for Sync States with RomM (3.0): what the
-        // state shows in RomM. Never fails the save.
-        if let Some(png) = thumb::png_fit(self.core.video_xrgb8888(), self.core.video_size(),
-            self.core.display_aspect()) {
+        // state shows in RomM. Only with the sync on; never fails the save.
+        let syncing = crate::runtime::ROMM_STATES.load(std::sync::atomic::Ordering::Acquire) == 2;
+        if let Some(png) = syncing.then(|| thumb::png_fit(self.core.video_xrgb8888(), self.core.video_size(),
+            self.core.display_aspect())).flatten() {
             let mut picture = self.retroarch_export.clone().into_os_string();
             picture.push(".png");
             if let Err(error) = atomic_write(std::path::Path::new(&picture), &png) {

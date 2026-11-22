@@ -2730,8 +2730,14 @@ class MainActivity : Activity() {
                     }
                     // Sync States with RomM (3.0, beta): the server's newer
                     // resume state, for this core, in what's left of the wait.
-                    val stateNote = if (romm.deleteHere) null else {
-                        val left = RommSaves.LAUNCH_BUDGET_MS - (SystemClock.elapsedRealtime() - rommAt)
+                    // One wait for both, 2 s at most: none left, the
+                    // handheld's state, checked again at the next launch.
+                    val left = RommSaves.LAUNCH_BUDGET_MS - (SystemClock.elapsedRealtime() - rommAt)
+                    val stateNote = if (romm.deleteHere || !RommStates.enabled(this@MainActivity)) null
+                    else if (left < 150L) {
+                        RommStates.unchecked(this@MainActivity, shared)
+                        null
+                    } else {
                         val states = RommStates.beforeLaunch(this@MainActivity, shared, romm, left,
                             { askRommStateConflict() }, { askStateDeletedElsewhere(shared.stem) })
                         if (states.deleteHere) {

@@ -148,7 +148,7 @@ internal object RommStates {
         val platform = RommSaves.platformOf(target) ?: return Outcome(null)
         val started = System.nanoTime()
         return try {
-            Romm.within(budgetMs.coerceAtLeast(500L)) { checkServer(context, target, platform, save, ask, askDeletedElsewhere) }.also {
+            Romm.within(budgetMs) { checkServer(context, target, platform, save, ask, askDeletedElsewhere) }.also {
                 uncheckedFile(context, target).delete()
             }
         } catch (error: Romm.SignedOut) {
@@ -163,6 +163,13 @@ internal object RommStates {
                 "the handheld's state", error)
             Outcome(null)
         }
+    }
+
+    /** The launch had no time left to check: the state goes up after the
+     *  game only if the server didn't change meanwhile (as RommSaves). */
+    fun unchecked(context: Context, target: RetroArchStorage.Target) {
+        try { uncheckedFile(context, target).apply { parentFile?.mkdirs() }.writeText("1") } catch (_: Exception) {}
+        SlotLog.i(TAG, "RomM state of ${target.core}/${target.stem} not checked: no time left at the launch")
     }
 
     private fun checkServer(context: Context, target: RetroArchStorage.Target, platform: String,

@@ -916,7 +916,7 @@ const TASK_SCAN: u8 = 5;
 static ROMM_SYNC: AtomicU8 = AtomicU8::new(0);
 /// Sync States with RomM (3.0): as ROMM_SYNC, and 3 off and idle (Sync
 /// Saves with RomM is off: a state holds its save).
-static ROMM_STATES: AtomicU8 = AtomicU8::new(0);
+pub(crate) static ROMM_STATES: AtomicU8 = AtomicU8::new(0);
 /// The ROM folder's SD card isn't in this handheld.
 static ROMS_MISSING: AtomicBool = AtomicBool::new(false);
 /// Carts whose SD card is out: grey, as a handheld switched off, opaque
