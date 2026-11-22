@@ -589,7 +589,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 171] = [
+const MENU_TEXT: [&str; 174] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -766,6 +766,9 @@ const MENU_TEXT: [&str; 171] = [
     "Hide Left Bar",                      // 168, Master System
     "FM Sound",                           // 169, Master System
     "Screen Shake",                       // 170, Pokemon mini
+    "WS Palette",                         // 171, WonderSwan (Siham 2026-11-22)
+    "PK Palette",                         // 172, Pokemon mini
+    "Bezel (Upright Games)",              // 173, WonderSwan when only those fit
 ];
 
 /// Settings > Systems, top to bottom.
@@ -6258,8 +6261,8 @@ impl Engine {
         let (mut rows, mut keys): (Vec<usize>, Vec<usize>) = match platform {
             Platform::Sms => (vec![164, 168], vec![SPRITE_LIMIT_SMS_KEY, LEFT_BAR_SMS_KEY]),
             Platform::Gg => (vec![164], vec![SPRITE_LIMIT_GG_KEY]),
-            Platform::Ws => (vec![167], vec![WS_PALETTE_KEY]),
-            Platform::Pokemini => (vec![163, 167, 166, 170],
+            Platform::Ws => (vec![171], vec![WS_PALETTE_KEY]),
+            Platform::Pokemini => (vec![163, 172, 166, 170],
                 vec![POKEMINI_FILTER_KEY, POKEMINI_PALETTE_KEY, POKEMINI_LCD_MODE_KEY, POKEMINI_SHAKE_KEY]),
             _ => (Vec::new(), Vec::new()),
         };
@@ -6276,41 +6279,78 @@ impl Engine {
     /// A system's page: its own rows, LCD Effect or Dither Blending, Frame
     /// Blending, its own options, then Controls (a page).
     fn system_page_rows(platform: Platform) -> Vec<usize> {
-        let mut rows = Self::system_rows(platform).to_vec();
-        rows.extend(Self::look_rows(platform).0);
-        rows.extend(Self::extra_rows(platform, false).0);
-        rows.push(125);
-        rows
+        Self::system_page(platform).0
     }
     fn system_page_keys(platform: Platform) -> Vec<usize> {
+        Self::system_page(platform).1
+    }
+    fn system_page(platform: Platform) -> (Vec<usize>, Vec<usize>) {
+        let mut rows = Self::system_rows(platform).to_vec();
         let mut keys = Self::system_keys(platform).to_vec();
+        rows.extend(Self::look_rows(platform).0);
         keys.extend(Self::look_rows(platform).1);
+        rows.extend(Self::extra_rows(platform, false).0);
         keys.extend(Self::extra_rows(platform, false).1);
+        // The WonderSwan's overlay fits only its upright games here: say so.
+        if platform == Platform::Ws && video_mode::own_place(224.0 / 144.0, (224, 144),
+            VideoMode::Aspect, panel_size()).is_none() {
+            for row in rows.iter_mut().filter(|r| **r == 90) { *row = 173; }
+        }
+        Self::palette_after_shader(&mut rows, &mut keys);
+        rows.push(125);
         keys.push(usize::MAX);
-        keys
+        (rows, keys)
     }
     /// The in-game Screen page: its rows, then LCD Effect or Dither
     /// Blending, then Frame Blending.
     fn pause_screen_page_rows(&self) -> Vec<usize> {
-        let mut rows = self.pause_screen_rows().to_vec();
+        self.pause_screen_page().0
+    }
+    fn pause_screen_page_key(&self, row: usize) -> Option<usize> {
+        self.pause_screen_page().1.get(row).copied()
+    }
+    /// The in-game Screen page's rows and their Settings keys, side by side.
+    fn pause_screen_page(&self) -> (Vec<usize>, Vec<usize>) {
+        let own = self.pause_screen_rows();
+        let mut rows = Vec::new();
+        let mut keys = Vec::new();
+        for (row, &label) in own.iter().enumerate() {
+            if let Some(key) = self.pause_screen_key(row) { rows.push(label); keys.push(key); }
+        }
         // A GBA Video cart has no LCD Effect and no Frame Blending.
         if !self.playing_video() {
             let platform = self.current_cart_platform();
-            rows.extend(Self::look_rows(platform).0);
-            rows.extend(Self::extra_rows(platform, true).0);
+            let (look_rows, look_keys) = Self::look_rows(platform);
+            rows.extend(look_rows); keys.extend(look_keys);
+            let (extra_rows, extra_keys) = Self::extra_rows(platform, true);
+            rows.extend(extra_rows); keys.extend(extra_keys);
+            // A 3.0 game's Bezel row only when this game has room for its
+            // overlay: on the KPA a WonderSwan game held upright has, one
+            // played across has none (Siham 2026-11-22).
+            if matches!(platform, Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
+                | Platform::Lynx | Platform::Pokemini) && !self.game_has_bezel_room() {
+                while let Some(at) = keys.iter().position(|&k| Settings::bezel_platform(k).is_some()) {
+                    rows.remove(at); keys.remove(at);
+                }
+            }
+            Self::palette_after_shader(&mut rows, &mut keys);
         }
-        rows
+        (rows, keys)
     }
-    fn pause_screen_page_key(&self, row: usize) -> Option<usize> {
-        let own = self.pause_screen_rows().len();
-        if row < own { self.pause_screen_key(row) }
-        else if self.playing_video() { None }
-        else {
-            let platform = self.current_cart_platform();
-            let mut keys = Self::look_rows(platform).1;
-            keys.extend(Self::extra_rows(platform, true).1);
-            keys.get(row - own).copied()
-        }
+    /// Whether the game played has room on this screen for its system's own
+    /// overlay (its own shape: a WonderSwan game is wide or upright).
+    fn game_has_bezel_room(&self) -> bool {
+        let (aspect, frame) = self.home_shape();
+        video_mode::own_place(aspect, frame, VideoMode::Aspect, panel_size()).is_some()
+    }
+    /// WS Palette straight after the Shader row (Siham 2026-11-22); the
+    /// Pokemon mini's PK Palette already follows its LCD Filter.
+    fn palette_after_shader(rows: &mut Vec<usize>, keys: &mut Vec<usize>) {
+        let Some(from) = keys.iter().position(|&k| k == crate::settings::WS_PALETTE_KEY) else { return };
+        let Some(shader) = keys.iter().position(|&k| k == SHADER_WS_KEY) else { return };
+        let (row, key) = (rows.remove(from), keys.remove(from));
+        let to = if from < shader { shader } else { shader + 1 };
+        rows.insert(to, row); keys.insert(to, key);
     }
     fn system_rows(platform: Platform)-> &'static [usize] {
         Self::system_rows_on(platform,panel_size())
