@@ -17,7 +17,7 @@ fn pixel(face: &CartFace, x: f32, y: f32) -> [u8; 4] {
 fn receivers_are_permanent_openings_in_the_top_of_every_native_bar() {
     for scale in [1., 4. / 3., 2., 3.] {
         density::with_scale(scale, || {
-            for family in 0..7 {
+            for family in (0..7).chain([11]) {
                 for theme in 0..3 {
                     for &wireless in if family == 6 {
                         &[false, true][..]
@@ -87,7 +87,7 @@ fn seated_metal_keeps_its_original_colour_beyond_the_small_contact_shadow() {
 #[test]
 fn both_casings_stop_at_the_shoulder_and_keep_distinct_role_finishes() {
     density::with_scale(4. / 3., || {
-        for family in 0..7 {
+        for family in (0..7).chain([11]) {
             for wireless in [false, true] {
                 let key = Hardware::new(family, 0, wireless);
                 let art = hardware_art(key);
