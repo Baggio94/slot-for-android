@@ -575,9 +575,10 @@ internal object Romm {
     // as other RetroArch-core clients do. Plain /api/saves calls, which RomM
     // has had since 3.x: no device registration needed.
 
-    /** One save the server holds for a game. */
+    /** One save or state the server holds for a game. [nameNoTags]: its
+     *  name without the date tags RomM adds to a slot's versions. */
     class ServerSave(val id: Long, val fileName: String, val updatedAt: String,
-                     val emulator: String, val downloadPath: String)
+                     val emulator: String, val downloadPath: String, val nameNoTags: String = fileName)
 
     /** The account can be asked about saves: signed in. */
     fun signedIn(context: Context): Boolean = account(context) != null
@@ -617,65 +618,105 @@ internal object Romm {
     }
 
     /** The saves the server holds for a game. */
-    fun saves(context: Context, romId: Long): List<ServerSave> {
-        val reply = authorized(context, "/api/saves?rom_id=$romId")
-        if (reply.code != 200) throw IOException("RomM saves HTTP ${reply.code}")
-        val list = JSONArray(String(reply.body, Charsets.UTF_8))
-        return (0 until list.length()).mapNotNull { i ->
-            val save = list.optJSONObject(i) ?: return@mapNotNull null
-            if (save.optLong("rom_id", romId) != romId) return@mapNotNull null
-            ServerSave(save.optLong("id"), save.optString("file_name"), save.optString("updated_at"),
-                save.optString("emulator").takeIf { it != "null" }.orEmpty(),
-                save.optString("download_path").takeIf { it != "null" }.orEmpty())
-        }
-    }
+    fun saves(context: Context, romId: Long): List<ServerSave> = assets(context, "saves", romId)
 
     /** A save's bytes: /api/saves/{id}/content, or its download path on
      *  an older RomM. */
-    fun downloadSave(context: Context, save: ServerSave): ByteArray {
-        val reply = authorizedRaw(context, "/api/saves/${save.id}/content")
-        if (reply.code == 200) return reply.body
-        if (reply.code == 404 && save.downloadPath.isNotBlank()) {
-            val path = if (save.downloadPath.startsWith("/")) save.downloadPath else "/" + save.downloadPath
-            val old = authorizedRaw(context, path)
-            if (old.code == 200) return old.body
-            throw IOException("RomM save download HTTP ${old.code}")
-        }
-        throw IOException("RomM save download HTTP ${reply.code}")
-    }
+    fun downloadSave(context: Context, save: ServerSave): ByteArray = downloadAsset(context, "saves", save)
 
     /** Deletes saves from the server (POST /api/saves/delete, RomM 3 and
      *  later): a save the player deleted everywhere (SaveDeletes). */
-    fun deleteSaves(context: Context, ids: List<Long>) {
-        if (ids.isEmpty()) return
-        val account = account(context) ?: throw SignedOut()
-        val body = JSONObject().put("saves", JSONArray(ids))
-        var reply = call(account.server + "/api/saves/delete", "POST", authorization(context, account), json = body)
-        if (reply.code == 401 && account.kind != "client") {
-            synchronized(this) { access = null }
-            reply = call(account.server + "/api/saves/delete", "POST", authorization(context, account), json = body)
-        }
-        if (reply.code == 401) { signOut(context); throw SignedOut() }
-        if (reply.code !in 200..299) throw IOException("RomM save delete HTTP ${reply.code}")
-    }
+    fun deleteSaves(context: Context, ids: List<Long>) = deleteAssets(context, "saves", ids)
 
     /** Sends a game's save, replacing the one of the same name and emulator. */
     fun uploadSave(context: Context, romId: Long, emulator: String, fileName: String,
-                   bytes: ByteArray): ServerSave {
+                   bytes: ByteArray): ServerSave =
+        uploadAsset(context, "saves", "saveFile", romId, emulator, fileName, bytes, null)
+
+    // ---------------------------------------------------------------------
+    // States (slot. 3.0, Sync States with RomM, beta): a game's resume state
+    // kept on the server like its save, under the core's name as "emulator"
+    // and RetroArch's file name (<rom>.state.auto), with a picture of the
+    // game. /api/states mirrors /api/saves.
+
+    fun states(context: Context, romId: Long): List<ServerSave> = assets(context, "states", romId)
+
+    fun downloadState(context: Context, state: ServerSave): ByteArray = downloadAsset(context, "states", state)
+
+    fun deleteStates(context: Context, ids: List<Long>) = deleteAssets(context, "states", ids)
+
+    /** Sends a game's resume state, replacing the one of the same name and
+     *  emulator, with [screenshot] (a PNG) when there is one. */
+    fun uploadState(context: Context, romId: Long, emulator: String, fileName: String,
+                    bytes: ByteArray, screenshot: ByteArray?): ServerSave =
+        uploadAsset(context, "states", "stateFile", romId, emulator, fileName, bytes, screenshot)
+
+    private fun assets(context: Context, kind: String, romId: Long): List<ServerSave> {
+        val reply = authorized(context, "/api/$kind?rom_id=$romId")
+        if (reply.code != 200) throw IOException("RomM $kind HTTP ${reply.code}")
+        val list = JSONArray(String(reply.body, Charsets.UTF_8))
+        return (0 until list.length()).mapNotNull { i ->
+            val asset = list.optJSONObject(i) ?: return@mapNotNull null
+            if (asset.optLong("rom_id", romId) != romId) return@mapNotNull null
+            serverAsset(asset)
+        }
+    }
+
+    private fun serverAsset(asset: JSONObject): ServerSave {
+        val name = asset.optString("file_name")
+        return ServerSave(asset.optLong("id"), name, asset.optString("updated_at"),
+            asset.optString("emulator").takeIf { it != "null" }.orEmpty(),
+            asset.optString("download_path").takeIf { it != "null" }.orEmpty(),
+            asset.optString("file_name_no_tags").takeIf { it.isNotBlank() && it != "null" } ?: name)
+    }
+
+    private fun downloadAsset(context: Context, kind: String, asset: ServerSave): ByteArray {
+        val what = kind.removeSuffix("s")
+        val reply = authorizedRaw(context, "/api/$kind/${asset.id}/content")
+        if (reply.code == 200) return reply.body
+        if (reply.code == 404 && asset.downloadPath.isNotBlank()) {
+            val path = if (asset.downloadPath.startsWith("/")) asset.downloadPath else "/" + asset.downloadPath
+            val old = authorizedRaw(context, path)
+            if (old.code == 200) return old.body
+            throw IOException("RomM $what download HTTP ${old.code}")
+        }
+        throw IOException("RomM $what download HTTP ${reply.code}")
+    }
+
+    private fun deleteAssets(context: Context, kind: String, ids: List<Long>) {
+        if (ids.isEmpty()) return
         val account = account(context) ?: throw SignedOut()
-        val url = account.server + "/api/saves?rom_id=$romId&emulator=" + URLEncoder.encode(emulator, "UTF-8")
+        val body = JSONObject().put(kind, JSONArray(ids))
+        var reply = call(account.server + "/api/$kind/delete", "POST", authorization(context, account), json = body)
+        if (reply.code == 401 && account.kind != "client") {
+            synchronized(this) { access = null }
+            reply = call(account.server + "/api/$kind/delete", "POST", authorization(context, account), json = body)
+        }
+        if (reply.code == 401) { signOut(context); throw SignedOut() }
+        if (reply.code !in 200..299) throw IOException("RomM ${kind.removeSuffix("s")} delete HTTP ${reply.code}")
+    }
+
+    private fun uploadAsset(context: Context, kind: String, field: String, romId: Long, emulator: String,
+                            fileName: String, bytes: ByteArray, screenshot: ByteArray?): ServerSave {
+        val what = kind.removeSuffix("s")
+        val account = account(context) ?: throw SignedOut()
+        val url = account.server + "/api/$kind?rom_id=$romId&emulator=" + URLEncoder.encode(emulator, "UTF-8")
         fun send(auth: String): Reply {
             val boundary = "slot" + System.nanoTime()
-            val head = ("--$boundary\r\nContent-Disposition: form-data; name=\"saveFile\"; filename=\"" +
-                fileName.replace("\"", "") + "\"\r\nContent-Type: application/octet-stream\r\n\r\n")
+            fun part(name: String, file: String, type: String) = ("--$boundary\r\nContent-Disposition: form-data; " +
+                "name=\"$name\"; filename=\"" + file.replace("\"", "") + "\"\r\nContent-Type: $type\r\n\r\n")
                 .toByteArray(Charsets.UTF_8)
+            val head = part(field, fileName, "application/octet-stream")
+            val picture = screenshot?.takeIf { it.isNotEmpty() }?.let {
+                "\r\n".toByteArray(Charsets.UTF_8) + part("screenshotFile", fileName + ".png", "image/png") + it
+            } ?: ByteArray(0)
             val tail = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
             val connection = open(url, "POST", auth)
             try {
                 connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
                 connection.doOutput = true
-                connection.setFixedLengthStreamingMode(head.size + bytes.size + tail.size)
-                connection.outputStream.use { it.write(head); it.write(bytes); it.write(tail) }
+                connection.setFixedLengthStreamingMode(head.size + bytes.size + picture.size + tail.size)
+                connection.outputStream.use { it.write(head); it.write(bytes); it.write(picture); it.write(tail) }
                 val code = connection.responseCode
                 val stream = if (code in 200..299) connection.inputStream else connection.errorStream
                 return Reply(code, read(stream, MAX_JSON))
@@ -689,11 +730,10 @@ internal object Romm {
             reply = send(authorization(context, account))
         }
         if (reply.code == 401) { signOut(context); throw SignedOut() }
-        if (reply.code == 403) throw IOException("This RomM account can't keep saves")
-        if (reply.code !in 200..299) throw IOException("RomM save upload HTTP ${reply.code}")
-        val save = reply.json() ?: throw IOException("RomM save upload unreadable")
-        return ServerSave(save.optLong("id"), save.optString("file_name"), save.optString("updated_at"),
-            save.optString("emulator"), save.optString("download_path"))
+        if (reply.code == 403) throw IOException("This RomM account can't keep ${kind}")
+        if (reply.code == 404 && kind == "states") throw IOException("This RomM server can't keep states")
+        if (reply.code !in 200..299) throw IOException("RomM $what upload HTTP ${reply.code}")
+        return serverAsset(reply.json() ?: throw IOException("RomM $what upload unreadable"))
     }
 
     /** The firmware the player keeps on RomM for one platform; none when

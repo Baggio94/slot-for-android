@@ -60,6 +60,7 @@ fn export(destination: &std::path::Path) -> Result<(), Box<dyn std::error::Error
         ("heading-romm.png", heading("ROMM")),
         ("heading-filter.png", heading("FILTER")),
         ("heading-romm-save.png", heading("ROMM SAVE")),
+        ("heading-romm-state.png", heading("ROMM STATE")),
         ("heading-two-saves.png", heading("TWO SAVES")),
         ("heading-deleted.png", heading("DELETED")),
         ("heading-save-folder.png", heading("SAVE FOLDER")),

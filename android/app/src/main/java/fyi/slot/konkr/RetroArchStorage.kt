@@ -354,7 +354,9 @@ internal object RetroArchStorage {
             generation?.let {
                 retire(File(saves, "$it.state"))
                 File(saves, "$it.retroarch-export.state.auto").delete()
+                File(saves, "$it.retroarch-export.state.auto.png").delete()
             }
+            File(target.stateExportLocal.path + ".png").delete()
             retire(File(saves, "$id.$lower.state"))
             if (target.core == "mGBA") retire(File(saves, "$id.state"))
             retire(target.stateDefaultLocal)
@@ -677,6 +679,46 @@ internal object RetroArchStorage {
             }
         }
         return failures
+    }
+
+    // Sync States with RomM (3.0): the game's resume state, as RetroArch
+    // keeps it (RASTATE, compressed in its #RZIPv1# chunks on disk).
+
+    /** The resume state this launch would use, uncompressed: the one the
+     *  launch staged from the folder or slot.'s own copy, else slot.'s
+     *  latest export. Null when the game has none. */
+    internal fun currentAutoState(context: Context, target: Target): ByteArray? =
+        listOf(target.stateImportLocal, activeExport(context, target))
+            .firstOrNull { it.isFile && it.length() > 0 }?.readBytes()
+
+    /** slot.'s latest export of the resume state (RASTATE), and the picture
+     *  of the game the engine keeps beside it (<export>.png). */
+    internal fun autoStateExport(context: Context, target: Target): File = activeExport(context, target)
+
+    /** A core switch set the game's older states aside: an incoming state
+     *  would be ignored at this launch. */
+    internal fun autoStateProtected(context: Context, target: Target): Boolean =
+        File(context.filesDir, "Saves/${target.romIdentity}.${coreLower(target.core)}.state-export-protected").isFile
+
+    /** The one-shot mark that the save is newer than the resume state. */
+    internal fun staleStateMark(context: Context, target: Target): File =
+        File(context.filesDir, "Saves/${target.romIdentity}.${coreLower(target.core)}.state-stale.once")
+
+    /** A resume state from RomM becomes the game's: where the launch reads
+     *  it now, and where the next launch will (the RetroArch folder, with
+     *  what slot. synced there, else slot.'s own copy), so a crash before
+     *  the next state never brings the older one back. */
+    internal fun adoptAutoState(context: Context, target: Target, raw: ByteArray) {
+        require(raw.size in 16..MAX_STATE && raw.startsWithRASTATE()) { "Invalid RomM state" }
+        val compressed = RetroArchCompression.encode(raw)
+        val name = target.stem + ".state.auto"
+        if (target.statesTree != null) {
+            writeSaf(context, target.statesTree, target.core, name, compressed, isState = true)
+            rememberSynced(context.filesDir, target.statesTree.toString(), target.core, name, compressed)
+        } else {
+            stage(target.stateDefaultLocal, compressed)
+        }
+        stage(target.stateImportLocal, raw)
     }
 
     /** The state slot. last wrote for RetroArch: its protected generation's

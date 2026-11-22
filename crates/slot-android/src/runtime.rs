@@ -589,7 +589,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 174] = [
+const MENU_TEXT: [&str; 175] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -769,6 +769,7 @@ const MENU_TEXT: [&str; 174] = [
     "WS Palette",                         // 171, WonderSwan (Siham 2026-11-22)
     "PK Palette",                         // 172, Pokemon mini
     "Bezel",                              // 173, no longer shown (plain Bezel)
+    "Sync States with RomM",              // 174, Library > Saves & States (3.0, beta)
 ];
 
 /// Settings > Systems, top to bottom.
@@ -882,6 +883,7 @@ fn narrow_label(label: &str) -> &str {
     match label {
         "Fast Forward Sound" => "FF Sound",
         "Sync Saves with RomM" => "Sync with RomM",
+        "Sync States with RomM" => "Sync States",
         "Wi-Fi & Bluetooth" => "Wi-Fi & BT",
         _ => label,
     }
@@ -912,6 +914,9 @@ const TASK_DOWNLOADS: u8 = 3;
 const TASK_SCAN: u8 = 5;
 /// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
 static ROMM_SYNC: AtomicU8 = AtomicU8::new(0);
+/// Sync States with RomM (3.0): as ROMM_SYNC, and 3 off and idle (Sync
+/// Saves with RomM is off: a state holds its save).
+static ROMM_STATES: AtomicU8 = AtomicU8::new(0);
 /// The ROM folder's SD card isn't in this handheld.
 static ROMS_MISSING: AtomicBool = AtomicBool::new(false);
 /// Carts whose SD card is out: grey, as a handheld switched off, opaque
@@ -1359,9 +1364,10 @@ const LIBRARY_SAVES_ROW: usize = 3;
 const LIBRARY_ROMM_ROW: usize = 4;
 /// Library > Saves & States: Save Folder, Save State Folder, Share Core
 /// Saves, Sync Saves with RomM.
-const SAVES_ROWS: [usize; 4] = [7, 8, 79, 152];
+const SAVES_ROWS: [usize; 5] = [7, 8, 79, 152, 174];
 const SAVES_SHARE_ROW: usize = 2;
 const SAVES_ROMM_ROW: usize = 3;
+const SAVES_STATES_ROW: usize = 4;
 
 /// X/Y Buttons (38, key 7) moved to Systems > Controls (X / Y), where its
 /// old value is the default until a system or game chooses.
@@ -5113,6 +5119,9 @@ impl Engine {
                                 21 | 22 | 96 if row == SAVES_ROMM_ROW => {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(71);
                                 }
+                                21 | 22 | 96 if row == SAVES_STATES_ROW => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(72);
+                                }
                                 96 if row < SAVES_SHARE_ROW && !self.external_pending => {
                                     // SRAM root, State root.
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner())
@@ -7911,7 +7920,18 @@ impl Engine {
             2 => self.setting_values[4],
             _ => self.setting_values[5],
         };
-        vec![(SAVES_SHARE_ROW, self.setting_values[share], true), (SAVES_ROMM_ROW, romm, true)]
+        let states = match ROMM_STATES.load(Ordering::Acquire) {
+            2 => self.setting_values[4],
+            _ => self.setting_values[5],
+        };
+        vec![(SAVES_SHARE_ROW, self.setting_values[share], true), (SAVES_ROMM_ROW, romm, true),
+            (SAVES_STATES_ROW, states, true)]
+    }
+
+    /// Saves & States' row shown but idle: Sync States with RomM while Sync
+    /// Saves with RomM is off.
+    fn saves_row_idle(at: usize) -> bool {
+        at == SAVES_STATES_ROW && ROMM_STATES.load(Ordering::Acquire) == 3
     }
 
     /// A value's short form when the whole one has no room at `scale`,
@@ -7953,7 +7973,8 @@ impl Engine {
         // Its row among the six shown while the page scrolls.
         let Some((dy, shows)) = self.menu_row_place(at, rows) else { return };
         let right = out_w() as f32 - 34.0;
-        let selected = row == at;
+        let idle = heading == 151 && Self::saves_row_idle(at);
+        let selected = row == at && !idle;
         let carets = toggle && selected;
         let caret = if toggle { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
         // Past its label, a gap and the left caret: a little too long, up
@@ -7972,7 +7993,7 @@ impl Engine {
             + height as f32 * (0.79 - scale) / 2.0;
         let w = width as f32 * scale;
         let end = right - if carets { 22.0 } else { 0.0 };
-        let alpha = shows * if selected { 1.0 } else { menu_look::ROW_REST };
+        let alpha = shows * if selected { 1.0 } else if idle { 0.3 } else { menu_look::ROW_REST };
         let x = if end - w >= from {
             out.push(Draw::Tex { x: end - w, y, w, h: height as f32 * scale, tex, alpha });
             end - w
@@ -8340,7 +8361,8 @@ impl Engine {
             let x = 37.0;
             let y = top + dy + 8.0 + (1.0 - fade) * 8.0;
             let chosen = i == selected;
-            let idle = heading == 148 && self.general_row_dimmed(index);
+            let idle = (heading == 148 && self.general_row_dimmed(index))
+                || (heading == 151 && Self::saves_row_idle(i));
             let alpha = fade * shows * if idle { 0.4 } else if chosen { 1.0 } else { menu_look::ROW_REST };
             let opens = self.menu_row_opens(heading, index);
             match scales.get(i) {

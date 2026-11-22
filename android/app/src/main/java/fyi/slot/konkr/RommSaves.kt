@@ -13,7 +13,8 @@ import java.util.Locale
  * and a newer one from the server comes back before the game starts, so the
  * same progress follows them on every handheld and in RomM's other clients.
  *
- * Only the in-game save (.srm, or .eeprom and .eep for the Lynx and the Pokemon mini): save states stay with slot. and its folders.
+ * Only the in-game save (.srm, or .eeprom and .eep for the Lynx and the Pokemon mini); the
+ * resume state has its own sync, RommStates (3.0).
  * Off by default. What slot. last exchanged with the server is remembered
  * per game (the server's save and the save's fingerprint), so:
  *  - the server changed, the handheld didn't: the server's save comes in;
@@ -95,7 +96,7 @@ internal object RommSaves {
     private fun rtcOf(target: RetroArchStorage.Target): File = target.rtcLocal
 
     /** The cart's system, from its portable name (`gba/…`). */
-    private fun platformOf(target: RetroArchStorage.Target): String? {
+    internal fun platformOf(target: RetroArchStorage.Target): String? {
         val name = GameKeys.name(target.romUri)
         if (!name.contains('/') || name.startsWith("content:")) return null
         return name.substringBefore('/').uppercase(Locale.ROOT)
@@ -105,10 +106,16 @@ internal object RommSaves {
     /** What to do when both the server and the handheld changed. */
     enum class Choice { KEEP_HANDHELD, USE_SERVER }
 
+    /** What became of the save at a launch, for its state (3.0): nothing
+     *  came, the server's came, or this handheld's was kept over a newer one. */
+    enum class Pick { NONE, BROUGHT, KEPT_HANDHELD }
+
     /** What the launch should know: a message to show, if any; [deleteHere]:
      *  another handheld deleted this save and the player chose to delete it
-     *  here too (beta39). */
-    class Outcome(val message: String?, val deleteHere: Boolean = false)
+     *  here too (beta39); [pick] and [serverAt], the server's newest save's
+     *  date, for Sync States with RomM (3.0). */
+    class Outcome(val message: String?, val deleteHere: Boolean = false,
+                  val pick: Pick = Pick.NONE, val serverAt: String = "")
 
     /**
      * Before a game starts: brings the server's save in when it is the
@@ -167,12 +174,13 @@ internal object RommSaves {
                 return Outcome(null)
             }
             val localSha = local?.let(::sha1)
-            if (kept != null && kept.serverStamp == server.updatedAt) return Outcome(null) // Server unchanged.
+            val at = server.updatedAt
+            if (kept != null && kept.serverStamp == server.updatedAt) return Outcome(null, serverAt = at) // Server unchanged.
             val bytes = Romm.downloadSave(context, server)
             val serverSha = sha1(bytes)
             if (serverSha == localSha) {
                 keep(context, target, Record(romId, server.id, server.updatedAt, serverSha))
-                return Outcome(null)
+                return Outcome(null, serverAt = at)
             }
             val handheldChanged = local != null && (kept == null || kept.sha1 != localSha)
             val useServer = !handheldChanged || ask() == Choice.USE_SERVER
@@ -188,12 +196,12 @@ internal object RommSaves {
                 RetroArchStorage.markFolderSave(context.filesDir, target.core, target.stem)
                 RetroArchStorage.applyFolderSaveMark(context.filesDir, target.core, target.stem, target.romIdentity)
                 keep(context, target, Record(romId, server.id, server.updatedAt, serverSha))
-                Outcome("Save brought in from RomM.")
+                Outcome("Save brought in from RomM.", pick = Pick.BROUGHT, serverAt = at)
             } else {
                 // The server's save, kept beside ours; ours goes up after the game.
                 File(target.saveLocal.parentFile, target.saveLocal.name + ".romm").writeBytes(bytes)
                 keep(context, target, Record(romId, server.id, server.updatedAt, ""))
-                return Outcome(null)
+                return Outcome(null, pick = Pick.KEPT_HANDHELD, serverAt = at)
             }
         }
     }

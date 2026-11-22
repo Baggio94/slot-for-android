@@ -2365,6 +2365,16 @@ impl GameSession {
             .map_err(|e| format!("RetroArch state encoding: {e}"))?;
         atomic_write(&self.retroarch_export, &container)
             .map_err(|e| format!("RetroArch state export: {e}"))?;
+        // Its picture beside it, for Sync States with RomM (3.0): what the
+        // state shows in RomM. Never fails the save.
+        if let Some(png) = thumb::png_fit(self.core.video_xrgb8888(), self.core.video_size(),
+            self.core.display_aspect()) {
+            let mut picture = self.retroarch_export.clone().into_os_string();
+            picture.push(".png");
+            if let Err(error) = atomic_write(std::path::Path::new(&picture), &png) {
+                crate::log_warn(&format!("state picture not kept: {error}"));
+            }
+        }
         // The auto-state now matches this battery.
         if self.stale_state.is_some() {
             self.opening_battery = self.core.save_ram_verified().ok().flatten().map(|ram| battery_hash(&ram));
