@@ -1196,6 +1196,16 @@ fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
             // Only app-private labels are used; never rewrite ROMs.
             cart.label = Some(labels.join(filename));
         }
+        // A Master System or Game Gear cart whose game has kept a battery
+        // save shows its battery, as the known ones do (Siham 2026-11-22).
+        let saved: std::collections::HashSet<std::ffi::OsString> = ["Genesis Plus GX", "Gearsystem"]
+            .iter().flat_map(|core| std::fs::read_dir(root.join("Saves").join(core)).into_iter().flatten())
+            .flatten().map(|f| f.file_name()).collect();
+        for platform in [Platform::Sms, Platform::Gg] {
+            for cart in systems[platform as usize].iter_mut().filter(|cart| !cart.battery) {
+                cart.battery = saved.contains(std::ffi::OsStr::new(&format!("{}.srm", cart.stem)));
+            }
+        }
     }
     let video = systems.pop().unwrap_or_default();
     (systems, video)

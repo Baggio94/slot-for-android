@@ -239,8 +239,51 @@ internal object Systems {
             NES -> nesHeader(header, fromName)
             SNES -> snesHeader(header, fromName)
             MD -> mdHeader(ext, header, fromName)
+            // Their headers say nothing of a battery: the games known to
+            // keep their save on one (a .srm seen later shows the others).
+            SMS, GG -> HomeHeader("", fromName, segaBattery(filename))
             else -> HomeHeader("", fromName, false)
         }
+    }
+
+    /** Master System and Game Gear games whose cartridge keeps its save on a
+     *  battery (by No-Intro title). Others show it once a save file exists. */
+    private val SEGA_BATTERY = listOf(
+        "phantasy star", "ys - the vanished omens", "ys (japan)", "golden axe warrior",
+        "ultima iv", "miracle warriors", "penguin land", "monopoly",
+        "shining force", "defenders of oasis", "sylvan tale", "tails adventure",
+        "madou monogatari", "lunar - sanposuru gakuen", "lunar - walking school",
+    )
+    internal fun segaBattery(filename: String): Boolean {
+        val title = filename.substringAfterLast('/').lowercase(Locale.ROOT)
+        return SEGA_BATTERY.any { title.startsWith(it) }
+    }
+
+    /** A WonderSwan cart keeps its save on a battery when its footer (the
+     *  ROM's last 10 bytes) names SRAM (types 1 to 5); EEPROM needs none.
+     *  Reads the cart once, from a stream, keeping only its tail. */
+    fun wsBattery(input: java.io.InputStream): Boolean {
+        val buffer = ByteArray(64 * 1024)
+        val tail = ByteArray(10)
+        var have = 0
+        var total = 0L
+        while (true) {
+            if (Thread.currentThread().isInterrupted) return false
+            val n = input.read(buffer)
+            if (n <= 0) break
+            total += n
+            if (total > 64L * 1024 * 1024) return false
+            if (n >= 10) {
+                System.arraycopy(buffer, n - 10, tail, 0, 10); have = 10
+            } else {
+                val keep = minOf(have, 10 - n)
+                System.arraycopy(tail, have - keep, tail, 0, keep)
+                System.arraycopy(buffer, 0, tail, keep, n)
+                have = keep + n
+            }
+        }
+        if (have < 10) return false
+        return (tail[5].toInt() and 0xff) in 0x01..0x05
     }
 
     /** No-Intro / GoodTools tags: (Japan), (USA), (Europe), (J), (U), (E)... */

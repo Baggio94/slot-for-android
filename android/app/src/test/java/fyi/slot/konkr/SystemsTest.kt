@@ -154,4 +154,19 @@ class SystemsTest {
         assertEquals(listOf("megadrive", "genesis", "megadrivejp"), Romm.folderNames("genesis", "MD"))
         assertEquals(listOf("gb"), Romm.folderNames("gb", "GB"))
     }
+
+    @org.junit.Test
+    fun the_3_0_boards_show_a_battery_where_the_cart_had_one() {
+        // WonderSwan: SRAM in the footer's save type, EEPROM none.
+        fun ws(type: Int) = ByteArray(0x20000).also { it[it.size - 5] = type.toByte() }
+        assertTrue(Systems.wsBattery(java.io.ByteArrayInputStream(ws(0x01))))
+        assertTrue(Systems.wsBattery(java.io.ByteArrayInputStream(ws(0x04))))
+        assertFalse(Systems.wsBattery(java.io.ByteArrayInputStream(ws(0x10))))
+        assertFalse(Systems.wsBattery(java.io.ByteArrayInputStream(ws(0x00))))
+        // Master System / Game Gear: the known battery games.
+        val header = ByteArray(0x8000)
+        assertTrue(Systems.homeHeader("gg", header, "Sylvan Tale (Japan).gg").battery)
+        assertTrue(Systems.homeHeader("sms", header, "Phantasy Star (USA, Europe).sms").battery)
+        assertFalse(Systems.homeHeader("gg", header, "Columns (USA, Europe, Brazil) (En).gg").battery)
+    }
 }

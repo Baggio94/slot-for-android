@@ -15,6 +15,8 @@ import java.util.Locale
  * No commercial games, BIOS files, or writable access are requested or copied.
  */
 internal object RomLibrary {
+    /** Systems whose cart battery 3.0.0-rc3 learned (entries marked battery_v3). */
+    private val BATTERY_V3 = setOf(Systems.WS, Systems.SMS, Systems.GG)
     /**
      * The most carts a shelf holds (library.rs keeps the same bound). 5,000
      * left a 6,000-game folder with an empty shelf (issue #122). Each cart
@@ -238,7 +240,10 @@ internal object RomLibrary {
             // Older ones also lack whether a GB/GBA cart has a
             // battery (2026-11): read once more to learn it.
             (old.has("home_battery") && (old.optString("platform") == "GBA" ||
-                old.has("gb_cgb_flag") || old.has("home_maker")))
+                old.has("gb_cgb_flag") || old.has("home_maker"))) &&
+            // 3.0.0-rc3 learns the WonderSwan's, Master System's and Game
+            // Gear's batteries: their older entries are read once more.
+            (old.optString("platform") !in BATTERY_V3 || old.has("battery_v3"))
         // ZIP archives remain a single shelf cartridge identified
         // by the ZIP's SAF URI and filename. Resolve the embedded
         // ROM header/extension only on cache misses.
@@ -290,6 +295,14 @@ internal object RomLibrary {
             // A .bin is a Mega Drive cart only with a SEGA header.
             if (!Systems.acceptsHeader(embeddedExtension, header)) return null
             if (home) homeHeader = Systems.homeHeader(embeddedExtension, header, name)
+            // The WonderSwan's save type is in the footer, at the ROM's end.
+            if (Systems.platformFor(embeddedExtension) == Systems.WS) {
+                homeHeader = homeHeader.copy(battery = try {
+                    resolver.openInputStream(fileUri)?.use { input ->
+                        RomSource.useRom(input, name) { rom, _ -> Systems.wsBattery(rom) }
+                    } ?: false
+                } catch (_: Exception) { false })
+            }
             else if (!gba) homeHeader = Systems.HomeHeader("", "", Systems.gbBattery(header))
             else homeHeader = Systems.HomeHeader("", "", try {
                 resolver.openInputStream(fileUri)?.use { input ->
@@ -342,6 +355,7 @@ internal object RomLibrary {
                 .put("home_region", homeHeader.region)
                 .put("home_battery", homeHeader.battery)
                 .put("home_maker", homeHeader.maker)
+                .put("battery_v3", true)
         } else {
             // GB/GBC/GBA: the board shows a battery only for a
             // cart that keeps its save on one.
