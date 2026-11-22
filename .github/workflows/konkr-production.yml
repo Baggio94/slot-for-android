@@ -245,6 +245,9 @@ jobs:
               with zipfile.ZipFile(sys.argv[1]) as archive:
                   built = json.loads(archive.read(f"assets/core-build-{name}.json"))
               assert built["revision"] == revision, name
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              gpgx = json.loads(archive.read("assets/core-build-genesis_plus_gx.json"))
+          assert "0001-sms-gg-state-load-tile-cache.patch" in gpgx["patches"]
           assert {"flash-bank-survives-mask.patch",
                   "gb-dmg-palette-follows-option.patch",
                   "543a19758-mbc2-sram-bank.patch"} <= set(mgba["patches"])

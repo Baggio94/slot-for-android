@@ -1,0 +1,26 @@
+diff --git a/core/vdp_ctrl.c b/core/vdp_ctrl.c
+index 3f0e1b7..5b232e0 100644
+--- a/core/vdp_ctrl.c
++++ b/core/vdp_ctrl.c
+@@ -1169,12 +1169,16 @@ void vdp_sms_ctrl_w(unsigned int data)
+             parse_satb = parse_satb_m4;
+             render_obj = render_obj_m4;
+ 
+-            /* force BG cache update */
+-            bg_list_index = 0x200;
+-            for (i=0;i<0x200;i++) 
++            /* force BG cache update (not while a state restores its own
++               tile cache: vdp_context_load sets the flag and rebuilds it) */
++            if (!do_not_invalidate_tile_cache)
+             {
+-              bg_name_list[i] = i;
+-              bg_name_dirty[i] = 0xFF;
++              bg_list_index = 0x200;
++              for (i=0;i<0x200;i++)
++              {
++                bg_name_list[i] = i;
++                bg_name_dirty[i] = 0xFF;
++              }
+             }
+           }
+           else

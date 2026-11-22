@@ -448,6 +448,16 @@ fn xy_buttons(buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
 
 /// The cached cart under its game name, for a core that names its own
 /// battery file after the ROM (bsnes). A hard link, or a copy.
+/// Whether the player's own Sega boot ROM for this system is in the BIOS
+/// folder: bios.gg for the Game Gear, bios_U/E/J.sms for the Master System.
+fn boot_screen(platform: Platform, bios: &Path) -> bool {
+    match platform {
+        Platform::Gg => bios.join("bios.gg").is_file(),
+        Platform::Sms => ["bios_U.sms", "bios_E.sms", "bios_J.sms"].iter().any(|f| bios.join(f).is_file()),
+        _ => false,
+    }
+}
+
 fn named_rom_alias(storage: &Path, rom: &Path, rom_stem: &str) -> Result<PathBuf, String> {
     let dir = storage.join("RomNames");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot prepare ROM name: {e}"))?;
@@ -681,6 +691,10 @@ impl GameSession {
         // has already staged only allowed BIOS files into this private folder.
         let bios = storage.join("BIOS");
         std::fs::create_dir_all(&bios).map_err(|e| e.to_string())?;
+        // A state will be resumed over this boot (a Sega boot screen is
+        // then left out; see genesis_plus_gx_bios below).
+        let resuming = resume_state && linked_boot.is_none()
+            && (retroarch_import.is_file() || state.is_file());
         // Gambatte decides on the boot ROM in retro_init, before the
         // options below are set.
         let init_options = match which {
@@ -796,15 +810,19 @@ impl GameSession {
                 // the player's BIOS is there (bios_U/E/J.sms, bios.gg; the
                 // core runs the game alone otherwise). Mega Drive games keep
                 // starting as before.
-                core.set_option("genesis_plus_gx_bios",
-                    if matches!(platform, Platform::Sms | Platform::Gg) { "enabled" } else { "disabled" });
+                // Only with the BIOS file there, and never under a resumed
+                // state: the state is the console's whole picture, and the
+                // boot ROM mapped back in left Game Gear games showing their
+                // backdrop alone (Siham 2026-11-22).
+                let boot = boot_screen(platform, &bios) && !resuming;
+                core.set_option("genesis_plus_gx_bios", if boot { "enabled" } else { "disabled" });
             }
             Core::Picodrive => {}
             // Gearsystem shows the Game Gear's boot screen when bios.gg is
             // there; NeoPop and RACE run on their own defaults, as RetroArch
             // starts them.
             Core::Gearsystem => {
-                let gg = platform == Platform::Gg && bios.join("bios.gg").is_file();
+                let gg = platform == Platform::Gg && boot_screen(platform, &bios) && !resuming;
                 core.set_option("gearsystem_bios_gg", if gg { "Enabled" } else { "Disabled" });
             }
             Core::Neopop | Core::Race => {}
