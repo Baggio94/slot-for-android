@@ -795,6 +795,10 @@ pub struct Settings {
     /// WonderSwan's language, the Pokemon mini's screen shake off.
     #[serde(default)]
     pub hide_left_bar_sms: bool,
+    /// The NES's left column hidden, and as much on the right so the
+    /// picture stays centred (Siham 2026-11-22).
+    #[serde(default)]
+    pub hide_left_bar_nes: bool,
     #[serde(default)]
     pub fm_off_sms: bool,
     #[serde(default)]
@@ -929,7 +933,8 @@ impl Default for Settings {
             pokemini_lcd_filter: 0,
             no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
             ws_palette: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
-            hide_left_bar_sms: false, fm_off_sms: false, ws_language: 0, pokemini_no_shake: false,
+            hide_left_bar_sms: false, hide_left_bar_nes: false, fm_off_sms: false, ws_language: 0,
+            pokemini_no_shake: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, own_bezels_room: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
@@ -1517,6 +1522,7 @@ impl Settings {
             POKEMINI_LCD_MODE_KEY => self.pokemini_lcd_mode =
                 step_index(self.pokemini_lcd_mode, POKEMINI_LCD_MODES.len() as u8, right),
             LEFT_BAR_SMS_KEY => self.hide_left_bar_sms = !self.hide_left_bar_sms,
+            LEFT_BAR_NES_KEY => self.hide_left_bar_nes = !self.hide_left_bar_nes,
             FM_SMS_KEY => self.fm_off_sms = !self.fm_off_sms,
             WS_LANGUAGE_KEY => self.ws_language = step_index(self.ws_language, 2, right),
             POKEMINI_SHAKE_KEY => self.pokemini_no_shake = !self.pokemini_no_shake,
@@ -1622,6 +1628,8 @@ pub const LEFT_BAR_SMS_KEY: usize = 137;
 pub const FM_SMS_KEY: usize = 138;
 pub const WS_LANGUAGE_KEY: usize = 139;
 pub const POKEMINI_SHAKE_KEY: usize = 140;
+/// Settings > Systems > NES > Hide Left Bar.
+pub const LEFT_BAR_NES_KEY: usize = 141;
 
 /// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
 /// grey first, then the three consoles' screens.
@@ -1650,11 +1658,13 @@ pub struct CoreExtras {
     pub fm_off_sms: bool,
     pub ws_language: u8,
     pub pokemini_no_shake: bool,
+    pub hide_left_bar_nes: bool,
 }
 pub static CORE_EXTRAS: std::sync::Mutex<CoreExtras> = std::sync::Mutex::new(CoreExtras {
     no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
     ws_palette: 0, pokemini_filter: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
-    hide_left_bar_sms: false, fm_off_sms: false, ws_language: 0, pokemini_no_shake: false });
+    hide_left_bar_sms: false, fm_off_sms: false, ws_language: 0, pokemini_no_shake: false,
+    hide_left_bar_nes: false });
 
 impl CoreExtras {
     pub fn of(s: &Settings) -> Self {
@@ -1662,7 +1672,8 @@ impl CoreExtras {
             ngp_language: s.ngp_language, ws_palette: s.ws_palette,
             pokemini_filter: s.pokemini_lcd_filter, pokemini_palette: s.pokemini_palette,
             pokemini_lcd_mode: s.pokemini_lcd_mode, hide_left_bar_sms: s.hide_left_bar_sms,
-            fm_off_sms: s.fm_off_sms, ws_language: s.ws_language, pokemini_no_shake: s.pokemini_no_shake }
+            fm_off_sms: s.fm_off_sms, ws_language: s.ws_language, pokemini_no_shake: s.pokemini_no_shake,
+            hide_left_bar_nes: s.hide_left_bar_nes }
     }
     pub fn store(s: &Settings) {
         POKEMINI_LCD_FILTER.store(s.pokemini_lcd_filter, std::sync::atomic::Ordering::Release);
@@ -1673,7 +1684,12 @@ impl CoreExtras {
     pub fn options(&self, platform: slot_store::Platform, core: slot_store::Core) -> Vec<(&'static str, &'static str)> {
         use slot_store::{Core, Platform};
         let pick = |list: &[&'static str], at: u8| list[(at as usize).min(list.len() - 1)];
+        let nes_bar = if self.hide_left_bar_nes { "8" } else { "0" };
         match (platform, core) {
+            (Platform::Nes, Core::Fceumm) =>
+                vec![("fceumm_overscan_h_left", nes_bar), ("fceumm_overscan_h_right", nes_bar)],
+            (Platform::Nes, Core::Nestopia) =>
+                vec![("nestopia_overscan_h_left", nes_bar), ("nestopia_overscan_h_right", nes_bar)],
             (Platform::Sms, Core::GenesisPlusGx) => vec![
                 ("genesis_plus_gx_no_sprite_limit", if self.no_sprite_limit_sms { "enabled" } else { "disabled" }),
                 ("genesis_plus_gx_left_border", if self.hide_left_bar_sms { "left border" } else { "disabled" }),

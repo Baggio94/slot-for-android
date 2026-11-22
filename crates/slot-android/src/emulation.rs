@@ -189,7 +189,11 @@ impl EmulationProfile {
             }
         }
         if let Some(value)=self.left_bar_override {
-            if platform==Platform::Sms { settings.hide_left_bar_sms=value; }
+            match platform {
+                Platform::Sms => settings.hide_left_bar_sms=value,
+                Platform::Nes => settings.hide_left_bar_nes=value,
+                _ => {}
+            }
         }
         if platform==Platform::Ws {
             if let Some(value)=self.ws_palette_override { settings.ws_palette=value; }
@@ -258,6 +262,8 @@ impl EmulationProfile {
                     {view.no_sprite_limit_gg} else {view.no_sprite_limit_sms}),
             settings::LEFT_BAR_SMS_KEY if platform==Platform::Sms =>
                 self.left_bar_override=Some(view.hide_left_bar_sms),
+            settings::LEFT_BAR_NES_KEY if platform==Platform::Nes =>
+                self.left_bar_override=Some(view.hide_left_bar_nes),
             settings::WS_PALETTE_KEY if platform==Platform::Ws =>
                 self.ws_palette_override=Some(view.ws_palette),
             settings::POKEMINI_PALETTE_KEY if platform==Platform::Pokemini =>

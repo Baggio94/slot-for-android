@@ -763,12 +763,12 @@ const MENU_TEXT: [&str; 174] = [
     "Language",                           // 165, Neo Geo Pocket
     "LCD Mode",                           // 166, Pokemon mini
     "Palette",                            // 167, WonderSwan, Pokemon mini
-    "Hide Left Bar",                      // 168, Master System
+    "Hide Left Bar",                      // 168, Master System, NES
     "FM Sound",                           // 169, Master System
     "Screen Shake",                       // 170, Pokemon mini
     "WS Palette",                         // 171, WonderSwan (Siham 2026-11-22)
     "PK Palette",                         // 172, Pokemon mini
-    "Bezel (Upright Games)",              // 173, WonderSwan when only those fit
+    "Bezel",                              // 173, no longer shown (plain Bezel)
 ];
 
 /// Settings > Systems, top to bottom.
@@ -1091,24 +1091,25 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         46 => bezel_value(scoped.bezel_md),
         crate::settings::BEZEL_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY =>
             bezel_value(scoped.bezel_for(Settings::bezel_platform(key)?)),
-        crate::settings::POKEMINI_FILTER_KEY => match settings.pokemini_lcd_filter {
+        crate::settings::POKEMINI_FILTER_KEY => match scoped.pokemini_lcd_filter {
             1 => 149, 2 => 17, _ => 105,
         },
         // The 3.0 systems' own options: the limit is ON as on the console.
-        crate::settings::SPRITE_LIMIT_SMS_KEY => if settings.no_sprite_limit_sms {5}else{4},
-        crate::settings::SPRITE_LIMIT_GG_KEY => if settings.no_sprite_limit_gg {5}else{4},
-        crate::settings::NGP_LANGUAGE_KEY => EXTRA_VALUES + usize::from(settings.ngp_language.min(1)),
-        crate::settings::WS_PALETTE_KEY => match settings.ws_palette.min(3) {
+        crate::settings::SPRITE_LIMIT_SMS_KEY => if scoped.no_sprite_limit_sms {5}else{4},
+        crate::settings::SPRITE_LIMIT_GG_KEY => if scoped.no_sprite_limit_gg {5}else{4},
+        crate::settings::NGP_LANGUAGE_KEY => EXTRA_VALUES + usize::from(scoped.ngp_language.min(1)),
+        crate::settings::WS_PALETTE_KEY => match scoped.ws_palette.min(3) {
             0 => 19, n => EXTRA_VALUES + 1 + usize::from(n) },
-        crate::settings::POKEMINI_PALETTE_KEY => match settings.pokemini_palette.min(6) {
+        crate::settings::POKEMINI_PALETTE_KEY => match scoped.pokemini_palette.min(6) {
             0 => 19, n => EXTRA_VALUES + 4 + usize::from(n) },
         crate::settings::POKEMINI_LCD_MODE_KEY =>
-            EXTRA_VALUES + 11 + usize::from(settings.pokemini_lcd_mode.min(2)),
-        crate::settings::LEFT_BAR_SMS_KEY => if settings.hide_left_bar_sms {4}else{5},
+            EXTRA_VALUES + 11 + usize::from(scoped.pokemini_lcd_mode.min(2)),
+        crate::settings::LEFT_BAR_SMS_KEY => if scoped.hide_left_bar_sms {4}else{5},
+        crate::settings::LEFT_BAR_NES_KEY => if scoped.hide_left_bar_nes {4}else{5},
         // FM sound on its own for the games that have it, as the Japanese console.
-        crate::settings::FM_SMS_KEY => if settings.fm_off_sms {5}else{66},
-        crate::settings::WS_LANGUAGE_KEY => EXTRA_VALUES + usize::from(settings.ws_language.min(1)),
-        crate::settings::POKEMINI_SHAKE_KEY => if settings.pokemini_no_shake {5}else{4},
+        crate::settings::FM_SMS_KEY => if scoped.fm_off_sms {5}else{66},
+        crate::settings::WS_LANGUAGE_KEY => EXTRA_VALUES + usize::from(scoped.ws_language.min(1)),
+        crate::settings::POKEMINI_SHAKE_KEY => if scoped.pokemini_no_shake {5}else{4},
         SCREEN_SIZE_KEY => SCREEN_SIZE_VALUE + match video {
             VideoMode::Actual => 0, VideoMode::Aspect => 1, VideoMode::Stretch => 2,
         },
@@ -6267,12 +6268,13 @@ impl Engine {
     fn extra_rows(platform: Platform, in_game: bool) -> (Vec<usize>, Vec<usize>) {
         use crate::settings::{SPRITE_LIMIT_SMS_KEY, SPRITE_LIMIT_GG_KEY, NGP_LANGUAGE_KEY,
             WS_PALETTE_KEY, POKEMINI_PALETTE_KEY, POKEMINI_LCD_MODE_KEY, LEFT_BAR_SMS_KEY,
-            FM_SMS_KEY, WS_LANGUAGE_KEY, POKEMINI_SHAKE_KEY};
+            FM_SMS_KEY, WS_LANGUAGE_KEY, POKEMINI_SHAKE_KEY, LEFT_BAR_NES_KEY};
         // What changes the picture shows in game too (Siham 2026-11-22);
         // sound and language, read when the game starts, only here.
         let (mut rows, mut keys): (Vec<usize>, Vec<usize>) = match platform {
             Platform::Sms => (vec![164, 168], vec![SPRITE_LIMIT_SMS_KEY, LEFT_BAR_SMS_KEY]),
             Platform::Gg => (vec![164], vec![SPRITE_LIMIT_GG_KEY]),
+            Platform::Nes => (vec![168], vec![LEFT_BAR_NES_KEY]),
             Platform::Ws => (vec![171], vec![WS_PALETTE_KEY]),
             Platform::Pokemini => (vec![163, 172, 166, 170],
                 vec![POKEMINI_FILTER_KEY, POKEMINI_PALETTE_KEY, POKEMINI_LCD_MODE_KEY, POKEMINI_SHAKE_KEY]),
@@ -6303,12 +6305,10 @@ impl Engine {
         keys.extend(Self::look_rows(platform).1);
         rows.extend(Self::extra_rows(platform, false).0);
         keys.extend(Self::extra_rows(platform, false).1);
-        // The WonderSwan's overlay fits only its upright games here: say so.
-        if platform == Platform::Ws && video_mode::own_place(224.0 / 144.0, (224, 144),
-            VideoMode::Aspect, panel_size()).is_none() {
-            for row in rows.iter_mut().filter(|r| **r == 90) { *row = 173; }
-        }
+        // Bezel, even where the WonderSwan's overlay fits only its upright
+        // games (Siham 2026-11-22).
         Self::palette_after_shader(&mut rows, &mut keys);
+        Self::blending_before_shake(&mut rows, &mut keys);
         rows.push(125);
         keys.push(usize::MAX);
         (rows, keys)
@@ -6346,8 +6346,20 @@ impl Engine {
                 }
             }
             Self::palette_after_shader(&mut rows, &mut keys);
+            Self::blending_before_shake(&mut rows, &mut keys);
         }
         (rows, keys)
+    }
+    /// The Pokemon mini's Frame Blending second to last, before Screen
+    /// Shake (Siham 2026-11-22).
+    fn blending_before_shake(rows: &mut Vec<usize>, keys: &mut Vec<usize>) {
+        let Some(from) = keys.iter().position(|&k| k == Settings::blending_key(Platform::Pokemini))
+            else { return };
+        let Some(shake) = keys.iter().position(|&k| k == crate::settings::POKEMINI_SHAKE_KEY)
+            else { return };
+        if from > shake { return; }
+        let (row, key) = (rows.remove(from), keys.remove(from));
+        rows.insert(shake - 1, row); keys.insert(shake - 1, key);
     }
     /// Whether the game played has room on this screen for its system's own
     /// overlay (its own shape: a WonderSwan game is wide or upright).
@@ -6694,7 +6706,8 @@ impl Engine {
         }
         if !save_profile_later(profile, &uri, core) { return; }
         self.game_emulation=Some(profile);
-        if (crate::settings::POKEMINI_FILTER_KEY..=crate::settings::POKEMINI_SHAKE_KEY).contains(&key) {
+        if (crate::settings::POKEMINI_FILTER_KEY..=crate::settings::POKEMINI_SHAKE_KEY).contains(&key)
+            || key == crate::settings::LEFT_BAR_NES_KEY {
             // The core takes the game's own values at its next frame.
             let extras=crate::settings::CoreExtras::of(&self.game_settings());
             if let Some(session)=self.game.as_mut() { session.apply_core_extras(extras,platform); }
@@ -8218,7 +8231,8 @@ impl Engine {
     /// A 3.0 system's option the paused game shows at once, redrawn.
     fn previewed_extra(key: usize) -> bool {
         use crate::settings::*;
-        matches!(key, SPRITE_LIMIT_SMS_KEY | SPRITE_LIMIT_GG_KEY | LEFT_BAR_SMS_KEY | WS_PALETTE_KEY
+        matches!(key, SPRITE_LIMIT_SMS_KEY | SPRITE_LIMIT_GG_KEY | LEFT_BAR_SMS_KEY | LEFT_BAR_NES_KEY
+            | WS_PALETTE_KEY
             | POKEMINI_PALETTE_KEY | POKEMINI_FILTER_KEY | POKEMINI_LCD_MODE_KEY)
             || (SHADER_SMS_KEY..=SHADER_GG_KEY).contains(&key)
             || matches!(key, SHADER_NGP_KEY | SHADER_WS_KEY | SHADER_LYNX_KEY | SHADER_POKEMINI_KEY)
@@ -10949,6 +10963,45 @@ mod texture_pool_tests {
 #[cfg(test)]
 mod settings_value_tests {
     use super::*;
+
+    #[test]
+    fn pokemini_frame_blending_comes_second_to_last() {
+        let keys = Engine::system_page_keys(Platform::Pokemini);
+        let at = |key| keys.iter().position(|&k| k == key).unwrap();
+        let blend = at(Settings::blending_key(Platform::Pokemini));
+        assert_eq!(at(crate::settings::POKEMINI_LCD_MODE_KEY) + 1, blend);
+        assert_eq!(blend + 1, at(crate::settings::POKEMINI_SHAKE_KEY));
+    }
+
+    #[test]
+    fn the_nes_page_offers_hide_left_bar() {
+        assert!(Engine::system_page_keys(Platform::Nes).contains(&crate::settings::LEFT_BAR_NES_KEY));
+        let mut extras = crate::settings::CoreExtras::default();
+        extras.hide_left_bar_nes = true;
+        for core in [Core::Fceumm, Core::Nestopia] {
+            let options = extras.options(Platform::Nes, core);
+            assert_eq!(options.len(), 2, "{core:?}");
+            assert!(options.iter().all(|(_, value)| *value == "8"), "{core:?}: both sides");
+        }
+    }
+
+    #[test]
+    fn a_games_own_option_shows_its_own_value() {
+        use crate::settings::*;
+        let system = Settings::default();
+        let mut game = system.clone();
+        game.hide_left_bar_sms = !system.hide_left_bar_sms;
+        game.no_sprite_limit_gg = !system.no_sprite_limit_gg;
+        game.ws_palette = 2;
+        game.pokemini_no_shake = !system.pokemini_no_shake;
+        let profile = EmulationProfile::from_settings(&system);
+        for (key, cart) in [(LEFT_BAR_SMS_KEY, Platform::Sms), (SPRITE_LIMIT_GG_KEY, Platform::Gg),
+            (WS_PALETTE_KEY, Platform::Ws), (POKEMINI_SHAKE_KEY, Platform::Pokemini)] {
+            let shown = |scoped: &Settings| setting_face(key, &system, scoped, &profile, cart,
+                VideoMode::Aspect, &[]);
+            assert_ne!(shown(&game), shown(&system), "key {key}: the game's own value");
+        }
+    }
 
     #[test]
     fn each_system_page_is_titled_with_its_own_name() {
