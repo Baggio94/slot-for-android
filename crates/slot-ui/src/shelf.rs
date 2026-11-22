@@ -727,12 +727,17 @@ impl Shelf {
         let recede = recede.clamp(0.0, 1.0);
         let dim = dim.clamp(0.0, 1.0);
         let target = self.scroll_target();
+        // The hidden cart is the one in the middle: its twin with the same
+        // name beside it (Game.zip and Game.sfc) stays on the shelf. Only a
+        // hidden cart not in the middle is looked for by its name.
+        let middle = self.cart_at_offset(0)
+            .is_some_and(|i| hidden == Some(self.carts[i].stem.as_str()));
         for slot in -SLOTS..=SLOTS {
             let Some(i) = self.cart_at_offset(slot) else {
                 continue;
             };
             let cart = &self.carts[i];
-            if hidden == Some(cart.stem.as_str()) {
+            if hidden == Some(cart.stem.as_str()) && (!middle || slot == 0) {
                 continue;
             }
             let shift = self.shift(slot);
