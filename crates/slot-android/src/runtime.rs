@@ -6029,7 +6029,9 @@ impl Engine {
     /// One screen size up (Integer -> Original Ratio -> Stretch) or down,
     /// with its banner. GBA on the KONKR has a single size.
     fn step_screen_size(&mut self, bigger: bool) {
-        let mode = if bigger { self.video_mode.bigger() } else { self.video_mode.smaller() };
+        let (platform, panel) = (self.current_cart_platform(), panel_size());
+        let mode = if bigger { self.video_mode.bigger_on(platform, panel) }
+            else { self.video_mode.smaller_on(platform, panel) };
         if mode == self.video_mode { return; }
         self.set_video_mode(mode);
         if self.video_mode != mode { return; }
@@ -6451,7 +6453,7 @@ impl Engine {
     fn cycle_system_video_mode(&mut self, platform: Platform, right: bool) {
         let at=platform as usize;
         let now=self.system_video_modes[at];
-        let mode=if right { now.bigger() } else { now.smaller() };
+        let mode=if right { now.bigger_on(platform,panel_size()) } else { now.smaller_on(platform,panel_size()) };
         if mode==now { return; }
         let paths=PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let Some((root,_))=paths else { return };
@@ -6628,7 +6630,9 @@ impl Engine {
 
     fn change_game_screen_or_gameplay(&mut self, key: usize, right: bool) {
         if key == SCREEN_SIZE_KEY {
-            let mode = if right { self.video_mode.bigger() } else { self.video_mode.smaller() };
+            let (platform, panel) = (self.current_cart_platform(), panel_size());
+            let mode = if right { self.video_mode.bigger_on(platform, panel) }
+                else { self.video_mode.smaller_on(platform, panel) };
             if mode != self.video_mode {
                 self.set_video_mode(mode);
                 self.hud.toast(self.video_mode_toast(), self.born.elapsed().as_millis() as u64);

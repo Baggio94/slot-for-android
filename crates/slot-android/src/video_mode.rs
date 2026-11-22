@@ -52,6 +52,30 @@ impl VideoMode {
             VideoMode::Aspect | VideoMode::Actual => VideoMode::Actual,
         }
     }
+    /// One size up on this panel: Original Ratio is left out where it is
+    /// the Integer picture itself (Siham 2026-11-22: Integer is kept).
+    pub fn bigger_on(self, platform: Platform, panel: (u32, u32)) -> VideoMode {
+        let next = self.on(platform, panel).bigger();
+        if next == VideoMode::Aspect && integer_is_ratio(platform, panel) { VideoMode::Stretch } else { next }
+    }
+    /// One size down on this panel, as bigger_on.
+    pub fn smaller_on(self, platform: Platform, panel: (u32, u32)) -> VideoMode {
+        let next = self.on(platform, panel).smaller();
+        if next == VideoMode::Aspect && integer_is_ratio(platform, panel) { VideoMode::Actual } else { next }
+    }
+    /// This size on this panel: Original Ratio is Integer where the two
+    /// are the same picture.
+    pub fn on(self, platform: Platform, panel: (u32, u32)) -> VideoMode {
+        if self == VideoMode::Aspect && integer_is_ratio(platform, panel) { VideoMode::Actual } else { self }
+    }
+}
+
+/// Whether Integer and Original Ratio show the very same picture on this
+/// panel (the Lynx's 160x102 six times on the KPA's 960x640).
+pub fn integer_is_ratio(platform: Platform, panel: (u32, u32)) -> bool {
+    let a = picture_rect(platform, VideoMode::Actual, panel);
+    let b = picture_rect(platform, VideoMode::Aspect, panel);
+    (a[2] - b[2]).abs() < 0.5 && (a[3] - b[3]).abs() < 0.5
 }
 
 /// The official Slot bezel's window is cut for integer scale only, the
@@ -100,6 +124,7 @@ pub fn video_mode_for(root: &Path, stem: &str, platform: Platform, panel: (u32, 
         .as_deref()
         .and_then(VideoMode::parse)
         .unwrap_or_else(|| system_mode(root, platform, panel))
+        .on(platform, panel)
 }
 
 /// Settings > Systems' Screen Size: the size a system's games start at
@@ -114,6 +139,7 @@ pub fn system_mode(root: &Path, platform: Platform, panel: (u32, u32)) -> VideoM
         .as_deref()
         .and_then(VideoMode::parse)
         .unwrap_or_else(|| default_mode(platform, panel))
+        .on(platform, panel)
 }
 
 pub fn write_system_mode(root: &Path, platform: Platform, mode: VideoMode) -> std::io::Result<()> {
@@ -681,6 +707,21 @@ mod tests {
         assert_eq!(pic[3], 152.0 * 7.0);
         let (_, pic) = own_place(224.0 / 144.0, (224, 144), Aspect, (1440, 1080)).unwrap();
         assert_eq!(pic[1], 0.0, "picture at the top over a band");
+    }
+
+    #[test]
+    fn integer_is_kept_where_it_is_the_original_ratio_picture() {
+        let kpa = (960, 640);
+        // The Lynx: 160x102 six times is both on the KPA.
+        assert!(integer_is_ratio(Platform::Lynx, kpa));
+        assert_eq!(VideoMode::Aspect.on(Platform::Lynx, kpa), VideoMode::Actual);
+        assert_eq!(VideoMode::Actual.bigger_on(Platform::Lynx, kpa), VideoMode::Stretch);
+        assert_eq!(VideoMode::Stretch.smaller_on(Platform::Lynx, kpa), VideoMode::Actual);
+        // The WonderSwan keeps its three sizes there.
+        assert!(!integer_is_ratio(Platform::Ws, kpa));
+        assert_eq!(VideoMode::Actual.bigger_on(Platform::Ws, kpa), VideoMode::Aspect);
+        // On a 1080p 16:9 screen the Lynx has three sizes again.
+        assert!(!integer_is_ratio(Platform::Lynx, (1920, 1080)));
     }
 
     #[test]
