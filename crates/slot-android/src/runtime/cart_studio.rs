@@ -1028,7 +1028,11 @@ impl Engine {
         let key = core_selection::key(uri);
         let mut ok = true;
         if let Some(png) = &outcome.label {
-            if let Err(error) = slot_store::atomic_write(&root.join("Labels").join(format!("{key}.png")), png) {
+            // The folder comes with a first label, which a library of rom
+            // hacks may never get on its own (nxnayx, 2026-11-22).
+            let labels = root.join("Labels");
+            if let Err(error) = std::fs::create_dir_all(&labels)
+                .and_then(|()| slot_store::atomic_write(&labels.join(format!("{key}.png")), png)) {
                 set_error_message("Couldn't save the label.", &error);
                 ok = false;
             }

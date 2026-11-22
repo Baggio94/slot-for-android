@@ -2391,7 +2391,7 @@ class MainActivity : Activity() {
             if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
             try {
                 val dialog = SlotModalDialog(this, "DELETED",
-                    "The save state of $title was deleted on another handheld. Delete it here too, " +
+                    "The save state of $title was deleted from RomM. Delete it here too, " +
                         "or keep this handheld's?",
                     onDismiss = { ready.countDown() })
                 dialog.addButton("DELETE IT") {
@@ -2418,7 +2418,7 @@ class MainActivity : Activity() {
             if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
             try {
                 val dialog = SlotModalDialog(this, "DELETED",
-                    "The save of $title was deleted on another handheld. Delete it here too, " +
+                    "The save of $title was deleted from RomM. Delete it here too, " +
                         "or keep this handheld's?",
                     onDismiss = { ready.countDown() })
                 dialog.addButton("DELETE IT") {
