@@ -3247,11 +3247,10 @@ impl Engine {
                     } else {
                         (crate::settings::POKEMINI_PALETTE_KEY, 4)
                     };
-                    self.settings.change(key, code == 105);
-                    self.persist_settings();
-                    let extras = crate::settings::CoreExtras::of(&self.settings);
-                    if let Some(game) = self.game.as_mut() { game.apply_core_extras(extras, platform); }
-                    let at = if platform == Platform::Ws { self.settings.ws_palette } else { self.settings.pokemini_palette };
+                    // This game's palette, as the Screen page's row (2026-11-22).
+                    self.change_game_screen_or_gameplay(key, code == 105);
+                    let view = self.game_settings();
+                    let at = if platform == Platform::Ws { view.ws_palette } else { view.pokemini_palette };
                     self.hud.toast(Toast::OwnPalette(first + at), time);
                 }
             // Also valid for GB-compatible .gbc ROMs (CGB flag bit 7 unset).
@@ -4877,7 +4876,10 @@ impl Engine {
                                     // Shader keys can switch the core's own GBA Color.
                                     // (Frame Blending acts between frames: a
                                     // still picture can't show it.)
-                                    if matches!(key, 0..=3 | 21..=24 | 66..=69) {
+                                    // The 3.0 systems' picture options too
+                                    // (Siham 2026-11-22): seen in the pause.
+                                    if matches!(key, 0..=3 | 21..=24 | 66..=69)
+                                        || Self::previewed_extra(key) {
                                         self.redraw_paused_game();
                                     }
                                 },
@@ -5767,6 +5769,8 @@ impl Engine {
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
             let effective_settings = self.game_settings();
+            // The 3.0 options this game starts with: its own, else its system's.
+            crate::settings::CoreExtras::store(&effective_settings);
             let started = Instant::now();
             let resume_preference = NEXT_RESUME_MODE.swap(-1, Ordering::AcqRel);
             let wants_state = match resume_preference {
@@ -6609,13 +6613,12 @@ impl Engine {
             set_message("Not available during Multiplayer.".into());
             return;
         }
-        // The 3.0 systems' own options are shared Settings, not the game's
-        // profile; the core takes them at its next frame.
-        if (crate::settings::POKEMINI_FILTER_KEY..=crate::settings::POKEMINI_SHAKE_KEY).contains(&key) {
+        // The 3.0 systems' sound and language are the system's (read when a
+        // game starts); their picture options are this game's, below.
+        if matches!(key, crate::settings::NGP_LANGUAGE_KEY | crate::settings::WS_LANGUAGE_KEY
+            | crate::settings::FM_SMS_KEY) {
             if !self.settings.change(key,right) { return; }
             self.persist_settings();
-            let extras=crate::settings::CoreExtras::of(&self.settings);
-            if let Some(session)=self.game.as_mut() { session.apply_core_extras(extras,platform); }
             return;
         }
         // This method is only called from the paused game, not the carousel.
@@ -6637,6 +6640,11 @@ impl Engine {
         }
         if !save_profile_later(profile, &uri, core) { return; }
         self.game_emulation=Some(profile);
+        if (crate::settings::POKEMINI_FILTER_KEY..=crate::settings::POKEMINI_SHAKE_KEY).contains(&key) {
+            // The core takes the game's own values at its next frame.
+            let extras=crate::settings::CoreExtras::of(&self.game_settings());
+            if let Some(session)=self.game.as_mut() { session.apply_core_extras(extras,platform); }
+        }
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
         if matches!(key,0|1|3|21|47|48|49|66..=68|70) || matches!(key,
@@ -6797,6 +6805,9 @@ impl Engine {
         let globals=self.game_settings();
         let platform=self.current_cart_platform();
         self.apply_game_look();
+        // The 3.0 picture options back to the system's.
+        let extras=crate::settings::CoreExtras::of(&globals);
+        if let Some(session)=self.game.as_mut() { session.apply_core_extras(extras,platform); }
         if let Some(session)=self.game.as_mut() {
             session.set_colour_correction(globals.shader_for(platform)
                 .core_colour(globals.colour_for(platform)));
@@ -8150,6 +8161,14 @@ impl Engine {
     /// The game's system has a Screen Size (the screen hasn't the system's
     /// own shape, as Systems > Screen Size), so L1 / R1 size the picture
     /// on the in-game Screen page, row or not.
+    /// A 3.0 system's option the paused game shows at once, redrawn.
+    fn previewed_extra(key: usize) -> bool {
+        use crate::settings::*;
+        matches!(key, SPRITE_LIMIT_SMS_KEY | SPRITE_LIMIT_GG_KEY | LEFT_BAR_SMS_KEY | WS_PALETTE_KEY
+            | POKEMINI_PALETTE_KEY | POKEMINI_FILTER_KEY | POKEMINI_LCD_MODE_KEY)
+            || (SHADER_SMS_KEY..=SHADER_GG_KEY).contains(&key)
+            || matches!(key, SHADER_NGP_KEY | SHADER_WS_KEY | SHADER_LYNX_KEY | SHADER_POKEMINI_KEY)
+    }
     fn screen_page_sizes(&self) -> bool {
         !video_mode::screen_fits(self.current_cart_platform(), panel_size())
     }
