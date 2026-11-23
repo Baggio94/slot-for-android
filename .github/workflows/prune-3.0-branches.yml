@@ -1,0 +1,59 @@
+name: One-time 3.0 branch cleanup
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/prune-3.0-branches.yml']
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  prune:
+    if: ${{ github.event.head_commit.message == 'chore(maintenance): prune superseded 3.0 branches' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove only verified, superseded 3.0 branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const finalRc = 'fb3c52c86bd31932bfa0e5fde0289d1c8de11781';
+            const branches = new Map([
+              ['beta/3.0-audio-parity', 'b9979e7c658ed1b26d86f588779ac4cd71e4f9df'],
+              ['beta/3.0-rc4', '891ab007de8acb91404e9fccf239ddd7f39b2'],
+              ['beta/3.0-rc5', '2d874e1f0bbc91b551791a7e952913bf1e778b1c'],
+              ['beta/3.0-rc6', '3ef8160c6ed02286357f542f332e22911347e9e8'],
+              ['beta/3.0-rc7', '909afa576e5dcf168a0e890d1d75507be7ddfcf7'],
+              ['wip/3.0-rc6', '3ef8160c6ed02286357f542f332e22911347e9e8'],
+              ['wip/3.0-rc7', '909afa576e5dcf168a0e890d1d75507be7ddfcf7'],
+            ]);
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100
+            });
+            // Validate ALL branches before deleting ANY.
+            for (const [branch, expectedSha] of branches) {
+              const ref = await github.rest.git.getRef({owner, repo, ref: 'heads/' + branch});
+              if (ref.data.object.sha !== expectedSha) {
+                throw new Error('Branch changed since audit: ' + branch);
+              }
+              const details = await github.rest.repos.getBranch({owner, repo, branch});
+              if (details.data.protected) {
+                throw new Error('Protected branch: ' + branch);
+              }
+              if (prs.some(pr => pr.head.repo?.full_name === owner + '/' + repo && pr.head.ref === branch)) {
+                throw new Error('Open PR depends on branch: ' + branch);
+              }
+              const comparison = await github.rest.repos.compareCommits({
+                owner, repo, base: branch, head: finalRc
+              });
+              if (comparison.data.behind_by !== 0) {
+                throw new Error('Unmerged commits remain in: ' + branch);
+              }
+            }
+            for (const branch of branches.keys()) {
+              await github.rest.git.deleteRef({owner, repo, ref: 'heads/' + branch});
+              core.info('Deleted verified obsolete branch: ' + branch);
+            }
