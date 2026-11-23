@@ -9972,7 +9972,6 @@ impl Engine {
                     Ordering::Release,
                 );
             }
-            if decide_usual { self.decide_usual_frame(); }
             // CPU wall time issuing the GL draw work. This is NOT asynchronous
             // GPU execution and excludes Android's later eglSwapBuffers.
             let submit_started = Instant::now();
@@ -10041,6 +10040,7 @@ impl Engine {
             a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
                 stepped, a12_native_started.elapsed().as_micros() as u64,
                 MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
+            if decide_usual { self.decide_usual_frame(); }
             if let Some(fault) = peer_fault { self.peer_link_stopped(fault); }
             return;
         }
