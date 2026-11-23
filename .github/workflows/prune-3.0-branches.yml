@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   prune:
-    if: ${{ github.event.head_commit.message == 'chore(maintenance): prune superseded 3.0 branches' }}
+    if: "${{ github.event.head_commit.message == 'chore(maintenance): prune superseded 3.0 branches' }}"
     runs-on: ubuntu-latest
     steps:
       - name: Remove only verified, superseded 3.0 branches
