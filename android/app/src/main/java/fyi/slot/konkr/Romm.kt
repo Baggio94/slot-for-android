@@ -750,14 +750,15 @@ internal object Romm {
         }
     }
 
-    /** Fetches the BIOS named in `wanted` (gba_bios.bin…) from the player's
-     *  platforms on RomM (GB, GBC, GBA, Lynx, Game Gear, Master System, Mega
-     *  Drive, Pokemon mini); returns those slot. kept. */
+    /** Fetches only the four RomM-auto-approved BIOS (GB/GBC/GBA/Lynx).
+     *  Other systems' BIOS may still be imported explicitly, but never fetched here. */
     fun fetchBios(context: Context, wanted: Set<String>): List<String> {
-        val left = wanted.toMutableSet()
+        val systems = BiosLibrary.ROMM_AUTO_PLATFORMS
+        val permitted = systems.flatMap(BiosLibrary::automaticNamesFor)
+            .map { it.lowercase(Locale.ROOT) }.toSet()
+        val left = wanted.intersect(permitted).toMutableSet()
         val added = mutableListOf<String>()
-        val systems = setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX, Systems.GG,
-            Systems.SMS, Systems.MD, Systems.POKEMINI)
+        if (left.isEmpty()) return added
         for (console in consoles(context).filter { it.platform in systems }) {
             if (left.isEmpty()) break
             for ((id, file) in firmware(context, console.id)) {
