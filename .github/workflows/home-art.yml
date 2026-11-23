@@ -3,12 +3,8 @@ name: Cart art
 # Builds slot.'s cart label set with tools/home-art/harvest.py and publishes it to the R2
 # bucket served at the art domain. Each run starts from the published indexes, so the set
 # grows run after run within ScreenScraper's daily quota, then keeps up with new dumps.
-# A push to feature/home-art runs a short Super Nintendo trial that publishes nothing.
 
 on:
-  push:
-    branches: [feature/home-art]
-    paths: [tools/home-art/**, .github/workflows/home-art.yml]
   schedule:
     # The set is full (2026-11-09): once a week, for new dumps and, a month after
     # ScreenScraper last had nothing for a dump, to ask it again.
@@ -43,7 +39,7 @@ jobs:
     timeout-minutes: 340
     env:
       PUBLISH: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
-      PLATFORM: ${{ github.event_name == 'push' && 'SNES' || inputs.platform || 'all' }}
+      PLATFORM: ${{ inputs.platform || 'all' }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
@@ -70,8 +66,8 @@ jobs:
           SS_SOFTNAME: ${{ secrets.SCREENSCRAPER_SOFTNAME }}
           SS_SSID: ${{ secrets.SCREENSCRAPER_SSID }}
           SS_SSPASSWORD: ${{ secrets.SCREENSCRAPER_SSPASSWORD }}
-          LIMIT: ${{ github.event_name == 'push' && '40' || inputs.limit || '' }}
-          MATCH: ${{ github.event_name == 'push' && '^(Super Mario World|Super Metroid|Chrono Trigger|F-Zero|EarthBound|Final Fantasy)' || inputs.match || '' }}
+          LIMIT: ${{ inputs.limit || '' }}
+          MATCH: ${{ inputs.match || '' }}
         run: |
           set -euo pipefail
           test -n "$SS_DEVID" || { echo "::error::ScreenScraper secrets are missing"; exit 1; }
@@ -104,9 +100,9 @@ jobs:
       - name: Contact sheet
         if: always() && github.event_name != 'schedule'
         run: python3 tools/home-art/preview.py --out art --platform "$PLATFORM" | tail -5 || true
-      # Trials (a push, or a run by hand that publishes nothing) are kept as an artifact.
+      # Non-publishing manual trials are kept as artifacts.
       - uses: actions/upload-artifact@v4
-        if: always() && (github.event_name == 'push' || env.PUBLISH != 'true')
+        if: always() && (env.PUBLISH != 'true')
         with:
           name: cart-art-trial-${{ github.run_number }}
           path: |

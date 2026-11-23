@@ -28,8 +28,7 @@ python3 -m unittest tools/home-art/test_harvest.py
 The **Cart art** workflow runs it once a week with the repository's ScreenScraper secrets,
 starting from the published indexes, asks again about a dump without a label a month after the
 last answer (`--retry-after 30`), and publishes new files and indexes to the R2 bucket
-(`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`). A push to
-feature/home-art runs a short trial kept as an artifact.
+(`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`). Manual non-publishing runs are kept as artifacts.
 
 Images come from [ScreenScraper](https://www.screenscraper.fr/) (CC BY-NC-SA 4.0); game names
 and CRCs from [libretro-database](https://github.com/libretro/libretro-database) (CC BY-SA 4.0).
