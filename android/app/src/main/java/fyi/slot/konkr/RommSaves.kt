@@ -239,8 +239,10 @@ internal object RommSaves {
         }
     }
 
-    /** After a save in slot.: sends it when it changed since the exchange. */
-    fun afterSave(context: Context, target: RetroArchStorage.Target): String? {
+    /** After a save in slot.: sends it when changed. Only a completed upload
+     *  calls [onUploaded]; unchanged, deferred and failed saves never confirm. */
+    fun afterSave(context: Context, target: RetroArchStorage.Target,
+                  onUploaded: () -> Unit = {}): String? {
         if (!enabled(context) || !Romm.signedIn(context)) return null
         val platform = platformOf(target) ?: return null
         val local = target.saveLocal.takeIf { it.isFile }?.readBytes() ?: return null
@@ -269,7 +271,7 @@ internal object RommSaves {
             }
             val sent = Romm.uploadSave(context, romId, emulator(target), target.saveName, local)
             keep(context, target, Record(romId, sent.id, sent.updatedAt, localSha, sendRtc(context, target, romId, kept)))
-            TaskPill.confirm("SAVED TO ROMM")
+            onUploaded()
             null
         } catch (error: Romm.SignedOut) {
             "Signed out of RomM: this save wasn't sent."
