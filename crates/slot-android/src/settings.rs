@@ -995,10 +995,10 @@ impl Settings {
             simpletex_gba_colour: true,
             lcd_3_0: true,
             lcd3x_3_0: true,
-            // The NES's side bars and the Master System's left bar hold
-            // the game's leftovers (Siham 2026-11-23): hidden.
-            hide_left_bar_nes: true,
-            hide_left_bar_sms: true,
+            // Leave NES side bars and Master System left bar visible by default.
+            // These are user choices, not automatic cropping.
+            hide_left_bar_nes: false,
+            hide_left_bar_sms: false,
             side_bars_3_0: true,
             gbav_fsr: true,
             ..Self::default()
@@ -1108,13 +1108,10 @@ impl Settings {
                     if s.shader_ws == Shader::Lcd1x { s.shader_ws = Shader::Lcd3x; }
                     s.lcd3x_3_0 = true;
                 }
-                // Once: the NES's side bars and the Master System's left
-                // bar hidden, as on a fresh install (3.0.0-rc6).
-                if !s.side_bars_3_0 {
-                    s.hide_left_bar_nes = true;
-                    s.hide_left_bar_sms = true;
-                    s.side_bars_3_0 = true;
-                }
+                // Mark the historical side-bar migration complete, but never
+                // change what an existing user chose (including rc5 installs).
+                // New installs already default to visible side bars.
+                if !s.side_bars_3_0 { s.side_bars_3_0 = true; }
                 if s.gb_palette as usize >= GbPalette::COUNT { s.gb_palette = 1; }
                 if !REWIND_SPEEDS.contains(&s.rewind_speed) { s.rewind_speed = 2; }
                 if s.run_ahead_frames > 2 { s.run_ahead_frames = 0; }
@@ -1973,20 +1970,24 @@ mod tests {
     }
 
     #[test]
-    fn side_bars_are_hidden_once_for_everyone() {
-        let fresh = Settings::first_install_defaults_for_device(Device::RPC);
-        assert!(fresh.hide_left_bar_nes && fresh.hide_left_bar_sms, "a fresh install");
+    fn side_bars_are_visible_by_default_and_existing_choices_survive() {
+        for device in [Device::RPC, Device::KONKR] {
+            let fresh = Settings::first_install_defaults_for_device(device);
+            assert!(!fresh.hide_left_bar_nes && !fresh.hide_left_bar_sms,
+                "new installations keep side bars visible");
+        }
         let dir = std::env::temp_dir().join(format!("slot-side-bars-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // An rc5 file: both shown, never migrated.
+        // Older settings with side bars visible must not be silently changed.
         let old = Settings { hide_left_bar_nes: false, hide_left_bar_sms: false, side_bars_3_0: false,
             ..Settings::default() };
         old.save(&dir).unwrap();
         let now = Settings::load(&dir);
-        assert!(now.hide_left_bar_nes && now.hide_left_bar_sms && now.side_bars_3_0);
-        // Shown again by the player: it stays so.
-        Settings { hide_left_bar_nes: false, ..now }.save(&dir).unwrap();
-        assert!(!Settings::load(&dir).hide_left_bar_nes);
+        assert!(!now.hide_left_bar_nes && !now.hide_left_bar_sms && now.side_bars_3_0);
+        // Older settings with side bars hidden explicitly must also be kept.
+        Settings { hide_left_bar_nes: true, hide_left_bar_sms: true, ..now }.save(&dir).unwrap();
+        let chosen = Settings::load(&dir);
+        assert!(chosen.hide_left_bar_nes && chosen.hide_left_bar_sms);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
