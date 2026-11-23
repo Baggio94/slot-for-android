@@ -754,7 +754,7 @@ internal object Romm {
      *  Other systems' BIOS may still be imported explicitly, but never fetched here. */
     fun fetchBios(context: Context, wanted: Set<String>): List<String> {
         val systems = BiosLibrary.ROMM_AUTO_PLATFORMS
-        val permitted = systems.flatMap(BiosLibrary::automaticNamesFor)
+        val permitted = systems.flatMap { BiosLibrary.automaticNamesFor(it) }
             .map { it.lowercase(Locale.ROOT) }.toSet()
         val left = wanted.intersect(permitted).toMutableSet()
         val added = mutableListOf<String>()
