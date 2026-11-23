@@ -11053,10 +11053,24 @@ mod settings_value_tests {
         assert_eq!(MENU_TEXT[Engine::system_page_rows(Platform::Nes)[at]], "Hide Side Bars");
         let mut extras = crate::settings::CoreExtras::default();
         extras.hide_left_bar_nes = true;
-        for core in [Core::Fceumm, Core::Nestopia] {
+        for (core, prefix, filter) in [
+            (Core::Fceumm, "fceumm", "fceumm_sndlowpass"),
+            (Core::Nestopia, "nestopia", "nestopia_audio_filter"),
+        ] {
             let options = extras.options(Platform::Nes, core);
-            assert_eq!(options.len(), 2, "{core:?}");
-            assert!(options.iter().all(|(_, value)| *value == "8"), "{core:?}: both sides");
+            assert_eq!(options.len(), 3, "{core:?}: both side bars and audio filter");
+            for side in ["h_left", "h_right"] {
+                let key = format!("{prefix}_overscan_{side}");
+                assert_eq!(options.iter().find(|(name, _)| *name == key).map(|(_, value)| *value),
+                    Some("8"), "{core:?}: {key}");
+            }
+            assert_eq!(options.iter().find(|(name, _)| *name == filter).map(|(_, value)| *value),
+                Some("disabled"), "{core:?}: audio OFF by default");
+            extras.nes_audio_filter = true;
+            assert_eq!(extras.options(Platform::Nes, core).iter()
+                .find(|(name, _)| *name == filter).map(|(_, value)| *value),
+                Some("enabled"), "{core:?}: audio filter ON");
+            extras.nes_audio_filter = false;
         }
     }
 
