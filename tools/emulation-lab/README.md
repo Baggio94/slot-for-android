@@ -1,4 +1,6 @@
-## Fast path from beta10 onward — one command
+# slot. for Android — Emulation Lab
+
+## Quick checks
 
 For routine tests, **stop doing a full core × Run-Ahead matrix at each build**.
 Run the Rust/Android/parser safety checks in CI, then reserve **one short physical
@@ -11,7 +13,7 @@ writes `quickcheck.md` + `quickcheck.json` alongside the raw reports.
 It does **not** modify an installed APK, selected emulator, Run-Ahead,
 settings, ROMs, game state or saves. **Start a game first.**
 
-From the repository root (gpSP + RA1 selected in the app already):
+From the repository root (example: gpSP with Run-Ahead 1 already selected):
 
     python3 tools/emulation-lab/quickcheck.py --seconds 180 --expect-core gpsp --expect-ra 1
 
@@ -19,11 +21,8 @@ Or review a previous capture, without any device:
 
     python3 tools/emulation-lab/quickcheck.py --existing emulation-lab-results/TIMESTAMP-scenario
 
-The known KONKR serial is the default (override with `--serial`).
-If using an **older beta3 test kit**, download the single standalone
-`tools/emulation-lab/quickcheck.py` from this branch into the kit root:
-
-    python3 quickcheck.py --seconds 180 --expect-core gpsp --expect-ra 1
+Supply `--serial` to select a specific Android device. The tool retains a
+historical KONKR device serial as its default, so override it for other devices.
 
 **Results:** `OK PROVISOIRE` indicates no *measured* hardware underruns or RA
 failures and no near-empty sampled AudioTrack output queue in this capture.
@@ -38,25 +37,41 @@ NOT a count of AudioTrack underruns.
 
 ---
 
-# slot. for Android — Emulation Lab (1.2.2-beta3)
+## Android diagnostic build
 
-An opt-in diagnostics build for the established **Mac Apple Silicon ARM64
-Android 12L** AVD `Slot_KONKR_API32` (960×640 / 3:2), and a KONKR ARM64
-test build. The debug package is **`fyi.slot.konkr.diag`**, side-by-side
-with `fyi.slot.konkr`; its internal saves and preferences are isolated.
-External RetroArch save/state folders are disabled in the debug build.
-It never changes the installed verified v1.2.1.
+The production package is `fyi.slot.konkr`. The separate debug package
+`fyi.slot.konkr.diag` can be installed alongside it, with isolated internal
+app data and preferences. External RetroArch save/state folders are disabled
+in the debug build. Do not replace the signed production APK with the lab APK.
 
 ## Running the Mac AVD
 
+For the existing Apple Silicon Android 12L AVD `Slot_KONKR_API32`
+(960 × 640 / 3:2), use an ARM64 emulator image. The `main` CI produces a
+separately installable debug APK. Use a successful workflow run that actually
+contains the `slot-for-android-3.0.0-mac-avd-debug` artifact.
+
 ```sh
 "$HOME/Library/Android/sdk/emulator/emulator" -avd Slot_KONKR_API32 -gpu auto -no-boot-anim
-"$HOME/Library/Android/sdk/platform-tools/adb" devices
-"$HOME/Library/Android/sdk/platform-tools/adb" -s emulator-5556 shell getprop ro.product.cpu.abi
-# This test APK requires: arm64-v8a
-"$HOME/Library/Android/sdk/platform-tools/adb" -s emulator-5556 install -r slot-for-konkr-1.2.2-beta3-mac-avd-debug.apk
-"$HOME/Library/Android/sdk/platform-tools/adb" -s emulator-5556 shell am start -n fyi.slot.konkr.diag/fyi.slot.konkr.MainActivity
+adb devices
+adb -s emulator-5556 shell getprop ro.product.cpu.abi
+# Expected ABI: arm64-v8a
+
+RUN_ID="$(gh run list -R Baggio94/slot-for-android \
+  -w konkr-production.yml -b main -s success -L 1 \
+  --json databaseId --jq '.[0].databaseId')"
+test -n "$RUN_ID" && test "$RUN_ID" != "null"
+DEST="$(mktemp -d "${TMPDIR:-/tmp}/slot-mac-avd.XXXXXX")"
+gh run download "$RUN_ID" -R Baggio94/slot-for-android \
+  -n slot-for-android-3.0.0-mac-avd-debug -D "$DEST"
+
+adb -s emulator-5556 install -r "$DEST/app-debug.apk"
+adb -s emulator-5556 shell am start -n \
+  fyi.slot.konkr.diag/fyi.slot.konkr.MainActivity
 ```
+
+Replace `emulator-5556` if your AVD uses a different serial. The artifact
+name above corresponds to version 3.0.0.
 
 After granting SAF read access to your ROM folder, use your own legally acquired
 ROMs and keep comparisons on the same game/settings/device. No ROM, BIOS,
@@ -67,7 +82,7 @@ Q/E=L1/R1, 1/2=L2/R2, Enter=START, Space=SELECT, Tab=MODE/HOME.
 Android Studio/AVD must have hardware keyboard input enabled. The same
 Android controller events from a connected gamepad work unchanged.
 
-## First comparison matrix
+## Optional targeted comparison matrix
 
 | Scene | Core | Run-Ahead | Auto Save | What to observe |
 |---|---|---|---|---|
@@ -95,7 +110,7 @@ bash tools/emulation-lab/capture.sh emulator-5556 drill_mgba_ra0 45
 bash tools/emulation-lab/capture.sh emulator-5556 drill_mgba_ra1 45
 bash tools/emulation-lab/capture.sh emulator-5556 drill_gpsp_ra1 45
 # Real KONKR (test APK, if installed), separate from emulator:
-bash tools/emulation-lab/capture.sh BW0308N250009576 warioware_mgba_ra1 60
+bash tools/emulation-lab/capture.sh YOUR_ADB_SERIAL warioware_mgba_ra1 60
 ```
 
 Each capture produces `emulation-lab-results/<stamp>-<scene>/{logcat.txt,report.txt,report.json,metadata.txt}`.
