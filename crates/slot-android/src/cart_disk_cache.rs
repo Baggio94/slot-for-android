@@ -37,6 +37,11 @@ impl DiskCache {
         if matches!(cart.platform, Sms | Gg | Ngp | Ws | Lynx | Pokemini) {
             input.extend_from_slice(b"materials-3");
         }
+        // 3.0's home shells (SNES, Mega Drive, the NES back to 2.5's, the
+        // Master System's cleaned corners): drawn anew once (3.0.0-rc6).
+        if matches!(cart.platform, Nes | Snes | Md | Sms) {
+            input.extend_from_slice(b"shells-rc6");
+        }
         // A cart with no label is written by hand since 2.4.1: its old face
         // (a printed text label) is drawn again, the others are kept.
         if cart.label.as_deref().is_none_or(|label| fs::metadata(label).is_err()) {

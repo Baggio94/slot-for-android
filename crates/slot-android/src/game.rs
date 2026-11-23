@@ -47,6 +47,9 @@ fn emulation_may_advance(link_touched: bool, link_active: bool) -> bool {
 const SRAM_PERIOD: Duration = Duration::from_secs(30);
 const REWIND_CAPTURE_FRAMES: u8 = 6; // 10 states/second at the original GBA FPS
 const UNDO_WINDOW: Duration = Duration::from_secs(30);
+/// Frames a paused redraw runs before showing its picture (see
+/// `redraw_paused`): enough for every 3.0 core to show its new look.
+const PAUSED_REDRAW_FRAMES: usize = 4;
 
 /// Read/reset on the renderer's GL thread only; no extra ROM/core work.
 #[derive(Clone, Copy, Default, Debug)]
@@ -1946,18 +1949,27 @@ impl GameSession {
     }
 
     /// The paused picture with a look option the core draws itself (colour
-    /// correction, frame blending, GB palette) just changed: one frame run
-    /// as Run-Ahead runs its frames (no achievements, no sound) from a
+    /// correction, frame blending, GB palette) just changed: a few frames
+    /// run as Run-Ahead runs its frames (no achievements, no sound) from a
     /// snapshot that is then put back, so the game doesn't move a frame.
-    /// The picture stays in view until play resumes. False when the core
-    /// can't roll back safely: the change shows on resume.
-    pub fn redraw_paused(&mut self) -> bool {
+    /// A few, as one isn't always enough: a core can take an option a frame
+    /// late, or draw its screen only every few frames (PokeMini's LCD Mode),
+    /// and slot.'s Frame Blending mixes a picture with the one before. Every
+    /// frame but the last goes to `before_last`; the last stays in view
+    /// until play resumes. False when the core can't roll back safely: the
+    /// change shows on resume.
+    pub fn redraw_paused(&mut self, mut before_last: impl FnMut(&[u8], (u32, u32))) -> bool {
         if !self.runahead_supported() || self.runahead_rollback_failed { return false; }
         if self.core.serialize_into(&mut self.runahead_state).is_err()
             || self.core.capture_speculative_audio().is_err() { return false; }
         self.core.set_frame_skip(false);
         self.core.set_port2(ButtonMask::default());
-        self.core.run_speculative_frame(ButtonMask(0));
+        for frame in 0..PAUSED_REDRAW_FRAMES {
+            self.core.run_speculative_frame(ButtonMask(0));
+            if frame + 1 < PAUSED_REDRAW_FRAMES {
+                before_last(self.core.video_xrgb8888(), self.core.video_size());
+            }
+        }
         self.core.discard_audio();
         self.runahead_video.clear();
         self.runahead_video.extend_from_slice(self.core.video_xrgb8888());

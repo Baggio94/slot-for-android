@@ -436,6 +436,10 @@ fn game_error_text(message: &str) -> &'static str {
 /// Short user-facing sentence on screen; the technical cause goes to logcat.
 /// Writes a game's settings off the GL thread (beta42); false without a
 /// folder to write them in.
+/// Frames of a Master System or Mega Drive game counted before its usual
+/// picture is decided: one minute.
+const USUAL_FRAME_COUNT: u32 = 3600;
+
 fn save_profile_later(profile: EmulationProfile, uri: &str, core: Core) -> bool {
     let Some(root) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(root, _)| root.clone())
     else { return false };
@@ -589,7 +593,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 175] = [
+const MENU_TEXT: [&str; 176] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -763,13 +767,14 @@ const MENU_TEXT: [&str; 175] = [
     "Language",                           // 165, Neo Geo Pocket
     "LCD Mode",                           // 166, Pokemon mini
     "Palette",                            // 167, WonderSwan, Pokemon mini
-    "Hide Left Bar",                      // 168, Master System, NES
+    "Hide Left Bar",                      // 168, Master System
     "FM Sound",                           // 169, Master System
     "Screen Shake",                       // 170, Pokemon mini
     "WS Palette",                         // 171, WonderSwan (Siham 2026-11-22)
     "PK Palette",                         // 172, Pokemon mini
     "Bezel",                              // 173, no longer shown (plain Bezel)
     "Sync States with RomM",              // 174, Library > Saves & States (3.0, beta)
+    "Hide Side Bars",                     // 175, NES: left and right (Siham 2026-11-23)
 ];
 
 /// Settings > Systems, top to bottom.
@@ -1623,6 +1628,11 @@ struct Engine {
     /// The game picture sits at the top of the screen: a Watomsk logo is
     /// in the band under it.
     picture_top: bool,
+    /// A Master System or Mega Drive game's usual picture: 256x224 or not,
+    /// once decided (video_mode::square_game), and the frames counted
+    /// (256x224, others) until then.
+    usual_h32: Option<bool>,
+    usual_count: (u32, u32),
     custom_wallpaper_present: bool,
     /// user.png's modified time, to tell a fresh import from any other reload.
     user_wallpaper_stamp: Option<std::time::SystemTime>,
@@ -2475,6 +2485,8 @@ impl Engine {
             gbc_bezel_tex,
             fitted_bezel: None,
             picture_top: false,
+            usual_h32: None,
+            usual_count: (0, 0),
             custom_wallpaper_present,
             user_wallpaper_stamp,
             screenshot_requested: false,
@@ -5916,7 +5928,7 @@ impl Engine {
             self.gpu.set_game_source_rect(slot_gfx::WHOLE_TEXTURE);
             let frame = self.game.as_ref().map_or((256, 224), GameSession::frame_size);
             self.gpu.set_game_fit(video_mode::home_fit(platform, self.video_mode, aspect,
-                frame, panel_size()));
+                frame, self.game_square()));
             self.gpu.set_game_top(self.picture_top);
             self.apply_game_look();
             return;
@@ -5942,6 +5954,48 @@ impl Engine {
             self.gpu.set_game_source_rect(video_mode::source_rect(platform, self.video_mode));
         }
         self.apply_game_look();
+    }
+
+    /// Square pixels for the game played (video_mode::square_game).
+    fn game_square(&self) -> bool {
+        video_mode::square_game(self.current_cart_platform(), panel_size(), self.usual_h32 == Some(true))
+    }
+    /// A Master System or Mega Drive game's usual picture, if decided.
+    fn read_usual_frame(&mut self, stem: &str, platform: Platform) {
+        self.usual_count = (0, 0);
+        self.usual_h32 = if matches!(platform, Platform::Sms | Platform::Md) {
+            PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+                .and_then(|(root, _)| slot_store::ini::value(root, video_mode::USUAL_FRAME_FILE, stem))
+                .map(|usual| usual.trim() == "256x224")
+        } else {
+            Some(false)
+        };
+    }
+    /// The first minute of a Master System or Mega Drive game decides its
+    /// usual picture once and for all (Siham 2026-11-23): 256x224 when most
+    /// of its frames were. A 256x224 game on a narrow screen turns to 8:7
+    /// at once, at Integer unless a size was chosen for it or its system.
+    fn decide_usual_frame(&mut self) {
+        let h32 = self.usual_count.0 > self.usual_count.1;
+        self.usual_h32 = Some(h32);
+        let platform = self.current_cart_platform();
+        let stem = self.shelves[self.active].carts.get(self.shelves[self.active].index)
+            .map(|cart| cart.stem.clone()).unwrap_or_default();
+        let root = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(root, _)| root.clone());
+        let Some(root) = root else { return };
+        let value = if h32 { "256x224" } else { "other" };
+        {
+            let (root, stem) = (root.clone(), stem.clone());
+            crate::later_write::write(root.join(format!("usual frame\u{1f}{stem}")), move || {
+                if let Err(error) = slot_store::ini::write(&root, video_mode::USUAL_FRAME_FILE, &stem, value) {
+                    crate::game::log_launch_timing(&format!("usual frame not kept: {error}"));
+                }
+            });
+        }
+        if self.game_square() {
+            self.video_mode = video_mode::video_mode_for(&root, &stem, platform, panel_size(), true);
+            self.apply_video_geometry();
+        }
     }
 
     fn set_video_mode(&mut self, mode: VideoMode) {
@@ -6081,7 +6135,8 @@ impl Engine {
     fn home_shape(&self) -> (f32, (u32, u32)) {
         let platform = self.current_cart_platform();
         self.game.as_ref().map_or((4.0 / 3.0, (256, 224)), |session| (
-            video_mode::home_aspect(platform, session.display_aspect(), panel_size()),
+            video_mode::home_aspect(platform, session.display_aspect(), session.frame_size(),
+                self.game_square()),
             session.frame_size()))
     }
 
@@ -6283,7 +6338,7 @@ impl Engine {
         let (mut rows, mut keys): (Vec<usize>, Vec<usize>) = match platform {
             Platform::Sms => (vec![164, 168], vec![SPRITE_LIMIT_SMS_KEY, LEFT_BAR_SMS_KEY]),
             Platform::Gg => (vec![164], vec![SPRITE_LIMIT_GG_KEY]),
-            Platform::Nes => (vec![168], vec![LEFT_BAR_NES_KEY]),
+            Platform::Nes => (vec![175], vec![LEFT_BAR_NES_KEY]),
             Platform::Ws => (vec![171], vec![WS_PALETTE_KEY]),
             Platform::Pokemini => (vec![163, 172, 166, 170],
                 vec![POKEMINI_FILTER_KEY, POKEMINI_PALETTE_KEY, POKEMINI_LCD_MODE_KEY, POKEMINI_SHAKE_KEY]),
@@ -6647,7 +6702,11 @@ impl Engine {
         let dither = platform == Platform::Md && self.game_dither();
         let Some(session) = self.game.as_mut() else { return };
         session.set_frame_blending(blending);
-        if !session.redraw_paused() { return; }
+        // The frames before the last one go through slot.'s Frame Blending
+        // as in play: the paused picture mixes with its own game's frames,
+        // not with what was shown before the change.
+        let (mode, blend) = (session.slot_blending(), &mut self.frame_blend);
+        if !session.redraw_paused(|frame, size| { blend.apply(mode, frame, size); }) { return; }
         if session.frame_size() == (slot_retro::GBA_W, slot_retro::GBA_H)
             && session.display_aspect() <= 0.0 {
             self.gpu.upload_game(session.frame());
@@ -9486,9 +9545,12 @@ impl Engine {
                         .get(self.shelves[self.active].index)
                         .map_or("", |cart| cart.stem.as_str());
                     let platform = self.current_cart_platform();
+                    let name = name.to_owned();
+                    self.read_usual_frame(&name, platform);
+                    let square = self.game_square();
                     self.video_mode = PATHS.lock().unwrap_or_else(|e| e.into_inner())
                         .as_ref().map_or(video_mode::default_mode(platform, panel_size()),
-                            |(root, _)| video_mode::video_mode_for(root, name, platform, panel_size()));
+                            |(root, _)| video_mode::video_mode_for(root, &name, platform, panel_size(), square));
                     self.apply_video_geometry();
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
@@ -9872,6 +9934,7 @@ impl Engine {
             if stepped > 1 {
                 self.perf_catchup = self.perf_catchup.saturating_add(1);
             }
+            let mut decide_usual = false;
             if stepped > 0 {
                 if self.select_tap_frames > 0 {
                     self.select_tap_frames = self.select_tap_frames.saturating_sub(stepped as u8);
@@ -9890,8 +9953,16 @@ impl Engine {
                     let picture = self.frame_blend.apply(session.slot_blending(), session.frame(), size);
                     let picture = if dither { self.dither_blend.apply(picture, size) } else { picture };
                     self.gpu.upload_game_sized(picture, size);
+                    let square = video_mode::square_game(cart_platform, panel_size(),
+                        self.usual_h32 == Some(true));
                     self.gpu.set_game_fit(video_mode::home_fit(cart_platform, self.video_mode,
-                        session.display_aspect(), session.frame_size(), panel_size()));
+                        session.display_aspect(), session.frame_size(), square));
+                    if self.usual_h32.is_none() && matches!(cart_platform, Platform::Sms | Platform::Md) {
+                        let frame = session.frame_size();
+                        if video_mode::h32_frame(frame) { self.usual_count.0 += 1; }
+                        else { self.usual_count.1 += 1; }
+                        decide_usual = self.usual_count.0 + self.usual_count.1 >= USUAL_FRAME_COUNT;
+                    }
                 }
                 frame_phases.gpu_upload_us = upload_started.elapsed().as_micros() as u64;
                 RUMBLE_STRENGTH.store(
@@ -9901,6 +9972,7 @@ impl Engine {
                     Ordering::Release,
                 );
             }
+            if decide_usual { self.decide_usual_frame(); }
             // CPU wall time issuing the GL draw work. This is NOT asynchronous
             // GPU execution and excludes Android's later eglSwapBuffers.
             let submit_started = Instant::now();
@@ -10996,8 +11068,10 @@ mod settings_value_tests {
     }
 
     #[test]
-    fn the_nes_page_offers_hide_left_bar() {
-        assert!(Engine::system_page_keys(Platform::Nes).contains(&crate::settings::LEFT_BAR_NES_KEY));
+    fn the_nes_page_offers_hide_side_bars() {
+        let keys = Engine::system_page_keys(Platform::Nes);
+        let at = keys.iter().position(|&k| k == crate::settings::LEFT_BAR_NES_KEY).unwrap();
+        assert_eq!(MENU_TEXT[Engine::system_page_rows(Platform::Nes)[at]], "Hide Side Bars");
         let mut extras = crate::settings::CoreExtras::default();
         extras.hide_left_bar_nes = true;
         for core in [Core::Fceumm, Core::Nestopia] {

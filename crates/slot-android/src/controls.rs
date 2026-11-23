@@ -557,9 +557,11 @@ const LYNX: [ConsoleButton; 9] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
     cb("A", bit::A), cb("B", bit::B), cb("Option 1", bit::L), cb("Option 2", bit::R),
     cb("Pause", bit::START)];
 /// PokeMini reads the Pokemon mini as RetroArch does: A, B, C from R1,
-/// Shake from L1. Its Power button (SELECT) is left out.
-const POKEMINI: [ConsoleButton; 8] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
-    cb("A", bit::A), cb("B", bit::B), cb("C", bit::R), cb("Shake", bit::L)];
+/// Shake from L1, Power from SELECT. Power has no slot. button until the
+/// player gives it one: it wakes a console a state left asleep.
+const POKEMINI: [ConsoleButton; 9] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("A", bit::A), cb("B", bit::B), cb("C", bit::R), cb("Shake", bit::L),
+    cb_on("Power", bit::SELECT, 0)];
 
 /// Systems, by the names slot. files their controls under.
 pub const SYSTEMS: [&str; 13] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv",
@@ -1197,6 +1199,19 @@ mod tests {
     use super::*;
 
     const PAD: &str = "8bitdo";
+
+    #[test]
+    fn pokemini_power_waits_for_a_button() {
+        let mut controls = Controls::default();
+        let power = console_buttons("pokemini").iter().position(|b| b.name == "Power").unwrap();
+        let scope = Scope::System("pokemini");
+        assert_eq!(controls.bind(&scope, 0, power), (0, false), "no slot. button by default");
+        let played = controls.resolve("pokemini", None, 0, XyRole::TurboAB);
+        assert_eq!(played.apply(bit::SELECT, 0) & bit::SELECT, 0, "SELECT doesn't press Power");
+        controls.map_console(&scope, 0, power, bit::SELECT);
+        let played = controls.resolve("pokemini", None, 0, XyRole::TurboAB);
+        assert_eq!(played.apply(bit::SELECT, 0), bit::SELECT, "now SELECT is Power");
+    }
 
     #[test]
     fn a_new_install_plays_exactly_as_before() {

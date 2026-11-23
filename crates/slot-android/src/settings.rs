@@ -825,6 +825,10 @@ pub struct Settings {
     /// Set once rc1's LCD Grid v2 / LCD1x handheld defaults became LCD3x.
     #[serde(default)]
     pub lcd3x_3_0: bool,
+    /// Set once the NES's side bars and the Master System's left bar were
+    /// hidden by default (Siham 2026-11-23, 3.0.0-rc6).
+    #[serde(default)]
+    pub side_bars_3_0: bool,
     /// Set once the 3.0 systems whose overlay has thin bars on this screen
     /// were started without it (Siham 2026-11-21).
     #[serde(default)]
@@ -936,7 +940,8 @@ impl Default for Settings {
             hide_left_bar_sms: false, hide_left_bar_nes: false, fm_off_sms: false, ws_language: 0,
             pokemini_no_shake: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
-            simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, own_bezels_room: false,
+            simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, side_bars_3_0: false,
+            own_bezels_room: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
             blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
             blending_sms: Blending::Off, blending_gg: Blending::Off,
@@ -982,6 +987,11 @@ impl Settings {
             simpletex_gba_colour: true,
             lcd_3_0: true,
             lcd3x_3_0: true,
+            // The NES's side bars and the Master System's left bar hold
+            // the game's leftovers (Siham 2026-11-23): hidden.
+            hide_left_bar_nes: true,
+            hide_left_bar_sms: true,
+            side_bars_3_0: true,
             gbav_fsr: true,
             ..Self::default()
         }
@@ -1089,6 +1099,13 @@ impl Settings {
                     }
                     if s.shader_ws == Shader::Lcd1x { s.shader_ws = Shader::Lcd3x; }
                     s.lcd3x_3_0 = true;
+                }
+                // Once: the NES's side bars and the Master System's left
+                // bar hidden, as on a fresh install (3.0.0-rc6).
+                if !s.side_bars_3_0 {
+                    s.hide_left_bar_nes = true;
+                    s.hide_left_bar_sms = true;
+                    s.side_bars_3_0 = true;
                 }
                 if s.gb_palette as usize >= GbPalette::COUNT { s.gb_palette = 1; }
                 if !REWIND_SPEEDS.contains(&s.rewind_speed) { s.rewind_speed = 2; }
@@ -1920,6 +1937,24 @@ mod tests {
         assert_eq!(copy.ff_speed,4);
         assert_eq!(copy.run_ahead_frames,1);
         assert_eq!(copy.wallpaper,WallpaperPick::None);
+    }
+
+    #[test]
+    fn side_bars_are_hidden_once_for_everyone() {
+        let fresh = Settings::first_install_defaults_for_device(Device::RPC);
+        assert!(fresh.hide_left_bar_nes && fresh.hide_left_bar_sms, "a fresh install");
+        let dir = std::env::temp_dir().join(format!("slot-side-bars-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // An rc5 file: both shown, never migrated.
+        let old = Settings { hide_left_bar_nes: false, hide_left_bar_sms: false, side_bars_3_0: false,
+            ..Settings::default() };
+        old.save(&dir).unwrap();
+        let now = Settings::load(&dir);
+        assert!(now.hide_left_bar_nes && now.hide_left_bar_sms && now.side_bars_3_0);
+        // Shown again by the player: it stays so.
+        Settings { hide_left_bar_nes: false, ..now }.save(&dir).unwrap();
+        assert!(!Settings::load(&dir).hide_left_bar_nes);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

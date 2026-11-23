@@ -9,6 +9,9 @@ use slot_ui::watomsk::{self, Shape};
 use crate::settings::{Bezel, Shader};
 
 pub const VIDEO_MODE_FILE: &str = "Config/video_mode.ini";
+/// Each Master System and Mega Drive game's usual picture, decided once
+/// (`h32_frame`): "256x224" or "other".
+pub const USUAL_FRAME_FILE: &str = "Config/usual_frame.ini";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum VideoMode {
@@ -119,11 +122,16 @@ pub fn screen_effect(shader: Shader, platform: Platform, mode: VideoMode) -> Scr
     }
 }
 
-pub fn video_mode_for(root: &Path, stem: &str, platform: Platform, panel: (u32, u32)) -> VideoMode {
-    ini::value(root, VIDEO_MODE_FILE, stem)
-        .as_deref()
-        .and_then(VideoMode::parse)
-        .unwrap_or_else(|| system_mode(root, platform, panel))
+/// A game's size: its own, else its system's as Settings > Systems set it,
+/// else the default; Integer for a game in square pixels (`square`: a
+/// 256x224 Master System or Mega Drive game on a narrow screen).
+pub fn video_mode_for(root: &Path, stem: &str, platform: Platform, panel: (u32, u32), square: bool)
+    -> VideoMode
+{
+    let read = |key: &str| ini::value(root, VIDEO_MODE_FILE, key).as_deref().and_then(VideoMode::parse);
+    read(stem)
+        .or_else(|| read(&system_key(platform)))
+        .unwrap_or_else(|| if square { VideoMode::Actual } else { default_mode(platform, panel) })
         .on(platform, panel)
 }
 
@@ -194,6 +202,33 @@ pub fn square_pixels(platform: Platform, panel: (u32, u32)) -> bool {
     matches!(platform, Platform::Nes | Platform::Snes) && narrow(panel)
 }
 
+/// A frame of 256x224: the Mega Drive's H32 mode, a Master System game's
+/// 224 lines (248 wide with its left bar hidden).
+pub fn h32_frame(frame: (u32, u32)) -> bool {
+    matches!(frame, (256, 224) | (248, 224))
+}
+
+/// Square pixels for the game played: NES and SNES as above, and a Master
+/// System or Mega Drive game whose usual picture is 256x224 (`usual_h32`),
+/// 8:7 with Integer overscale, on screens narrower than 4:3 (Siham
+/// 2026-11-23). The others keep 4:3. A game's usual picture is decided
+/// once, as Mega Drive games switch between 256 and 320 wide.
+pub fn square_game(platform: Platform, panel: (u32, u32), usual_h32: bool) -> bool {
+    square_pixels(platform, panel)
+        || (matches!(platform, Platform::Sms | Platform::Md) && usual_h32 && narrow(panel))
+}
+
+/// A square-pixel game's shape: its frame's, except a Master System or
+/// Mega Drive game's other frames (a 320-wide screen in a 256x224 game),
+/// which keep its 8:7 window.
+fn square_shape(platform: Platform, frame: (u32, u32)) -> f32 {
+    if matches!(platform, Platform::Sms | Platform::Md) && !h32_frame(frame) {
+        8.0 / 7.0
+    } else {
+        square_aspect(frame)
+    }
+}
+
 /// NES on screens narrower than 4:3: the cores hide 8 lines at the top and
 /// 8 at the bottom, as a television did, so the square-pixel picture is
 /// 256x224, 8:7 like the SNES (Siham, 2026-11-12). Wider screens keep all
@@ -214,10 +249,14 @@ pub fn square_aspect(frame: (u32, u32)) -> f32 {
 /// Mega Drive, whatever aspect the core reports (FCEUmm and Nestopia report
 /// 8:7 PAR, bsnes and Genesis Plus GX their own), except NES and SNES on
 /// screens narrower than 4:3, which keep square pixels (Siham, 2026-11-12).
-pub fn home_aspect(platform: Platform, core: f32, panel: (u32, u32)) -> f32 {
+pub fn home_aspect(platform: Platform, core: f32, frame: (u32, u32), square: bool) -> f32 {
     match platform {
-        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms
-            if !square_pixels(platform, panel) => 4.0 / 3.0,
+        // The NES's side bars and the Master System's left bar hidden: the
+        // columns left keep their width, the picture narrows.
+        Platform::Nes | Platform::Sms if !square && (240..256).contains(&frame.0) =>
+            4.0 / 3.0 * frame.0 as f32 / 256.0,
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms if !square => 4.0 / 3.0,
+        Platform::Md | Platform::Sms => square_shape(platform, frame),
         // The Game Gear's LCD: its 160x144 pixels are square.
         Platform::Gg => 10.0 / 9.0,
         // NeoPop and RACE report 160x152's square pixels, Beetle Cygne
@@ -226,19 +265,20 @@ pub fn home_aspect(platform: Platform, core: f32, panel: (u32, u32)) -> f32 {
     }
 }
 
-/// How a home console frame fills the screen in `mode`.
+/// How a home console frame fills the screen in `mode` (`square`: see
+/// `square_game`).
 pub fn home_fit(platform: Platform, mode: VideoMode, aspect: f32, frame: (u32, u32),
-    panel: (u32, u32)) -> slot_gfx::Fit
+    square: bool) -> slot_gfx::Fit
 {
-    if square_pixels(platform, panel) {
-        let a = square_aspect(frame);
+    if square {
+        let a = square_shape(platform, frame);
         return match mode {
             VideoMode::Actual => slot_gfx::Fit::Overscale(a),
             VideoMode::Aspect => slot_gfx::Fit::Aspect(a),
             VideoMode::Stretch => slot_gfx::Fit::Stretch,
         };
     }
-    let aspect = home_aspect(platform, aspect, panel);
+    let aspect = home_aspect(platform, aspect, frame, false);
     match mode {
         VideoMode::Actual => slot_gfx::Fit::Integer(aspect),
         VideoMode::Aspect => slot_gfx::Fit::Aspect(aspect),
@@ -419,7 +459,9 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
         Platform::Nes | Platform::Snes | Platform::Md => {
             if a > 4.0 / 3.0 * 1.01 {
                 side(home_rect(VideoMode::Aspect, 4.0 / 3.0, home.1, panel, false))
-            } else if a < 4.0 / 3.0 * 0.99 && watomsk::has_band(design) {
+            } else if a < 4.0 / 3.0 * 0.99 && watomsk::has_band(design)
+                && (home.0 - 4.0 / 3.0).abs() < 0.01 {
+                // Not over a 256x224 game's 8:7 picture, which fills the screen.
                 band(home_rect(mode, home.0, home.1, panel, true))
             } else {
                 None
@@ -583,11 +625,11 @@ mod tests {
         assert_eq!(default_mode(Platform::Nes, (720, 720)), VideoMode::Actual);
         assert_eq!(default_mode(Platform::Md, rpc), VideoMode::Aspect);
         assert_eq!(default_mode(Platform::Snes, (960, 640)), VideoMode::Aspect);
-        assert_eq!(home_fit(Platform::Snes, VideoMode::Actual, 4.0 / 3.0, (512, 448), rpc),
+        assert_eq!(home_fit(Platform::Snes, VideoMode::Actual, 4.0 / 3.0, (512, 448), square_pixels(Platform::Snes, rpc)),
             Fit::Overscale(256.0 / 224.0));
-        assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, 4.0 / 3.0, (256, 240), rpc),
+        assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, 4.0 / 3.0, (256, 240), square_pixels(Platform::Nes, rpc)),
             Fit::Aspect(256.0 / 240.0));
-        assert_eq!(home_fit(Platform::Nes, VideoMode::Actual, 4.0 / 3.0, (256, 240), (960, 640)),
+        assert_eq!(home_fit(Platform::Nes, VideoMode::Actual, 4.0 / 3.0, (256, 240), square_pixels(Platform::Nes, (960, 640))),
             Fit::Integer(4.0 / 3.0));
     }
 
@@ -597,19 +639,47 @@ mod tests {
         let par = 256.0 * 8.0 / 7.0 / 240.0; // FCEUmm and Nestopia "8:7 PAR"
         for panel in [(960, 640), (1024, 768), (1920, 1080)] {
             for platform in [Platform::Nes, Platform::Snes, Platform::Md] {
-                assert_eq!(home_fit(platform, VideoMode::Aspect, par, (256, 240), panel),
+                assert_eq!(home_fit(platform, VideoMode::Aspect, par, (256, 240), square_pixels(platform, panel)),
                     Fit::Aspect(4.0 / 3.0), "{platform:?} {panel:?}");
-                assert_eq!(home_fit(platform, VideoMode::Actual, 1.5238, (320, 224), panel),
+                assert_eq!(home_fit(platform, VideoMode::Actual, 1.5238, (320, 224), square_pixels(platform, panel)),
                     Fit::Integer(4.0 / 3.0), "{platform:?} {panel:?}");
             }
         }
         // Narrow screens: NES and SNES keep square pixels, the Mega Drive 4:3.
         let rpc = (1240, 1080);
-        assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, par, (256, 240), rpc),
+        assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, par, (256, 240), square_pixels(Platform::Nes, rpc)),
             Fit::Aspect(256.0 / 240.0));
-        assert_eq!(home_fit(Platform::Md, VideoMode::Aspect, 1.5238, (320, 224), rpc),
+        assert_eq!(home_fit(Platform::Md, VideoMode::Aspect, 1.5238, (320, 224), square_pixels(Platform::Md, rpc)),
             Fit::Aspect(4.0 / 3.0));
-        assert_eq!(home_aspect(Platform::Gba, 1.5, (960, 640)), 1.5);
+        assert_eq!(home_aspect(Platform::Gba, 1.5, (240, 160), false), 1.5);
+    }
+
+    #[test]
+    fn master_system_and_mega_drive_256x224_games_take_square_pixels_on_narrow_screens() {
+        use slot_gfx::Fit;
+        let rpc = (1240, 1080);
+        for platform in [Platform::Sms, Platform::Md] {
+            assert!(square_game(platform, rpc, true), "{platform:?}");
+            assert!(!square_game(platform, rpc, false), "{platform:?}: other games keep 4:3");
+            assert!(!square_game(platform, (960, 640), true), "{platform:?}: wider screens keep 4:3");
+            assert_eq!(home_fit(platform, VideoMode::Actual, 4.0 / 3.0, (256, 224), true),
+                Fit::Overscale(8.0 / 7.0));
+        }
+        // The cropped left bar: the Integer picture is the 248 columns shown.
+        assert_eq!(home_fit(Platform::Sms, VideoMode::Actual, 4.0 / 3.0, (248, 224), true),
+            Fit::Overscale(248.0 / 224.0));
+        // A 320-wide screen of a 256x224 game keeps the game's 8:7 window.
+        assert_eq!(home_fit(Platform::Md, VideoMode::Actual, 1.5238, (320, 224), true),
+            Fit::Overscale(8.0 / 7.0));
+        assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), true), 8.0 / 7.0);
+        assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), false), 4.0 / 3.0);
+        // Hidden bars on a wider screen: the columns keep their width.
+        assert_eq!(home_aspect(Platform::Nes, 1.0, (240, 240), false), 4.0 / 3.0 * 240.0 / 256.0);
+        assert_eq!(home_aspect(Platform::Sms, 1.0, (248, 192), false), 4.0 / 3.0 * 248.0 / 256.0);
+        // A 256x192 Master System game: 4:3, square or not.
+        assert!(!h32_frame((256, 192)));
+        // No room beside an 8:7 picture on the Retroid Pocket Classic: no overlay.
+        assert!(own_place(8.0 / 7.0, (256, 224), VideoMode::Aspect, rpc).is_none());
     }
 
     #[test]
@@ -623,10 +693,10 @@ mod tests {
         }
         // The cropped 256x224 frame is 8:7, the same picture as the SNES.
         let rpc = (1240, 1080);
-        assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, 1.0, (256, 224), rpc),
+        assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, 1.0, (256, 224), square_pixels(Platform::Nes, rpc)),
             Fit::Aspect(256.0 / 224.0));
-        assert_eq!(home_fit(Platform::Nes, VideoMode::Actual, 1.0, (256, 224), rpc),
-            home_fit(Platform::Snes, VideoMode::Actual, 1.0, (256, 224), rpc));
+        assert_eq!(home_fit(Platform::Nes, VideoMode::Actual, 1.0, (256, 224), square_pixels(Platform::Nes, rpc)),
+            home_fit(Platform::Snes, VideoMode::Actual, 1.0, (256, 224), square_pixels(Platform::Snes, rpc)));
     }
 
     #[test]
