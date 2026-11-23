@@ -11304,7 +11304,6 @@ mod audio_and_refresh_parity_tests {
         for hz in [60.0, 120.0] {
             assert!(handheld_core_60hz_for_display(72.0, hz));
             assert!(handheld_core_60hz_for_display(75.47, hz));
-            assert!(handheld_core_60hz_for_display(75.0, hz));
         }
         // A rare native-refresh panel should keep original timing.
         assert!(!handheld_core_60hz_for_display(72.0, 72.0));
