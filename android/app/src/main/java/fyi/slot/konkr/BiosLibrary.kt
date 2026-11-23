@@ -43,9 +43,16 @@ internal object BiosLibrary {
     private fun kindOf(name: String): Kind? =
         KINDS.firstOrNull { it.name.equals(name, ignoreCase = true) }
 
-    /** The BIOS a system's games can use (only the Lynx's Beetle Lynx needs one). */
+    /** The BIOS a system's games can use, including explicitly imported BIOS. */
     fun namesFor(platform: String): List<String> =
         KINDS.filter { it.platform == platform }.map { it.name }
+
+    /** Only these four systems receive BIOS automatically from a RomM game download.
+     * Others stay available through Choose BIOS Folder without changing core boot behaviour. */
+    internal val ROMM_AUTO_PLATFORMS = setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX)
+
+    internal fun automaticNamesFor(platform: String): List<String> =
+        if (platform in ROMM_AUTO_PLATFORMS) namesFor(platform) else emptyList()
 
     /** Short system names for "BIOS added: GBA." */
     fun systemOf(name: String): String = when (kindOf(name)?.platform) {
@@ -60,12 +67,12 @@ internal object BiosLibrary {
         else -> name
     }
 
-    /** Which of these systems' BIOS slot. doesn't have yet: a Master System
-     *  with any of its region BIOS has one. */
+    /** BIOS missing locally for RomM's four automatic-download systems only.
+     *  Explicit imports and pre-existing BIOS for other systems are untouched. */
     fun missing(context: Context, platforms: Set<String>): Set<String> {
         val dest = File(context.filesDir, "BIOS")
         return platforms.flatMapTo(linkedSetOf()) { platform ->
-            val names = namesFor(platform)
+            val names = automaticNamesFor(platform)
             if (names.any { File(dest, it).isFile }) emptyList() else names.map { it.lowercase() }
         }
     }
