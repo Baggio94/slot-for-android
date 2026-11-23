@@ -293,9 +293,10 @@ internal object RommStates {
         }
     }
 
-    /** After a Save & Eject: sends the resume state, with a picture of the
-     *  game, when it changed since the exchange. A message, if any. */
-    fun afterSave(context: Context, target: RetroArchStorage.Target): String? {
+    /** After Save & Eject: sends a changed resume state and screenshot.
+     *  Only an actually completed upload calls [onUploaded]. */
+    fun afterSave(context: Context, target: RetroArchStorage.Target,
+                  onUploaded: () -> Unit = {}): String? {
         if (!enabled(context) || !Romm.signedIn(context)) return null
         val platform = RommSaves.platformOf(target) ?: return null
         val export = RetroArchStorage.autoStateExport(context, target)
@@ -327,6 +328,7 @@ internal object RommStates {
             keep(context, target, Record(romId, sent.id, sent.updatedAt, localSha))
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove("states-told").apply()
             SlotLog.i(TAG, "RomM state of ${target.core}/${target.stem} sent (${raw.size} bytes)")
+            onUploaded()
             null
         } catch (error: Romm.SignedOut) {
             "Signed out of RomM: this state wasn't sent."
