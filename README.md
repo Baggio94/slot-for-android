@@ -19,17 +19,17 @@ The port has since grown to other Android handhelds and more systems. The goal s
 ## Highlights
 
 - **Cartridges first.** Your library is a shelf of cartridges with their real labels, insertion and ejection animations and sounds.
-- **Themes.** Dark, OLED, Light and Original, with a wallpaper for each shelf.
 - **12 systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo, Mega Drive, Master System, Game Gear, Neo Geo Pocket/Color, WonderSwan/Color, Atari Lynx and Pokémon mini, with multiple emulation cores where available.
-- **Any screen shape.** The interface adapts to square, 4:3, 3:2 and widescreen handhelds at their native resolution, including the Anbernic RG Rotate.
+- **Any screen shape.** The interface adapts to square, 4:3, 3:2 and widescreen handhelds at their native resolution.
 - **Cart Studio.** Change a cartridge's label, shell colour, finish and shape, right on the handheld.
-- **Screen options.** LCD and CRT shaders, overlays, color correction, Frame Blending and LCD effects, per system or per game.
-- **Your games on every handheld.** The slot. folder carries your saves, states, labels, favorites and settings from one handheld to another, on an SD card or synced storage.
-- **Saves.** Save states, automatic saving on eject, rewind and fast-forward. Compatible with RetroArch saves and Syncthing, and synced with your RomM server if you like.
-- **RetroAchievements.** Online or offline, with unlocks synced when you reconnect.
+- **Themes.** Dark, OLED, Light and Original, with a wallpaper for each shelf.
+- **Screen options.** LCD and CRT shaders, overlays, colour correction, Frame Blending and LCD effects, per system or per game.
+- **Your slot. on every handheld.** The slot. folder carries your saves, states, labels, favorites and settings from one handheld to another, on an SD card or in a synced folder.
+- **RetroArch & Syncthing compatibility.** Use your existing RetroArch save and save state folders to keep your progress in sync with slot.
+- **RetroAchievements.** Online or offline, with achievements synced when you reconnect.
 - **Multiplayer.** Link Cable, Wireless Adapter and two-player netplay, on the same Wi-Fi or over the Internet.
 - **RomM.** Download games and supported BIOS files, and sync saves and save states with your own RomM server.
-- **Cheats.** RetroArch's cheat database is included for every system.
+- **Cheats.** RetroArch's cheat database is built in, with support for your own custom cheats.
 
 ## Getting Started
 
