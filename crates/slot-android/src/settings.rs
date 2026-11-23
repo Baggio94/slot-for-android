@@ -2733,7 +2733,7 @@ mod tests {
         // Already past the one-time 3:2 home overlay change.
         let mut s = Settings { home_bezel_three_two: true, gb_palette_twb64: true,
             gb_overlays_watomsk: true, simpletex_gba_colour: true, gbav_fsr: true,
-            lcd_3_0: true, lcd3x_3_0: true, ..Settings::default() };
+            lcd_3_0: true, lcd3x_3_0: true, side_bars_3_0: true, ..Settings::default() };
         s.change(0, true); s.change(6, true); s.gb_palette = 47;
         s.save(&dir).unwrap();
         assert_eq!(Settings::load(&dir), s);
