@@ -9,9 +9,6 @@ use slot_ui::watomsk::{self, Shape};
 use crate::settings::{Bezel, Shader};
 
 pub const VIDEO_MODE_FILE: &str = "Config/video_mode.ini";
-/// Each Master System and Mega Drive game's usual picture, decided once
-/// (`h32_frame`): "256x224" or "other".
-pub const USUAL_FRAME_FILE: &str = "Config/usual_frame.ini";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum VideoMode {
@@ -202,27 +199,26 @@ pub fn square_pixels(platform: Platform, panel: (u32, u32)) -> bool {
     matches!(platform, Platform::Nes | Platform::Snes) && narrow(panel)
 }
 
-/// A frame of 256x224: the Mega Drive's H32 mode, a Master System game's
-/// 224 lines (248 wide with its left bar hidden).
-pub fn h32_frame(frame: (u32, u32)) -> bool {
-    matches!(frame, (256, 224) | (248, 224))
+/// A frame 256 pixels wide (248 with the Master System's left bar hidden):
+/// the Mega Drive's H32 mode, a Master System game's.
+pub fn narrow_frame(frame: (u32, u32)) -> bool {
+    matches!(frame.0, 248 | 256)
 }
 
-/// Square pixels for the game played: NES and SNES as above, and a Master
-/// System or Mega Drive game whose usual picture is 256x224 (`usual_h32`),
-/// 8:7 with Integer overscale, on screens narrower than 4:3 (Siham
-/// 2026-11-23). The others keep 4:3. A game's usual picture is decided
-/// once, as Mega Drive games switch between 256 and 320 wide.
-pub fn square_game(platform: Platform, panel: (u32, u32), usual_h32: bool) -> bool {
+/// Square pixels for the game played: NES and SNES as above, and the
+/// Master System and Mega Drive games played 256 pixels wide (`listed`:
+/// square_games), on screens narrower than 4:3 (Siham 2026-11-23). Their
+/// 256-wide screens show 8:7 with Integer overscale, their 320-wide ones
+/// (logos, titles, menus) 4:3. Every other game keeps 4:3.
+pub fn square_game(platform: Platform, panel: (u32, u32), listed: bool) -> bool {
     square_pixels(platform, panel)
-        || (matches!(platform, Platform::Sms | Platform::Md) && usual_h32 && narrow(panel))
+        || (matches!(platform, Platform::Sms | Platform::Md) && listed && narrow(panel))
 }
 
-/// A square-pixel game's shape: its frame's, except a Master System or
-/// Mega Drive game's other frames (a 320-wide screen in a 256x224 game),
-/// which keep its 8:7 window.
+/// A square-pixel game's shape, for its overlay: a listed Master System or
+/// Mega Drive game is an 8:7 game, its 320-wide screens too.
 fn square_shape(platform: Platform, frame: (u32, u32)) -> f32 {
-    if matches!(platform, Platform::Sms | Platform::Md) && !h32_frame(frame) {
+    if matches!(platform, Platform::Sms | Platform::Md) && !narrow_frame(frame) {
         8.0 / 7.0
     } else {
         square_aspect(frame)
@@ -270,6 +266,10 @@ pub fn home_aspect(platform: Platform, core: f32, frame: (u32, u32), square: boo
 pub fn home_fit(platform: Platform, mode: VideoMode, aspect: f32, frame: (u32, u32),
     square: bool) -> slot_gfx::Fit
 {
+    // A listed game's 320-wide screen: 4:3, as large as it fits.
+    if square && matches!(platform, Platform::Sms | Platform::Md) && !narrow_frame(frame) {
+        return if mode == VideoMode::Stretch { slot_gfx::Fit::Stretch } else { slot_gfx::Fit::Aspect(4.0 / 3.0) };
+    }
     if square {
         let a = square_shape(platform, frame);
         return match mode {
@@ -655,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn master_system_and_mega_drive_256x224_games_take_square_pixels_on_narrow_screens() {
+    fn listed_master_system_and_mega_drive_games_take_square_pixels_on_narrow_screens() {
         use slot_gfx::Fit;
         let rpc = (1240, 1080);
         for platform in [Platform::Sms, Platform::Md] {
@@ -668,16 +668,20 @@ mod tests {
         // The cropped left bar: the Integer picture is the 248 columns shown.
         assert_eq!(home_fit(Platform::Sms, VideoMode::Actual, 4.0 / 3.0, (248, 224), true),
             Fit::Overscale(248.0 / 224.0));
-        // A 320-wide screen of a 256x224 game keeps the game's 8:7 window.
+        // A listed game's 320-wide screens (logos, menus): 4:3, the whole picture.
         assert_eq!(home_fit(Platform::Md, VideoMode::Actual, 1.5238, (320, 224), true),
-            Fit::Overscale(8.0 / 7.0));
+            Fit::Aspect(4.0 / 3.0));
+        assert_eq!(home_fit(Platform::Md, VideoMode::Stretch, 1.5238, (320, 224), true), Fit::Stretch);
+        // A European game's 240 lines: square too.
+        assert_eq!(home_fit(Platform::Md, VideoMode::Actual, 1.0, (256, 240), true),
+            Fit::Overscale(256.0 / 240.0));
         assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), true), 8.0 / 7.0);
         assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), false), 4.0 / 3.0);
         // Hidden bars on a wider screen: the columns keep their width.
         assert_eq!(home_aspect(Platform::Nes, 1.0, (240, 240), false), 4.0 / 3.0 * 240.0 / 256.0);
         assert_eq!(home_aspect(Platform::Sms, 1.0, (248, 192), false), 4.0 / 3.0 * 248.0 / 256.0);
-        // A 256x192 Master System game: 4:3, square or not.
-        assert!(!h32_frame((256, 192)));
+        // A 320-wide frame isn't a 256-wide game's.
+        assert!(!narrow_frame((320, 224)) && narrow_frame((248, 192)));
         // No room beside an 8:7 picture on the Retroid Pocket Classic: no overlay.
         assert!(own_place(8.0 / 7.0, (256, 224), VideoMode::Aspect, rpc).is_none());
     }

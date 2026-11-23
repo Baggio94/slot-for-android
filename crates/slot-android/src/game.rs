@@ -396,6 +396,9 @@ pub struct GameSession {
     full_pad: bool,
     /// A WonderSwan game held upright: its Controls are "wsv"'s.
     upright: bool,
+    /// A Master System or Mega Drive game played 256 pixels wide
+    /// (square_games): 8:7 on narrow screens.
+    square_listed: bool,
     /// A Neo Geo Pocket Color or WonderSwan Color game (its overlay's logo).
     colour: bool,
     /// NES, SNES and Mega Drive take a second local player on port 2.
@@ -1135,6 +1138,7 @@ impl GameSession {
             frame_count: 0, palette_live, core_kind: which,
             full_pad: matches!(platform, Platform::Snes | Platform::Md | Platform::Ws),
             upright: which == Core::BeetleCygne && ws_upright(rom),
+            square_listed: crate::square_games::listed(platform, rom),
             colour: colour_cart(platform, rom),
             // The Game Gear, Neo Geo Pocket and WonderSwan have no second
             // pad: their link cable is another console.
@@ -1422,6 +1426,8 @@ impl GameSession {
 
     /// A Neo Geo Pocket Color or WonderSwan Color game.
     pub fn colour(&self) -> bool { self.colour }
+    /// One of the games played 256 pixels wide (square_games).
+    pub fn square_listed(&self) -> bool { self.square_listed }
 
     /// A home console game whose port 2 is the other console's right now.
     pub fn port2_is_remote(&self) -> bool { self.second_player && self.in_multiplayer() }

@@ -91,6 +91,8 @@ mod cheats;
 mod wallpaper;
 // Use Slot's original per-game Actual/Stretch geometry and video_mode.ini.
 mod video_mode;
+// Master System and Mega Drive games played 256 pixels wide: 8:7 on narrow screens.
+mod square_games;
 #[cfg(test)]
 mod systems_table_tests;
 mod thumb;

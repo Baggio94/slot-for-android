@@ -436,10 +436,6 @@ fn game_error_text(message: &str) -> &'static str {
 /// Short user-facing sentence on screen; the technical cause goes to logcat.
 /// Writes a game's settings off the GL thread (beta42); false without a
 /// folder to write them in.
-/// Frames of a Master System or Mega Drive game counted before its usual
-/// picture is decided: one minute.
-const USUAL_FRAME_COUNT: u32 = 3600;
-
 fn save_profile_later(profile: EmulationProfile, uri: &str, core: Core) -> bool {
     let Some(root) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(root, _)| root.clone())
     else { return false };
@@ -1628,11 +1624,6 @@ struct Engine {
     /// The game picture sits at the top of the screen: a Watomsk logo is
     /// in the band under it.
     picture_top: bool,
-    /// A Master System or Mega Drive game's usual picture: 256x224 or not,
-    /// once decided (video_mode::square_game), and the frames counted
-    /// (256x224, others) until then.
-    usual_h32: Option<bool>,
-    usual_count: (u32, u32),
     custom_wallpaper_present: bool,
     /// user.png's modified time, to tell a fresh import from any other reload.
     user_wallpaper_stamp: Option<std::time::SystemTime>,
@@ -2485,8 +2476,6 @@ impl Engine {
             gbc_bezel_tex,
             fitted_bezel: None,
             picture_top: false,
-            usual_h32: None,
-            usual_count: (0, 0),
             custom_wallpaper_present,
             user_wallpaper_stamp,
             screenshot_requested: false,
@@ -5958,44 +5947,8 @@ impl Engine {
 
     /// Square pixels for the game played (video_mode::square_game).
     fn game_square(&self) -> bool {
-        video_mode::square_game(self.current_cart_platform(), panel_size(), self.usual_h32 == Some(true))
-    }
-    /// A Master System or Mega Drive game's usual picture, if decided.
-    fn read_usual_frame(&mut self, stem: &str, platform: Platform) {
-        self.usual_count = (0, 0);
-        self.usual_h32 = if matches!(platform, Platform::Sms | Platform::Md) {
-            PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
-                .and_then(|(root, _)| slot_store::ini::value(root, video_mode::USUAL_FRAME_FILE, stem))
-                .map(|usual| usual.trim() == "256x224")
-        } else {
-            Some(false)
-        };
-    }
-    /// The first minute of a Master System or Mega Drive game decides its
-    /// usual picture once and for all (Siham 2026-11-23): 256x224 when most
-    /// of its frames were. A 256x224 game on a narrow screen turns to 8:7
-    /// at once, at Integer unless a size was chosen for it or its system.
-    fn decide_usual_frame(&mut self) {
-        let h32 = self.usual_count.0 > self.usual_count.1;
-        self.usual_h32 = Some(h32);
-        let platform = self.current_cart_platform();
-        let stem = self.shelves[self.active].carts.get(self.shelves[self.active].index)
-            .map(|cart| cart.stem.clone()).unwrap_or_default();
-        let root = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(root, _)| root.clone());
-        let Some(root) = root else { return };
-        let value = if h32 { "256x224" } else { "other" };
-        {
-            let (root, stem) = (root.clone(), stem.clone());
-            crate::later_write::write(root.join(format!("usual frame\u{1f}{stem}")), move || {
-                if let Err(error) = slot_store::ini::write(&root, video_mode::USUAL_FRAME_FILE, &stem, value) {
-                    crate::game::log_launch_timing(&format!("usual frame not kept: {error}"));
-                }
-            });
-        }
-        if self.game_square() {
-            self.video_mode = video_mode::video_mode_for(&root, &stem, platform, panel_size(), true);
-            self.apply_video_geometry();
-        }
+        video_mode::square_game(self.current_cart_platform(), panel_size(),
+            self.game.as_ref().is_some_and(GameSession::square_listed))
     }
 
     fn set_video_mode(&mut self, mode: VideoMode) {
@@ -9545,12 +9498,10 @@ impl Engine {
                         .get(self.shelves[self.active].index)
                         .map_or("", |cart| cart.stem.as_str());
                     let platform = self.current_cart_platform();
-                    let name = name.to_owned();
-                    self.read_usual_frame(&name, platform);
                     let square = self.game_square();
                     self.video_mode = PATHS.lock().unwrap_or_else(|e| e.into_inner())
                         .as_ref().map_or(video_mode::default_mode(platform, panel_size()),
-                            |(root, _)| video_mode::video_mode_for(root, &name, platform, panel_size(), square));
+                            |(root, _)| video_mode::video_mode_for(root, name, platform, panel_size(), square));
                     self.apply_video_geometry();
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
@@ -9934,7 +9885,6 @@ impl Engine {
             if stepped > 1 {
                 self.perf_catchup = self.perf_catchup.saturating_add(1);
             }
-            let mut decide_usual = false;
             if stepped > 0 {
                 if self.select_tap_frames > 0 {
                     self.select_tap_frames = self.select_tap_frames.saturating_sub(stepped as u8);
@@ -9954,15 +9904,9 @@ impl Engine {
                     let picture = if dither { self.dither_blend.apply(picture, size) } else { picture };
                     self.gpu.upload_game_sized(picture, size);
                     let square = video_mode::square_game(cart_platform, panel_size(),
-                        self.usual_h32 == Some(true));
+                        session.square_listed());
                     self.gpu.set_game_fit(video_mode::home_fit(cart_platform, self.video_mode,
                         session.display_aspect(), session.frame_size(), square));
-                    if self.usual_h32.is_none() && matches!(cart_platform, Platform::Sms | Platform::Md) {
-                        let frame = session.frame_size();
-                        if video_mode::h32_frame(frame) { self.usual_count.0 += 1; }
-                        else { self.usual_count.1 += 1; }
-                        decide_usual = self.usual_count.0 + self.usual_count.1 >= USUAL_FRAME_COUNT;
-                    }
                 }
                 frame_phases.gpu_upload_us = upload_started.elapsed().as_micros() as u64;
                 RUMBLE_STRENGTH.store(
@@ -10040,7 +9984,6 @@ impl Engine {
             a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
                 stepped, a12_native_started.elapsed().as_micros() as u64,
                 MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
-            if decide_usual { self.decide_usual_frame(); }
             if let Some(fault) = peer_fault { self.peer_link_stopped(fault); }
             return;
         }
