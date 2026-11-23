@@ -46,7 +46,7 @@ jobs:
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Pillow
         run: python3 -m pip install --quiet Pillow
       - name: Tests
@@ -101,7 +101,7 @@ jobs:
         if: always() && github.event_name != 'schedule'
         run: python3 tools/home-art/preview.py --out art --platform "$PLATFORM" | tail -5 || true
       # Non-publishing manual trials are kept as artifacts.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always() && (env.PUBLISH != 'true')
         with:
           name: cart-art-trial-${{ github.run_number }}

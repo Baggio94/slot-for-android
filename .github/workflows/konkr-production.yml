@@ -19,8 +19,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -53,7 +53,7 @@ jobs:
           # cargo reads the project's 1.96 override.
           toolchain: '1.96'
           targets: aarch64-linux-android
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.7'
       - name: Read app version
@@ -78,7 +78,7 @@ jobs:
           cargo test -p slot-ui --test cart_material --test new_cart_material --test upstream_v17_assets --test native_resolution --test insert_neighbour_motion --test mixed_shelf_parity --test chrome_crt_parity --test native_density --test link_hardware
       - name: Export cartridge material checks
         run: cargo run --locked -p slot-ui --example material_preview -- "$RUNNER_TEMP/material-preview" 1.3333333
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: slot-for-android-${{ env.VERSION_NAME }}-material-previews
           path: ${{ runner.temp }}/material-preview
@@ -194,7 +194,7 @@ jobs:
           unzip -Z -1 "$APK" | grep -Fx 'AndroidManifest.xml'
           grep -F 'fyi.slot.konkr.diag' "$RUNNER_TEMP/mac-lab-badging.txt"
           sha256sum "$APK"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: slot-for-android-${{ env.VERSION_NAME }}-mac-avd-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
@@ -272,7 +272,7 @@ jobs:
             fi
           done < <(unzip -Z -1 "$APK" | grep -E '^classes([0-9]+)?[.]dex$')
           sha256sum "$APK"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: slot-for-android-arm64-signed
           path: android/app/build/outputs/apk/release/app-release.apk
@@ -294,8 +294,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
         with:
           name: slot-for-android-arm64-signed
           path: release-assets
