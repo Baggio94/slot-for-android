@@ -23,7 +23,7 @@ jobs:
             const finalRc = 'fb3c52c86bd31932bfa0e5fde0289d1c8de11781';
             const branches = new Map([
               ['beta/3.0-audio-parity', 'b9979e7c658ed1b26d86f588779ac4cd71e4f9df'],
-              ['beta/3.0-rc4', '891ab007de8acb91404e9fccf239ddd7f39b2'],
+              ['beta/3.0-rc4', '891ab007de8acb91404e9fccf239ddd7f39b2a11'],
               ['beta/3.0-rc5', '2d874e1f0bbc91b551791a7e952913bf1e778b1c'],
               ['beta/3.0-rc6', '3ef8160c6ed02286357f542f332e22911347e9e8'],
               ['beta/3.0-rc7', '909afa576e5dcf168a0e890d1d75507be7ddfcf7'],
