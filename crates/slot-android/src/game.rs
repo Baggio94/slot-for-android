@@ -837,13 +837,21 @@ impl GameSession {
             Core::BeetleCygne => {
                 core.set_option("wswan_rotate_display", if ws_upright(rom) { "portrait" } else { "landscape" });
                 core.set_option("wswan_rotate_keymap", "auto");
+                core.set_option("wswan_60hz_mode", if crate::runtime::handheld_core_60hz(75.47) {
+                    "enabled"
+                } else { "disabled" });
             }
             // A Lynx game held upright is turned on screen, its buttons
             // with it: both cores' own Auto, as RetroArch starts them.
             // SELECT turns the screen by hand in Beetle Lynx's Manual
             // mode only; slot. never maps SELECT for the Lynx.
             Core::Handy => core.set_option("handy_rot", "Auto"),
-            Core::BeetleLynx => core.set_option("lynx_rot_screen", "auto"),
+            Core::BeetleLynx => {
+                core.set_option("lynx_rot_screen", "auto");
+                core.set_option("lynx_force_60hz", if crate::runtime::handheld_core_60hz(75.0) {
+                    "enabled"
+                } else { "disabled" });
+            },
             // PokeMini runs on its own defaults, as RetroArch starts it (the
             // cart's rumble on the device), its LCD Filter the player's
             // (Settings > Systems > Pokemon mini), and its LCD drawn at the
@@ -852,6 +860,9 @@ impl GameSession {
             Core::PokeMini => {
                 let scale = crate::video_mode::pokemini_scale(crate::runtime::panel_size());
                 core.set_option("pokemini_video_scale", &format!("{scale}x"));
+                core.set_option("pokemini_60hz_mode", if crate::runtime::handheld_core_60hz(72.0) {
+                    "enabled"
+                } else { "disabled" });
             }
         }
         // The 3.0 systems' own options from Settings > Systems (sprite
