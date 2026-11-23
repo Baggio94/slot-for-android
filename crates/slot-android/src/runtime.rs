@@ -589,7 +589,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 176] = [
+const MENU_TEXT: [&str; 177] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -771,6 +771,7 @@ const MENU_TEXT: [&str; 176] = [
     "Bezel",                              // 173, no longer shown (plain Bezel)
     "Sync States with RomM",              // 174, Library > Saves & States (3.0, beta)
     "Hide Side Bars",                     // 175, NES: left and right (Siham 2026-11-23)
+    "Audio Filter",                       // 176, NES + WonderSwan optional analogue audio
 ];
 
 /// Settings > Systems, top to bottom.
@@ -795,7 +796,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 185] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 190] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -854,6 +855,9 @@ const SETTING_VALUE_NAMES: [&str; 185] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "WonderSwan", "WonderSwan Color", "SwanCrystal",
                                "Old", "Monochrome", "Green", "Red", "Blue", "Sepia",
                                "Analog", "3 Shades", "2 Shades",
+                               // 164-168: optional audio coloration; these must stay
+                               // before Rotate's 21 terminal values.
+                               "RF", "Soft", "MAME", "Nuked", "Analog",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -865,6 +869,8 @@ const SETTING_VALUE_NAMES: [&str; 185] = ["2×", "3×", "4×", "6×", "ON", "OFF
 const OWN_BEZEL_VALUES: usize = 140;
 /// The first of the 3.0 systems' own option values in SETTING_VALUE_NAMES.
 const EXTRA_VALUES: usize = 150;
+/// NES/WonderSwan filter and Mega Drive FM values (before Rotate values).
+const AUDIO_OPTION_VALUES: usize = EXTRA_VALUES + 14;
 /// The first RG Rotate value in SETTING_VALUE_NAMES.
 const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
 /// Library's values (2.5): where the slot. folder is, and RomM's sync
@@ -1116,6 +1122,14 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         crate::settings::FM_SMS_KEY => if scoped.fm_off_sms {5}else{66},
         crate::settings::WS_LANGUAGE_KEY => EXTRA_VALUES + usize::from(scoped.ws_language.min(1)),
         crate::settings::POKEMINI_SHAKE_KEY => if scoped.pokemini_no_shake {5}else{4},
+        crate::settings::NES_AUDIO_FILTER_KEY => if !scoped.nes_audio_filter { 5 }
+            else if cores[Platform::Nes as usize] == Core::Nestopia { AUDIO_OPTION_VALUES + 4 }
+            else { AUDIO_OPTION_VALUES },
+        crate::settings::MD_FM_SOUND_KEY =>
+            AUDIO_OPTION_VALUES + 2 + usize::from(scoped.md_fm_nuked),
+        crate::settings::WS_AUDIO_FILTER_KEY => if scoped.ws_audio_filter {
+            AUDIO_OPTION_VALUES + 1
+        } else { 5 },
         SCREEN_SIZE_KEY => SCREEN_SIZE_VALUE + match video {
             VideoMode::Actual => 0, VideoMode::Aspect => 1, VideoMode::Stretch => 2,
         },
@@ -6285,7 +6299,8 @@ impl Engine {
     fn extra_rows(platform: Platform, in_game: bool) -> (Vec<usize>, Vec<usize>) {
         use crate::settings::{SPRITE_LIMIT_SMS_KEY, SPRITE_LIMIT_GG_KEY, NGP_LANGUAGE_KEY,
             WS_PALETTE_KEY, POKEMINI_PALETTE_KEY, POKEMINI_LCD_MODE_KEY, LEFT_BAR_SMS_KEY,
-            FM_SMS_KEY, WS_LANGUAGE_KEY, POKEMINI_SHAKE_KEY, LEFT_BAR_NES_KEY};
+            FM_SMS_KEY, WS_LANGUAGE_KEY, POKEMINI_SHAKE_KEY, LEFT_BAR_NES_KEY,
+            NES_AUDIO_FILTER_KEY, MD_FM_SOUND_KEY, WS_AUDIO_FILTER_KEY};
         // What changes the picture shows in game too (Siham 2026-11-22);
         // sound and language, read when the game starts, only here.
         let (mut rows, mut keys): (Vec<usize>, Vec<usize>) = match platform {
@@ -6300,8 +6315,13 @@ impl Engine {
         if !in_game {
             match platform {
                 Platform::Sms => { rows.push(169); keys.push(FM_SMS_KEY); }
+                Platform::Nes => { rows.push(176); keys.push(NES_AUDIO_FILTER_KEY); }
+                Platform::Md => { rows.push(169); keys.push(MD_FM_SOUND_KEY); }
                 Platform::Ngp => { rows.push(165); keys.push(NGP_LANGUAGE_KEY); }
-                Platform::Ws => { rows.push(165); keys.push(WS_LANGUAGE_KEY); }
+                Platform::Ws => {
+                    rows.push(165); keys.push(WS_LANGUAGE_KEY);
+                    rows.push(176); keys.push(WS_AUDIO_FILTER_KEY);
+                }
                 _ => {}
             }
         }
