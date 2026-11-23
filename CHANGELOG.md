@@ -2,6 +2,16 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v3.0.0-rc8 — 23 November 2026 (release candidate, not stable)
+
+- Six more emulated systems: Master System, Game Gear, Neo Geo Pocket/Color, WonderSwan/Color, Atari Lynx and Pokémon mini; refreshed cartridge shells, themes and system settings.
+- RomM: Sync States with RomM for same-core automatic resume states and screenshots, following the existing save conflict and safety rules. After queued uploads complete, one success pill reports SAVE SYNCED, STATE SYNCED or SAVE + STATE SYNCED; only actual uploads count (RommSaves.kt, RommStates.kt, MainActivity.kt, TaskPill.kt).
+- RomM BIOS auto-downloads restricted to GB/GBC/GBA/Lynx (BiosLibrary.kt, Romm.kt); manually imported BIOS and core boot options for other systems remain untouched.
+- Settings defaults: NES Hide Side Bars and Master System Hide Left Bar OFF on new installations, with no preference override during migrations (settings.rs).
+- Audio: NES FCEUmm/Nestopia filters, Mega Drive MAME/Nuked YM2612 choice for Genesis Plus GX, WonderSwan low-pass; display-aware 60 Hz options for PokeMini and WonderSwan; Beetle Lynx and Handy unchanged (settings.rs, runtime.rs, game.rs).
+- Tests: audio/refresh parity, NES settings rows, default/migration persistence, RomM BIOS auto allowlist and the four sync-indicator outcomes.
+- Android signed upgrade candidate 3.0.0-rc8, versionCode 578. Do not merge or publish until CI and device validation pass.
+
 ## v2.5.1 — 20 November 2026
 
 - ROM scan (#122): bounds raised to 10,000 carts (RomLibrary.MAX_ROMS, library.rs), 30,000 listed files and 5,000 folders; ROM index cache up to 32 MB (shelf, Cart Studio, home labels, RetroAchievements cache). A scan over the bounds adds the carts it found and keeps every earlier one (toast "ROM folder too big: … some games skipped.") instead of leaving a fresh install with an empty shelf. The old index's text is dropped before the new index is built; an OutOfMemoryError during a scan keeps the shelf.
