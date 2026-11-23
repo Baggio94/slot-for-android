@@ -805,6 +805,13 @@ pub struct Settings {
     pub ws_language: u8,
     #[serde(default)]
     pub pokemini_no_shake: bool,
+    /// Optional analogue audio colouring per system. Defaults match Libretro.
+    #[serde(default)]
+    pub nes_audio_filter: bool,
+    #[serde(default)]
+    pub md_fm_nuked: bool,
+    #[serde(default)]
+    pub ws_audio_filter: bool,
     /// Set once the home consoles' 3:2 default (no overlay) was applied.
     #[serde(default)]
     pub home_bezel_three_two: bool,
@@ -939,6 +946,7 @@ impl Default for Settings {
             ws_palette: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
             hide_left_bar_sms: false, hide_left_bar_nes: false, fm_off_sms: false, ws_language: 0,
             pokemini_no_shake: false,
+            nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, side_bars_3_0: false,
             own_bezels_room: false,
@@ -1541,6 +1549,9 @@ impl Settings {
             LEFT_BAR_SMS_KEY => self.hide_left_bar_sms = !self.hide_left_bar_sms,
             LEFT_BAR_NES_KEY => self.hide_left_bar_nes = !self.hide_left_bar_nes,
             FM_SMS_KEY => self.fm_off_sms = !self.fm_off_sms,
+            NES_AUDIO_FILTER_KEY => self.nes_audio_filter = !self.nes_audio_filter,
+            MD_FM_SOUND_KEY => self.md_fm_nuked = !self.md_fm_nuked,
+            WS_AUDIO_FILTER_KEY => self.ws_audio_filter = !self.ws_audio_filter,
             WS_LANGUAGE_KEY => self.ws_language = step_index(self.ws_language, 2, right),
             POKEMINI_SHAKE_KEY => self.pokemini_no_shake = !self.pokemini_no_shake,
             BEZEL_SMS_KEY..=BEZEL_POKEMINI_KEY => {
@@ -1647,6 +1658,10 @@ pub const WS_LANGUAGE_KEY: usize = 139;
 pub const POKEMINI_SHAKE_KEY: usize = 140;
 /// Settings > Systems > NES > Hide Left Bar.
 pub const LEFT_BAR_NES_KEY: usize = 141;
+/// Settings > Systems: optional audio character, OFF/MAME by default.
+pub const NES_AUDIO_FILTER_KEY: usize = 142;
+pub const MD_FM_SOUND_KEY: usize = 143;
+pub const WS_AUDIO_FILTER_KEY: usize = 144;
 
 /// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
 /// grey first, then the three consoles' screens.
@@ -1676,12 +1691,16 @@ pub struct CoreExtras {
     pub ws_language: u8,
     pub pokemini_no_shake: bool,
     pub hide_left_bar_nes: bool,
+    pub nes_audio_filter: bool,
+    pub md_fm_nuked: bool,
+    pub ws_audio_filter: bool,
 }
 pub static CORE_EXTRAS: std::sync::Mutex<CoreExtras> = std::sync::Mutex::new(CoreExtras {
     no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
     ws_palette: 0, pokemini_filter: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
     hide_left_bar_sms: false, fm_off_sms: false, ws_language: 0, pokemini_no_shake: false,
-    hide_left_bar_nes: false });
+    hide_left_bar_nes: false,
+    nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false });
 
 impl CoreExtras {
     pub fn of(s: &Settings) -> Self {
@@ -1690,7 +1709,10 @@ impl CoreExtras {
             pokemini_filter: s.pokemini_lcd_filter, pokemini_palette: s.pokemini_palette,
             pokemini_lcd_mode: s.pokemini_lcd_mode, hide_left_bar_sms: s.hide_left_bar_sms,
             fm_off_sms: s.fm_off_sms, ws_language: s.ws_language, pokemini_no_shake: s.pokemini_no_shake,
-            hide_left_bar_nes: s.hide_left_bar_nes }
+            hide_left_bar_nes: s.hide_left_bar_nes,
+            nes_audio_filter: s.nes_audio_filter,
+            md_fm_nuked: s.md_fm_nuked,
+            ws_audio_filter: s.ws_audio_filter }
     }
     pub fn store(s: &Settings) {
         POKEMINI_LCD_FILTER.store(s.pokemini_lcd_filter, std::sync::atomic::Ordering::Release);
@@ -1703,10 +1725,20 @@ impl CoreExtras {
         let pick = |list: &[&'static str], at: u8| list[(at as usize).min(list.len() - 1)];
         let nes_bar = if self.hide_left_bar_nes { "8" } else { "0" };
         match (platform, core) {
-            (Platform::Nes, Core::Fceumm) =>
-                vec![("fceumm_overscan_h_left", nes_bar), ("fceumm_overscan_h_right", nes_bar)],
-            (Platform::Nes, Core::Nestopia) =>
-                vec![("nestopia_overscan_h_left", nes_bar), ("nestopia_overscan_h_right", nes_bar)],
+            (Platform::Nes, Core::Fceumm) => vec![
+                ("fceumm_overscan_h_left", nes_bar), ("fceumm_overscan_h_right", nes_bar),
+                ("fceumm_sndlowpass", if self.nes_audio_filter { "enabled" } else { "disabled" }),
+            ],
+            // Nestopia's analogue-output filter is not the RF modulator:
+            // map the core's own closest equivalent instead of doing nothing.
+            (Platform::Nes, Core::Nestopia) => vec![
+                ("nestopia_overscan_h_left", nes_bar), ("nestopia_overscan_h_right", nes_bar),
+                ("nestopia_audio_filter", if self.nes_audio_filter { "enabled" } else { "disabled" }),
+            ],
+            (Platform::Md, Core::GenesisPlusGx) => vec![
+                ("genesis_plus_gx_ym2612",
+                    if self.md_fm_nuked { "nuked (ym2612)" } else { "mame (ym2612)" }),
+            ],
             (Platform::Sms, Core::GenesisPlusGx) => vec![
                 ("genesis_plus_gx_no_sprite_limit", if self.no_sprite_limit_sms { "enabled" } else { "disabled" }),
                 ("genesis_plus_gx_left_border", if self.hide_left_bar_sms { "left border" } else { "disabled" }),
@@ -1730,6 +1762,7 @@ impl CoreExtras {
             (Platform::Ws, _) => vec![
                 ("wswan_mono_palette", pick(&WS_PALETTES, self.ws_palette)),
                 ("wswan_language", if self.ws_language == 1 { "japanese" } else { "english" }),
+                ("wswan_sound_low_pass", if self.ws_audio_filter { "enabled" } else { "disabled" }),
             ],
             (Platform::Pokemini, _) => vec![
                 ("pokemini_lcdfilter", pokemini_lcd_filter_option(self.pokemini_filter)),
