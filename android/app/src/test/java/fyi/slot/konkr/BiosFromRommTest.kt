@@ -21,6 +21,23 @@ class BiosFromRommTest {
         assertTrue(BiosLibrary.namesFor(Systems.WS).isEmpty())
     }
 
+    @Test fun onlyFourSystemsAreEligibleForAutomaticRommBios() {
+        assertEquals(setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX),
+            BiosLibrary.ROMM_AUTO_PLATFORMS)
+        assertEquals(listOf("gb_bios.bin"), BiosLibrary.automaticNamesFor(Systems.GB))
+        assertEquals(listOf("gbc_bios.bin"), BiosLibrary.automaticNamesFor(Systems.GBC))
+        assertEquals(listOf("gba_bios.bin"), BiosLibrary.automaticNamesFor(Systems.GBA))
+        assertEquals(listOf("lynxboot.img"), BiosLibrary.automaticNamesFor(Systems.LYNX))
+        for (system in listOf(Systems.GG, Systems.SMS, Systems.MD, Systems.POKEMINI,
+            Systems.NGP, Systems.WS, Systems.SNES)) {
+            assertTrue("No automatic BIOS for $system",
+                BiosLibrary.automaticNamesFor(system).isEmpty())
+        }
+        // This is only a download policy: BIOS chosen manually are still supported.
+        assertEquals(listOf("bios.gg"), BiosLibrary.namesFor(Systems.GG))
+        assertEquals(listOf("bios.min"), BiosLibrary.namesFor(Systems.POKEMINI))
+    }
+
     @Test fun theNewSystemsBiosAreCheckedToo() {
         assertTrue(BiosLibrary.valid("lynxboot.img", ByteArray(512)))
         assertTrue(BiosLibrary.valid("LYNXBOOT.IMG", ByteArray(512)))
