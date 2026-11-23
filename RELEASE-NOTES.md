@@ -1,3 +1,38 @@
+# slot. for Android — v3.0.0-rc8 (release candidate)
+
+**Release candidate for validation before 3.0 stable.** Install this signed build over your current slot. installation; the package name and signing identity are unchanged, and saves, states and settings are kept. The stable version is **not** published by this branch.
+
+### New in 3.0
+
+- **Six new systems:** Master System, Game Gear, Neo Geo Pocket / Color, WonderSwan / Color, Atari Lynx and Pokémon mini, with native cartridge art, core choices and per-system settings.
+- **Sync States with RomM:** Sync Saves with RomM can also carry a game's automatic resume state, for the same core, including its screenshot. The handheld and server versions are compared; conflicts are resolved without overwriting the other copy.
+- **Audio controls (Settings → Systems):** NES low-pass filter for FCEUmm / Nestopia; Mega Drive FM emulation MAME or Nuked for Genesis Plus GX; WonderSwan audio filter.
+- **60 Hz displays:** automatic 60 Hz adaptation for Pokémon mini and WonderSwan, when the device screen cannot use the native refresh frequency. Lynx core behaviour is unchanged.
+
+### RC8 changes and fixes
+
+- **Selective RomM BIOS downloads:** downloading games fetches missing BIOS **only** for GB, GBC, GBA and Lynx. Other systems' BIOS remain available through manual import, and existing BIOS files and the Gearsystem / Genesis Plus GX boot behaviour are **untouched**.
+- **One RomM success indicator:** after a completed upload, the top-right pill shows `SAVE SYNCED`, `STATE SYNCED`, or `SAVE + STATE SYNCED`. The combined message appears only when both files were actually uploaded. No false confirmation for unchanged, skipped or deferred transfers; existing errors remain.
+- **NES and Master System side bars visible by default** on new installations: Hide Side Bars (NES) and Hide Left Bar (Master System) begin **OFF**. Previously saved preferences are preserved; older migration code no longer forces either option on.
+- **NES menu regression fix:** updated checks for the two side-bar options plus the new audio filter.
+- **Upgrade-compatible build:** versionName `3.0.0-rc8`, versionCode `578`, production package `fyi.slot.konkr`.
+
+### Before publishing 3.0 stable
+
+Please validate on the KONKR Pocket Advance, RG Rotate and any other target devices:
+
+1. Download GB, GBC, GBA and Lynx games from RomM with missing BIOS and check that only their approved firmware downloads automatically. Download Game Gear / SMS / Mega Drive / Pokémon mini games and verify no new BIOS is fetched.
+2. Confirm existing manually installed BIOS files are unchanged and that Sonic starts with Gearsystem under the same BIOS conditions as before.
+3. With RomM Save and State sync enabled, test save-only, state-only, both and no-change cases. The top-right pill should display exactly one accurate message and fit the Rotate screen; check the existing offline/error cases.
+4. Check NES and Master System side bars on a fresh install and verify previously chosen ON/OFF values survive an upgrade.
+5. Check Pokémon mini audio speed, WonderSwan sound / 60 Hz, the NES filter and Mega Drive MAME / Nuked settings.
+
+**Do not publish stable until GitHub Actions and these device checks pass.**
+
+---
+
+## Previous release notes (2.5.1)
+
 # slot. for Android — v2.5.1
 
 Take your slot. with you: the new **slot. folder** carries your saves, states, labels, favorites and settings from one handheld to another, and **RomM** can now keep your saves in sync too.
