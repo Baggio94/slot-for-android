@@ -846,12 +846,7 @@ impl GameSession {
             // SELECT turns the screen by hand in Beetle Lynx's Manual
             // mode only; slot. never maps SELECT for the Lynx.
             Core::Handy => core.set_option("handy_rot", "Auto"),
-            Core::BeetleLynx => {
-                core.set_option("lynx_rot_screen", "auto");
-                core.set_option("lynx_force_60hz", if crate::runtime::handheld_core_60hz(75.0) {
-                    "enabled"
-                } else { "disabled" });
-            },
+            Core::BeetleLynx => core.set_option("lynx_rot_screen", "auto"),
             // PokeMini runs on its own defaults, as RetroArch starts it (the
             // cart's rumble on the device), its LCD Filter the player's
             // (Settings > Systems > Pokemon mini), and its LCD drawn at the
