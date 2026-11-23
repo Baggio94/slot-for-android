@@ -82,4 +82,91 @@ class SystemsTest {
         "4  ".toByteArray().copyInto(rom, 0x1f0)
         assertEquals("U", Systems.homeHeader("md", rom, "ps.md").region)
     }
+
+    @Test fun everySystemHasOneCompleteRow() {
+        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI"), Systems.PLATFORMS)
+        for (row in Systems.TABLE) {
+            val p = row.platform
+            assertTrue(p, row.extensions.isNotEmpty() && row.folders.isNotEmpty() && row.romm.isNotEmpty())
+            assertEquals(p, 2, row.cores.size)
+            for (core in row.cores) assertEquals(p, core, Systems.keyForFolder(Systems.folderForKey(core)))
+            for (ext in row.extensions) assertTrue("$p .$ext", ext in Systems.ROM_EXTENSIONS)
+            for (slug in row.romm) assertEquals("$p $slug", p, Romm.platformOf(slug))
+            assertEquals(p, row.home, p in Systems.HOME_PLATFORMS)
+            assertTrue(p, row.retroAchievements > 0 && row.screenScraper > 0)
+        }
+        assertEquals(Systems.TABLE.size, Systems.TABLE.map { it.retroAchievements }.toSet().size)
+        assertEquals(Systems.TABLE.size, Systems.TABLE.map { it.screenScraper }.toSet().size)
+    }
+
+    @Test fun ourOwnFoldersAreNeverSkippedByTheScan() {
+        // RomLibrary skips ES-DE folders of systems slot. does not run
+        // (gamegear, ngp, wonderswan...): a system joining the table must
+        // leave that list, or its carts are never found.
+        for (row in Systems.TABLE) for (folder in row.folders) {
+            assertFalse("${row.platform} $folder", folder in RomLibrary.OTHER_SYSTEM_DIRECTORIES)
+            assertFalse("${row.platform} $folder", folder in RomLibrary.IGNORED_DIRECTORIES)
+        }
+    }
+
+    @Test fun theTableKeepsTheSixSystemsAsTheyWere() {
+        assertEquals(setOf("gba", "gb", "gbc", "nes", "fc", "unf", "unif", "sfc", "smc", "md", "gen", "smd", "bin",
+            "sms", "gg", "ngp", "ngc", "ngpc", "ws", "wsc", "lnx", "lyx", "min"), Systems.ROM_EXTENSIONS)
+        assertEquals(setOf("NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI"), Systems.HOME_PLATFORMS)
+        assertEquals("GBA", Systems.platformFor("GBA"))
+        assertEquals("GBC", Systems.platformFor("gbc"))
+        assertEquals("MD", Systems.platformFor("bin"))
+        assertEquals(mapOf("GB" to 4, "GBA" to 5, "GBC" to 6, "NES" to 7, "SNES" to 3, "MD" to 1,
+            "SMS" to 11, "GG" to 15, "NGP" to 14, "WS" to 53, "LYNX" to 13, "POKEMINI" to 24),
+            Systems.PLATFORMS.associateWith { Systems.retroAchievementsId(it) })
+        assertEquals(mapOf("GB" to null, "GBA" to null, "GBC" to null, "NES" to 3, "SNES" to 4, "MD" to 1,
+            "SMS" to 2, "GG" to 21, "NGP" to 25, "WS" to 45, "LYNX" to 28, "POKEMINI" to 211),
+            Systems.PLATFORMS.associateWith { HomeCartLabels.systemId(it) })
+        assertEquals("MD", Romm.platformOf("Sega-Mega-Drive"))
+        assertEquals("GG", Romm.platformOf("gamegear"))
+        assertEquals("SMS", Systems.platformFor("SMS"))
+        assertEquals(listOf("genesis_plus_gx", "gearsystem"), Systems.row("GG")!!.cores)
+        assertEquals("Gearsystem", Systems.coreFolder("gearsystem", "sms"))
+        assertEquals("Genesis Plus GX", Systems.coreFolder("", "gg"))
+        assertEquals(null, Romm.platformOf("psx"))
+        assertEquals("NGP", Romm.platformOf("neo-geo-pocket-color"))
+        assertEquals("WS", Romm.platformOf("wonderswan-color"))
+        assertEquals("NGP", Systems.platformFor("ngc"))
+        assertEquals("WS", Systems.platformFor("WSC"))
+        assertEquals("Beetle NeoPop", Systems.coreFolder("", "ngp"))
+        assertEquals("RACE", Systems.coreFolder("race", "ngc"))
+        assertEquals("Beetle WonderSwan", Systems.coreFolder("", "wsc"))
+        assertEquals("LYNX", Romm.platformOf("lynx"))
+        assertEquals("POKEMINI", Romm.platformOf("pokemon-mini"))
+        assertEquals("LYNX", Systems.platformFor("LNX"))
+        assertEquals("POKEMINI", Systems.platformFor("min"))
+        assertEquals("Handy", Systems.coreFolder("", "lnx"))
+        assertEquals("Beetle Lynx", Systems.coreFolder("mednafen_lynx", "lyx"))
+        assertEquals("PokeMini", Systems.coreFolder("", "min"))
+        assertEquals(listOf("atarilynx", "lynx"), Romm.folderNames("lynx", "LYNX"))
+        assertEquals(listOf("ngpc", "ngp"), Romm.folderNames("neo-geo-pocket-color", "NGP"))
+        assertEquals(listOf("ngp", "ngpc"), Romm.folderNames("neo-geo-pocket", "NGP"))
+        assertEquals(listOf("wonderswancolor", "wonderswan"), Romm.folderNames("wonderswan-color", "WS"))
+        assertEquals(listOf("famicom", "nes"), Romm.folderNames("famicom", "NES"))
+        assertEquals(listOf("sfc", "snes"), Romm.folderNames("sfam", "SNES"))
+        assertEquals(listOf("nes", "famicom"), Romm.folderNames("nes", "NES"))
+        assertEquals(listOf("snes", "sfc", "snesna"), Romm.folderNames("snes", "SNES"))
+        assertEquals(listOf("megadrive", "genesis", "megadrivejp"), Romm.folderNames("genesis", "MD"))
+        assertEquals(listOf("gb"), Romm.folderNames("gb", "GB"))
+    }
+
+    @org.junit.Test
+    fun the_3_0_boards_show_a_battery_where_the_cart_had_one() {
+        // WonderSwan: SRAM in the footer's save type, EEPROM none.
+        fun ws(type: Int) = ByteArray(0x20000).also { it[it.size - 5] = type.toByte() }
+        assertTrue(Systems.wsBattery(java.io.ByteArrayInputStream(ws(0x01))))
+        assertTrue(Systems.wsBattery(java.io.ByteArrayInputStream(ws(0x04))))
+        assertFalse(Systems.wsBattery(java.io.ByteArrayInputStream(ws(0x10))))
+        assertFalse(Systems.wsBattery(java.io.ByteArrayInputStream(ws(0x00))))
+        // Master System / Game Gear: the known battery games.
+        val header = ByteArray(0x8000)
+        assertTrue(Systems.homeHeader("gg", header, "Sylvan Tale (Japan).gg").battery)
+        assertTrue(Systems.homeHeader("sms", header, "Phantasy Star (USA, Europe).sms").battery)
+        assertFalse(Systems.homeHeader("gg", header, "Columns (USA, Europe, Brazil) (En).gg").battery)
+    }
 }

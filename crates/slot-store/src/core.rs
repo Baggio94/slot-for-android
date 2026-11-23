@@ -18,13 +18,23 @@ pub enum Core {
     Bsnes,
     GenesisPlusGx,
     Picodrive,
+    // The 3.0 systems' cores, named on their boards.
+    Neopop,
+    Race,
+    Gearsystem,
+    Handy,
+    BeetleLynx,
+    BeetleCygne,
+    PokeMini,
 }
 
 impl Core {
-    pub const ALL: [Core; 9] = [
+    pub const ALL: [Core; 16] = [
         Core::Mgba, Core::Gpsp, Core::Gambatte,
         Core::Fceumm, Core::Nestopia, Core::Snes9x, Core::Bsnes,
         Core::GenesisPlusGx, Core::Picodrive,
+        Core::Neopop, Core::Race, Core::Gearsystem, Core::Handy, Core::BeetleLynx,
+        Core::BeetleCygne, Core::PokeMini,
     ];
 
     /// libretro's own core name: lib{as_str}_libretro.so, and the key
@@ -40,6 +50,13 @@ impl Core {
             Core::Bsnes => "bsnes",
             Core::GenesisPlusGx => "genesis_plus_gx",
             Core::Picodrive => "picodrive",
+            Core::Neopop => "mednafen_ngp",
+            Core::Race => "race",
+            Core::Gearsystem => "gearsystem",
+            Core::Handy => "handy",
+            Core::BeetleLynx => "mednafen_lynx",
+            Core::BeetleCygne => "mednafen_wswan",
+            Core::PokeMini => "pokemini",
         }
     }
 
@@ -67,6 +84,13 @@ impl Core {
             Core::Bsnes => "bsnes",
             Core::GenesisPlusGx => "Genesis Plus GX",
             Core::Picodrive => "PicoDrive",
+            Core::Neopop => "Beetle NeoPop",
+            Core::Race => "RACE",
+            Core::Gearsystem => "Gearsystem",
+            Core::Handy => "Handy",
+            Core::BeetleLynx => "Beetle Lynx",
+            Core::BeetleCygne => "Beetle WonderSwan",
+            Core::PokeMini => "PokeMini",
         }
     }
 
@@ -81,31 +105,22 @@ impl Core {
 
     /// The first socket on the board, and the system's default core.
     pub fn primary_for(platform: Platform) -> Core {
-        match platform {
-            Platform::Gba | Platform::Gb | Platform::Gbc => Core::Mgba,
-            Platform::Nes => Core::Fceumm,
-            Platform::Snes => Core::Snes9x,
-            Platform::Md => Core::GenesisPlusGx,
-        }
+        platform.system().cores[0]
     }
 
     /// The second socket on the board: gpSP for GBA, Gambatte for GB/GBC,
     /// Nestopia for NES, bsnes for SNES, PicoDrive for Mega Drive.
     pub fn alternate_for(platform: Platform) -> Core {
-        match platform {
-            Platform::Gba => Core::Gpsp,
-            Platform::Gb | Platform::Gbc => Core::Gambatte,
-            Platform::Nes => Core::Nestopia,
-            Platform::Snes => Core::Bsnes,
-            Platform::Md => Core::Picodrive,
-        }
+        platform.system().cores[1]
     }
 
     /// Which of the board's two sockets this core sits in.
     pub fn socket(self) -> usize {
         match self {
-            Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx => 0,
-            Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive => 1,
+            Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx
+            | Core::Neopop | Core::Handy | Core::BeetleCygne | Core::PokeMini => 0,
+            Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive
+            | Core::Race | Core::Gearsystem | Core::BeetleLynx => 1,
         }
     }
 
@@ -136,20 +151,14 @@ pub fn core_for_platform(root: &Path, stem: &str, platform: Platform) -> Core {
         .unwrap_or_else(|| default_core(root, platform))
 }
 
-fn default_key(platform: Platform) -> &'static str {
-    match platform {
-        Platform::Gba => "gba",
-        Platform::Gb => "gb",
-        Platform::Gbc => "gbc",
-        Platform::Nes => "nes",
-        Platform::Snes => "snes",
-        Platform::Md => "md",
-    }
+/// The system's key in default_core.ini: its folder name in lower case.
+fn default_key(platform: Platform) -> String {
+    platform.dir_name().to_ascii_lowercase()
 }
 
 /// The core a system's carts run on unless a cart was given the other one.
 pub fn default_core(root: &Path, platform: Platform) -> Core {
-    crate::ini::value(root, DEFAULT_CORE_FILE, default_key(platform))
+    crate::ini::value(root, DEFAULT_CORE_FILE, &default_key(platform))
         .as_deref()
         .and_then(Core::parse)
         .filter(|core| core.runs(platform))
@@ -168,7 +177,7 @@ pub fn write_default_core(root: &Path, platform: Platform, core: Core) -> std::i
             crate::ini::write_entry(root, SELECTED_CORE_FILE, &stem, None)?;
         }
     }
-    crate::ini::write(root, DEFAULT_CORE_FILE, default_key(platform), core.as_str())
+    crate::ini::write(root, DEFAULT_CORE_FILE, &default_key(platform), core.as_str())
 }
 
 /// A cart's pick from the board: only a core other than the system's

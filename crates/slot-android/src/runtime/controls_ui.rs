@@ -127,7 +127,17 @@ impl Engine {
         match platform {
             Platform::Gba => "gba", Platform::Gbc => "gbc", Platform::Gb => "gb",
             Platform::Nes => "nes", Platform::Snes => "snes", Platform::Md => "md",
+            Platform::Sms => "sms", Platform::Gg => "gg",
+            Platform::Ngp => "ngp", Platform::Ws => "ws",
+            Platform::Lynx => "lynx", Platform::Pokemini => "pokemini",
         }
+    }
+
+    /// The Controls a page of the game being played edits: an upright
+    /// WonderSwan game's are filed apart, its buttons turned with it.
+    fn game_system_key(&self, platform: Platform) -> &'static str {
+        let upright = platform == Platform::Ws && self.game.as_ref().is_some_and(GameSession::upright);
+        if upright { controls::WS_UPRIGHT_SYSTEM } else { Self::system_key(platform) }
     }
 
     /// The game being played, as its Controls are filed: its portable name
@@ -137,7 +147,7 @@ impl Engine {
     }
 
     fn layout_scope(&self, platform: Platform, game: bool) -> Scope {
-        let system = Self::system_key(platform);
+        let system = if game { self.game_system_key(platform) } else { Self::system_key(platform) };
         match self.game_key().filter(|_| game) {
             Some(game) => Scope::Game { system, game },
             None => Scope::System(system),
@@ -156,7 +166,7 @@ impl Engine {
         let Some(game) = self.game.as_ref() else { return };
         let wanted = (self.controls_rev, turbo);
         if game.has_layouts() && self.layouts_for == Some(wanted) { return; }
-        let system = Self::system_key(self.current_cart_platform());
+        let system = self.game_system_key(self.current_cart_platform());
         let key = self.game_key();
         // A game's Controls filed by its URI in 2.4 move to its name.
         if let (Some(key), Some(uri)) = (key.as_deref(), self.requested_uri.clone()) {

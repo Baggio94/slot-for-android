@@ -126,7 +126,8 @@ pub fn shell_for(cart: &Cart) -> Shell {
     match cart.platform {
         Platform::Gba => gba_shell_for(&cart.code),
         Platform::Gb | Platform::Gbc => gb_shell_for(&cart.rom),
-        Platform::Nes | Platform::Snes | Platform::Md => crate::home::home_mould_of(cart)
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini => crate::home::home_mould_of(cart)
             .map_or(DEFAULT_SHELL, |m| shell(m.art().colour, Finish::Solid)),
     }
 }
@@ -345,6 +346,31 @@ const MD_SWATCHES: &[Swatch] = &[
     swatch("Mega Drive black", [18, 18, 19], Finish::Solid),
 ];
 
+const SMS_SWATCHES: &[Swatch] = &[
+    swatch("Master System black", [18, 18, 18], Finish::Solid),
+];
+
+const GG_SWATCHES: &[Swatch] = &[
+    swatch("Game Gear black", [20, 20, 20], Finish::Solid),
+];
+
+const NGP_SWATCHES: &[Swatch] = &[
+    swatch("Neo Geo Pocket black", [18, 18, 18], Finish::Solid),
+];
+
+const WS_SWATCHES: &[Swatch] = &[
+    swatch("WonderSwan black", [30, 30, 30], Finish::Solid),
+    swatch("WonderSwan Color clear", [145, 148, 148], Finish::Translucent),
+];
+
+const LYNX_SWATCHES: &[Swatch] = &[
+    swatch("Lynx black", [25, 25, 25], Finish::Solid),
+];
+
+const POKEMINI_SWATCHES: &[Swatch] = &[
+    swatch("Pokemon mini clear", [128, 150, 178], Finish::Translucent),
+];
+
 /// Colours no real cart came in, for fun, on every system.
 pub const FUN_SWATCHES: &[Swatch] = &[
     swatch("Cherry", [0xe0, 0x28, 0x3a], Finish::Solid),
@@ -367,5 +393,11 @@ pub fn system_swatches(platform: Platform) -> &'static [Swatch] {
         Platform::Nes => NES_SWATCHES,
         Platform::Snes => SNES_SWATCHES,
         Platform::Md => MD_SWATCHES,
+        Platform::Sms => SMS_SWATCHES,
+        Platform::Gg => GG_SWATCHES,
+        Platform::Ngp => NGP_SWATCHES,
+        Platform::Ws => WS_SWATCHES,
+        Platform::Lynx => LYNX_SWATCHES,
+        Platform::Pokemini => POKEMINI_SWATCHES,
     }
 }

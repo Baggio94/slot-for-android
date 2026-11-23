@@ -171,6 +171,10 @@ static PANEL_SIZE: AtomicU64 = AtomicU64::new(0);
 /// Paused Screen row choosing the game's size: GBA off the 3:2 KONKR, and
 /// the home consoles everywhere (Integer / Original Ratio / Stretch).
 const SCREEN_SIZE_KEY: usize = 40;
+use crate::settings::{CORE_SMS_KEY, CORE_GG_KEY, CORE_NGP_KEY, CORE_LYNX_KEY,
+    SHADER_SMS_KEY, SHADER_GG_KEY, SHADER_NGP_KEY, SHADER_WS_KEY, SHADER_LYNX_KEY,
+    SHADER_POKEMINI_KEY, BEZEL_SMS_KEY, BEZEL_GG_KEY, BEZEL_NGP_KEY, BEZEL_WS_KEY,
+    BEZEL_LYNX_KEY, BEZEL_POKEMINI_KEY, POKEMINI_FILTER_KEY};
 /// "INTEGER", "ORIGINAL RATIO", "STRETCH" in the setting value faces.
 const SCREEN_SIZE_VALUE: usize = 67;
 
@@ -259,6 +263,13 @@ const RA_NOTICE_LIMIT: usize = 8;
 // Up to 96 prepared cartridge faces (~70 MiB worst-case native RGBA artwork).
 // KONKR has 4 GiB shared RAM; the LRU still reuses existing GLES textures.
 const CART_TEXTURE_CACHE_CAPACITY: usize = 160;
+
+/// Steps between two carts on a shelf that wraps around.
+fn cyclic_distance(a: usize, b: usize, len: usize) -> usize {
+    if len == 0 { return 0; }
+    let d = a.abs_diff(b) % len;
+    d.min(len - d)
+}
 const CART_IDLE_PREFETCH_CAP: usize = 155;
 const CART_IDLE_GRACE: Duration = Duration::from_millis(400);
 const CART_GPU_UPLOAD_BUDGET: Duration = Duration::from_millis(2);
@@ -296,6 +307,22 @@ static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
 // RETROARCH pacing inputs from Kotlin: the panel refresh rate (mHz) and the
 // AudioTrack queue depth/capacity in frames, sampled by the audio worker.
 static DISPLAY_REFRESH_MILLIHZ: AtomicI32 = AtomicI32::new(0);
+
+/// Match a core's native refresh if the panel can show every frame at an
+/// integer refresh multiple; otherwise use its own 60Hz pulldown mode.
+/// PokeMini and Beetle WonderSwan preserve game/audio speed by emulating
+/// their missing intermediate frames inside a 60Hz libretro callback.
+/// Unknown Android display rate falls back to 60Hz (KPA's normal display).
+pub(crate) fn handheld_core_60hz(native_hz: f64) -> bool {
+    let display_hz = f64::from(DISPLAY_REFRESH_MILLIHZ.load(Ordering::Acquire)) / 1000.0;
+    handheld_core_60hz_for_display(native_hz, display_hz)
+}
+
+pub(crate) fn handheld_core_60hz_for_display(native_hz: f64, display_hz: f64) -> bool {
+    if !(native_hz > 0.0) || !(display_hz > 0.0) { return true; }
+    let multiple = (display_hz / native_hz).round().max(1.0);
+    ((display_hz / native_hz) - multiple).abs() > 0.02
+}
 static AUDIO_OUT_QUEUED_FRAMES: AtomicI32 = AtomicI32::new(0);
 static AUDIO_OUT_CAPACITY_FRAMES: AtomicI32 = AtomicI32::new(0);
 static DISPLAY_SYNC: AtomicBool = AtomicBool::new(false);
@@ -523,7 +550,7 @@ impl LinkEntry {
             Self::Shortcut => ShelfOverlay::None,
             Self::Stopped => ShelfOverlay::GameMenu { row: 0 },
             Self::GameMenu => ShelfOverlay::GameMenu {
-                row: pause_rows(linked, requires_relaunch).iter()
+                row: pause_rows(linked, requires_relaunch, true).iter()
                     .position(|item| *item == PauseRow::Multiplayer).unwrap_or(0),
             },
         }
@@ -578,7 +605,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 156] = [
+const MENU_TEXT: [&str; 177] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -739,20 +766,53 @@ const MENU_TEXT: [&str; 156] = [
     "Blur",                               // 153
     "Halo",                               // 154
     "Tint",                               // 155, Darken in 2.5's first betas
+    "3.0 Test Shelf",                     // 156, Interface (3.0.0-cartes1)
+    "Master System",                      // 157, Systems (3.0)
+    "Game Gear",                          // 158
+    "Neo Geo Pocket",                     // 159
+    "WonderSwan",                         // 160
+    "Lynx",                               // 161
+    "Pokemon mini",                       // 162
+    "LCD Filter",                         // 163, Pokemon mini (Siham 2026-11-21)
+    // 164-166: the 3.0 systems' own options (3.0.0-materials3).
+    "Sprite Limit",                       // 164, Master System, Game Gear
+    "Language",                           // 165, Neo Geo Pocket
+    "LCD Mode",                           // 166, Pokemon mini
+    "Palette",                            // 167, WonderSwan, Pokemon mini
+    "Hide Left Bar",                      // 168, Master System
+    "FM Sound",                           // 169, Master System
+    "Screen Shake",                       // 170, Pokemon mini
+    "WS Palette",                         // 171, WonderSwan (Siham 2026-11-22)
+    "PK Palette",                         // 172, Pokemon mini
+    "Bezel",                              // 173, no longer shown (plain Bezel)
+    "Sync States with RomM",              // 174, Library > Saves & States (3.0, beta)
+    "Hide Side Bars",                     // 175, NES: left and right (Siham 2026-11-23)
+    "Audio Filter",                       // 176, NES + WonderSwan optional analogue audio
 ];
 
 /// Settings > Systems, top to bottom.
-const SYSTEM_ORDER: [Platform; 6] = [
+const SYSTEM_ORDER: [Platform; 12] = [
     Platform::Gba, Platform::Gbc, Platform::Gb,
     Platform::Nes, Platform::Snes, Platform::Md,
+    Platform::Sms, Platform::Gg, Platform::Ngp, Platform::Ws,
+    Platform::Lynx, Platform::Pokemini,
 ];
-const SYSTEM_TITLES: [usize; 6] = [91, 92, 93, 121, 122, 123];
+const SYSTEM_TITLES: [usize; 12] = [91, 92, 93, 121, 122, 123, 157, 158, 159, 160, 161, 162];
 // Special racks follow the supported platforms, not hard-coded GB-era indices.
 const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
+/// The 3.0 test shelf (3.0.0-cartes1), after Library > RomM's rack.
+const TEST_RACK: usize = Platform::ALL.len() + 4;
+
+/// The 3.0 test shelf's carts (3.0.0-cartes1). Every 3.0 system has real
+/// carts since 3.0.0-lynxmini1, so the shelf is empty and Interface no
+/// longer offers it.
+fn test_carts() -> Vec<slot_store::Cart> {
+    Vec::new()
+}
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 190] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -793,6 +853,27 @@ const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                // Halo and Tint; 0 % shows OFF (5).
                                "10%", "20%", "30%", "40%", "50%",
                                "60%", "70%", "80%", "90%", "100%",
+                               // 135: the Master System and Game Gear's second core.
+                               "Gearsystem",
+                               // 136, 137: the Neo Geo Pocket's two cores.
+                               "Beetle NeoPop", "RACE",
+                               // 138, 139: the Lynx's two cores.
+                               "Handy", "Beetle Lynx",
+                               // 140-148 (OWN_BEZEL_VALUES): slot.'s own 3.0 overlays.
+                               "MASTER SYSTEM", "GAME GEAR", "NEO GEO POCKET", "NGP COLOR",
+                               "WONDERSWAN", "WONDERSWAN COLOR", "LYNX", "LYNX GOLD",
+                               "POKEMON MINI",
+                               // 149: Pokemon mini's LCD Filter (Dot Matrix 105, None 17).
+                               "Scanlines",
+                               // 150-163 (EXTRA_VALUES): the 3.0 systems' own
+                               // options; Default (19) leads both palettes.
+                               "English", "Japanese",
+                               "WonderSwan", "WonderSwan Color", "SwanCrystal",
+                               "Old", "Monochrome", "Green", "Red", "Blue", "Sepia",
+                               "Analog", "3 Shades", "2 Shades",
+                               // 164-168: optional audio coloration; these must stay
+                               // before Rotate's 21 terminal values.
+                               "RF", "Soft", "MAME", "Nuked", "Analog",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -800,6 +881,12 @@ const SETTING_VALUE_NAMES: [&str; 156] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "NEEDS SWIPE LOCK", "DIGITAL CLOCK", "ANALOG CLOCK",
                                // 18-20: Game Info.
                                "TITLE", "TIME", "ALL"];
+/// The first of slot.'s own 3.0 overlays in SETTING_VALUE_NAMES.
+const OWN_BEZEL_VALUES: usize = 140;
+/// The first of the 3.0 systems' own option values in SETTING_VALUE_NAMES.
+const EXTRA_VALUES: usize = 150;
+/// NES/WonderSwan filter and Mega Drive FM values (before Rotate values).
+const AUDIO_OPTION_VALUES: usize = EXTRA_VALUES + 14;
 /// The first RG Rotate value in SETTING_VALUE_NAMES.
 const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
 /// Library's values (2.5): where the slot. folder is, and RomM's sync
@@ -819,6 +906,7 @@ fn narrow_label(label: &str) -> &str {
     match label {
         "Fast Forward Sound" => "FF Sound",
         "Sync Saves with RomM" => "Sync with RomM",
+        "Sync States with RomM" => "Sync States",
         "Wi-Fi & Bluetooth" => "Wi-Fi & BT",
         _ => label,
     }
@@ -849,6 +937,9 @@ const TASK_DOWNLOADS: u8 = 3;
 const TASK_SCAN: u8 = 5;
 /// Sync Saves with RomM: 0 RomM not connected, 1 off, 2 on.
 static ROMM_SYNC: AtomicU8 = AtomicU8::new(0);
+/// Sync States with RomM (3.0): as ROMM_SYNC, and 3 off and idle (Sync
+/// Saves with RomM is off: a state holds its save).
+pub(crate) static ROMM_STATES: AtomicU8 = AtomicU8::new(0);
 /// The ROM folder's SD card isn't in this handheld.
 static ROMS_MISSING: AtomicBool = AtomicBool::new(false);
 /// Carts whose SD card is out: grey, as a handheld switched off, opaque
@@ -1007,10 +1098,17 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         },
         19 => if settings.show_recents {4}else{5},
         20 => if settings.show_titles {4}else{5},
+        TEST_SHELF_KEY => if settings.test_shelf {4}else{5},
         21 => shader(scoped.shader_gbc),
         47 => shader(scoped.shader_nes),
         48 => shader(scoped.shader_snes),
         49 => shader(scoped.shader_md),
+        crate::settings::SHADER_SMS_KEY => shader(scoped.shader_sms),
+        crate::settings::SHADER_NGP_KEY => shader(scoped.shader_ngp),
+        crate::settings::SHADER_WS_KEY => shader(scoped.shader_ws),
+        crate::settings::SHADER_LYNX_KEY => shader(scoped.shader_lynx),
+        crate::settings::SHADER_POKEMINI_KEY => shader(scoped.shader_pokemini),
+        crate::settings::SHADER_GG_KEY => shader(scoped.shader_gg),
         22 => if scoped.shader_gba.includes_gba_color() { 42 }
             else if scoped.colour_correction_gba {4}else{5},
         23 => if scoped.colour_correction_gbc {4}else{5},
@@ -1019,6 +1117,35 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         44 => bezel_value(scoped.bezel_nes),
         45 => bezel_value(scoped.bezel_snes),
         46 => bezel_value(scoped.bezel_md),
+        crate::settings::BEZEL_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY =>
+            bezel_value(scoped.bezel_for(Settings::bezel_platform(key)?)),
+        crate::settings::POKEMINI_FILTER_KEY => match scoped.pokemini_lcd_filter {
+            1 => 149, 2 => 17, _ => 105,
+        },
+        // The 3.0 systems' own options: the limit is ON as on the console.
+        crate::settings::SPRITE_LIMIT_SMS_KEY => if scoped.no_sprite_limit_sms {5}else{4},
+        crate::settings::SPRITE_LIMIT_GG_KEY => if scoped.no_sprite_limit_gg {5}else{4},
+        crate::settings::NGP_LANGUAGE_KEY => EXTRA_VALUES + usize::from(scoped.ngp_language.min(1)),
+        crate::settings::WS_PALETTE_KEY => match scoped.ws_palette.min(3) {
+            0 => 19, n => EXTRA_VALUES + 1 + usize::from(n) },
+        crate::settings::POKEMINI_PALETTE_KEY => match scoped.pokemini_palette.min(6) {
+            0 => 19, n => EXTRA_VALUES + 4 + usize::from(n) },
+        crate::settings::POKEMINI_LCD_MODE_KEY =>
+            EXTRA_VALUES + 11 + usize::from(scoped.pokemini_lcd_mode.min(2)),
+        crate::settings::LEFT_BAR_SMS_KEY => if scoped.hide_left_bar_sms {4}else{5},
+        crate::settings::LEFT_BAR_NES_KEY => if scoped.hide_left_bar_nes {4}else{5},
+        // FM sound on its own for the games that have it, as the Japanese console.
+        crate::settings::FM_SMS_KEY => if scoped.fm_off_sms {5}else{66},
+        crate::settings::WS_LANGUAGE_KEY => EXTRA_VALUES + usize::from(scoped.ws_language.min(1)),
+        crate::settings::POKEMINI_SHAKE_KEY => if scoped.pokemini_no_shake {5}else{4},
+        crate::settings::NES_AUDIO_FILTER_KEY => if !scoped.nes_audio_filter { 5 }
+            else if cores[Platform::Nes as usize] == Core::Nestopia { AUDIO_OPTION_VALUES + 4 }
+            else { AUDIO_OPTION_VALUES },
+        crate::settings::MD_FM_SOUND_KEY =>
+            AUDIO_OPTION_VALUES + 2 + usize::from(scoped.md_fm_nuked),
+        crate::settings::WS_AUDIO_FILTER_KEY => if scoped.ws_audio_filter {
+            AUDIO_OPTION_VALUES + 1
+        } else { 5 },
         SCREEN_SIZE_KEY => SCREEN_SIZE_VALUE + match video {
             VideoMode::Actual => 0, VideoMode::Aspect => 1, VideoMode::Stretch => 2,
         },
@@ -1026,13 +1153,16 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         27 => bezel_value(scoped.bezel_gb),
         28 => if settings.time_format==crate::settings::TimeFormat::TwelveHour
             {35}else{36},
-        29..=31 | 41..=43 => core_value(Engine::core_key_platform(key)
+        29..=31 | 41..=43 | crate::settings::CORE_SMS_KEY | crate::settings::CORE_GG_KEY
+        | crate::settings::CORE_NGP_KEY | crate::settings::CORE_LYNX_KEY =>
+            core_value(Engine::core_key_platform(key)
             .map_or(Core::Mgba, |platform| cores[platform as usize])),
         // Frame Blending, LCD Effect and Dither Blending: the game's own in
         // game, the system's default in Settings > Systems.
-        60..=65 => {
-            use slot_store::Platform::*;
-            match scoped.blending_for([Gba, Gbc, Gb, Nes, Snes, Md][key - 60]) {
+        60..=65 | crate::settings::BLENDING_SMS_KEY | crate::settings::BLENDING_GG_KEY
+        | crate::settings::BLENDING_NGP_KEY | crate::settings::BLENDING_WS_KEY
+        | crate::settings::BLENDING_LYNX_KEY | crate::settings::BLENDING_POKEMINI_KEY => {
+            match scoped.blending_for(Settings::blending_platform(key)?) {
                 crate::settings::Blending::Off => 5,
                 crate::settings::Blending::Mix => 96,
                 crate::settings::Blending::Ghosting => 97,
@@ -1103,6 +1233,16 @@ fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
             // Only app-private labels are used; never rewrite ROMs.
             cart.label = Some(labels.join(filename));
         }
+        // A Master System or Game Gear cart whose game has kept a battery
+        // save shows its battery, as the known ones do (Siham 2026-11-22).
+        let saved: std::collections::HashSet<std::ffi::OsString> = ["Genesis Plus GX", "Gearsystem"]
+            .iter().flat_map(|core| std::fs::read_dir(root.join("Saves").join(core)).into_iter().flatten())
+            .flatten().map(|f| f.file_name()).collect();
+        for platform in [Platform::Sms, Platform::Gg] {
+            for cart in systems[platform as usize].iter_mut().filter(|cart| !cart.battery) {
+                cart.battery = saved.contains(std::ffi::OsStr::new(&format!("{}.srm", cart.stem)));
+            }
+        }
     }
     let video = systems.pop().unwrap_or_default();
     (systems, video)
@@ -1147,6 +1287,8 @@ fn dot_matrix_colours(view: &Settings) -> [u32; 4] {
 fn core_value(core: Core) -> usize {
     match core {
         Core::Mgba => 50, Core::Gpsp => 51, Core::Gambatte => 52,
+        Core::Gearsystem => 135, Core::Neopop => 136, Core::Race => 137,
+        Core::Handy => 138, Core::BeetleLynx => 139,
         other => 70 + other.index() - Core::Fceumm.index(),
     }
 }
@@ -1198,6 +1340,13 @@ fn bezel_value(bezel: crate::settings::Bezel) -> usize {
         Nes => 81, NesGrayLogo => 82,
         Snes => 83, SnesAlt => 84, SnesGrayLogo => 85, SnesGrayLogoAlt => 86,
         GenesisClassic => 87, Genesis => 88, MegaDrive => 89,
+        // slot.'s own 3.0 overlays: OWN_BEZEL_VALUES on, AUTO is 66.
+        NgpAuto | WsAuto => 66,
+        MasterSystem => OWN_BEZEL_VALUES, GameGear => OWN_BEZEL_VALUES + 1,
+        Ngp => OWN_BEZEL_VALUES + 2, NgpColor => OWN_BEZEL_VALUES + 3,
+        Ws => OWN_BEZEL_VALUES + 4, WsColor => OWN_BEZEL_VALUES + 5,
+        Lynx => OWN_BEZEL_VALUES + 6, LynxGold => OWN_BEZEL_VALUES + 7,
+        PokemonMini => OWN_BEZEL_VALUES + 8,
     }
 }
 
@@ -1213,8 +1362,11 @@ fn settings_rows() -> &'static [usize] {
 
 /// Settings > Interface: Theme, Wallpaper (its page), Recents, Game Titles,
 /// Status Bar (its page).
+/// 3.0 Test Shelf (156) left it in 3.0.0-lynxmini1: no test cart is left.
 const INTERFACE_PAGE_ROWS: [usize; 5] = [85, 83, 86, 87, 58];
 const INTERFACE_PAGE_KEYS: [usize; 5] = [18, usize::MAX, 19, 20, usize::MAX];
+/// Interface > 3.0 Test Shelf's value (3.0.0-cartes1).
+const TEST_SHELF_KEY: usize = 107;
 const INTERFACE_WALLPAPER_ROW: usize = 1;
 const INTERFACE_STATUS_ROW: usize = 4;
 /// Settings > Interface > Wallpaper (Engine::wallpaper_rows): Shelf
@@ -1243,9 +1395,10 @@ const LIBRARY_SAVES_ROW: usize = 3;
 const LIBRARY_ROMM_ROW: usize = 4;
 /// Library > Saves & States: Save Folder, Save State Folder, Share Core
 /// Saves, Sync Saves with RomM.
-const SAVES_ROWS: [usize; 4] = [7, 8, 79, 152];
+const SAVES_ROWS: [usize; 5] = [7, 8, 79, 152, 174];
 const SAVES_SHARE_ROW: usize = 2;
 const SAVES_ROMM_ROW: usize = 3;
+const SAVES_STATES_ROW: usize = 4;
 
 /// X/Y Buttons (38, key 7) moved to Systems > Controls (X / Y), where its
 /// old value is the default until a system or game chooses.
@@ -1601,6 +1754,9 @@ struct Engine {
     // R1 WAN, L1 LAN, Y Share, UP Digit, arrows Move, A Join.
     link_inet_hints: [[(slot_gfx::TexId, u32); 6]; 2],
     board_texture: Option<slot_gfx::TexId>,
+    /// The front that lifts off a cart that leaves its contacts on the board
+    /// (the Lynx), and whether the open picker's cart has one.
+    picker_lid: (Option<slot_gfx::TexId>, bool),
     picker: Option<CorePicker>,
     /// A finger chose a core: A once the chip has hopped there (ms, born).
     picker_auto_seat: Option<u64>,
@@ -1610,7 +1766,7 @@ struct Engine {
     pak_chip_textures: [slot_gfx::TexId; Core::ALL.len()],
     pak_chip_blank: slot_gfx::TexId,
     /// The NES, Super Nintendo and Mega Drive chips with no core name.
-    home_chip_blanks: [slot_gfx::TexId; 3],
+    home_chip_blanks: [slot_gfx::TexId; 9],
     chip_shadow: slot_gfx::TexId,
     core_legend_faces: [(slot_gfx::TexId, u32); 3],
     /// The same, their words in Light's dark ink: over a light shelf
@@ -1673,6 +1829,7 @@ struct Engine {
     recents_platform_face: Printed,
     favorites_platform_face: Printed,
     video_platform_face: Printed,
+    test_platform_face: Printed,
     focus_seen: Option<(usize, String)>,
     focus_dirty_since: Option<Instant>,
     // Upstream v1.7 menu key-repeat belongs to the UI clock, never libretro.
@@ -1795,9 +1952,11 @@ impl Engine {
             retroid_pocket_classic: RPC_DEFAULT_RESPONSIVE.load(Ordering::Acquire),
             three_two: crate::settings::Device::is_three_two(size),
         };
-        let settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+        let mut settings = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .as_ref().map(|(root, _)| Settings::load_for_device(root, device))
             .unwrap_or_else(|| Settings::first_install_defaults_for_device(device));
+        settings.own_bezels_by_room(size);
+        crate::settings::CoreExtras::store(&settings);
         // General's wallpaper too (a blur takes a moment): Default's mosaic
         // follows the shelf on screen, not known yet, and is made once the
         // engine is (with_shelf_wallpapers).
@@ -1855,7 +2014,7 @@ impl Engine {
         let slot_dark_faces = (upload(&mut gpu), upload(&mut gpu));
         let slot_light_faces = (upload(&mut gpu), upload(&mut gpu));
         let footer_inked_dark_at_start = settings.appearance == crate::settings::Appearance::Light;
-        let home_slot_themes = [0usize, 1, 2].map(|_| [0usize, 1, 2, 3, 4, 5, 6]
+        let home_slot_themes = [0usize, 1, 2].map(|_| [(); slot_ui::bitmaps::CONSOLE_SLOTS]
             .map(|_| (upload(&mut gpu), upload(&mut gpu))));
         steps.mark("slot bars");
         let home_slot_faces = home_slot_themes[settings.appearance.bar_theme()];
@@ -1898,6 +2057,11 @@ impl Engine {
         shelves.push(Shelf::new(favorite_carts));
         debug_assert_eq!(shelves.len(), VIDEO_RACK);
         shelves.push(Shelf::new(video_carts));
+        // Library > RomM's page has its rack but no shelf: an empty one
+        // keeps the 3.0 test shelf at its own rack (3.0.0-cartes1).
+        shelves.push(Shelf::new(Vec::new()));
+        debug_assert_eq!(shelves.len(), TEST_RACK);
+        shelves.push(Shelf::new(if settings.test_shelf { test_carts() } else { Vec::new() }));
 
         // Original Slot names, not abbreviations: Game Boy Advance,
         // Game Boy, Game Boy Color. Keep the existing 3x antialiased 16px
@@ -1920,6 +2084,8 @@ impl Engine {
             favorites_label.w);
         let video_label=platform_name_face("Game Boy Advance Video");
         let video_platform_face=Printed::new(gpu.create_face(&video_label), video_label.w);
+        let test_label=platform_name_face("3.0 TEST");
+        let test_platform_face=Printed::new(gpu.create_face(&test_label), test_label.w);
 
         steps.mark("platform names");
         let gba = upload(&mut gpu);
@@ -2128,7 +2294,8 @@ impl Engine {
         // GB/GBC boards hop their own big pak chip between two footprints.
         let pak_chip_textures = Core::ALL.map(|core| gpu.create_face(&pak_chip_face(Some(core))));
         let pak_chip_blank = gpu.create_face(&pak_chip_face(None));
-        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md]
+        let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md, Platform::Sms, Platform::Gg,
+            Platform::Ngp, Platform::Ws, Platform::Lynx, Platform::Pokemini]
             .map(|p| gpu.create_face(&slot_ui::home_chip_face(p, None)));
         let shadow = chip_shadow_face();
         let chip_shadow = gpu.create_face(&shadow);
@@ -2405,6 +2572,7 @@ impl Engine {
             link_failed_hints,
             link_inet_hints,
             board_texture: None,
+            picker_lid: (None, false),
             picker: None,
             picker_auto_seat: None,
             socket_textures,
@@ -2455,6 +2623,7 @@ impl Engine {
             recents_platform_face,
             favorites_platform_face,
             video_platform_face,
+            test_platform_face,
             focus_seen: None,
             focus_dirty_since: None,
             menu_held: None,
@@ -3117,6 +3286,24 @@ impl Engine {
             104 | 105 if self.game.as_ref().is_some_and(GameSession::motion) => {
                 self.nudge_motion(code == 105);
             }
+            // The WonderSwan's and the Pokemon mini's palettes, as the Game
+            // Boy's (Siham 2026-11-22). A colour WonderSwan game has none.
+            104 | 105 if matches!(self.current_cart_platform(), Platform::Ws | Platform::Pokemini)
+                && self.game.as_ref().is_some_and(|g| !g.linked())
+                && !(self.current_cart_platform() == Platform::Ws
+                    && self.game.as_ref().is_some_and(|g| crate::game::colour_cart(Platform::Ws, g.rom_path()))) => {
+                    let platform = self.current_cart_platform();
+                    let (key, first) = if platform == Platform::Ws {
+                        (crate::settings::WS_PALETTE_KEY, 0u8)
+                    } else {
+                        (crate::settings::POKEMINI_PALETTE_KEY, 4)
+                    };
+                    // This game's palette, as the Screen page's row (2026-11-22).
+                    self.change_game_screen_or_gameplay(key, code == 105);
+                    let view = self.game_settings();
+                    let at = if platform == Platform::Ws { view.ws_palette } else { view.pokemini_palette };
+                    self.hud.toast(Toast::OwnPalette(first + at), time);
+                }
             // Also valid for GB-compatible .gbc ROMs (CGB flag bit 7 unset).
             104 | 105 if self.game_settings().gb_palettes
                 && self.game.as_ref().is_some_and(|g| g.can_change_gb_palette()) => {
@@ -3162,7 +3349,7 @@ impl Engine {
                 opened: true,
             };
             self.overlay = ShelfOverlay::Multiplayer;
-        } else {
+        } else if self.multiplayer_offered() {
             self.enter_multiplayer_menu();
             if matches!(self.overlay, ShelfOverlay::Multiplayer) {
                 self.link_entry = LinkEntry::Shortcut;
@@ -3376,6 +3563,11 @@ impl Engine {
         let identity = self.link_identity.as_ref().expect("checked above");
         if game.core_kind() == Core::Bsnes {
             set_message("Multiplayer needs the Snes9x core.".into());
+            return;
+        }
+        // As bsnes (Siham 2026-11-22): Gearsystem has no netplay.
+        if game.core_kind() == Core::Gearsystem {
+            set_message("Multiplayer needs Genesis Plus GX.".into());
             return;
         }
         if game.core_kind() != Core::Gpsp {
@@ -4617,7 +4809,7 @@ impl Engine {
                                 let linked=self.game.as_ref().is_some_and(GameSession::linked);
                                 let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
                                 ShelfOverlay::GameMenu {
-                                    row: pause_rows(linked, relaunch).iter()
+                                    row: pause_rows(linked, relaunch, self.multiplayer_offered()).iter()
                                         .position(|item| *item==PauseRow::States).unwrap_or(0),
                                 }
                             } else { ShelfOverlay::None },
@@ -4637,9 +4829,9 @@ impl Engine {
                         if let ShelfOverlay::GameMenu { row } = self.overlay {
                             match code {
                                 19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::GameMenu {
-                                    row: move_menu_row(row, code, pause_rows(linked, relaunch).len(), self.menu_repeat_dispatch),
+                                    row: move_menu_row(row, code, pause_rows(linked, relaunch, self.multiplayer_offered()).len(), self.menu_repeat_dispatch),
                                 },
-                                96 => match pause_rows(linked, relaunch).get(row).copied() {
+                                96 => match pause_rows(linked, relaunch, self.multiplayer_offered()).get(row).copied() {
                                     Some(PauseRow::SaveEject) => self.handle(Input::Exit),
                                     Some(PauseRow::Resume) => self.overlay = ShelfOverlay::None,
                                     Some(PauseRow::States) if !linked && !relaunch => {
@@ -4713,7 +4905,8 @@ impl Engine {
                                 },
                                 97 => self.overlay = ShelfOverlay::GameMenu {
                                     row: pause_rows(self.game.as_ref().is_some_and(GameSession::linked),
-                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch))
+                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch),
+                                        self.multiplayer_offered())
                                         .iter().position(|item| *item==PauseRow::Settings).unwrap_or(0),
                                 },
                                 _ => {}
@@ -4734,7 +4927,10 @@ impl Engine {
                                     // Shader keys can switch the core's own GBA Color.
                                     // (Frame Blending acts between frames: a
                                     // still picture can't show it.)
-                                    if matches!(key, 0..=3 | 21..=24 | 66..=69) {
+                                    // The 3.0 systems' picture options too
+                                    // (Siham 2026-11-22): seen in the pause.
+                                    if matches!(key, 0..=3 | 21..=24 | 66..=69)
+                                        || Self::previewed_extra(key) {
                                         self.redraw_paused_game();
                                     }
                                 },
@@ -4953,6 +5149,9 @@ impl Engine {
                                 }
                                 21 | 22 | 96 if row == SAVES_ROMM_ROW => {
                                     UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(71);
+                                }
+                                21 | 22 | 96 if row == SAVES_STATES_ROW => {
+                                    UI_ACTION.lock().unwrap_or_else(|e| e.into_inner()).push_back(72);
                                 }
                                 96 if row < SAVES_SHARE_ROW && !self.external_pending => {
                                     // SRAM root, State root.
@@ -5187,6 +5386,19 @@ impl Engine {
                             set_message("The SD card with your games isn't in.".into());
                             return;
                         }
+                        96 if !self.inserted && !self.shelves[self.active].carts.is_empty()
+                            && self.selected_test_cart() => {
+                            // A 3.0 test cart goes in and stays seated: no
+                            // core to start yet (3.0.0-cartes1).
+                            self.inserted = true;
+                            self.prepared_rom = None;
+                            self.pending_game = None;
+                            self.insert_started = Some(Instant::now());
+                            self.a_down_at = self.insert_started;
+                            self.fresh_launch = false;
+                            set_message("No core for this system yet: 3.0 test cart.".into());
+                            return;
+                        }
                         96 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
                             self.load_selected_emulation();
                             self.inserted = true;
@@ -5274,11 +5486,25 @@ impl Engine {
     /// the middle cart up, touch.rs).
     pub(super) fn open_core_picker(&mut self) {
         let Some(selected) = self.shelves[self.active].carts.get(self.shelves[self.active].index) else { return };
+        if !slot_ui::cart_opens(selected) {
+            // One core only: the cart shakes, as on an empty shelf
+            // (Siham 2026-11-22).
+            self.refusal = Some(slot_ui::Refusal::started(self.born.elapsed().as_millis() as u64));
+            return;
+        }
         let face = board_face(selected);
         if let Some(texture) = self.board_texture {
             self.gpu.update_face(texture, &face);
         } else {
             self.board_texture = Some(self.gpu.create_face(&face));
+        }
+        let lid = slot_ui::lid_face(selected);
+        self.picker_lid.1 = lid.is_some();
+        if let Some(lid) = lid {
+            match self.picker_lid.0 {
+                Some(texture) => self.gpu.update_face(texture, &lid),
+                None => self.picker_lid.0 = Some(self.gpu.create_face(&lid)),
+            }
         }
         let now = self.born.elapsed().as_millis() as u64;
         let current_core = PATHS.lock()
@@ -5287,9 +5513,10 @@ impl Engine {
             .map(|(storage, _)| core_selection::selected_for(
                 storage, &selected.rom.to_string_lossy(), selected.platform))
             .unwrap_or_else(|| Core::default_for(selected.platform));
-        let mut picker = CorePicker::open_between(current_core,
-            Core::primary_for(selected.platform),
-            Core::alternate_for(selected.platform), now);
+        let [primary, alternate] = slot_ui::board_cores(selected);
+        // A 3.0 test cart keeps no core: its first chip is seated.
+        let current_core = if slot_ui::is_test_cart(selected) { primary } else { current_core };
+        let mut picker = CorePicker::open_between(current_core, primary, alternate, now);
         // A clear cart's lid waits for its plastic without
         // the board (start_waiting_picker), or the shelf
         // face would lift with the board drawn on it.
@@ -5304,6 +5531,10 @@ impl Engine {
         let now = self.born.elapsed().as_millis() as u64;
         let Some(core) = self.picker.map(|picker| picker.seat()) else { return };
         let cart = &self.shelves[self.active].carts[self.shelves[self.active].index];
+        if slot_ui::is_test_cart(cart) {
+            set_message(format!("{} comes with slot. 3.0.", core.text()));
+            return;
+        }
         let uri = cart.rom.to_string_lossy().into_owned();
         let platform = cart.platform;
         let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -5426,9 +5657,16 @@ impl Engine {
                 // Pin selected +/- one cart from each nonempty shelf (up to
                 // 15 across GBA/GB/GBC/Recents/Favorites). Preserve warm art
                 // while the 96-face LRU bounds shared GPU memory.
+                // Distances wrap: on the first cart the left neighbour is the
+                // last one, and evicting it made it flicker on every upload.
+                // Nothing on screen on the active shelf is ever taken.
+                let active = self.active;
+                let on_screen = self.shelves[active].on_screen();
                 let victim = self.texture_cache.iter().position(|(sid, index, _)| {
                     self.shelves.get(*sid).is_none_or(|shelf|
-                        shelf.carts.is_empty() || shelf.index.abs_diff(*index) > 1)
+                        shelf.carts.is_empty()
+                            || (cyclic_distance(shelf.index, *index, shelf.carts.len()) > 1
+                                && !(*sid == active && on_screen.contains(index))))
                 }).unwrap_or(0);
                 let (old_shelf, old_index, tex) = self.texture_cache
                     .remove(victim).expect("nonempty texture pool");
@@ -5515,6 +5753,19 @@ impl Engine {
         } else {
             self.cart_render.prioritize(&priority);
         }
+        // Touch the LRU least important first, so the selected cart and its
+        // neighbours end up the most recently used.
+        for (sid, index) in priority.iter().rev().copied() {
+            if self.shelves.get(sid).is_some_and(|shelf| shelf.face(index).is_some()) {
+                if let Some(pos) = self.texture_cache.iter()
+                    .position(|(s, i, _)| *s == sid && *i == index)
+                {
+                    if let Some(entry) = self.texture_cache.remove(pos) {
+                        self.texture_cache.push_back(entry);
+                    }
+                }
+            }
+        }
         for (sid, index) in priority {
             // Clear-cart composite is expensive: delay its three material
             // uploads until the carousel has settled.
@@ -5524,13 +5775,6 @@ impl Engine {
                 self.shelves[sid].carts.get(index).is_some_and(slot_ui::is_clear) &&
                 self.clear_material.map(|m|m.key)!=Some((sid,index));
             if self.shelves[sid].face(index).is_some() {
-                if let Some(pos) = self.texture_cache.iter()
-                    .position(|(s, i, _)| *s == sid && *i == index)
-                {
-                    if let Some(entry) = self.texture_cache.remove(pos) {
-                        self.texture_cache.push_back(entry);
-                    }
-                }
                 if !wants_material && !self.relabelled.contains(&(sid, index)) {continue;}
             }
             // A freshly configured AVD has no ROMs yet. Skip the empty
@@ -5579,6 +5823,8 @@ impl Engine {
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
             let effective_settings = self.game_settings();
+            // The 3.0 options this game starts with: its own, else its system's.
+            crate::settings::CoreExtras::store(&effective_settings);
             let started = Instant::now();
             let resume_preference = NEXT_RESUME_MODE.swap(-1, Ordering::AcqRel);
             let wants_state = match resume_preference {
@@ -5684,6 +5930,9 @@ impl Engine {
     fn cart_globals(&self) -> crate::settings::Settings {
         if self.playing_video() { self.settings.as_gba_video() } else { self.settings.clone() }
     }
+    /// Whether the running game's system has Multiplayer at all.
+    fn multiplayer_offered(&self) -> bool { multiplayer_offered(self.current_cart_platform()) }
+
     fn current_cart_platform(&self) -> Platform {
         self.shelves[self.active].carts
             .get(self.shelves[self.active].index)
@@ -5698,7 +5947,7 @@ impl Engine {
             self.gpu.set_game_source_rect(slot_gfx::WHOLE_TEXTURE);
             let frame = self.game.as_ref().map_or((256, 224), GameSession::frame_size);
             self.gpu.set_game_fit(video_mode::home_fit(platform, self.video_mode, aspect,
-                frame, panel_size()));
+                frame, self.game_square()));
             self.gpu.set_game_top(self.picture_top);
             self.apply_game_look();
             return;
@@ -5724,6 +5973,12 @@ impl Engine {
             self.gpu.set_game_source_rect(video_mode::source_rect(platform, self.video_mode));
         }
         self.apply_game_look();
+    }
+
+    /// Square pixels for the game played (video_mode::square_game).
+    fn game_square(&self) -> bool {
+        video_mode::square_game(self.current_cart_platform(), panel_size(),
+            self.game.as_ref().is_some_and(GameSession::square_listed))
     }
 
     fn set_video_mode(&mut self, mode: VideoMode) {
@@ -5831,7 +6086,9 @@ impl Engine {
     /// One screen size up (Integer -> Original Ratio -> Stretch) or down,
     /// with its banner. GBA on the KONKR has a single size.
     fn step_screen_size(&mut self, bigger: bool) {
-        let mode = if bigger { self.video_mode.bigger() } else { self.video_mode.smaller() };
+        let (platform, panel) = (self.current_cart_platform(), panel_size());
+        let mode = if bigger { self.video_mode.bigger_on(platform, panel) }
+            else { self.video_mode.smaller_on(platform, panel) };
         if mode == self.video_mode { return; }
         self.set_video_mode(mode);
         if self.video_mode != mode { return; }
@@ -5861,7 +6118,8 @@ impl Engine {
     fn home_shape(&self) -> (f32, (u32, u32)) {
         let platform = self.current_cart_platform();
         self.game.as_ref().map_or((4.0 / 3.0, (256, 224)), |session| (
-            video_mode::home_aspect(platform, session.display_aspect(), panel_size()),
+            video_mode::home_aspect(platform, session.display_aspect(), session.frame_size(),
+                self.game_square()),
             session.frame_size()))
     }
 
@@ -5875,10 +6133,17 @@ impl Engine {
         use crate::settings::Bezel;
         use video_mode::WatomskFit;
         let platform=self.current_cart_platform();
-        let bezel=self.game_settings().bezel_for(platform);
+        // AUTO: the Neo Geo Pocket Color or WonderSwan Color logo for a
+        // Color game, the plain one otherwise.
+        let colour=self.game.as_ref().is_some_and(GameSession::colour);
+        let bezel=match self.game_settings().bezel_for(platform) {
+            Bezel::NgpAuto=>if colour {Bezel::NgpColor} else {Bezel::Ngp},
+            Bezel::WsAuto=>if colour {Bezel::WsColor} else {Bezel::Ws},
+            bezel=>bezel,
+        };
         let panel=panel_size();
         let fit=video_mode::watomsk_fit(bezel,platform,self.video_mode,panel,self.home_shape());
-        let top=matches!(fit,Some(WatomskFit::Band(_)));
+        let top=matches!(fit,Some(WatomskFit::Band(_)|WatomskFit::Own(slot_ui::own_overlay::Place::Band,_)));
         if top!=self.picture_top {
             self.picture_top=top;
             self.apply_video_geometry();
@@ -5904,25 +6169,25 @@ impl Engine {
             (key,fit_overlay(&slot_bezel_sized(&master,(mw,mh)),panel,window))
         } else {
             let fit=fit?;
-            let design=bezel.watomsk()?;
             let key=(bezel,platform,panel,rect(match fit {
-                WatomskFit::Side(_,r)|WatomskFit::Band(r)=>r,
+                WatomskFit::Side(_,r)|WatomskFit::Band(r)|WatomskFit::Own(_,r)=>r,
             }));
             // On the KONKR the 3:2 game frame is the whole panel.
             let area=if fitted_canvas() {whole} else {slot_gfx::default_area()};
             if let Some((tex,fitted))=self.fitted_bezel {
                 if fitted==key {return Some((tex,area));}
             }
-            use slot_ui::{watomsk, fit_overlay::{fit_band, fit_overlay}};
+            use slot_ui::{watomsk, own_overlay, fit_overlay::{fit_band, fit_overlay}};
             let rgba=match fit {
                 WatomskFit::Side(shape,window)=>{
-                    let side=watomsk::side(design,shape)?;
+                    let side=watomsk::side(bezel.watomsk()?,shape)?;
                     fit_overlay(&side.art(),panel,window)
                 }
                 WatomskFit::Band(pic)=>{
-                    let band=watomsk::band(design)?;
+                    let band=watomsk::band(bezel.watomsk()?)?;
                     fit_band(&band.art(),panel,pic)
                 }
+                WatomskFit::Own(place,pic)=>own_overlay::draw(bezel.own(colour)?,place,panel,pic)?,
             };
             let tex=self.bezel_texture(panel,&rgba);
             self.fitted_bezel=Some((tex,key));
@@ -5948,7 +6213,18 @@ impl Engine {
     }
     fn screen_rows_on(platform: Platform, panel: (u32,u32))-> &'static [usize] {
         let bezel=video_mode::bezel_offered(platform,panel);
+        // A system whose shape the panel already has offers no Screen Size,
+        // in game as on its Settings page (Siham 2026-11-21).
+        let fits=video_mode::screen_fits(platform,panel);
         match (platform,bezel) {
+            (Platform::Snes|Platform::Md|Platform::Ws|Platform::Lynx,false) if fits=>&[124],
+            (Platform::Snes|Platform::Md|Platform::Ws|Platform::Lynx,true) if fits=>&[124,90],
+            // The Pokemon mini has no Shader: its LCD Filter is the core's
+            // own (Siham 2026-11-22), in the rows after these.
+            (Platform::Pokemini,false) if fits=>&[],
+            (Platform::Pokemini,true) if fits=>&[90],
+            (Platform::Pokemini,false)=>&[120],
+            (Platform::Pokemini,true)=>&[120,90],
             (Platform::Gba,false)=>&[34,29],
             (Platform::Gba,true)=>&[34,29,90],
             (Platform::Gbc,false)=>&[88,29],
@@ -5963,6 +6239,13 @@ impl Engine {
             (Platform::Nes,true)=>&[124,90],
             (Platform::Snes|Platform::Md,false)=>&[120,124],
             (Platform::Snes|Platform::Md,true)=>&[120,124,90],
+            // Master System, Game Gear and Neo Geo Pocket size with L1/R1,
+            // as the NES; the WonderSwan's L1/R1 are its Y buttons, the
+            // Lynx's its Options, the Pokemon mini's Shake and C.
+            (Platform::Sms|Platform::Gg|Platform::Ngp,false)=>&[124],
+            (Platform::Sms|Platform::Gg|Platform::Ngp,true)=>&[124,90],
+            (Platform::Ws|Platform::Lynx,false)=>&[120,124],
+            (Platform::Ws|Platform::Lynx,true)=>&[120,124,90],
         }
     }
     fn screen_keys(platform: Platform)-> &'static [usize] {
@@ -5970,7 +6253,18 @@ impl Engine {
     }
     fn screen_keys_on(platform: Platform, panel: (u32,u32))-> &'static [usize] {
         let bezel=video_mode::bezel_offered(platform,panel);
+        let fits=video_mode::screen_fits(platform,panel);
         match (platform,bezel) {
+            (Platform::Snes,false) if fits=>&[48],
+            (Platform::Md,false) if fits=>&[49],
+            (Platform::Snes,true) if fits=>&[48,45],
+            (Platform::Md,true) if fits=>&[49,46],
+            (Platform::Ws,false) if fits=>&[SHADER_WS_KEY],
+            (Platform::Ws,true) if fits=>&[SHADER_WS_KEY,BEZEL_WS_KEY],
+            (Platform::Lynx,false) if fits=>&[SHADER_LYNX_KEY],
+            (Platform::Lynx,true) if fits=>&[SHADER_LYNX_KEY,BEZEL_LYNX_KEY],
+            (Platform::Pokemini,false) if fits=>&[],
+            (Platform::Pokemini,true) if fits=>&[BEZEL_POKEMINI_KEY],
             (Platform::Gba,false)=>&[0,22],
             (Platform::Gba,true)=>&[0,22,25],
             (Platform::Gbc,false)=>&[21,23],
@@ -5983,6 +6277,18 @@ impl Engine {
             (Platform::Nes,true)=>&[47,44],
             (Platform::Snes,true)=>&[SCREEN_SIZE_KEY,48,45],
             (Platform::Md,true)=>&[SCREEN_SIZE_KEY,49,46],
+            (Platform::Sms,false)=>&[SHADER_SMS_KEY],
+            (Platform::Sms,true)=>&[SHADER_SMS_KEY,BEZEL_SMS_KEY],
+            (Platform::Gg,false)=>&[SHADER_GG_KEY],
+            (Platform::Gg,true)=>&[SHADER_GG_KEY,BEZEL_GG_KEY],
+            (Platform::Ngp,false)=>&[SHADER_NGP_KEY],
+            (Platform::Ngp,true)=>&[SHADER_NGP_KEY,BEZEL_NGP_KEY],
+            (Platform::Ws,false)=>&[SCREEN_SIZE_KEY,SHADER_WS_KEY],
+            (Platform::Ws,true)=>&[SCREEN_SIZE_KEY,SHADER_WS_KEY,BEZEL_WS_KEY],
+            (Platform::Lynx,false)=>&[SCREEN_SIZE_KEY,SHADER_LYNX_KEY],
+            (Platform::Lynx,true)=>&[SCREEN_SIZE_KEY,SHADER_LYNX_KEY,BEZEL_LYNX_KEY],
+            (Platform::Pokemini,false)=>&[SCREEN_SIZE_KEY],
+            (Platform::Pokemini,true)=>&[SCREEN_SIZE_KEY,BEZEL_POKEMINI_KEY],
         }
     }
     // Settings > Systems opens with the system's default core, then its
@@ -6003,35 +6309,125 @@ impl Engine {
         keys.push(Settings::blending_key(platform));
         (rows, keys)
     }
+    /// The 3.0 systems' own core options (3.0.0-materials3), as row
+    /// labels and Settings keys. `in_game` leaves out what needs the game
+    /// restarted (the Neo Geo Pocket's language).
+    fn extra_rows(platform: Platform, in_game: bool) -> (Vec<usize>, Vec<usize>) {
+        use crate::settings::{SPRITE_LIMIT_SMS_KEY, SPRITE_LIMIT_GG_KEY, NGP_LANGUAGE_KEY,
+            WS_PALETTE_KEY, POKEMINI_PALETTE_KEY, POKEMINI_LCD_MODE_KEY, LEFT_BAR_SMS_KEY,
+            FM_SMS_KEY, WS_LANGUAGE_KEY, POKEMINI_SHAKE_KEY, LEFT_BAR_NES_KEY,
+            NES_AUDIO_FILTER_KEY, MD_FM_SOUND_KEY, WS_AUDIO_FILTER_KEY};
+        // What changes the picture shows in game too (Siham 2026-11-22);
+        // sound and language, read when the game starts, only here.
+        let (mut rows, mut keys): (Vec<usize>, Vec<usize>) = match platform {
+            Platform::Sms => (vec![164, 168], vec![SPRITE_LIMIT_SMS_KEY, LEFT_BAR_SMS_KEY]),
+            Platform::Gg => (vec![164], vec![SPRITE_LIMIT_GG_KEY]),
+            Platform::Nes => (vec![175], vec![LEFT_BAR_NES_KEY]),
+            Platform::Ws => (vec![171], vec![WS_PALETTE_KEY]),
+            Platform::Pokemini => (vec![163, 172, 166, 170],
+                vec![POKEMINI_FILTER_KEY, POKEMINI_PALETTE_KEY, POKEMINI_LCD_MODE_KEY, POKEMINI_SHAKE_KEY]),
+            _ => (Vec::new(), Vec::new()),
+        };
+        if !in_game {
+            match platform {
+                Platform::Sms => { rows.push(169); keys.push(FM_SMS_KEY); }
+                Platform::Nes => { rows.push(176); keys.push(NES_AUDIO_FILTER_KEY); }
+                Platform::Md => { rows.push(169); keys.push(MD_FM_SOUND_KEY); }
+                Platform::Ngp => { rows.push(165); keys.push(NGP_LANGUAGE_KEY); }
+                Platform::Ws => {
+                    rows.push(165); keys.push(WS_LANGUAGE_KEY);
+                    rows.push(176); keys.push(WS_AUDIO_FILTER_KEY);
+                }
+                _ => {}
+            }
+        }
+        (rows, keys)
+    }
     /// A system's page: its own rows, LCD Effect or Dither Blending, Frame
-    /// Blending, then Controls (a page).
+    /// Blending, its own options, then Controls (a page).
     fn system_page_rows(platform: Platform) -> Vec<usize> {
-        let mut rows = Self::system_rows(platform).to_vec();
-        rows.extend(Self::look_rows(platform).0);
-        rows.push(125);
-        rows
+        Self::system_page(platform).0
     }
     fn system_page_keys(platform: Platform) -> Vec<usize> {
+        Self::system_page(platform).1
+    }
+    fn system_page(platform: Platform) -> (Vec<usize>, Vec<usize>) {
+        let mut rows = Self::system_rows(platform).to_vec();
         let mut keys = Self::system_keys(platform).to_vec();
+        rows.extend(Self::look_rows(platform).0);
         keys.extend(Self::look_rows(platform).1);
+        rows.extend(Self::extra_rows(platform, false).0);
+        keys.extend(Self::extra_rows(platform, false).1);
+        // Bezel, even where the WonderSwan's overlay fits only its upright
+        // games (Siham 2026-11-22).
+        Self::palette_after_shader(&mut rows, &mut keys);
+        Self::blending_before_shake(&mut rows, &mut keys);
+        rows.push(125);
         keys.push(usize::MAX);
-        keys
+        (rows, keys)
     }
     /// The in-game Screen page: its rows, then LCD Effect or Dither
     /// Blending, then Frame Blending.
     fn pause_screen_page_rows(&self) -> Vec<usize> {
-        let mut rows = self.pause_screen_rows().to_vec();
-        // A GBA Video cart has no LCD Effect and no Frame Blending.
-        if !self.playing_video() {
-            rows.extend(Self::look_rows(self.current_cart_platform()).0);
-        }
-        rows
+        self.pause_screen_page().0
     }
     fn pause_screen_page_key(&self, row: usize) -> Option<usize> {
-        let own = self.pause_screen_rows().len();
-        if row < own { self.pause_screen_key(row) }
-        else if self.playing_video() { None }
-        else { Self::look_rows(self.current_cart_platform()).1.get(row - own).copied() }
+        self.pause_screen_page().1.get(row).copied()
+    }
+    /// The in-game Screen page's rows and their Settings keys, side by side.
+    fn pause_screen_page(&self) -> (Vec<usize>, Vec<usize>) {
+        let own = self.pause_screen_rows();
+        let mut rows = Vec::new();
+        let mut keys = Vec::new();
+        for (row, &label) in own.iter().enumerate() {
+            if let Some(key) = self.pause_screen_key(row) { rows.push(label); keys.push(key); }
+        }
+        // A GBA Video cart has no LCD Effect and no Frame Blending.
+        if !self.playing_video() {
+            let platform = self.current_cart_platform();
+            let (look_rows, look_keys) = Self::look_rows(platform);
+            rows.extend(look_rows); keys.extend(look_keys);
+            let (extra_rows, extra_keys) = Self::extra_rows(platform, true);
+            rows.extend(extra_rows); keys.extend(extra_keys);
+            // A 3.0 game's Bezel row only when this game has room for its
+            // overlay: on the KPA a WonderSwan game held upright has, one
+            // played across has none (Siham 2026-11-22).
+            if matches!(platform, Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
+                | Platform::Lynx | Platform::Pokemini) && !self.game_has_bezel_room() {
+                while let Some(at) = keys.iter().position(|&k| Settings::bezel_platform(k).is_some()) {
+                    rows.remove(at); keys.remove(at);
+                }
+            }
+            Self::palette_after_shader(&mut rows, &mut keys);
+            Self::blending_before_shake(&mut rows, &mut keys);
+        }
+        (rows, keys)
+    }
+    /// The Pokemon mini's Frame Blending second to last, before Screen
+    /// Shake (Siham 2026-11-22).
+    fn blending_before_shake(rows: &mut Vec<usize>, keys: &mut Vec<usize>) {
+        let Some(from) = keys.iter().position(|&k| k == Settings::blending_key(Platform::Pokemini))
+            else { return };
+        let Some(shake) = keys.iter().position(|&k| k == crate::settings::POKEMINI_SHAKE_KEY)
+            else { return };
+        if from > shake { return; }
+        let (row, key) = (rows.remove(from), keys.remove(from));
+        rows.insert(shake - 1, row); keys.insert(shake - 1, key);
+    }
+    /// Whether the game played has room on this screen for its system's own
+    /// overlay (its own shape: a WonderSwan game is wide or upright).
+    fn game_has_bezel_room(&self) -> bool {
+        let (aspect, frame) = self.home_shape();
+        video_mode::own_place(aspect, frame, VideoMode::Aspect, panel_size()).is_some()
+    }
+    /// WS Palette straight after the Shader row (Siham 2026-11-22); the
+    /// Pokemon mini's PK Palette already follows its LCD Filter.
+    fn palette_after_shader(rows: &mut Vec<usize>, keys: &mut Vec<usize>) {
+        let Some(from) = keys.iter().position(|&k| k == crate::settings::WS_PALETTE_KEY) else { return };
+        let Some(shader) = keys.iter().position(|&k| k == SHADER_WS_KEY) else { return };
+        let (row, key) = (rows.remove(from), keys.remove(from));
+        let to = if from < shader { shader } else { shader + 1 };
+        rows.insert(to, row); keys.insert(to, key);
     }
     fn system_rows(platform: Platform)-> &'static [usize] {
         Self::system_rows_on(platform,panel_size())
@@ -6052,6 +6448,17 @@ impl Engine {
             (Platform::Nes|Platform::Snes|Platform::Md,true,_)=>&[118,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,false)=>&[118,120,124],
             (Platform::Nes|Platform::Snes|Platform::Md,false,true)=>&[118,120,124,90],
+            (Platform::Sms|Platform::Gg|Platform::Ngp|Platform::Lynx,true,_)=>&[118,124],
+            (Platform::Sms|Platform::Gg|Platform::Ngp|Platform::Lynx,false,false)=>&[118,120,124],
+            (Platform::Sms|Platform::Gg|Platform::Ngp|Platform::Lynx,false,true)=>&[118,120,124,90],
+            // One core only: no Default Core row.
+            (Platform::Ws,true,_)=>&[124],
+            (Platform::Ws,false,false)=>&[120,124],
+            (Platform::Ws,false,true)=>&[120,124,90],
+            // No Shader: its LCD Filter follows, with its own options.
+            (Platform::Pokemini,true,_)=>&[],
+            (Platform::Pokemini,false,false)=>&[120],
+            (Platform::Pokemini,false,true)=>&[120,90],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -6079,12 +6486,34 @@ impl Engine {
             (Platform::Md,true,_)=>&[43,49],
             (Platform::Md,false,false)=>&[43,SCREEN_SIZE_KEY,49],
             (Platform::Md,false,true)=>&[43,SCREEN_SIZE_KEY,49,46],
+            (Platform::Sms,true,_)=>&[CORE_SMS_KEY,SHADER_SMS_KEY],
+            (Platform::Sms,false,false)=>&[CORE_SMS_KEY,SCREEN_SIZE_KEY,SHADER_SMS_KEY],
+            (Platform::Sms,false,true)=>&[CORE_SMS_KEY,SCREEN_SIZE_KEY,SHADER_SMS_KEY,BEZEL_SMS_KEY],
+            (Platform::Gg,true,_)=>&[CORE_GG_KEY,SHADER_GG_KEY],
+            (Platform::Gg,false,false)=>&[CORE_GG_KEY,SCREEN_SIZE_KEY,SHADER_GG_KEY],
+            (Platform::Gg,false,true)=>&[CORE_GG_KEY,SCREEN_SIZE_KEY,SHADER_GG_KEY,BEZEL_GG_KEY],
+            (Platform::Ngp,true,_)=>&[CORE_NGP_KEY,SHADER_NGP_KEY],
+            (Platform::Ngp,false,false)=>&[CORE_NGP_KEY,SCREEN_SIZE_KEY,SHADER_NGP_KEY],
+            (Platform::Ngp,false,true)=>&[CORE_NGP_KEY,SCREEN_SIZE_KEY,SHADER_NGP_KEY,BEZEL_NGP_KEY],
+            (Platform::Ws,true,_)=>&[SHADER_WS_KEY],
+            (Platform::Ws,false,false)=>&[SCREEN_SIZE_KEY,SHADER_WS_KEY],
+            (Platform::Ws,false,true)=>&[SCREEN_SIZE_KEY,SHADER_WS_KEY,BEZEL_WS_KEY],
+            (Platform::Lynx,true,_)=>&[CORE_LYNX_KEY,SHADER_LYNX_KEY],
+            (Platform::Lynx,false,false)=>&[CORE_LYNX_KEY,SCREEN_SIZE_KEY,SHADER_LYNX_KEY],
+            (Platform::Lynx,false,true)=>&[CORE_LYNX_KEY,SCREEN_SIZE_KEY,SHADER_LYNX_KEY,BEZEL_LYNX_KEY],
+            (Platform::Pokemini,true,_)=>&[],
+            (Platform::Pokemini,false,false)=>&[SCREEN_SIZE_KEY],
+            (Platform::Pokemini,false,true)=>&[SCREEN_SIZE_KEY,BEZEL_POKEMINI_KEY],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
         match key {
             29=>Some(Platform::Gba), 30=>Some(Platform::Gbc), 31=>Some(Platform::Gb),
             41=>Some(Platform::Nes), 42=>Some(Platform::Snes), 43=>Some(Platform::Md),
+            crate::settings::CORE_SMS_KEY=>Some(Platform::Sms),
+            crate::settings::CORE_GG_KEY=>Some(Platform::Gg),
+            crate::settings::CORE_NGP_KEY=>Some(Platform::Ngp),
+            crate::settings::CORE_LYNX_KEY=>Some(Platform::Lynx),
             _=>None,
         }
     }
@@ -6099,7 +6528,7 @@ impl Engine {
     fn cycle_system_video_mode(&mut self, platform: Platform, right: bool) {
         let at=platform as usize;
         let now=self.system_video_modes[at];
-        let mode=if right { now.bigger() } else { now.smaller() };
+        let mode=if right { now.bigger_on(platform,panel_size()) } else { now.smaller_on(platform,panel_size()) };
         if mode==now { return; }
         let paths=PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let Some((root,_))=paths else { return };
@@ -6262,7 +6691,11 @@ impl Engine {
         let dither = platform == Platform::Md && self.game_dither();
         let Some(session) = self.game.as_mut() else { return };
         session.set_frame_blending(blending);
-        if !session.redraw_paused() { return; }
+        // The frames before the last one go through slot.'s Frame Blending
+        // as in play: the paused picture mixes with its own game's frames,
+        // not with what was shown before the change.
+        let (mode, blend) = (session.slot_blending(), &mut self.frame_blend);
+        if !session.redraw_paused(|frame, size| { blend.apply(mode, frame, size); }) { return; }
         if session.frame_size() == (slot_retro::GBA_W, slot_retro::GBA_H)
             && session.display_aspect() <= 0.0 {
             self.gpu.upload_game(session.frame());
@@ -6276,7 +6709,9 @@ impl Engine {
 
     fn change_game_screen_or_gameplay(&mut self, key: usize, right: bool) {
         if key == SCREEN_SIZE_KEY {
-            let mode = if right { self.video_mode.bigger() } else { self.video_mode.smaller() };
+            let (platform, panel) = (self.current_cart_platform(), panel_size());
+            let mode = if right { self.video_mode.bigger_on(platform, panel) }
+                else { self.video_mode.smaller_on(platform, panel) };
             if mode != self.video_mode {
                 self.set_video_mode(mode);
                 self.hud.toast(self.video_mode_toast(), self.born.elapsed().as_millis() as u64);
@@ -6296,8 +6731,17 @@ impl Engine {
         let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
-        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70)) {
+        if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70
+            |crate::settings::SHADER_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY)) {
             set_message("Not available during Multiplayer.".into());
+            return;
+        }
+        // The 3.0 systems' sound and language are the system's (read when a
+        // game starts); their picture options are this game's, below.
+        if matches!(key, crate::settings::NGP_LANGUAGE_KEY | crate::settings::WS_LANGUAGE_KEY
+            | crate::settings::FM_SMS_KEY) {
+            if !self.settings.change(key,right) { return; }
+            self.persist_settings();
             return;
         }
         // This method is only called from the paused game, not the carousel.
@@ -6319,9 +6763,18 @@ impl Engine {
         }
         if !save_profile_later(profile, &uri, core) { return; }
         self.game_emulation=Some(profile);
+        if (crate::settings::POKEMINI_FILTER_KEY..=crate::settings::POKEMINI_SHAKE_KEY).contains(&key)
+            || key == crate::settings::LEFT_BAR_NES_KEY {
+            // The core takes the game's own values at its next frame.
+            let extras=crate::settings::CoreExtras::of(&self.game_settings());
+            if let Some(session)=self.game.as_mut() { session.apply_core_extras(extras,platform); }
+        }
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
-        if matches!(key,0|1|3|21|47|48|49|66..=68|70) {
+        if matches!(key,0|1|3|21|47|48|49|66..=68|70) || matches!(key,
+            crate::settings::SHADER_SMS_KEY|crate::settings::SHADER_GG_KEY
+            |crate::settings::SHADER_NGP_KEY|crate::settings::SHADER_WS_KEY
+            |crate::settings::SHADER_LYNX_KEY|crate::settings::SHADER_POKEMINI_KEY) {
             self.apply_game_look();
         }
         // A shader change can switch to/from a preset with its own GBA Color.
@@ -6476,6 +6929,9 @@ impl Engine {
         let globals=self.game_settings();
         let platform=self.current_cart_platform();
         self.apply_game_look();
+        // The 3.0 picture options back to the system's.
+        let extras=crate::settings::CoreExtras::of(&globals);
+        if let Some(session)=self.game.as_mut() { session.apply_core_extras(extras,platform); }
         if let Some(session)=self.game.as_mut() {
             session.set_colour_correction(globals.shader_for(platform)
                 .core_colour(globals.colour_for(platform)));
@@ -6486,6 +6942,7 @@ impl Engine {
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
     fn persist_settings(&self) {
+        crate::settings::CoreExtras::store(&self.settings);
         if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             let (root, settings) = (root.clone(), self.settings.clone());
             crate::later_write::write(root.join("Settings.json"), move || {
@@ -6608,6 +7065,7 @@ impl Engine {
             .map(|shelf| shelf.carts.as_slice()).collect()
     }
     fn toggle_favorite(&mut self) {
+        if self.selected_test_cart() { return; }
         let Some(uri)=self.selected_rom_uri() else {return};
         let Some(root)=Self::recents_root() else {return};
         match crate::favorites::toggle(&root,&uri) {
@@ -6713,6 +7171,23 @@ impl Engine {
                 }
             }
         }
+    }
+    /// Interface > 3.0 Test Shelf turned on or off (3.0.0-cartes1).
+    fn rebuild_test_shelf(&mut self) {
+        let carts = if self.settings.test_shelf { test_carts() } else { Vec::new() };
+        let Some(shelf) = self.shelves.get_mut(TEST_RACK) else { return };
+        if shelf.carts == carts { return; }
+        self.cart_render.invalidate_shelf(TEST_RACK);
+        let moves = self.shelves[TEST_RACK].update_carts(carts);
+        self.rekey_rack_visuals(TEST_RACK, &moves);
+        if self.active == TEST_RACK && self.shelves[TEST_RACK].carts.is_empty() {
+            self.active = self.next_shelf(0, 1);
+        }
+    }
+    /// The selected cart is one of the 3.0 test shelf's.
+    fn selected_test_cart(&self) -> bool {
+        let shelf = &self.shelves[self.active];
+        shelf.carts.get(shelf.index).is_some_and(slot_ui::is_test_cart)
     }
     fn rebuild_recents(&mut self) {
         let Some(root)=Self::recents_root() else { return };
@@ -6877,6 +7352,11 @@ impl Engine {
             87 => {
                 self.settings.show_titles=!self.settings.show_titles;
                 self.selected_title_name.clear();
+                self.persist_settings();
+            }
+            156 => {
+                self.settings.test_shelf=!self.settings.test_shelf;
+                self.rebuild_test_shelf();
                 self.persist_settings();
             }
             58 if confirm => self.overlay = ShelfOverlay::InterfaceSettings { row: 0 },
@@ -7488,7 +7968,18 @@ impl Engine {
             2 => self.setting_values[4],
             _ => self.setting_values[5],
         };
-        vec![(SAVES_SHARE_ROW, self.setting_values[share], true), (SAVES_ROMM_ROW, romm, true)]
+        let states = match ROMM_STATES.load(Ordering::Acquire) {
+            2 => self.setting_values[4],
+            _ => self.setting_values[5],
+        };
+        vec![(SAVES_SHARE_ROW, self.setting_values[share], true), (SAVES_ROMM_ROW, romm, true),
+            (SAVES_STATES_ROW, states, true)]
+    }
+
+    /// Saves & States' row shown but idle: Sync States with RomM while Sync
+    /// Saves with RomM is off.
+    fn saves_row_idle(at: usize) -> bool {
+        at == SAVES_STATES_ROW && ROMM_STATES.load(Ordering::Acquire) == 3
     }
 
     /// A value's short form when the whole one has no room at `scale`,
@@ -7530,7 +8021,8 @@ impl Engine {
         // Its row among the six shown while the page scrolls.
         let Some((dy, shows)) = self.menu_row_place(at, rows) else { return };
         let right = out_w() as f32 - 34.0;
-        let selected = row == at;
+        let idle = heading == 151 && Self::saves_row_idle(at);
+        let selected = row == at && !idle;
         let carets = toggle && selected;
         let caret = if toggle { self.setting_carets[0].1 as f32 + 8.0 } else { 0.0 };
         // Past its label, a gap and the left caret: a little too long, up
@@ -7549,7 +8041,7 @@ impl Engine {
             + height as f32 * (0.79 - scale) / 2.0;
         let w = width as f32 * scale;
         let end = right - if carets { 22.0 } else { 0.0 };
-        let alpha = shows * if selected { 1.0 } else { menu_look::ROW_REST };
+        let alpha = shows * if selected { 1.0 } else if idle { 0.3 } else { menu_look::ROW_REST };
         let x = if end - w >= from {
             out.push(Draw::Tex { x: end - w, y, w, h: height as f32 * scale, tex, alpha });
             end - w
@@ -7805,6 +8297,15 @@ impl Engine {
     /// The game's system has a Screen Size (the screen hasn't the system's
     /// own shape, as Systems > Screen Size), so L1 / R1 size the picture
     /// on the in-game Screen page, row or not.
+    /// A 3.0 system's option the paused game shows at once, redrawn.
+    fn previewed_extra(key: usize) -> bool {
+        use crate::settings::*;
+        matches!(key, SPRITE_LIMIT_SMS_KEY | SPRITE_LIMIT_GG_KEY | LEFT_BAR_SMS_KEY | LEFT_BAR_NES_KEY
+            | WS_PALETTE_KEY
+            | POKEMINI_PALETTE_KEY | POKEMINI_FILTER_KEY | POKEMINI_LCD_MODE_KEY)
+            || (SHADER_SMS_KEY..=SHADER_GG_KEY).contains(&key)
+            || matches!(key, SHADER_NGP_KEY | SHADER_WS_KEY | SHADER_LYNX_KEY | SHADER_POKEMINI_KEY)
+    }
     fn screen_page_sizes(&self) -> bool {
         !video_mode::screen_fits(self.current_cart_platform(), panel_size())
     }
@@ -7908,7 +8409,8 @@ impl Engine {
             let x = 37.0;
             let y = top + dy + 8.0 + (1.0 - fade) * 8.0;
             let chosen = i == selected;
-            let idle = heading == 148 && self.general_row_dimmed(index);
+            let idle = (heading == 148 && self.general_row_dimmed(index))
+                || (heading == 151 && Self::saves_row_idle(i));
             let alpha = fade * shows * if idle { 0.4 } else if chosen { 1.0 } else { menu_look::ROW_REST };
             let opens = self.menu_row_opens(heading, index);
             match scales.get(i) {
@@ -8368,7 +8870,7 @@ impl Engine {
             ShelfOverlay::GameMenu { row } => {
                 let linked = self.game.as_ref().is_some_and(GameSession::linked);
                 let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
-                let indices: Vec<usize> = pause_rows(linked, relaunch).iter()
+                let indices: Vec<usize> = pause_rows(linked, relaunch, self.multiplayer_offered()).iter()
                     .map(|item| pause_row_text(*item, relaunch)).collect();
                 self.draw_original_style_menu(19, &indices, row, out);
             }
@@ -8452,6 +8954,12 @@ impl Engine {
                 Platform::Nes => self.home_chip_blanks[0],
                 Platform::Snes => self.home_chip_blanks[1],
                 Platform::Md => self.home_chip_blanks[2],
+                Platform::Sms => self.home_chip_blanks[3],
+                Platform::Gg => self.home_chip_blanks[4],
+                Platform::Ngp => self.home_chip_blanks[5],
+                Platform::Ws => self.home_chip_blanks[6],
+                Platform::Lynx => self.home_chip_blanks[7],
+                Platform::Pokemini => self.home_chip_blanks[8],
                 _ => self.pak_chip_blank,
             };
             (&self.pak_chip_textures, blank)
@@ -8485,7 +8993,9 @@ impl Engine {
         if front.is_some() { behind = [None, None]; }
         let face=grown(lid,TURN_PAD as f32*lid.w/slot_ui::body_box(shape).0 as f32);
         for tex in behind.into_iter().flatten()
-            .chain(front.or_else(||shelf.face(shelf.index))) {
+            .chain(front
+                .or_else(|| self.picker_lid.0.filter(|_| self.picker_lid.1))
+                .or_else(|| shelf.face(shelf.index))) {
             out.push(Draw::Turned {
                 x:face.x,y:face.y,w:face.w,h:face.h,
                 tex,alpha:1.0,turn,
@@ -8871,7 +9381,8 @@ impl Engine {
             ShelfOverlay::SavesStates { row } => (33u8, row, SAVES_ROWS.len()),
             ShelfOverlay::GameMenu { row } => (3u8, row, pause_rows(
                 self.game.as_ref().is_some_and(GameSession::linked),
-                self.game.as_ref().is_some_and(GameSession::requires_relaunch)).len()),
+                self.game.as_ref().is_some_and(GameSession::requires_relaunch),
+                self.multiplayer_offered()).len()),
             ShelfOverlay::PauseSettings { row } => (13u8, row, self.pause_settings_rows().len()),
             ShelfOverlay::PauseScreenSettings { row } =>
                 (14u8, row, self.pause_screen_page_rows().len()),
@@ -9023,9 +9534,10 @@ impl Engine {
                         .get(self.shelves[self.active].index)
                         .map_or("", |cart| cart.stem.as_str());
                     let platform = self.current_cart_platform();
+                    let square = self.game_square();
                     self.video_mode = PATHS.lock().unwrap_or_else(|e| e.into_inner())
                         .as_ref().map_or(video_mode::default_mode(platform, panel_size()),
-                            |(root, _)| video_mode::video_mode_for(root, name, platform, panel_size()));
+                            |(root, _)| video_mode::video_mode_for(root, name, platform, panel_size(), square));
                     self.apply_video_geometry();
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
@@ -9427,8 +9939,10 @@ impl Engine {
                     let picture = self.frame_blend.apply(session.slot_blending(), session.frame(), size);
                     let picture = if dither { self.dither_blend.apply(picture, size) } else { picture };
                     self.gpu.upload_game_sized(picture, size);
+                    let square = video_mode::square_game(cart_platform, panel_size(),
+                        session.square_listed());
                     self.gpu.set_game_fit(video_mode::home_fit(cart_platform, self.video_mode,
-                        session.display_aspect(), session.frame_size(), panel_size()));
+                        session.display_aspect(), session.frame_size(), square));
                 }
                 frame_phases.gpu_upload_us = upload_started.elapsed().as_micros() as u64;
                 RUMBLE_STRENGTH.store(
@@ -9684,7 +10198,9 @@ impl Engine {
                                 RECENTS_RACK=>self.recents_platform_face,
                                 FAVORITES_RACK=>self.favorites_platform_face,
                                 VIDEO_RACK=>self.video_platform_face,
-                                index=>self.platform_faces[index],
+                                TEST_RACK=>self.test_platform_face,
+                                index=>self.platform_faces.get(index).copied()
+                                    .unwrap_or(self.test_platform_face),
                             };
                         Some((face,elapsed,true))
                     } else {
@@ -10056,10 +10572,21 @@ const LINK_PAUSE_ROWS: &[PauseRow] = &[
 const RELAUNCH_PAUSE_ROWS: &[PauseRow] = &[
     PauseRow::SaveEject, PauseRow::Multiplayer,
 ];
-fn pause_rows(linked: bool, requires_relaunch: bool) -> &'static [PauseRow] {
+/// A system with no Multiplayer at all shows no Multiplayer row (Siham
+/// 2026-11-22): the Game Gear (no second pad, no Gear-to-Gear over the
+/// network), the Neo Geo Pocket, the WonderSwan, the Lynx, the Pokemon mini.
+const SOLO_ONLY_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::Resume, PauseRow::States, PauseRow::Cheats,
+    PauseRow::Settings, PauseRow::SaveEject,
+];
+fn multiplayer_offered(platform: Platform) -> bool {
+    !matches!(platform, Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini)
+}
+fn pause_rows(linked: bool, requires_relaunch: bool, offered: bool) -> &'static [PauseRow] {
     if requires_relaunch { RELAUNCH_PAUSE_ROWS }
     else if linked { LINK_PAUSE_ROWS }
-    else { SOLO_PAUSE_ROWS }
+    else if offered { SOLO_PAUSE_ROWS }
+    else { SOLO_ONLY_PAUSE_ROWS }
 }
 fn pause_row_text(row: PauseRow, requires_relaunch: bool) -> usize {
     match row {
@@ -10076,7 +10603,7 @@ fn pause_row_text(row: PauseRow, requires_relaunch: bool) -> usize {
 /// Ejection and resume are never inferred from their displayed row numbers.
 #[cfg(test)]
 fn game_menu_ejects(row: usize, linked: bool, requires_relaunch: bool) -> bool {
-    matches!(pause_rows(linked, requires_relaunch).get(row), Some(PauseRow::SaveEject))
+    matches!(pause_rows(linked, requires_relaunch, true).get(row), Some(PauseRow::SaveEject))
 }
 
 /// The original Slot HUD distinguishes a remote end and a BIOS mismatch.
@@ -10333,7 +10860,7 @@ impl StartJob {
             jobs.extend([StartJob::Band(back), StartJob::Band(front)]);
         }
         for theme in 0..3 {
-            for family in 0..7 {
+            for family in 0..slot_ui::bitmaps::CONSOLE_SLOTS {
                 let (back, front) = home_slot_png(family, theme);
                 jobs.extend([StartJob::Band(back), StartJob::Band(front)]);
             }
@@ -10458,7 +10985,7 @@ fn pick_closer(
     cart: Option<&slot_store::Cart>,
 ) -> Option<slot_ui::SlotCloser> {
     faces?;
-    closers[cart.and_then(slot_ui::bitmaps::home_slot_family)?]
+    closers.get(cart.and_then(slot_ui::bitmaps::home_slot_family)?).copied().flatten()
 }
 
 /// The screen columns the core picker covers at `progress`.
@@ -10492,8 +11019,78 @@ pub(crate) use jni_exports::exercise_session_graphics_recovery;
 /// from setting_face would draw a blank value (the NES/SNES/MD Shader row,
 /// 2026-11-04, after the Default Core rows on 2026-11-02).
 #[cfg(test)]
+mod texture_pool_tests {
+    use super::cyclic_distance;
+
+    #[test]
+    fn the_first_carts_left_neighbour_is_the_last_cart() {
+        assert_eq!(cyclic_distance(0, 9, 10), 1);
+        assert_eq!(cyclic_distance(9, 0, 10), 1);
+        assert_eq!(cyclic_distance(0, 5, 10), 5);
+        assert_eq!(cyclic_distance(3, 4, 10), 1);
+        assert_eq!(cyclic_distance(0, 0, 1), 0);
+        assert_eq!(cyclic_distance(0, 0, 0), 0);
+    }
+}
+
+#[cfg(test)]
 mod settings_value_tests {
     use super::*;
+
+    #[test]
+    fn pokemini_frame_blending_comes_second_to_last() {
+        let keys = Engine::system_page_keys(Platform::Pokemini);
+        let at = |key| keys.iter().position(|&k| k == key).unwrap();
+        let blend = at(Settings::blending_key(Platform::Pokemini));
+        assert_eq!(at(crate::settings::POKEMINI_LCD_MODE_KEY) + 1, blend);
+        assert_eq!(blend + 1, at(crate::settings::POKEMINI_SHAKE_KEY));
+    }
+
+    #[test]
+    fn the_nes_page_offers_hide_side_bars() {
+        let keys = Engine::system_page_keys(Platform::Nes);
+        let at = keys.iter().position(|&k| k == crate::settings::LEFT_BAR_NES_KEY).unwrap();
+        assert_eq!(MENU_TEXT[Engine::system_page_rows(Platform::Nes)[at]], "Hide Side Bars");
+        let mut extras = crate::settings::CoreExtras::default();
+        extras.hide_left_bar_nes = true;
+        for (core, prefix, filter) in [
+            (Core::Fceumm, "fceumm", "fceumm_sndlowpass"),
+            (Core::Nestopia, "nestopia", "nestopia_audio_filter"),
+        ] {
+            let options = extras.options(Platform::Nes, core);
+            assert_eq!(options.len(), 3, "{core:?}: both side bars and audio filter");
+            for side in ["h_left", "h_right"] {
+                let key = format!("{prefix}_overscan_{side}");
+                assert_eq!(options.iter().find(|(name, _)| *name == key).map(|(_, value)| *value),
+                    Some("8"), "{core:?}: {key}");
+            }
+            assert_eq!(options.iter().find(|(name, _)| *name == filter).map(|(_, value)| *value),
+                Some("disabled"), "{core:?}: audio OFF by default");
+            extras.nes_audio_filter = true;
+            assert_eq!(extras.options(Platform::Nes, core).iter()
+                .find(|(name, _)| *name == filter).map(|(_, value)| *value),
+                Some("enabled"), "{core:?}: audio filter ON");
+            extras.nes_audio_filter = false;
+        }
+    }
+
+    #[test]
+    fn a_games_own_option_shows_its_own_value() {
+        use crate::settings::*;
+        let system = Settings::default();
+        let mut game = system.clone();
+        game.hide_left_bar_sms = !system.hide_left_bar_sms;
+        game.no_sprite_limit_gg = !system.no_sprite_limit_gg;
+        game.ws_palette = 2;
+        game.pokemini_no_shake = !system.pokemini_no_shake;
+        let profile = EmulationProfile::from_settings(&system);
+        for (key, cart) in [(LEFT_BAR_SMS_KEY, Platform::Sms), (SPRITE_LIMIT_GG_KEY, Platform::Gg),
+            (WS_PALETTE_KEY, Platform::Ws), (POKEMINI_SHAKE_KEY, Platform::Pokemini)] {
+            let shown = |scoped: &Settings| setting_face(key, &system, scoped, &profile, cart,
+                VideoMode::Aspect, &[]);
+            assert_ne!(shown(&game), shown(&system), "key {key}: the game's own value");
+        }
+    }
 
     #[test]
     fn each_system_page_is_titled_with_its_own_name() {
@@ -10535,6 +11132,24 @@ mod settings_value_tests {
     const PANELS: [(u32, u32); 7] = [(960, 640), (1240, 1080), (1920, 1080),
         (720, 720), (1024, 768), (1280, 720), (1920, 1152)];
 
+    #[test]
+    fn every_system_has_its_settings_page_on_every_screen() {
+        // The screens slot. ships on (systems_table_tests::SCREENS).
+        assert_eq!(PANELS, crate::systems_table_tests::SCREENS.map(|(_, panel)| panel));
+        let mut order = SYSTEM_ORDER.to_vec();
+        order.sort_by_key(|p| *p as usize);
+        assert_eq!(order, Platform::ALL, "Settings > Systems lists every system once");
+        for platform in Platform::ALL {
+            for panel in PANELS {
+                // The Pokemon mini's rows may all be its own options.
+                assert!(!Engine::system_keys_on(platform, panel).is_empty()
+                    || !Engine::extra_rows(platform, false).1.is_empty(), "{platform:?} on {panel:?}");
+                assert!(!Engine::screen_keys_on(platform, panel).is_empty()
+                    || !Engine::extra_rows(platform, true).1.is_empty(), "{platform:?} game menu on {panel:?}");
+            }
+        }
+    }
+
     fn menu_keys() -> Vec<(String, usize, Platform)> {
         let mut keys = Vec::new();
         for platform in Platform::ALL {
@@ -10552,6 +11167,15 @@ mod settings_value_tests {
                 }
                 for key in screen.1 {
                     keys.push((format!("{platform:?} game menu > Screen on {panel:?}"), *key, platform));
+                }
+            }
+            // The 3.0 systems' own options, each with a label and a value.
+            for in_game in [false, true] {
+                let (rows, extras) = Engine::extra_rows(platform, in_game);
+                assert_eq!(rows.len(), extras.len(), "{platform:?}: own options' rows and values differ");
+                assert!(rows.iter().all(|&row| row < MENU_TEXT.len()), "{platform:?}: own option label");
+                for key in extras {
+                    keys.push((format!("{platform:?} own options (in game {in_game})"), key, platform));
                 }
             }
             for key in GAMEPLAY_KEYS {
@@ -10608,9 +11232,16 @@ mod settings_value_tests {
         }
         use crate::settings::Bezel;
         for bezel in Bezel::GB.into_iter().chain(Bezel::GBC).chain(Bezel::GBA)
-            .chain(Bezel::NES).chain(Bezel::SNES).chain(Bezel::MD) {
+            .chain(Bezel::NES).chain(Bezel::SNES).chain(Bezel::MD)
+            .chain(Bezel::SMS).chain(Bezel::GG).chain(Bezel::NGP).chain(Bezel::WS)
+            .chain(Bezel::LYNX).chain(Bezel::POKEMINI) {
             assert!(bezel_value(bezel) < SETTING_VALUE_NAMES.len(), "{bezel:?}");
         }
+        // slot.'s own: each its own name, AUTO for the two that follow the game.
+        assert_eq!(SETTING_VALUE_NAMES[bezel_value(Bezel::NgpAuto)], "AUTO");
+        assert_eq!(SETTING_VALUE_NAMES[bezel_value(Bezel::WsColor)], "WONDERSWAN COLOR");
+        assert_eq!(SETTING_VALUE_NAMES[bezel_value(Bezel::PokemonMini)], "POKEMON MINI");
+        assert_eq!(SETTING_VALUE_NAMES[ROTATE_VALUES], "INSERTED CART");
     }
 }
 
@@ -10648,5 +11279,51 @@ mod library_update_tests {
         assert_eq!(engine.library_version, 3);
         assert!(!engine.update_library(4, Some(&renamed(&["CC", "BB", "AA"], "Other"))),
                 "the same ROMs with another title build everything again");
+    }
+}
+
+
+#[cfg(test)]
+mod audio_and_refresh_parity_tests {
+    use super::*;
+
+    #[test]
+    fn audio_options_appear_only_in_system_settings_not_paused_game() {
+        use crate::settings::{NES_AUDIO_FILTER_KEY, MD_FM_SOUND_KEY, WS_AUDIO_FILTER_KEY};
+        for (platform, key) in [
+            (Platform::Nes, NES_AUDIO_FILTER_KEY),
+            (Platform::Md, MD_FM_SOUND_KEY),
+            (Platform::Ws, WS_AUDIO_FILTER_KEY),
+        ] {
+            assert!(Engine::system_page_keys(platform).contains(&key));
+            assert!(Engine::extra_rows(platform, false).1.contains(&key));
+            assert!(!Engine::extra_rows(platform, true).1.contains(&key));
+        }
+    }
+
+    #[test]
+    fn audio_values_preserve_rotate_value_offsets() {
+        assert_eq!(MENU_TEXT[176], "Audio Filter");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES], "RF");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES + 1], "Soft");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES + 2], "MAME");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES + 3], "Nuked");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES + 4], "Analog");
+        assert_eq!(SETTING_VALUE_NAMES[ROTATE_VALUES], "INSERTED CART");
+    }
+
+    #[test]
+    fn high_refresh_native_only_on_exact_native_refresh_multiples() {
+        // KPA 60 Hz, 120 Hz panels: 60 Hz pulldown avoids 72/75 fps throttling.
+        for hz in [60.0, 120.0] {
+            assert!(handheld_core_60hz_for_display(72.0, hz));
+            assert!(handheld_core_60hz_for_display(75.47, hz));
+        }
+        // A rare native-refresh panel should keep original timing.
+        assert!(!handheld_core_60hz_for_display(72.0, 72.0));
+        assert!(!handheld_core_60hz_for_display(72.0, 144.0));
+        assert!(!handheld_core_60hz_for_display(75.47, 75.47));
+        assert!(!handheld_core_60hz_for_display(75.47, 150.0));
+        assert!(handheld_core_60hz_for_display(72.0, 0.0));
     }
 }

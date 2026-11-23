@@ -157,6 +157,8 @@ impl Engine {
         let rack = self.active;
         let Some(shelf) = self.shelves.get(rack) else { return };
         let Some(cart) = shelf.carts.get(shelf.index) else { return };
+        // A 3.0 test cart has no file to delete (3.0.0-cartes1).
+        if slot_ui::is_test_cart(cart) { return; }
         let Some(rect) = shelf.selected_rect() else { return };
         let uri = cart.rom.clone();
         DELETE_REQUEST.lock().unwrap_or_else(|e| e.into_inner())

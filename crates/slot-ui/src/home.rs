@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use slot_store::{Cart, Outline, Platform, ShellChoice, ShellFinish};
+use slot_store::{Cart, Core, Outline, Platform, ShellChoice, ShellFinish};
 
 pub use crate::home_art::*;
 #[cfg(test)]
@@ -31,6 +31,21 @@ impl HomeMould {
             | HomeMould::MegaDriveCodemasters
             | HomeMould::MegaDriveVr
             | HomeMould::MegaDriveSk => Platform::Md,
+            HomeMould::MasterSystem | HomeMould::MasterSystemJp | HomeMould::MasterSystemCard => Platform::Sms,
+            HomeMould::GameGear | HomeMould::GameGearCodemasters => Platform::Gg,
+            HomeMould::NeoGeoPocket => Platform::Ngp,
+            HomeMould::WonderSwan | HomeMould::WonderSwanColor => Platform::Ws,
+            HomeMould::Lynx => Platform::Lynx,
+            HomeMould::PokemonMini => Platform::Pokemini,
+        }
+    }
+
+    /// The two cores on a 3.0 system's board (None for the systems slot.
+    /// plays, whose cores follow the platform, and for the one-core ones).
+    pub fn preview_cores(self) -> Option<[Core; 2]> {
+        match self {
+            HomeMould::Lynx => Some([Core::Handy, Core::BeetleLynx]),
+            _ => None,
         }
     }
 
@@ -40,6 +55,12 @@ impl HomeMould {
             Platform::Nes => Some(HomeMould::Nes),
             Platform::Snes => Some(HomeMould::Snes),
             Platform::Md => Some(HomeMould::MegaDrive),
+            Platform::Sms => Some(HomeMould::MasterSystem),
+            Platform::Gg => Some(HomeMould::GameGear),
+            Platform::Ngp => Some(HomeMould::NeoGeoPocket),
+            Platform::Ws => Some(HomeMould::WonderSwan),
+            Platform::Lynx => Some(HomeMould::Lynx),
+            Platform::Pokemini => Some(HomeMould::PokemonMini),
             Platform::Gba | Platform::Gb | Platform::Gbc => None,
         }
     }
@@ -59,6 +80,16 @@ impl HomeMould {
             HomeMould::MegaDriveCodemasters => Outline::MegaDriveCodemasters,
             HomeMould::MegaDriveVr => Outline::MegaDriveVr,
             HomeMould::MegaDriveSk => Outline::MegaDriveSk,
+            HomeMould::NeoGeoPocket => Outline::NeoGeoPocket,
+            HomeMould::WonderSwan => Outline::WonderSwan,
+            HomeMould::WonderSwanColor => Outline::WonderSwanColor,
+            HomeMould::GameGear => Outline::GameGear,
+            HomeMould::MasterSystem => Outline::MasterSystem,
+            HomeMould::Lynx => Outline::Lynx,
+            HomeMould::PokemonMini => Outline::PokemonMini,
+            HomeMould::MasterSystemJp => Outline::MasterSystemJp,
+            HomeMould::MasterSystemCard => Outline::MasterSystemCard,
+            HomeMould::GameGearCodemasters => Outline::GameGearCodemasters,
         }
     }
 
@@ -74,9 +105,32 @@ pub fn home_mould_of(cart: &Cart) -> Option<HomeMould> {
     Some(
         cart.shell
             .and_then(|choice| HomeMould::of_outline(choice.outline))
-            .filter(|m| m.platform() == cart.platform)
+            .filter(|m| m.platform() == cart.platform && (!m.is_preview() || is_test_cart(cart)))
             .unwrap_or(default),
     )
+}
+
+/// The scheme of the 3.0 test shelf's carts: no ROM behind them.
+pub const TEST_CART_SCHEME: &str = "slot-test-3.0:";
+
+/// A cart of the 3.0 test shelf (3.0.0-cartes1): it goes in and out of the
+/// slot and opens, but no core is ever started for it.
+pub fn is_test_cart(cart: &Cart) -> bool {
+    cart.rom.to_string_lossy().starts_with(TEST_CART_SCHEME)
+}
+
+/// The two cores a cart's board names: a 3.0 test cart's own, else its
+/// system's.
+pub fn board_cores(cart: &Cart) -> [Core; 2] {
+    home_mould_of(cart)
+        .filter(|_| is_test_cart(cart))
+        .and_then(HomeMould::preview_cores)
+        .unwrap_or([Core::primary_for(cart.platform), Core::alternate_for(cart.platform)])
+}
+
+/// Whether the cart opens onto its board: not a one-core 3.0 system.
+pub fn cart_opens(cart: &Cart) -> bool {
+    !home_mould_of(cart).is_some_and(|m| m.art().single_core)
 }
 
 fn decoded(bytes: &'static [u8], w: u32, h: u32) -> Vec<u8> {
@@ -106,7 +160,30 @@ pub(crate) fn dense_decal(m: HomeMould) -> Option<Arc<Vec<u8>>> {
 /// The outline at 1x: the neutral shell's own alpha.
 pub(crate) fn mask(m: HomeMould) -> &'static [u8] {
     static CACHE: [OnceLock<Vec<u8>>; HomeMould::ALL.len()] = [const { OnceLock::new() }; HomeMould::ALL.len()];
-    CACHE[m.index()].get_or_init(|| neutral(m).iter().skip(3).step_by(4).copied().collect())
+    CACHE[m.index()].get_or_init(|| match m.art().silhouette {
+        Some(png) => {
+            let (w, h) = m.size();
+            decoded(png, w, h).iter().skip(3).step_by(4).copied().collect()
+        }
+        None => crate::home_material::clean_outline(m, m.size().0, m.size().1)
+            .unwrap_or_else(|| neutral(m).iter().skip(3).step_by(4).copied().collect()),
+    })
+}
+
+/// The front that lifts off an opened cart, at panel density, one byte a
+/// texel, where the mould has its own (see `MouldArt::lid`).
+pub(crate) fn dense_lid(m: HomeMould) -> Option<Arc<Vec<u8>>> {
+    let (w, h) = m.size();
+    let rgba = crate::bitmaps::dense_png(m.art().lid?, w, h);
+    Some(Arc::new(rgba.iter().skip(3).step_by(4).copied().collect()))
+}
+
+/// A clear shell's opacity at panel density, one byte a texel, where the
+/// mould has its own (see `MouldArt::opacity`).
+pub(crate) fn dense_opacity(m: HomeMould) -> Option<Arc<Vec<u8>>> {
+    let (w, h) = m.size();
+    let rgba = crate::bitmaps::dense_png(m.art().opacity?, w, h);
+    Some(Arc::new(rgba.iter().step_by(4).copied().collect()))
 }
 
 /// The outline at panel density.
@@ -118,7 +195,13 @@ pub(crate) fn dense_mask(m: HomeMould) -> Arc<Vec<u8>> {
     cache
         .entry(key)
         .or_insert_with(|| {
-            let big = crate::bitmaps::dense_shell(crate::bitmaps::Mould::Home(m), false);
+            let big = match m.art().silhouette {
+                Some(png) => {
+                    let (w, h) = m.size();
+                    crate::bitmaps::dense_png(png, w, h)
+                }
+                None => crate::bitmaps::dense_shell(crate::bitmaps::Mould::Home(m), false),
+            };
             Arc::new(big.iter().skip(3).step_by(4).copied().collect())
         })
         .clone()
@@ -145,10 +228,23 @@ pub fn home_shell(platform: Platform, stem: &str, region: &str, maker: &str) -> 
         Platform::Nes => HomeSystem::Nes,
         Platform::Snes => HomeSystem::Snes,
         Platform::Md => HomeSystem::Md,
+        Platform::Sms => HomeSystem::MasterSystem,
+        Platform::Gg => HomeSystem::GameGear,
+        Platform::Ngp => HomeSystem::NeoGeoPocket,
+        Platform::Ws => HomeSystem::WonderSwan,
+        Platform::Lynx => HomeSystem::Lynx,
+        Platform::Pokemini => HomeSystem::PokemonMini,
         Platform::Gba | Platform::Gb | Platform::Gbc => return None,
     };
     let (mould, colour, glitter) = home_pick(system, stem, region, maker);
-    let finish = if glitter { ShellFinish::Glitter } else { ShellFinish::Solid };
+    // Every Pokemon mini cart is clear plastic, its cap frosted.
+    let finish = if glitter {
+        ShellFinish::Glitter
+    } else if system == HomeSystem::PokemonMini {
+        ShellFinish::Clear
+    } else {
+        ShellFinish::Solid
+    };
     Some(ShellChoice { outline: mould.outline(), colour, finish })
 }
 
@@ -246,7 +342,9 @@ mod tests {
         for m in HomeMould::ALL {
             assert_eq!(m.name(), m.outline().name(), "{m:?}");
             assert_eq!(HomeMould::of_name(m.name()), Some(m));
-            assert_eq!(HomeMould::default_for(m.platform()), Some(HomeMould::default_of(m.system())));
+            if !m.is_preview() {
+                assert_eq!(HomeMould::default_for(m.platform()), Some(HomeMould::default_of(m.system())));
+            }
         }
     }
 
@@ -257,8 +355,74 @@ mod tests {
             assert_eq!(neutral(m).len(), (w * h * 4) as usize, "{m:?}");
             assert_eq!(board_rgba(m, true).len(), (w * h * 4) as usize, "{m:?}");
             assert!(mask(m).iter().any(|a| *a == 255));
+            assert_eq!(mask(m).len(), (w * h) as usize, "{m:?}");
             let (lx, ly, lw, lh) = m.art().label;
             assert!(lx + lw <= w && ly + lh <= h, "{m:?} label");
+            for (x, y, fw, fh) in m.art().footprints {
+                assert!(x + fw <= w as f32 && y + fh <= h as f32, "{m:?} footprint");
+            }
         }
+    }
+
+    fn test_cart(m: HomeMould) -> Cart {
+        Cart {
+            platform: m.platform(),
+            stem: "Test".into(),
+            rom: format!("{TEST_CART_SCHEME}{}/1", m.name()).into(),
+            label: None,
+            title: "Test".into(),
+            code: String::new(),
+            shell: Some(ShellChoice { outline: m.outline(), colour: m.art().colour, finish: ShellFinish::Solid }),
+            battery: false,
+        }
+    }
+
+    #[test]
+    fn only_test_carts_take_the_new_moulds() {
+        for m in HomeMould::ALL.into_iter().filter(|m| m.is_preview()) {
+            let cart = test_cart(m);
+            assert!(is_test_cart(&cart));
+            assert_eq!(home_mould_of(&cart), Some(m));
+            // A real Mega Drive cart naming one of them keeps its own.
+            let real = Cart { rom: "content://x/y.md".into(), ..cart };
+            assert_eq!(home_mould_of(&real), Some(HomeMould::MegaDrive));
+        }
+        assert_eq!(board_cores(&test_cart(HomeMould::NeoGeoPocket)), [Core::Neopop, Core::Race]);
+        assert_eq!(board_cores(&test_cart(HomeMould::GameGear)), [Core::GenesisPlusGx, Core::Gearsystem]);
+        assert!(!cart_opens(&test_cart(HomeMould::WonderSwanColor)));
+        assert!(cart_opens(&test_cart(HomeMould::Lynx)));
+    }
+
+    #[test]
+    fn master_system_and_game_gear_carts_take_their_own_shells() {
+        use crate::home_art::{home_pick, HomeSystem as S};
+        let pick = |s, stem| {
+            let (m, c, _) = home_pick(s, stem, "", "");
+            (m, c)
+        };
+        assert_eq!(pick(S::MasterSystem, "Hokuto no Ken (Japan)").0, HomeMould::MasterSystemJp);
+        assert_eq!(pick(S::MasterSystem, "Super Boy 4 (Korea) (En)").0, HomeMould::MasterSystemJp);
+        assert_eq!(pick(S::MasterSystem, "Wonder Boy (USA, Europe, Brazil)").0, HomeMould::MasterSystem);
+        assert_eq!(pick(S::MasterSystem, "Great Golf (USA, Europe)").0, HomeMould::MasterSystem);
+        assert_eq!(pick(S::MasterSystem, "Bomb Jack (World)"), (HomeMould::MasterSystemCard, [0xec, 0xec, 0xe8]));
+        assert_eq!(pick(S::GameGear, "Micro Machines (USA, Europe)").0, HomeMould::GameGearCodemasters);
+        assert_eq!(pick(S::GameGear, "Waternet (World)"), (HomeMould::GameGear, [0x96, 0, 0]));
+        assert_eq!(pick(S::GameGear, "Sonic the Hedgehog (Japan)"), (HomeMould::GameGear, [20, 20, 20]));
+        // A real Master System cart in the My Card stays shut; the others open.
+        let real = |m: HomeMould| Cart {
+            platform: m.platform(),
+            stem: "Bomb Jack (World)".into(),
+            rom: "content://x/y.sms".into(),
+            label: None,
+            title: "Bomb Jack".into(),
+            code: String::new(),
+            shell: Some(ShellChoice { outline: m.outline(), colour: m.art().colour, finish: ShellFinish::Solid }),
+            battery: false,
+        };
+        assert_eq!(home_mould_of(&real(HomeMould::MasterSystemCard)), Some(HomeMould::MasterSystemCard));
+        assert!(!cart_opens(&real(HomeMould::MasterSystemCard)));
+        assert!(cart_opens(&real(HomeMould::MasterSystemJp)));
+        assert!(cart_opens(&real(HomeMould::GameGearCodemasters)));
+        assert_eq!(home_mould_of(&real(HomeMould::GameGearCodemasters)), Some(HomeMould::GameGearCodemasters));
     }
 }

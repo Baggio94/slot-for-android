@@ -75,7 +75,14 @@ jobs:
       - name: Test interface graphics
         run: |
           cargo test -p slot-ui --lib onboarding_tests
-          cargo test -p slot-ui --test cart_material --test upstream_v17_assets --test native_resolution --test insert_neighbour_motion --test mixed_shelf_parity --test chrome_crt_parity --test native_density --test link_hardware
+          cargo test -p slot-ui --test cart_material --test new_cart_material --test upstream_v17_assets --test native_resolution --test insert_neighbour_motion --test mixed_shelf_parity --test chrome_crt_parity --test native_density --test link_hardware
+      - name: Export cartridge material checks
+        run: cargo run --locked -p slot-ui --example material_preview -- "$RUNNER_TEMP/material-preview" 1.3333333
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slot-for-android-${{ env.VERSION_NAME }}-material-previews
+          path: ${{ runner.temp }}/material-preview
+          if-no-files-found: error
       - name: Export Slot keycap graphics for Android Apps
         run: |
           cargo run --locked -p slot-ui --example export_apps_legend -- android/app/src/main/assets/apps_controls
@@ -116,10 +123,10 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-gambatte-android.sh
-      - name: Build NES, SNES and Mega Drive arm64 libretro cores
+      - name: Build NES, SNES, Mega Drive, Master System, Game Gear, Neo Geo Pocket and WonderSwan arm64 libretro cores
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive; do
+          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini; do
             bash scripts/build-home-core-android.sh "$core"
           done
       - name: Test Android debug and release policies on JVM
@@ -177,7 +184,7 @@ jobs:
           grep -F "package: name='fyi.slot.konkr.diag' versionCode='$VERSION_CODE'" "$RUNNER_TEMP/mac-lab-badging.txt"
           grep -F "versionName='$VERSION_NAME-mac-lab'" "$RUNNER_TEMP/mac-lab-badging.txt"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify "$APK"
-          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro; do
+          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro; do
             unzip -Z -1 "$APK" | grep -Fx "lib/arm64-v8a/lib${core}.so"
           done
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
@@ -202,7 +209,7 @@ jobs:
           grep -F "versionName='$VERSION_NAME'" "$RUNNER_TEMP/konkr-badging.txt"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" |
             grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
-          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro; do
+          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro; do
             unzip -Z -1 "$APK" | grep -Fx "lib/arm64-v8a/lib${core}.so"
           done
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
@@ -226,11 +233,21 @@ jobs:
               "bsnes": "63ee22f7af8f5d1ada295c2c98fd7bf261fa62a7",
               "genesis_plus_gx": "b9c2316441978d4015ba30e9a95d9b0e6f8ee981",
               "picodrive": "1890c2932234c9d30f4cd3851d02228baae8f09e",
+              "gearsystem": "4b3b1b266e536848ab23b8733f783ae17f0126a6",
+              "mednafen_ngp": "a50d5ac288a81f2104ddf43195a4efdd15c72227",
+              "race": "c660d9ab5aafb47aefff90182ca90d319ad9b077",
+              "mednafen_wswan": "4b01295838ea89e3f1355bbe4cb5cf98aa6108cd",
+              "handy": "bc55d462f0b2d6b073ea93dc552ebd73cec60fd1",
+              "mednafen_lynx": "fcdefcfb3c11d6d2e71be076a5d3df2e88ab73ed",
+              "pokemini": "132111b76343559860532a1ccc094f93f1ed5650",
           }
           for name, revision in home.items():
               with zipfile.ZipFile(sys.argv[1]) as archive:
                   built = json.loads(archive.read(f"assets/core-build-{name}.json"))
               assert built["revision"] == revision, name
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              gpgx = json.loads(archive.read("assets/core-build-genesis_plus_gx.json"))
+          assert "0001-sms-gg-state-load-tile-cache.patch" in gpgx["patches"]
           assert {"flash-bank-survives-mask.patch",
                   "gb-dmg-palette-follows-option.patch",
                   "543a19758-mbc2-sram-bank.patch"} <= set(mgba["patches"])

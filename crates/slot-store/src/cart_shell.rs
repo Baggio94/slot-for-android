@@ -26,10 +26,22 @@ pub enum Outline {
     MegaDriveCodemasters,
     MegaDriveVr,
     MegaDriveSk,
+    // The 3.0 systems' shells (3.0.0-cartes1 test shelf).
+    NeoGeoPocket,
+    WonderSwan,
+    WonderSwanColor,
+    GameGear,
+    MasterSystem,
+    Lynx,
+    PokemonMini,
+    // Per-game Master System and Game Gear shells (2026-11-20).
+    MasterSystemJp,
+    MasterSystemCard,
+    GameGearCodemasters,
 }
 
 impl Outline {
-    pub const NAMES: [(Outline, &'static str); 16] = [
+    pub const NAMES: [(Outline, &'static str); 26] = [
         (Outline::Auto, "auto"),
         (Outline::Notched, "notched"),
         (Outline::Rounded, "rounded"),
@@ -46,6 +58,16 @@ impl Outline {
         (Outline::MegaDriveCodemasters, "megadrive-codemasters"),
         (Outline::MegaDriveVr, "megadrive-vr"),
         (Outline::MegaDriveSk, "megadrive-sk"),
+        (Outline::NeoGeoPocket, "ngp"),
+        (Outline::WonderSwan, "wonderswan"),
+        (Outline::WonderSwanColor, "wonderswan-color"),
+        (Outline::GameGear, "gamegear"),
+        (Outline::MasterSystem, "mastersystem"),
+        (Outline::Lynx, "lynx"),
+        (Outline::PokemonMini, "pokemini"),
+        (Outline::MasterSystemJp, "mastersystem-jp"),
+        (Outline::MasterSystemCard, "mastersystem-card"),
+        (Outline::GameGearCodemasters, "gamegear-codemasters"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -73,6 +95,12 @@ impl Outline {
             | Outline::MegaDriveCodemasters
             | Outline::MegaDriveVr
             | Outline::MegaDriveSk => Some(Platform::Md),
+            Outline::MasterSystem | Outline::MasterSystemJp | Outline::MasterSystemCard => Some(Platform::Sms),
+            Outline::GameGear | Outline::GameGearCodemasters => Some(Platform::Gg),
+            Outline::NeoGeoPocket => Some(Platform::Ngp),
+            Outline::WonderSwan | Outline::WonderSwanColor => Some(Platform::Ws),
+            Outline::Lynx => Some(Platform::Lynx),
+            Outline::PokemonMini => Some(Platform::Pokemini),
         }
     }
 }

@@ -33,6 +33,15 @@ internal object TaskPill {
 
     class Task(val kind: Int, val words: String, val progress: Float)
 
+    /** One confirmation after the save and state upload attempts finish.
+     *  Never claim a transfer happened when it was unchanged or deferred. */
+    internal fun rommSyncWords(saveUploaded: Boolean, stateUploaded: Boolean): String? = when {
+        saveUploaded && stateUploaded -> "SAVE + STATE SYNCED"
+        saveUploaded -> "SAVE SYNCED"
+        stateUploaded -> "STATE SYNCED"
+        else -> null
+    }
+
     @Volatile private var problem: String? = null
     @Volatile private var problemUntil = 0L
     @Volatile private var done: String? = null

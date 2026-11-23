@@ -12,16 +12,24 @@ use crate::art;
 use crate::wallpaper_scale::{self, Crop};
 
 /// The shelves' keys, in wallpaper::SHELF_KEYS's order.
-pub const MOSAIC_KEYS: [&str; 9] =
-    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "Recents", "Favorites", "GBAV"];
+pub const MOSAIC_KEYS: [&str; 15] =
+    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI",
+     "Recents", "Favorites", "GBAV"];
 
-const MASKS: [&[u8]; 9] = [
+const MASKS: [&[u8]; 15] = [
     include_bytes!("../../../assets/wallpapers/GBA.png"),
     include_bytes!("../../../assets/wallpapers/GB.png"),
     include_bytes!("../../../assets/wallpapers/GBC.png"),
     include_bytes!("../../../assets/wallpapers/NES.png"),
     include_bytes!("../../../assets/wallpapers/SNES.png"),
     include_bytes!("../../../assets/wallpapers/MD.png"),
+    // The six 3.0 systems' own drawings (Siham 2026-11-20).
+    include_bytes!("../../../assets/wallpapers/SMS.png"),
+    include_bytes!("../../../assets/wallpapers/GG.png"),
+    include_bytes!("../../../assets/wallpapers/NGP.png"),
+    include_bytes!("../../../assets/wallpapers/WS.png"),
+    include_bytes!("../../../assets/wallpapers/LYNX.png"),
+    include_bytes!("../../../assets/wallpapers/POKEMINI.png"),
     include_bytes!("../../../assets/wallpapers/Recents.png"),
     include_bytes!("../../../assets/wallpapers/Favorites.png"),
     include_bytes!("../../../assets/wallpapers/GBAV.png"),
@@ -33,7 +41,7 @@ pub enum MosaicTheme { Original, Light, Dark, Oled }
 
 /// Ground, then line, for Original, Light, Dark and OLED, read off Siham's
 /// PNGs (each is exactly ground + mask x (line - ground)).
-const COLOURS: [[[[u8; 3]; 2]; 4]; 9] = [
+const COLOURS: [[[[u8; 3]; 2]; 4]; 15] = [
     // GBA
     [[[196, 198, 228], [145, 147, 182]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [67, 67, 73]], [[0, 0, 0], [50, 50, 56]]],
     // GB
@@ -46,6 +54,18 @@ const COLOURS: [[[[u8; 3]; 2]; 4]; 9] = [
     [[[205, 211, 222], [152, 161, 178]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
     // MD
     [[[88, 90, 96], [134, 140, 152]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [66, 66, 73]], [[0, 0, 0], [50, 50, 56]]],
+    // SMS: Alex Kidd, Wonder Boy and Opa-Opa on pink.
+    [[[220, 196, 192], [169, 145, 141]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // GG: Tails, Arle and Carbuncle on sea green.
+    [[[196, 217, 213], [145, 170, 164]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // NGP: Terry, Nakoruru and Athena on pale blue.
+    [[[207, 219, 232], [155, 170, 190]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // WS: the WonderSwan's consoles, carts and origami swans on lilac.
+    [[[219, 209, 230], [167, 154, 183]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // LYNX: Toki, Chip and Louie on sand.
+    [[[232, 214, 182], [183, 161, 125]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // POKEMINI: the Pokémon mini's consoles, carts and balls on lime.
+    [[[215, 223, 175], [162, 175, 121]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // Recents
     [[[211, 216, 223], [155, 164, 177]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // Favorites
@@ -151,7 +171,7 @@ pub fn mosaic_native(shelf: usize, theme: MosaicTheme, look: MosaicLook) -> Opti
 }
 
 /// Three box blurs of radius `r` each way: close to a Gaussian.
-fn soften(rgba: &mut [u8], w: usize, h: usize, r: usize) {
+pub(crate) fn soften(rgba: &mut [u8], w: usize, h: usize, r: usize) {
     if w == 0 || h == 0 { return; }
     let mut line = Vec::new();
     for _ in 0..3 {

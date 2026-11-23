@@ -297,7 +297,7 @@ internal object FolderSync {
                     }
                     // "Use the folder's": the handheld's copy is in its backup.
                     if (start != Start.FOLDER_WINS) report.conflicts++
-                    if (start != Start.FOLDER_WINS && path.endsWith(".srm") && SaveDeletes.kindOf(path) != null) {
+                    if (start != Start.FOLDER_WINS && Systems.isSaveName(path) && SaveDeletes.kindOf(path) != null) {
                         report.twoSaves.add(TwoSaves(path, if (folderWins) mineBytes else theirBytes,
                             folderWins, p.modified, f.modified))
                     }

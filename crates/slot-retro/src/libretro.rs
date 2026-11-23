@@ -41,6 +41,12 @@ struct Host {
     frame: (u32, u32),
     /// The core's display aspect, from its geometry (0: not reported).
     aspect: f32,
+    /// SET_ROTATION: the core's picture turned by this many 90° steps
+    /// counter-clockwise (an upright Lynx game in Beetle Lynx). Native
+    /// frames only; the aspect the core reports is the turned picture's.
+    rotation: u8,
+    /// The frame before it is turned, reused.
+    unturned: Vec<u8>,
     /// Timing the core changed with SET_SYSTEM_AV_INFO, not yet read.
     timing: Option<(f64, f64)>,
     format: PixelFormat,
@@ -192,6 +198,13 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
                 true
             })
             .unwrap_or(false)
+        }
+        SET_ROTATION => {
+            if data.is_null() {
+                return false;
+            }
+            let steps = (*(data as *const c_uint) % 4) as u8;
+            with_host(|h| h.rotation = steps).is_some()
         }
         SET_GEOMETRY => {
             if data.is_null() {
@@ -544,6 +557,30 @@ unsafe fn copy_native_frame(h: &mut Host, data: *const c_void, width: c_uint, he
             }
         }
     }
+    if h.rotation != 0 {
+        turn_frame(h, cols, rows);
+    }
+}
+
+/// Turns the packed frame `h.video` (cols x rows) by `h.rotation` 90° steps
+/// counter-clockwise, as RetroArch does for SET_ROTATION.
+fn turn_frame(h: &mut Host, cols: usize, rows: usize) {
+    std::mem::swap(&mut h.video, &mut h.unturned);
+    h.video.resize(cols * rows * 4, 0);
+    let (out_w, out_h) = if h.rotation % 2 == 1 { (rows, cols) } else { (cols, rows) };
+    for y in 0..rows {
+        for x in 0..cols {
+            let (nx, ny) = match h.rotation {
+                1 => (y, cols - 1 - x),
+                2 => (cols - 1 - x, rows - 1 - y),
+                _ => (rows - 1 - y, x),
+            };
+            let from = (y * cols + x) * 4;
+            let to = (ny * out_w + nx) * 4;
+            h.video[to..to + 4].copy_from_slice(&h.unturned[from..from + 4]);
+        }
+    }
+    h.frame = (out_w as u32, out_h as u32);
 }
 
 // F9: return the last committed PCM Vec to libretro for the next frame.
@@ -832,6 +869,8 @@ impl LibretroCore {
             native: false,
             frame: (GBA_W, GBA_H),
             aspect: 0.0,
+            rotation: 0,
+            unturned: Vec::new(),
             timing: None,
             format: PixelFormat::default(),
             audio: Vec::new(),
@@ -1008,10 +1047,11 @@ fn copy_gb_achievement_map(
     filled
 }
 
-/// Where RetroAchievements reads the home consoles (rcheevos console maps):
-/// the work RAM from 0 and the cart's battery RAM after it. NES: 2 KiB RAM
-/// mirrored up to 0x2000, cart RAM at 0x6000. SNES: 128 KiB WRAM, cart RAM
-/// at 0x20000. Mega Drive: 64 KiB 68000 RAM, cart RAM at 0x10000.
+/// Where RetroAchievements reads the home consoles and the 3.0 handhelds
+/// (rcheevos console maps): the work RAM from 0 and the cart's battery RAM
+/// after it. NES: 2 KiB RAM mirrored up to 0x2000, cart RAM at 0x6000.
+/// SNES: 128 KiB WRAM, cart RAM at 0x20000. Mega Drive: 64 KiB 68000 RAM,
+/// cart RAM at 0x10000.
 struct HomeMap {
     ram: usize,
     mirror_to: usize,
@@ -1027,6 +1067,17 @@ fn home_map(console: u32) -> Option<HomeMap> {
         7 => Some(HomeMap { ram: 0x800, mirror_to: 0x2000, save_at: 0x6000, save_max: 0x2000, bus: 0 }),
         3 => Some(HomeMap { ram: 0x20000, mirror_to: 0x20000, save_at: 0x20000, save_max: 0x20000, bus: 0x7e0000 }),
         1 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0x10000, bus: 0xff0000 }),
+        // Master System and Game Gear: 8 KiB RAM, cart RAM at 0x2000 (32 KiB).
+        11 | 15 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0x8000, bus: 0xc000 }),
+        // Neo Geo Pocket: 16 KiB RAM (0x4000 on the bus), nothing after.
+        14 => Some(HomeMap { ram: 0x4000, mirror_to: 0x4000, save_at: 0x4000, save_max: 0, bus: 0x4000 }),
+        // Lynx: its 64 KiB RAM.
+        13 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0, bus: 0 }),
+        // Pokemon mini: 8 KiB, as RetroArch lays PokeMini's RAM.
+        24 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0, bus: 0 }),
+        // WonderSwan: 64 KiB RAM, cart RAM at 0x10000 (as far as the
+        // 256 KiB window reaches: 192 KiB).
+        53 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0x30000, bus: 0 }),
         _ => None,
     }
 }
@@ -1505,6 +1556,8 @@ mod tests {
             native: false,
             frame: (GBA_W, GBA_H),
             aspect: 0.0,
+            rotation: 0,
+            unturned: Vec::new(),
             timing: None,
             format: PixelFormat::Xrgb8888,
             audio: Vec::new(),
@@ -1682,6 +1735,16 @@ mod tests {
         assert_eq!(ram[0x8000 + 0x8000], 0xEE);
         let malformed = test_ra_descriptor(&mut ewram, 0x03000000, usize::MAX - 2, 0x8000);
         assert_eq!(copy_gba_achievement_map(&[malformed], &mut ram), [0, 0, 0]);
+    }
+
+    #[test]
+    fn every_home_map_fits_the_achievement_window() {
+        for console in [1, 3, 7, 11, 13, 14, 15, 24, 53] {
+            let map = home_map(console).expect("mapped console");
+            assert!(map.ram <= map.mirror_to && map.mirror_to <= map.save_at, "{console}");
+            assert!(map.save_at + map.save_max <= 0x40000, "{console}");
+        }
+        assert!(home_map(5).is_none() && home_map(4).is_none());
     }
 
     #[test]
@@ -2763,6 +2826,36 @@ mod tests {
             });
         }
         assert!(matches!(host.format, PixelFormat::Rgb1555));
+    }
+
+    #[test]
+    fn a_turned_native_frame_is_turned_counter_clockwise() {
+        let mut host = host_with(HashMap::new(), false);
+        host.native = true;
+        host.format = PixelFormat::Xrgb8888;
+        // 3x2: a b c / d e f, one byte of colour per pixel.
+        let px = |v: u8| [v, 0, 0, 0];
+        let frame: Vec<u8> = [1, 2, 3, 4, 5, 6].into_iter().flat_map(px).collect();
+        let picture = |host: &Host| host.video.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>();
+        let show = |host: &mut Host, steps: c_uint| {
+            let _active = Active::bind(host);
+            unsafe {
+                assert!(environment(SET_ROTATION, &steps as *const c_uint as *mut c_void));
+                video_refresh(frame.as_ptr().cast(), 3, 2, 12);
+            }
+        };
+        show(&mut host, 1);
+        assert_eq!(host.frame, (2, 3));
+        assert_eq!(picture(&host), vec![3, 6, 2, 5, 1, 4]);
+        show(&mut host, 2);
+        assert_eq!(host.frame, (3, 2));
+        assert_eq!(picture(&host), vec![6, 5, 4, 3, 2, 1]);
+        show(&mut host, 3);
+        assert_eq!(host.frame, (2, 3));
+        assert_eq!(picture(&host), vec![4, 1, 5, 2, 6, 3]);
+        show(&mut host, 0);
+        assert_eq!(host.frame, (3, 2));
+        assert_eq!(picture(&host), vec![1, 2, 3, 4, 5, 6]);
     }
 
     #[test]

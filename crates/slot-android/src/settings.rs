@@ -297,6 +297,14 @@ pub enum Bezel {
     #[serde(alias="genesis_classic_grey")] GenesisClassic,
     #[serde(alias="genesis_grey")] Genesis,
     #[serde(alias="mega_drive_grey")] MegaDrive,
+    // slot.'s own overlays for the 3.0 systems, in Watomsk's style (Siham
+    // 2026-11-21). Neo Geo Pocket and WonderSwan: AUTO shows the Color
+    // logo for a Color game, the plain one otherwise.
+    MasterSystem, GameGear,
+    NgpAuto, Ngp, NgpColor,
+    WsAuto, Ws, WsColor,
+    Lynx, LynxGold,
+    PokemonMini,
 }
 impl Bezel {
     /// GB and GBC also keep the slot. bezel; every system's own Watomsk
@@ -310,6 +318,12 @@ impl Bezel {
         Bezel::SnesGrayLogo, Bezel::SnesGrayLogoAlt];
     pub const MD: [Bezel; 4] = [Bezel::None, Bezel::GenesisClassic, Bezel::Genesis,
         Bezel::MegaDrive];
+    pub const SMS: [Bezel; 2] = [Bezel::None, Bezel::MasterSystem];
+    pub const GG: [Bezel; 2] = [Bezel::None, Bezel::GameGear];
+    pub const NGP: [Bezel; 4] = [Bezel::None, Bezel::NgpAuto, Bezel::Ngp, Bezel::NgpColor];
+    pub const WS: [Bezel; 4] = [Bezel::None, Bezel::WsAuto, Bezel::Ws, Bezel::WsColor];
+    pub const LYNX: [Bezel; 3] = [Bezel::None, Bezel::Lynx, Bezel::LynxGold];
+    pub const POKEMINI: [Bezel; 2] = [Bezel::None, Bezel::PokemonMini];
     pub fn list(platform: slot_store::Platform) -> &'static [Bezel] {
         use slot_store::Platform;
         match platform {
@@ -319,6 +333,12 @@ impl Bezel {
             Platform::Nes => &Self::NES,
             Platform::Snes => &Self::SNES,
             Platform::Md => &Self::MD,
+            Platform::Sms => &Self::SMS,
+            Platform::Gg => &Self::GG,
+            Platform::Ngp => &Self::NGP,
+            Platform::Ws => &Self::WS,
+            Platform::Lynx => &Self::LYNX,
+            Platform::Pokemini => &Self::POKEMINI,
         }
     }
     pub fn step_in(self,list:&[Bezel],right:bool)->Self {
@@ -331,6 +351,9 @@ impl Bezel {
         use slot_ui::watomsk::Design as D;
         Some(match self {
             Bezel::None | Bezel::Default => return None,
+            Bezel::MasterSystem | Bezel::GameGear | Bezel::NgpAuto | Bezel::Ngp
+            | Bezel::NgpColor | Bezel::WsAuto | Bezel::Ws | Bezel::WsColor
+            | Bezel::Lynx | Bezel::LynxGold | Bezel::PokemonMini => return None,
             Bezel::Gb => D::Gb, Bezel::Pocket => D::Pocket, Bezel::Color => D::Color,
             Bezel::GbaClassic => D::GbaClassic, Bezel::Gba => D::Gba,
             Bezel::GbaSp => D::GbaSp, Bezel::GbaAlt => D::GbaAlt,
@@ -341,11 +364,37 @@ impl Bezel {
             Bezel::MegaDrive => D::MegaDrive,
         })
     }
+    /// Which of slot.'s own 3.0 overlays; `colour`: the game is a Neo Geo
+    /// Pocket Color or WonderSwan Color one (for AUTO).
+    pub fn own(self, colour: bool) -> Option<slot_ui::own_overlay::Design> {
+        use slot_ui::own_overlay::Design as D;
+        Some(match self {
+            Bezel::MasterSystem => D::MasterSystem,
+            Bezel::GameGear => D::GameGear,
+            Bezel::NgpAuto if colour => D::NeoGeoPocketColor,
+            Bezel::NgpAuto | Bezel::Ngp => D::NeoGeoPocket,
+            Bezel::NgpColor => D::NeoGeoPocketColor,
+            Bezel::WsAuto if colour => D::WonderSwanColor,
+            Bezel::WsAuto | Bezel::Ws => D::WonderSwan,
+            Bezel::WsColor => D::WonderSwanColor,
+            Bezel::Lynx => D::Lynx,
+            Bezel::LynxGold => D::LynxGold,
+            Bezel::PokemonMini => D::PokemonMini,
+            _ => return None,
+        })
+    }
 }
 
 fn bezel_nes_default() -> Bezel { Bezel::Nes }
 fn bezel_snes_default() -> Bezel { Bezel::Snes }
 fn bezel_md_default() -> Bezel { Bezel::GenesisClassic }
+// The 3.0 systems start with their overlay, where it has room.
+fn bezel_sms_default() -> Bezel { Bezel::MasterSystem }
+fn bezel_gg_default() -> Bezel { Bezel::GameGear }
+fn bezel_ngp_default() -> Bezel { Bezel::NgpAuto }
+fn bezel_ws_default() -> Bezel { Bezel::WsAuto }
+fn bezel_lynx_default() -> Bezel { Bezel::Lynx }
+fn bezel_pokemini_default() -> Bezel { Bezel::PokemonMini }
 
 pub const REWIND_SPEEDS: [u8; 4] = [1, 2, 3, 5];
 
@@ -441,6 +490,24 @@ impl Shader {
         Self::CrtGdvTrinitron, Self::CrtGeomDeluxe, Self::CrtRoyale,
         Self::SuperEagle, Self::XbrLv2, Self::Sabr,
     ];
+    /// The 3.0 handhelds' LCDs (Game Gear, Neo Geo Pocket, WonderSwan,
+    /// Lynx): the Game Boys' LCD shaders without their own colours (Siham
+    /// 2026-11-21).
+    pub const LCD: [Self; 8] = [
+        Self::Off, Self::SharpBilinear, Self::Lcd1x, Self::Lcd3x, Self::ZfastLcd,
+        Self::Simpletex, Self::Dot, Self::LcdGridV2,
+    ];
+    /// Pokemon mini: PokeMini draws its own LCD (Dot Matrix), no shader.
+    pub const POKEMINI: [Self; 2] = [Self::Off, Self::SharpBilinear];
+    /// The 3.0 systems' choices; the Master System keeps the CRT ones.
+    pub fn list_3_0(platform: slot_store::Platform) -> &'static [Self] {
+        use slot_store::Platform::*;
+        match platform {
+            Gg | Ngp | Ws | Lynx => &Self::LCD,
+            Pokemini => &Self::POKEMINI,
+            _ => &Self::HOME,
+        }
+    }
     pub fn effect(self) -> ScreenEffect {
         match self {
             Self::Off => ScreenEffect::None,
@@ -500,6 +567,13 @@ const DEVICE_NAME: &str = "slot-konkr-device.json";
 struct DeviceSettings {
     bezel_gba: Bezel, bezel_gbc: Bezel, bezel_gb: Bezel,
     bezel_nes: Bezel, bezel_snes: Bezel, bezel_md: Bezel,
+    #[serde(default="bezel_sms_default")] bezel_sms: Bezel,
+    #[serde(default="bezel_gg_default")] bezel_gg: Bezel,
+    #[serde(default="bezel_ngp_default")] bezel_ngp: Bezel,
+    #[serde(default="bezel_ws_default")] bezel_ws: Bezel,
+    #[serde(default="bezel_lynx_default")] bezel_lynx: Bezel,
+    #[serde(default="bezel_pokemini_default")] bezel_pokemini: Bezel,
+    #[serde(default)] own_bezels_room: bool,
     home_bezel_three_two: bool,
     responsive_loop: bool, run_ahead_frames: u8,
     rotate_game_cover: u8, rotate_shelf_cover: u8, rotate_dim: u8, rotate_sleep: u8,
@@ -512,6 +586,9 @@ impl DeviceSettings {
         DeviceSettings {
             bezel_gba: s.bezel_gba, bezel_gbc: s.bezel_gbc, bezel_gb: s.bezel_gb,
             bezel_nes: s.bezel_nes, bezel_snes: s.bezel_snes, bezel_md: s.bezel_md,
+            bezel_sms: s.bezel_sms, bezel_gg: s.bezel_gg, bezel_ngp: s.bezel_ngp,
+            bezel_ws: s.bezel_ws, bezel_lynx: s.bezel_lynx, bezel_pokemini: s.bezel_pokemini,
+            own_bezels_room: s.own_bezels_room,
             home_bezel_three_two: s.home_bezel_three_two,
             responsive_loop: s.responsive_loop, run_ahead_frames: s.run_ahead_frames,
             rotate_game_cover: s.rotate_game_cover, rotate_shelf_cover: s.rotate_shelf_cover,
@@ -573,6 +650,22 @@ pub struct Settings {
     pub shader_gbc: Shader,
     /// The home consoles' CRT shaders (new in 1.3.5: zfast-crt by default).
     pub shader_nes: Shader, pub shader_snes: Shader, pub shader_md: Shader,
+    /// Master System (zfast-crt) and Game Gear (no shader: an LCD), 3.0.
+    #[serde(default = "shader_sms_default")]
+    pub shader_sms: Shader,
+    /// The 3.0 handhelds' LCDs: LCD Grid V2 (Game Gear, Neo Geo Pocket,
+    /// Lynx), LCD1x (WonderSwan), none for the Pokemon mini (Siham
+    /// 2026-11-21).
+    #[serde(default = "shader_gg_default")]
+    pub shader_gg: Shader,
+    #[serde(default = "shader_gg_default")]
+    pub shader_ngp: Shader,
+    #[serde(default = "shader_ws_default")]
+    pub shader_ws: Shader,
+    #[serde(default = "shader_gg_default")]
+    pub shader_lynx: Shader,
+    #[serde(default = "shader_off")]
+    pub shader_pokemini: Shader,
     // Retain legacy field for old RC1 Settings.json and old desktop Link code;
     // the three platform fields below are authoritative after migration.
     pub colour_correction_gba: bool,
@@ -585,6 +678,18 @@ pub struct Settings {
     pub bezel_snes: Bezel,
     #[serde(default="bezel_md_default")]
     pub bezel_md: Bezel,
+    #[serde(default="bezel_sms_default")]
+    pub bezel_sms: Bezel,
+    #[serde(default="bezel_gg_default")]
+    pub bezel_gg: Bezel,
+    #[serde(default="bezel_ngp_default")]
+    pub bezel_ngp: Bezel,
+    #[serde(default="bezel_ws_default")]
+    pub bezel_ws: Bezel,
+    #[serde(default="bezel_lynx_default")]
+    pub bezel_lynx: Bezel,
+    #[serde(default="bezel_pokemini_default")]
+    pub bezel_pokemini: Bezel,
     pub gb_palettes: bool, pub gb_palette: u8, pub rewind: bool,
     // Number of historical rewind snapshots restored per 100 ms of game time.
     // Prior Android builds captured 10/s and replayed 10/s (1x). Original
@@ -659,8 +764,54 @@ pub struct Settings {
     /// Slot v1.7 GENERAL: Recents is off by default; persist its list regardless.
     pub show_recents: bool,
     pub show_titles: bool,
+    /// Interface > 3.0 Test Shelf (3.0.0-cartes1): the 3.0 systems' carts
+    /// on a shelf of their own, to put in and take out without a game.
+    #[serde(default)]
+    pub test_shelf: bool,
     /// Touch on the shelf (runtime/touch.rs): on by default (Siham 2026-11-17).
     pub touchscreen: bool,
+    /// Pokemon mini's LCD Filter, PokeMini's own: Dot Matrix, Scanlines,
+    /// None (Siham 2026-11-21). Taken at the game's next start.
+    #[serde(default)]
+    pub pokemini_lcd_filter: u8,
+    /// The 3.0 systems' own core options (Siham 2026-11-22), each off or
+    /// at the core's own default so games start as on the real console:
+    /// Master System and Game Gear's sprite limit removed, the Neo Geo
+    /// Pocket's language, the WonderSwan's palette for black-and-white
+    /// games, the Pokemon mini's palette and LCD mode.
+    #[serde(default)]
+    pub no_sprite_limit_sms: bool,
+    #[serde(default)]
+    pub no_sprite_limit_gg: bool,
+    #[serde(default)]
+    pub ngp_language: u8,
+    #[serde(default)]
+    pub ws_palette: u8,
+    #[serde(default)]
+    pub pokemini_palette: u8,
+    #[serde(default)]
+    pub pokemini_lcd_mode: u8,
+    /// The Master System's left column hidden, its FM sound off, the
+    /// WonderSwan's language, the Pokemon mini's screen shake off.
+    #[serde(default)]
+    pub hide_left_bar_sms: bool,
+    /// The NES's left column hidden, and as much on the right so the
+    /// picture stays centred (Siham 2026-11-22).
+    #[serde(default)]
+    pub hide_left_bar_nes: bool,
+    #[serde(default)]
+    pub fm_off_sms: bool,
+    #[serde(default)]
+    pub ws_language: u8,
+    #[serde(default)]
+    pub pokemini_no_shake: bool,
+    /// Optional analogue audio colouring per system. Defaults match Libretro.
+    #[serde(default)]
+    pub nes_audio_filter: bool,
+    #[serde(default)]
+    pub md_fm_nuked: bool,
+    #[serde(default)]
+    pub ws_audio_filter: bool,
     /// Set once the home consoles' 3:2 default (no overlay) was applied.
     #[serde(default)]
     pub home_bezel_three_two: bool,
@@ -674,6 +825,21 @@ pub struct Settings {
     /// when the shader still had its own GBA Color.
     #[serde(default)]
     pub simpletex_gba_colour: bool,
+    /// Set once the 3.0 handhelds' LCD shaders were given to settings the
+    /// 3.0 betas saved with none.
+    #[serde(default)]
+    pub lcd_3_0: bool,
+    /// Set once rc1's LCD Grid v2 / LCD1x handheld defaults became LCD3x.
+    #[serde(default)]
+    pub lcd3x_3_0: bool,
+    /// Set once the NES's side bars and the Master System's left bar were
+    /// hidden by default (Siham 2026-11-23, 3.0.0-rc6).
+    #[serde(default)]
+    pub side_bars_3_0: bool,
+    /// Set once the 3.0 systems whose overlay has thin bars on this screen
+    /// were started without it (Siham 2026-11-21).
+    #[serde(default)]
+    pub own_bezels_room: bool,
     /// Frame Blending of each system (Systems > [system] > Frame Blending).
     #[serde(default)]
     pub blending_gba: Blending,
@@ -687,6 +853,20 @@ pub struct Settings {
     pub blending_snes: Blending,
     #[serde(default)]
     pub blending_md: Blending,
+    #[serde(default)]
+    pub blending_sms: Blending,
+    #[serde(default)]
+    pub blending_gg: Blending,
+    #[serde(default)]
+    pub blending_ngp: Blending,
+    /// The WonderSwan mixes each picture with the one before, as its slow
+    /// LCD showed the sprites its games flicker (Siham 2026-11-21).
+    #[serde(default = "blending_ws_default")]
+    pub blending_ws: Blending,
+    #[serde(default)]
+    pub blending_lynx: Blending,
+    #[serde(default)]
+    pub blending_pokemini: Blending,
     /// LCD Effect of each Game Boy (Systems > [system] > LCD Effect).
     #[serde(default)]
     pub lcd_effect_gba: LcdEffect,
@@ -712,6 +892,19 @@ pub struct Settings {
     pub gbav_fsr: bool,
 }
 fn shader_gbav_default() -> Shader { Shader::Lcd3x }
+fn shader_sms_default() -> Shader { Shader::ZfastCrt }
+fn shader_gg_default() -> Shader { Shader::Lcd3x }
+fn shader_ws_default() -> Shader { Shader::Lcd3x }
+fn shader_off() -> Shader { Shader::Off }
+fn blending_ws_default() -> Blending { Blending::Mix }
+/// A 3.0 handheld's LCD shader on a fresh install.
+fn lcd_3_0_default(platform: slot_store::Platform) -> Shader {
+    match platform {
+        slot_store::Platform::Pokemini => Shader::Off,
+        // LCD3x on every LCD handheld (Siham 2026-11-21).
+        _ => Shader::Lcd3x,
+    }
+}
 impl Default for Settings {
     fn default() -> Self {
         // Historical defaults for serde's partial legacy JSON. Do not change:
@@ -721,10 +914,15 @@ impl Default for Settings {
             shader_gbc: Shader::Off,
             shader_nes: Shader::ZfastCrt, shader_snes: Shader::ZfastCrt,
             shader_md: Shader::ZfastCrt,
+            shader_sms: Shader::ZfastCrt, shader_gg: Shader::Lcd3x,
+            shader_ngp: Shader::Lcd3x, shader_ws: Shader::Lcd3x,
+            shader_lynx: Shader::Lcd3x, shader_pokemini: Shader::Off,
             colour_correction_gba: false, colour_correction_gb: false,
             colour_correction_gbc: false,
             bezel_gba: Bezel::None, bezel_gbc: Bezel::Default, bezel_gb: Bezel::Default,
             bezel_nes: Bezel::Nes, bezel_snes: Bezel::Snes, bezel_md: Bezel::GenesisClassic,
+            bezel_sms: Bezel::MasterSystem, bezel_gg: Bezel::GameGear, bezel_ngp: Bezel::NgpAuto,
+            bezel_ws: Bezel::WsAuto, bezel_lynx: Bezel::Lynx, bezel_pokemini: Bezel::PokemonMini,
             gb_palettes: false, gb_palette: 1, rewind: true,
             rewind_speed: 2,
             turbo: true, eject_save: true,
@@ -742,11 +940,21 @@ impl Default for Settings {
             wallpaper_look: WallpaperLook::default(),
             wallpaper_shelf_looks: Default::default(),
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
-            show_recents: false, show_titles: false, touchscreen: true, home_bezel_three_two: false,
+            show_recents: false, show_titles: false, test_shelf: false, touchscreen: true, home_bezel_three_two: false,
+            pokemini_lcd_filter: 0,
+            no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
+            ws_palette: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
+            hide_left_bar_sms: false, hide_left_bar_nes: false, fm_off_sms: false, ws_language: 0,
+            pokemini_no_shake: false,
+            nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
-            simpletex_gba_colour: false,
+            simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, side_bars_3_0: false,
+            own_bezels_room: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
             blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
+            blending_sms: Blending::Off, blending_gg: Blending::Off,
+            blending_ngp: Blending::Off, blending_ws: Blending::Mix,
+            blending_lynx: Blending::Off, blending_pokemini: Blending::Off,
             lcd_effect_gba: LcdEffect::Off, lcd_effect_gbc: LcdEffect::Off, lcd_effect_gb: LcdEffect::Off,
             dither_blend_md: false,
             shader_gbav: Shader::Lcd3x, upscaler_gbav: Upscaler::Fsr,
@@ -785,6 +993,13 @@ impl Settings {
             gb_palette_twb64: true,
             gb_overlays_watomsk: true,
             simpletex_gba_colour: true,
+            lcd_3_0: true,
+            lcd3x_3_0: true,
+            // Leave NES side bars and Master System left bar visible by default.
+            // These are user choices, not automatic cropping.
+            hide_left_bar_nes: false,
+            hide_left_bar_sms: false,
+            side_bars_3_0: true,
             gbav_fsr: true,
             ..Self::default()
         }
@@ -861,9 +1076,42 @@ impl Settings {
                 if !Shader::GBA.contains(&s.shader_gbav) { s.shader_gbav = Shader::Lcd3x; }
                 if !Shader::DMG.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
                 if !Shader::GBC.contains(&s.shader_gbc) { s.shader_gbc = Shader::Off; }
-                for shader in [&mut s.shader_nes, &mut s.shader_snes, &mut s.shader_md] {
+                for shader in [&mut s.shader_nes, &mut s.shader_snes, &mut s.shader_md,
+                    &mut s.shader_sms] {
                     if !Shader::HOME.contains(shader) { *shader = Shader::ZfastCrt; }
                 }
+                use slot_store::Platform as P;
+                for platform in [P::Gg, P::Ngp, P::Ws, P::Lynx, P::Pokemini] {
+                    if !Shader::list_3_0(platform).contains(&s.shader_for(platform)) {
+                        s.set_shader_for(platform, Shader::Off);
+                    }
+                }
+                // Once: the 3.0 betas' handhelds left with no shader take
+                // their LCD defaults (Siham 2026-11-21).
+                if !s.lcd_3_0 {
+                    for platform in [P::Gg, P::Ngp, P::Ws, P::Lynx] {
+                        if s.shader_for(platform) == Shader::Off {
+                            s.set_shader_for(platform, lcd_3_0_default(platform));
+                        }
+                    }
+                    if s.blending_ws == Blending::Off { s.blending_ws = Blending::Mix; }
+                    s.lcd_3_0 = true;
+                }
+                // Once: rc1's defaults (LCD Grid v2, LCD1x on the WonderSwan)
+                // become LCD3x (Siham 2026-11-21); any other choice stays.
+                if !s.lcd3x_3_0 {
+                    for platform in [P::Gg, P::Ngp, P::Lynx] {
+                        if s.shader_for(platform) == Shader::LcdGridV2 {
+                            s.set_shader_for(platform, Shader::Lcd3x);
+                        }
+                    }
+                    if s.shader_ws == Shader::Lcd1x { s.shader_ws = Shader::Lcd3x; }
+                    s.lcd3x_3_0 = true;
+                }
+                // Mark the historical side-bar migration complete, but never
+                // change what an existing user chose (including rc5 installs).
+                // New installs already default to visible side bars.
+                if !s.side_bars_3_0 { s.side_bars_3_0 = true; }
                 if s.gb_palette as usize >= GbPalette::COUNT { s.gb_palette = 1; }
                 if !REWIND_SPEEDS.contains(&s.rewind_speed) { s.rewind_speed = 2; }
                 if s.run_ahead_frames > 2 { s.run_ahead_frames = 0; }
@@ -1046,6 +1294,12 @@ impl Settings {
             slot_store::Platform::Nes=>self.shader_nes,
             slot_store::Platform::Snes=>self.shader_snes,
             slot_store::Platform::Md=>self.shader_md,
+            slot_store::Platform::Sms=>self.shader_sms,
+            slot_store::Platform::Gg=>self.shader_gg,
+            slot_store::Platform::Ngp=>self.shader_ngp,
+            slot_store::Platform::Ws=>self.shader_ws,
+            slot_store::Platform::Lynx=>self.shader_lynx,
+            slot_store::Platform::Pokemini=>self.shader_pokemini,
         }
     }
     pub fn set_shader_for(&mut self,platform:slot_store::Platform,shader:Shader) {
@@ -1056,14 +1310,28 @@ impl Settings {
             slot_store::Platform::Nes=>self.shader_nes=shader,
             slot_store::Platform::Snes=>self.shader_snes=shader,
             slot_store::Platform::Md=>self.shader_md=shader,
+            slot_store::Platform::Sms=>self.shader_sms=shader,
+            slot_store::Platform::Gg=>self.shader_gg=shader,
+            slot_store::Platform::Ngp=>self.shader_ngp=shader,
+            slot_store::Platform::Ws=>self.shader_ws=shader,
+            slot_store::Platform::Lynx=>self.shader_lynx=shader,
+            slot_store::Platform::Pokemini=>self.shader_pokemini=shader,
         }
     }
-    /// The Shader row's key of a home console (47 NES, 48 SNES, 49 MD).
+    /// The Shader row's key of a home console (47 NES, 48 SNES, 49 MD,
+    /// 110 Master System, 111 Game Gear, 115 Neo Geo Pocket, 116 WonderSwan,
+    /// 120 Lynx, 121 Pokemon mini).
     pub fn home_shader_key(platform:slot_store::Platform)->Option<usize> {
         match platform {
             slot_store::Platform::Nes=>Some(47),
             slot_store::Platform::Snes=>Some(48),
             slot_store::Platform::Md=>Some(49),
+            slot_store::Platform::Sms=>Some(SHADER_SMS_KEY),
+            slot_store::Platform::Gg=>Some(SHADER_GG_KEY),
+            slot_store::Platform::Ngp=>Some(SHADER_NGP_KEY),
+            slot_store::Platform::Ws=>Some(SHADER_WS_KEY),
+            slot_store::Platform::Lynx=>Some(SHADER_LYNX_KEY),
+            slot_store::Platform::Pokemini=>Some(SHADER_POKEMINI_KEY),
             _=>None,
         }
     }
@@ -1075,10 +1343,20 @@ impl Settings {
             _=>false,
         }
     }
-    /// The Settings key of a system's Frame Blending row (60..=65).
+    /// The Settings key of a system's Frame Blending row (60..=65, then
+    /// 112 Master System, 113 Game Gear, 117 Neo Geo Pocket, 118 WonderSwan,
+    /// 122 Lynx, 123 Pokemon mini).
     pub fn blending_key(platform: slot_store::Platform) -> usize {
         use slot_store::Platform::*;
-        match platform { Gba => 60, Gbc => 61, Gb => 62, Nes => 63, Snes => 64, Md => 65 }
+        match platform { Gba => 60, Gbc => 61, Gb => 62, Nes => 63, Snes => 64, Md => 65,
+            Sms => BLENDING_SMS_KEY, Gg => BLENDING_GG_KEY,
+            Ngp => BLENDING_NGP_KEY, Ws => BLENDING_WS_KEY,
+            Lynx => BLENDING_LYNX_KEY, Pokemini => BLENDING_POKEMINI_KEY }
+    }
+
+    /// The system a Frame Blending key belongs to.
+    pub fn blending_platform(key: usize) -> Option<slot_store::Platform> {
+        slot_store::Platform::ALL.into_iter().find(|p| Self::blending_key(*p) == key)
     }
 
     pub(crate) fn blending_mut(&mut self, platform: slot_store::Platform) -> &mut Blending {
@@ -1086,6 +1364,9 @@ impl Settings {
         match platform {
             Gba => &mut self.blending_gba, Gbc => &mut self.blending_gbc, Gb => &mut self.blending_gb,
             Nes => &mut self.blending_nes, Snes => &mut self.blending_snes, Md => &mut self.blending_md,
+            Sms => &mut self.blending_sms, Gg => &mut self.blending_gg,
+            Ngp => &mut self.blending_ngp, Ws => &mut self.blending_ws,
+            Lynx => &mut self.blending_lynx, Pokemini => &mut self.blending_pokemini,
         }
     }
 
@@ -1117,6 +1398,9 @@ impl Settings {
         match platform {
             Gba => self.blending_gba, Gbc => self.blending_gbc, Gb => self.blending_gb,
             Nes => self.blending_nes, Snes => self.blending_snes, Md => self.blending_md,
+            Sms => self.blending_sms, Gg => self.blending_gg,
+            Ngp => self.blending_ngp, Ws => self.blending_ws,
+            Lynx => self.blending_lynx, Pokemini => self.blending_pokemini,
         }
     }
 
@@ -1152,6 +1436,12 @@ impl Settings {
             slot_store::Platform::Nes=>self.bezel_nes,
             slot_store::Platform::Snes=>self.bezel_snes,
             slot_store::Platform::Md=>self.bezel_md,
+            slot_store::Platform::Sms=>self.bezel_sms,
+            slot_store::Platform::Gg=>self.bezel_gg,
+            slot_store::Platform::Ngp=>self.bezel_ngp,
+            slot_store::Platform::Ws=>self.bezel_ws,
+            slot_store::Platform::Lynx=>self.bezel_lynx,
+            slot_store::Platform::Pokemini=>self.bezel_pokemini,
         }
     }
     pub fn set_bezel_for(&mut self,platform:slot_store::Platform,value:Bezel) {
@@ -1162,6 +1452,12 @@ impl Settings {
             slot_store::Platform::Nes=>self.bezel_nes=value,
             slot_store::Platform::Snes=>self.bezel_snes=value,
             slot_store::Platform::Md=>self.bezel_md=value,
+            slot_store::Platform::Sms=>self.bezel_sms=value,
+            slot_store::Platform::Gg=>self.bezel_gg=value,
+            slot_store::Platform::Ngp=>self.bezel_ngp=value,
+            slot_store::Platform::Ws=>self.bezel_ws=value,
+            slot_store::Platform::Lynx=>self.bezel_lynx=value,
+            slot_store::Platform::Pokemini=>self.bezel_pokemini=value,
         }
     }
     /// The Bezel row's settings key for each system.
@@ -1170,7 +1466,28 @@ impl Settings {
             slot_store::Platform::Gba=>25, slot_store::Platform::Gbc=>26,
             slot_store::Platform::Gb=>27, slot_store::Platform::Nes=>44,
             slot_store::Platform::Snes=>45, slot_store::Platform::Md=>46,
+            slot_store::Platform::Sms=>BEZEL_SMS_KEY, slot_store::Platform::Gg=>BEZEL_GG_KEY,
+            slot_store::Platform::Ngp=>BEZEL_NGP_KEY, slot_store::Platform::Ws=>BEZEL_WS_KEY,
+            slot_store::Platform::Lynx=>BEZEL_LYNX_KEY,
+            slot_store::Platform::Pokemini=>BEZEL_POKEMINI_KEY,
         }
+    }
+    /// Once per handheld: a 3.0 system whose overlay would only have thin
+    /// bars on this screen starts with it OFF (the Master System on 3:2,
+    /// the Pokemon mini on 5:3), as NES, SNES and Mega Drive on 3:2.
+    pub fn own_bezels_by_room(&mut self, panel: (u32, u32)) {
+        if self.own_bezels_room { return; }
+        use slot_store::Platform as P;
+        for platform in [P::Sms, P::Gg, P::Ngp, P::Ws, P::Lynx, P::Pokemini] {
+            if crate::video_mode::own_room(platform, panel) < crate::video_mode::OWN_ROOM_ON {
+                self.set_bezel_for(platform, Bezel::None);
+            }
+        }
+        self.own_bezels_room = true;
+    }
+    /// The system a Bezel row's key belongs to.
+    pub fn bezel_platform(key:usize)->Option<slot_store::Platform> {
+        slot_store::Platform::ALL.into_iter().find(|p| Self::bezel_key(*p)==key)
     }
     fn step_bezel(&mut self,platform:slot_store::Platform,right:bool) {
         let next=self.bezel_for(platform).step_in(Bezel::list(platform),right);
@@ -1192,9 +1509,9 @@ impl Settings {
             24 => self.set_colour_for(slot_store::Platform::Gb,
                 !self.colour_correction_gb),
             21 => self.shader_gbc=self.shader_gbc.step(&Shader::GBC,right),
-            60..=65 => {
-                use slot_store::Platform::*;
-                let platform = [Gba, Gbc, Gb, Nes, Snes, Md][key - 60];
+            60..=65 | BLENDING_SMS_KEY | BLENDING_GG_KEY | BLENDING_NGP_KEY | BLENDING_WS_KEY
+            | BLENDING_LYNX_KEY | BLENDING_POKEMINI_KEY => {
+                let Some(platform) = Self::blending_platform(key) else { return false };
                 let blending = self.blending_mut(platform);
                 *blending = blending.step(right);
             }
@@ -1217,9 +1534,36 @@ impl Settings {
             44 => self.step_bezel(slot_store::Platform::Nes,right),
             45 => self.step_bezel(slot_store::Platform::Snes,right),
             46 => self.step_bezel(slot_store::Platform::Md,right),
+            POKEMINI_FILTER_KEY => self.pokemini_lcd_filter = step_index(self.pokemini_lcd_filter, 3, right),
+            SPRITE_LIMIT_SMS_KEY => self.no_sprite_limit_sms = !self.no_sprite_limit_sms,
+            SPRITE_LIMIT_GG_KEY => self.no_sprite_limit_gg = !self.no_sprite_limit_gg,
+            NGP_LANGUAGE_KEY => self.ngp_language = step_index(self.ngp_language, 2, right),
+            WS_PALETTE_KEY => self.ws_palette = step_index(self.ws_palette, WS_PALETTES.len() as u8, right),
+            POKEMINI_PALETTE_KEY => self.pokemini_palette =
+                step_index(self.pokemini_palette, POKEMINI_PALETTES.len() as u8, right),
+            POKEMINI_LCD_MODE_KEY => self.pokemini_lcd_mode =
+                step_index(self.pokemini_lcd_mode, POKEMINI_LCD_MODES.len() as u8, right),
+            LEFT_BAR_SMS_KEY => self.hide_left_bar_sms = !self.hide_left_bar_sms,
+            LEFT_BAR_NES_KEY => self.hide_left_bar_nes = !self.hide_left_bar_nes,
+            FM_SMS_KEY => self.fm_off_sms = !self.fm_off_sms,
+            NES_AUDIO_FILTER_KEY => self.nes_audio_filter = !self.nes_audio_filter,
+            MD_FM_SOUND_KEY => self.md_fm_nuked = !self.md_fm_nuked,
+            WS_AUDIO_FILTER_KEY => self.ws_audio_filter = !self.ws_audio_filter,
+            WS_LANGUAGE_KEY => self.ws_language = step_index(self.ws_language, 2, right),
+            POKEMINI_SHAKE_KEY => self.pokemini_no_shake = !self.pokemini_no_shake,
+            BEZEL_SMS_KEY..=BEZEL_POKEMINI_KEY => {
+                let Some(platform) = Self::bezel_platform(key) else { return false };
+                self.step_bezel(platform,right);
+            }
             47 => self.shader_nes=self.shader_nes.step(&Shader::HOME,right),
             48 => self.shader_snes=self.shader_snes.step(&Shader::HOME,right),
             49 => self.shader_md=self.shader_md.step(&Shader::HOME,right),
+            SHADER_SMS_KEY => self.shader_sms=self.shader_sms.step(&Shader::HOME,right),
+            SHADER_GG_KEY => self.shader_gg=self.shader_gg.step(&Shader::LCD,right),
+            SHADER_NGP_KEY => self.shader_ngp=self.shader_ngp.step(&Shader::LCD,right),
+            SHADER_WS_KEY => self.shader_ws=self.shader_ws.step(&Shader::LCD,right),
+            SHADER_LYNX_KEY => self.shader_lynx=self.shader_lynx.step(&Shader::LCD,right),
+            SHADER_POKEMINI_KEY => self.shader_pokemini=self.shader_pokemini.step(&Shader::POKEMINI,right),
             3 => step_palette(&mut self.gb_palettes, &mut self.gb_palette, right),
             4 => {
                 let at = SPEEDS.iter().position(|x| *x == self.ff_speed).unwrap_or(0);
@@ -1266,6 +1610,173 @@ impl Settings {
             .unwrap_or(GbPalette::DEFAULT).core_name()
     }
 }
+/// Settings keys of the 3.0 systems' rows (2.5 used up to 107): Default
+/// Core, Shader and Frame Blending of the Master System and the Game Gear.
+pub const CORE_SMS_KEY: usize = 108;
+pub const CORE_GG_KEY: usize = 109;
+pub const SHADER_SMS_KEY: usize = 110;
+pub const SHADER_GG_KEY: usize = 111;
+pub const BLENDING_SMS_KEY: usize = 112;
+pub const BLENDING_GG_KEY: usize = 113;
+/// Neo Geo Pocket (Default Core, Shader, Frame Blending) and WonderSwan
+/// (Shader, Frame Blending: one core only), 3.0.
+pub const CORE_NGP_KEY: usize = 114;
+pub const SHADER_NGP_KEY: usize = 115;
+pub const SHADER_WS_KEY: usize = 116;
+pub const BLENDING_NGP_KEY: usize = 117;
+pub const BLENDING_WS_KEY: usize = 118;
+/// Lynx (Default Core, Shader, Frame Blending) and Pokemon mini (Shader,
+/// Frame Blending: one core only), 3.0.
+pub const CORE_LYNX_KEY: usize = 119;
+pub const SHADER_LYNX_KEY: usize = 120;
+pub const SHADER_POKEMINI_KEY: usize = 121;
+pub const BLENDING_LYNX_KEY: usize = 122;
+pub const BLENDING_POKEMINI_KEY: usize = 123;
+/// The 3.0 systems' Bezel rows (slot.'s own overlays, 3.0.0-overlays1).
+pub const BEZEL_SMS_KEY: usize = 124;
+pub const BEZEL_GG_KEY: usize = 125;
+pub const BEZEL_NGP_KEY: usize = 126;
+pub const BEZEL_WS_KEY: usize = 127;
+pub const BEZEL_LYNX_KEY: usize = 128;
+pub const BEZEL_POKEMINI_KEY: usize = 129;
+/// Settings > Systems > Pokemon mini > LCD Filter.
+pub const POKEMINI_FILTER_KEY: usize = 130;
+
+/// The 3.0 systems' own core options (3.0.0-materials3), as Settings keys.
+pub const SPRITE_LIMIT_SMS_KEY: usize = 131;
+pub const SPRITE_LIMIT_GG_KEY: usize = 132;
+pub const NGP_LANGUAGE_KEY: usize = 133;
+pub const WS_PALETTE_KEY: usize = 134;
+pub const POKEMINI_PALETTE_KEY: usize = 135;
+pub const POKEMINI_LCD_MODE_KEY: usize = 136;
+pub const LEFT_BAR_SMS_KEY: usize = 137;
+pub const FM_SMS_KEY: usize = 138;
+pub const WS_LANGUAGE_KEY: usize = 139;
+pub const POKEMINI_SHAKE_KEY: usize = 140;
+/// Settings > Systems > NES > Hide Left Bar.
+pub const LEFT_BAR_NES_KEY: usize = 141;
+/// Settings > Systems: optional audio character, OFF/MAME by default.
+pub const NES_AUDIO_FILTER_KEY: usize = 142;
+pub const MD_FM_SOUND_KEY: usize = 143;
+pub const WS_AUDIO_FILTER_KEY: usize = 144;
+
+/// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
+/// grey first, then the three consoles' screens.
+pub const WS_PALETTES: [&str; 4] = ["default", "wonderswan", "wondeswan_color", "swancrystal"];
+/// PokeMini's palettes, its Default (the real console's) first.
+pub const POKEMINI_PALETTES: [&str; 7] = ["Default", "Old", "Monochrome", "Green", "Red", "Blue", "Sepia"];
+/// PokeMini's LCD modes: Analog (the real LCD's ghosting) first.
+pub const POKEMINI_LCD_MODES: [&str; 3] = ["analog", "3shades", "2shades"];
+
+/// The Pokemon mini's LCD Filter for the next game started (the settings
+/// stay with the runtime; the core options are set in game.rs).
+pub static POKEMINI_LCD_FILTER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The 3.0 systems' core options a game starts with, kept by the runtime
+/// whenever Settings change (as POKEMINI_LCD_FILTER).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CoreExtras {
+    pub no_sprite_limit_sms: bool,
+    pub no_sprite_limit_gg: bool,
+    pub ngp_language: u8,
+    pub ws_palette: u8,
+    pub pokemini_filter: u8,
+    pub pokemini_palette: u8,
+    pub pokemini_lcd_mode: u8,
+    pub hide_left_bar_sms: bool,
+    pub fm_off_sms: bool,
+    pub ws_language: u8,
+    pub pokemini_no_shake: bool,
+    pub hide_left_bar_nes: bool,
+    pub nes_audio_filter: bool,
+    pub md_fm_nuked: bool,
+    pub ws_audio_filter: bool,
+}
+pub static CORE_EXTRAS: std::sync::Mutex<CoreExtras> = std::sync::Mutex::new(CoreExtras {
+    no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
+    ws_palette: 0, pokemini_filter: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
+    hide_left_bar_sms: false, fm_off_sms: false, ws_language: 0, pokemini_no_shake: false,
+    hide_left_bar_nes: false,
+    nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false });
+
+impl CoreExtras {
+    pub fn of(s: &Settings) -> Self {
+        Self { no_sprite_limit_sms: s.no_sprite_limit_sms, no_sprite_limit_gg: s.no_sprite_limit_gg,
+            ngp_language: s.ngp_language, ws_palette: s.ws_palette,
+            pokemini_filter: s.pokemini_lcd_filter, pokemini_palette: s.pokemini_palette,
+            pokemini_lcd_mode: s.pokemini_lcd_mode, hide_left_bar_sms: s.hide_left_bar_sms,
+            fm_off_sms: s.fm_off_sms, ws_language: s.ws_language, pokemini_no_shake: s.pokemini_no_shake,
+            hide_left_bar_nes: s.hide_left_bar_nes,
+            nes_audio_filter: s.nes_audio_filter,
+            md_fm_nuked: s.md_fm_nuked,
+            ws_audio_filter: s.ws_audio_filter }
+    }
+    pub fn store(s: &Settings) {
+        POKEMINI_LCD_FILTER.store(s.pokemini_lcd_filter, std::sync::atomic::Ordering::Release);
+        *CORE_EXTRAS.lock().unwrap_or_else(|e| e.into_inner()) = Self::of(s);
+    }
+    pub fn current() -> Self { *CORE_EXTRAS.lock().unwrap_or_else(|e| e.into_inner()) }
+    /// The core options these choices set for a system's core.
+    pub fn options(&self, platform: slot_store::Platform, core: slot_store::Core) -> Vec<(&'static str, &'static str)> {
+        use slot_store::{Core, Platform};
+        let pick = |list: &[&'static str], at: u8| list[(at as usize).min(list.len() - 1)];
+        let nes_bar = if self.hide_left_bar_nes { "8" } else { "0" };
+        match (platform, core) {
+            (Platform::Nes, Core::Fceumm) => vec![
+                ("fceumm_overscan_h_left", nes_bar), ("fceumm_overscan_h_right", nes_bar),
+                ("fceumm_sndlowpass", if self.nes_audio_filter { "enabled" } else { "disabled" }),
+            ],
+            // Nestopia's analogue-output filter is not the RF modulator:
+            // map the core's own closest equivalent instead of doing nothing.
+            (Platform::Nes, Core::Nestopia) => vec![
+                ("nestopia_overscan_h_left", nes_bar), ("nestopia_overscan_h_right", nes_bar),
+                ("nestopia_audio_filter", if self.nes_audio_filter { "enabled" } else { "disabled" }),
+            ],
+            (Platform::Md, Core::GenesisPlusGx) => vec![
+                ("genesis_plus_gx_ym2612",
+                    if self.md_fm_nuked { "nuked (ym2612)" } else { "mame (ym2612)" }),
+            ],
+            (Platform::Sms, Core::GenesisPlusGx) => vec![
+                ("genesis_plus_gx_no_sprite_limit", if self.no_sprite_limit_sms { "enabled" } else { "disabled" }),
+                ("genesis_plus_gx_left_border", if self.hide_left_bar_sms { "left border" } else { "disabled" }),
+                ("genesis_plus_gx_ym2413", if self.fm_off_sms { "disabled" } else { "auto" }),
+            ],
+            (Platform::Gg, Core::GenesisPlusGx) => vec![
+                ("genesis_plus_gx_no_sprite_limit", if self.no_sprite_limit_gg { "enabled" } else { "disabled" }),
+            ],
+            (Platform::Sms, Core::Gearsystem) => vec![
+                ("gearsystem_no_sprite_limit", if self.no_sprite_limit_sms { "Enabled" } else { "Disabled" }),
+                ("gearsystem_hide_left_bar", if self.hide_left_bar_sms { "Always" } else { "No" }),
+                ("gearsystem_ym2413", if self.fm_off_sms { "Disabled" } else { "Auto" }),
+            ],
+            (Platform::Gg, Core::Gearsystem) => vec![
+                ("gearsystem_no_sprite_limit", if self.no_sprite_limit_gg { "Enabled" } else { "Disabled" }),
+            ],
+            (Platform::Ngp, Core::Neopop) =>
+                vec![("ngp_language", if self.ngp_language == 1 { "japanese" } else { "english" })],
+            (Platform::Ngp, Core::Race) =>
+                vec![("race_language", if self.ngp_language == 1 { "japanese" } else { "english" })],
+            (Platform::Ws, _) => vec![
+                ("wswan_mono_palette", pick(&WS_PALETTES, self.ws_palette)),
+                ("wswan_language", if self.ws_language == 1 { "japanese" } else { "english" }),
+                ("wswan_sound_low_pass", if self.ws_audio_filter { "enabled" } else { "disabled" }),
+            ],
+            (Platform::Pokemini, _) => vec![
+                ("pokemini_lcdfilter", pokemini_lcd_filter_option(self.pokemini_filter)),
+                ("pokemini_palette", pick(&POKEMINI_PALETTES, self.pokemini_palette)),
+                ("pokemini_lcdmode", pick(&POKEMINI_LCD_MODES, self.pokemini_lcd_mode)),
+                ("pokemini_screen_shake_lv", if self.pokemini_no_shake { "0" } else { "3" }),
+            ],
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// PokeMini's pokemini_lcdfilter value for a Settings choice.
+pub fn pokemini_lcd_filter_option(choice: u8) -> &'static str {
+    match choice { 1 => "scanline", 2 => "none", _ => "dotmatrix" }
+}
+
 /// RG Rotate closed: seconds before it dims, then before it sleeps (0 never).
 pub const ROTATE_DIM_S: [u16; 4] = [5, 10, 15, 30];
 pub const ROTATE_SLEEP_S: [u16; 5] = [30, 60, 120, 300, 0];
@@ -1459,6 +1970,28 @@ mod tests {
     }
 
     #[test]
+    fn side_bars_are_visible_by_default_and_existing_choices_survive() {
+        for device in [Device::RPC, Device::KONKR] {
+            let fresh = Settings::first_install_defaults_for_device(device);
+            assert!(!fresh.hide_left_bar_nes && !fresh.hide_left_bar_sms,
+                "new installations keep side bars visible");
+        }
+        let dir = std::env::temp_dir().join(format!("slot-side-bars-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Older settings with side bars visible must not be silently changed.
+        let old = Settings { hide_left_bar_nes: false, hide_left_bar_sms: false, side_bars_3_0: false,
+            ..Settings::default() };
+        old.save(&dir).unwrap();
+        let now = Settings::load(&dir);
+        assert!(!now.hide_left_bar_nes && !now.hide_left_bar_sms && now.side_bars_3_0);
+        // Older settings with side bars hidden explicitly must also be kept.
+        Settings { hide_left_bar_nes: true, hide_left_bar_sms: true, ..now }.save(&dir).unwrap();
+        let chosen = Settings::load(&dir);
+        assert!(chosen.hide_left_bar_nes && chosen.hide_left_bar_sms);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn upstream_v17_wallpaper_picker_follows_original_order() {
         use WallpaperPick::*;
         let root=std::env::temp_dir().join(format!(
@@ -1624,7 +2157,8 @@ mod tests {
         assert_eq!(s.wallpaper, Default);
         assert_eq!(s.wallpaper_on(0), &File("gba.PNG".into()));
         assert_eq!(s.wallpaper_on(1), &Default);
-        assert_eq!(s.wallpaper_on(7), &File("Favorites.png".into()));
+        let favorites = crate::wallpaper::SHELF_KEYS.iter().position(|k| *k == "Favorites").unwrap();
+        assert_eq!(s.wallpaper_on(favorites), &File("Favorites.png".into()));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2187,12 +2721,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
     #[test]
+    fn the_3_0_handhelds_take_their_lcd_shaders_once() {
+        let dir = std::env::temp_dir().join(format!("slot-lcd-3-0-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A 3.0 beta's settings: no shader on the handhelds, a CRT one left
+        // on the Game Gear by an older beta's list.
+        fs::write(dir.join(NAME), r#"{"shader_gg":"zfastcrt","shader_ngp":"off","shader_ws":"off",
+            "shader_lynx":"off","shader_pokemini":"off","blending_ws":"Off"}"#).unwrap();
+        let mut s = Settings::load(&dir);
+        assert_eq!((s.shader_gg, s.shader_ngp, s.shader_ws, s.shader_lynx, s.shader_pokemini),
+            (Shader::Lcd3x, Shader::Lcd3x, Shader::Lcd3x, Shader::Lcd3x, Shader::Off));
+        assert_eq!(s.blending_ws, Blending::Mix);
+        // Off chosen afterwards stays Off.
+        s.shader_ngp = Shader::Off;
+        s.save(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).shader_ngp, Shader::Off);
+        // Each list: Simpletex for the LCDs, nothing but Off and Sharp
+        // Bilinear for the Pokemon mini.
+        assert!(Shader::LCD.contains(&Shader::Simpletex));
+        let mut s = Settings::default();
+        for _ in 0..3 { s.change(SHADER_POKEMINI_KEY, true); }
+        assert!(Shader::POKEMINI.contains(&s.shader_pokemini));
+        s.change(POKEMINI_FILTER_KEY, true);
+        assert_eq!(pokemini_lcd_filter_option(s.pokemini_lcd_filter), "scanline");
+        let _ = fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn rc1_lcd_defaults_become_lcd3x_once() {
+        let dir = std::env::temp_dir().join(format!("slot-lcd3x-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(NAME), r#"{"lcd_3_0":true,"shader_gg":"lcdgridv2","shader_ngp":"dot",
+            "shader_ws":"lcd1x","shader_lynx":"lcdgridv2","shader_pokemini":"off"}"#).unwrap();
+        let mut s = Settings::load(&dir);
+        assert_eq!((s.shader_gg, s.shader_ngp, s.shader_ws, s.shader_lynx),
+            (Shader::Lcd3x, Shader::Dot, Shader::Lcd3x, Shader::Lcd3x));
+        // LCD Grid v2 chosen afterwards stays.
+        s.shader_gg = Shader::LcdGridV2;
+        s.save(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).shader_gg, Shader::LcdGridV2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+    #[test]
     fn roundtrip_and_invalid_values() {
         let dir = std::env::temp_dir().join(format!("slot-konkr-dev14-{}", std::process::id()));
         // Already past the one-time 3:2 home overlay change.
         let mut s = Settings { home_bezel_three_two: true, gb_palette_twb64: true,
             gb_overlays_watomsk: true, simpletex_gba_colour: true, gbav_fsr: true,
-            ..Settings::default() };
+            lcd_3_0: true, lcd3x_3_0: true, side_bars_3_0: true, ..Settings::default() };
         s.change(0, true); s.change(6, true); s.gb_palette = 47;
         s.save(&dir).unwrap();
         assert_eq!(Settings::load(&dir), s);
@@ -2346,3 +2921,53 @@ mod tests {
     }
 }
 
+
+
+/// Audio preferences belong to the portable slot. folder, not the device.
+#[cfg(test)]
+mod audio_parity_tests {
+    use super::*;
+    use slot_store::{Core, Platform};
+
+    fn value(options: &[(&str, &str)], key: &str) -> Option<String> {
+        options.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_string())
+    }
+
+    #[test]
+    fn defaults_match_libretro_audio_and_survive_older_settings_json() {
+        let s = Settings::default();
+        assert!(!s.nes_audio_filter && !s.md_fm_nuked && !s.ws_audio_filter);
+        let extras = CoreExtras::of(&s);
+        assert_eq!(value(&extras.options(Platform::Nes, Core::Fceumm), "fceumm_sndlowpass"), Some("disabled".into()));
+        assert_eq!(value(&extras.options(Platform::Nes, Core::Nestopia), "nestopia_audio_filter"), Some("disabled".into()));
+        assert_eq!(value(&extras.options(Platform::Md, Core::GenesisPlusGx), "genesis_plus_gx_ym2612"), Some("mame (ym2612)".into()));
+        assert_eq!(value(&extras.options(Platform::Ws, Core::BeetleCygne), "wswan_sound_low_pass"), Some("disabled".into()));
+
+        let mut json = serde_json::to_value(s).expect("settings serialized");
+        let object = json.as_object_mut().expect("object");
+        for field in ["nes_audio_filter", "md_fm_nuked", "ws_audio_filter"] {
+            object.remove(field);
+        }
+        let restored: Settings = serde_json::from_value(json).expect("older settings");
+        assert!(!restored.nes_audio_filter && !restored.md_fm_nuked && !restored.ws_audio_filter);
+    }
+
+    #[test]
+    fn audio_rows_toggle_and_apply_only_to_supported_cores() {
+        let mut s = Settings::default();
+        s.change(NES_AUDIO_FILTER_KEY, true);
+        s.change(MD_FM_SOUND_KEY, true);
+        s.change(WS_AUDIO_FILTER_KEY, true);
+        assert!(s.nes_audio_filter && s.md_fm_nuked && s.ws_audio_filter);
+        let extras = CoreExtras::of(&s);
+        assert_eq!(value(&extras.options(Platform::Nes, Core::Fceumm), "fceumm_sndlowpass"), Some("enabled".into()));
+        assert_eq!(value(&extras.options(Platform::Nes, Core::Nestopia), "nestopia_audio_filter"), Some("enabled".into()));
+        assert_eq!(value(&extras.options(Platform::Md, Core::GenesisPlusGx), "genesis_plus_gx_ym2612"), Some("nuked (ym2612)".into()));
+        assert!(value(&extras.options(Platform::Md, Core::Picodrive), "genesis_plus_gx_ym2612").is_none());
+        assert_eq!(value(&extras.options(Platform::Ws, Core::BeetleCygne), "wswan_sound_low_pass"), Some("enabled".into()));
+
+        let stored = serde_json::to_string(&s).expect("serialized");
+        let loaded: Settings = serde_json::from_str(&stored).expect("reloaded");
+        assert!(loaded.nes_audio_filter && loaded.md_fm_nuked && loaded.ws_audio_filter);
+    }
+}

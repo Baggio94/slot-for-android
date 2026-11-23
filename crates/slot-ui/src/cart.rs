@@ -86,7 +86,8 @@ pub enum Body {
 
 pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
-        Platform::Gba | Platform::Nes | Platform::Snes | Platform::Md => None,
+        Platform::Gba | Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini => None,
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
             Some(Outline::Notched) => GbShell::Notched,
             Some(Outline::Rounded) => GbShell::Rounded,
@@ -113,7 +114,8 @@ pub fn platform_body(platform: Platform) -> Body {
     match platform {
         Platform::Gba => Body::Gba,
         Platform::Gb | Platform::Gbc => Body::Gb(GbShell::Notched),
-        Platform::Nes | Platform::Snes | Platform::Md => {
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini => {
             Body::Home(HomeMould::default_for(platform).unwrap_or(HomeMould::Nes))
         }
     }
@@ -197,12 +199,18 @@ pub fn cart_box_for(cart: &Cart) -> (u32, u32) {
 /// EA's tall Mega Drive carts are drawn 20% smaller than that (Siham
 /// 2026-11-04): at full size they ran off the top of the screen. The other
 /// tall Mega Drive moulds (Accolade, Codemasters, Virtua Racing) are held
-/// to the height the EA cart is shown at.
+/// to the height the EA cart is shown at, the tall 3.0 moulds to the Game
+/// Gear cart's.
 pub fn shelf_grow(body: Body) -> f32 {
     match body {
         Body::Home(m) if m.system() == home::HomeSystem::Md => {
             let tallest = HomeMould::MegaDriveEa.size().1 as f32 * 1.2 * 0.8;
             seat_grow(body).min(tallest / m.size().1 as f32)
+        }
+        // The Mark III's cart, the My Card and Codemasters' Game Gear cart
+        // are held to the Game Gear cart's height, so they stay on screen.
+        Body::Home(m @ (HomeMould::MasterSystemJp | HomeMould::MasterSystemCard | HomeMould::GameGearCodemasters)) => {
+            (HomeMould::GameGear.size().1 as f32 / m.size().1 as f32).min(1.0)
         }
         _ => seat_grow(body),
     }
@@ -212,7 +220,7 @@ pub fn shelf_grow(body: Body) -> f32 {
 /// EA's included, fill their slot's recess, which is drawn to fit them.
 fn seat_grow(body: Body) -> f32 {
     match body {
-        Body::Home(m) if m.system() != home::HomeSystem::Nes => 1.2,
+        Body::Home(m) if matches!(m.system(), home::HomeSystem::Snes | home::HomeSystem::Md) => 1.2,
         _ => 1.0,
     }
 }
@@ -269,9 +277,25 @@ fn mask_of(s: &Spec) -> std::borrow::Cow<'static, [u8]> {
 fn label_art(cart: &Cart, w: u32, h: u32) -> Option<Vec<u8>> {
     let path = cart.label.as_deref()?;
     match body_of(cart) {
-        Body::Home(_) => art::fit_label(path, w, h),
+        Body::Home(m) => {
+            let (src, sw, sh) = art::decode(path)?;
+            label_fits(m, sw, sh).then(|| art::fit_label_rgba(&src, sw, sh, w, h)).flatten()
+        }
         _ => art::cover(path, w, h),
     }
+}
+
+/// Whether a label picture has its well's shape near enough: a 3.0 cart
+/// keeps its title by hand rather than wear another cart's label (a
+/// Master System front label on the end of a western cart, whose well is
+/// the strip on its top).
+fn label_fits(m: HomeMould, sw: u32, sh: u32) -> bool {
+    if m.index() < HomeMould::NeoGeoPocket.index() || sw == 0 || sh == 0 {
+        return true;
+    }
+    let (_, _, lw, lh) = m.art().label;
+    let ratio = (sw as f32 / sh as f32) / (lw as f32 / lh as f32);
+    (1.0 / 1.6..=1.6).contains(&ratio)
 }
 
 /// Cart Studio: a label picture of any size (straight RGBA) fitted to this
@@ -307,6 +331,19 @@ pub fn cart_face(cart: &Cart) -> CartFace {
     let (lw, lh) = label_size(cart);
     let art = label_art(cart, px(lw), px(lh));
     cart_face_with(cart, art)
+}
+
+/// The front that lifts off when the cart opens, where it is not the cart's
+/// own face: the Lynx's leaves its contacts on the board. None otherwise.
+pub fn lid_face(cart: &Cart) -> Option<CartFace> {
+    let Body::Home(m) = body_of(cart) else { return None };
+    let lid = home::dense_lid(m)?;
+    let (lw, lh) = label_size(cart);
+    let mut face = cart_face_with(cart, label_art(cart, px(lw), px(lh)));
+    for (px, cover) in face.rgba.chunks_exact_mut(4).zip(lid.iter()) {
+        px[3] = ((px[3] as u32 * *cover as u32 + 127) / 255) as u8;
+    }
+    Some(face)
 }
 
 pub fn is_clear(cart: &Cart) -> bool {
@@ -391,6 +428,8 @@ pub fn cart_face_with_material(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
         let (w, h) = label_size(cart);
         label_art(cart, px(w), px(h))
     });
+    // The title by hand (no label, or Cart Studio's slot. label).
+    let by_hand = !home::is_test_cart(cart) && artwork.as_deref().is_none_or(mostly_clear);
     let plastic = cart_face_with(cart, artwork);
     if !is_clear(cart) {
         return plastic;
@@ -402,8 +441,37 @@ pub fn cart_face_with_material(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
     let mut pixels = vec![0u8; plastic.rgba.len()];
     blend_over(&mut pixels, &interior.rgba);
     blend_over(&mut pixels, &backing.rgba);
+    if by_hand {
+        frost_well(&spec(shape_of(cart)), &mut pixels, &plastic.rgba);
+    }
     blend_over(&mut pixels, &plastic.rgba);
     CartFace { rgba: pixels, w: plastic.w, h: plastic.h }
+}
+
+/// Under a title written by hand, a clear cart's label well is frosted
+/// plastic (Siham 2026-11-20): the board behind it blurred and milky, so
+/// the chips' printing never reads through the writing.
+fn frost_well(s: &Spec, under: &mut [u8], plastic: &[u8]) {
+    let (lx, ly, lw, lh) = s.label;
+    let (fw, fh) = (px(s.w) as usize, px(s.h) as usize);
+    let (x0, y0) = (px(lx) as usize, px(ly) as usize);
+    let (x1, y1) = ((px(lx + lw) as usize).min(fw), (px(ly + lh) as usize).min(fh));
+    if x1 <= x0 || y1 <= y0 { return; }
+    let (w, h) = (x1 - x0, y1 - y0);
+    let mut well = Vec::with_capacity(w * h * 4);
+    for y in y0..y1 { well.extend_from_slice(&under[(y * fw + x0) * 4..(y * fw + x1) * 4]); }
+    crate::mosaic::soften(&mut well, w, h, px(4).max(1) as usize);
+    // The haze: the plastic's own colour, halfway to white.
+    let mid = ((y0 + h / 2) * fw + x0 + w / 2) * 4;
+    let haze = [0, 1, 2].map(|c| (plastic[mid + c] as u32 + 255) / 2);
+    for y in 0..h {
+        for x in 0..w {
+            let (from, to) = ((y * w + x) * 4, ((y + y0) * fw + x + x0) * 4);
+            for c in 0..3 {
+                under[to + c] = ((well[from + c] as u32 * 55 + haze[c] * 45) / 100) as u8;
+            }
+        }
+    }
 }
 
 /// Straight-alpha source-over. Channel math uses integers and is independent
@@ -427,7 +495,8 @@ fn blend_over(dst: &mut [u8], src: &[u8]) {
 
 pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
     let s = spec(shape_of(cart));
-    if art.is_none() {
+    // A 3.0 test cart wears slot.'s printed label: its title on a colour.
+    if art.is_none() && !home::is_test_cart(cart) {
         if let Some(face) = handwritten(&s, cart) {
             return face;
         }
@@ -444,13 +513,20 @@ pub fn cart_face_with(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
         return face;
     }
     let mut face = shell_face(&s, &shell_for(cart));
+    let scanned = art.is_some();
     let label = match art {
         Some(rgba) => rgba,
         None => generated_label(&s, &label_text(cart)),
     };
+    // The plastic as a cart with no label has it, for the edges laid back
+    // over a real label.
+    let bare = scanned.then(|| shell_face_of(&s, &shell_for(cart), true).rgba);
     paste_label(&s, &mut face, &label);
     if let Body::Home(_) = s.body {
         shade_label_well(&s, &mut face);
+    }
+    if let (Some(bare), Body::Home(m)) = (bare, s.body) {
+        frame_over_label(&s, m, &mut face, &bare);
     }
     clip_to_silhouette(&s, &mut face);
     face
@@ -535,12 +611,17 @@ pub fn handwritten_label_art(cart: &Cart) -> (Vec<u8>, u32, u32) {
 fn shade_label_well(s: &Spec, face: &mut CartFace) {
     let (lx, ly, lw, lh) = s.label;
     let k = density::scale();
-    let (x0, y0, x1, y1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    let (x0, y0, x1, y1) = (px(lx), px(ly), px(lx) + px(lw), px(ly) + px(lh));
     let fw = px(s.w);
+    // A shaped well (the Pokemon mini's curved foot, the Game Gear's round
+    // corners): no shade where its plastic rises over the label's box.
+    let shaped = match s.body { Body::Home(m) => Some(m), _ => None };
     for y in y0..y1.min(px(s.h)) {
         for x in x0..x1.min(fw) {
             let d = ((x - x0).min(y - y0) as f32) / k;
-            let shade = 0.28 * (1.0 - d / 6.0).max(0.0);
+            let outside = shaped.map_or(0.0, |m| label_frame(m,
+                (x - x0) as f32 / k, (y - y0) as f32 / k, lw as f32, lh as f32));
+            let shade = 0.28 * (1.0 - d / 6.0).max(0.0) * (1.0 - outside);
             if shade <= 0.0 {
                 continue;
             }
@@ -548,6 +629,82 @@ fn shade_label_well(s: &Spec, face: &mut CartFace) {
             for c in 0..3 {
                 face.rgba[i + c] = (face.rgba[i + c] as f32 * (1.0 - shade)).round() as u8;
             }
+        }
+    }
+}
+
+/// How much of a real label the plastic around it covers, in the label's
+/// logical pixels, at (x, y) from its top left: 0 where the label shows, 1
+/// under the plastic. The Game Gear's recess has round corners and the
+/// Pokemon mini's a curved foot; the scans show the scanner's ground or the
+/// cart's own plastic there (Siham 2026-11-21).
+fn label_frame(m: HomeMould, x: f32, y: f32, w: f32, h: f32) -> f32 {
+    match m {
+        HomeMould::GameGear | HomeMould::GameGearCodemasters => {
+            // A rim over every edge, rounder in the corners; the lower
+            // corners less round (Siham 2026-11-21).
+            let codemasters = m == HomeMould::GameGearCodemasters;
+            let e = if codemasters { 1.0 } else { 3.0 };
+            let r = if codemasters { 4.0 } else if y > h / 2.0 { 8.0 } else { 14.0 };
+            let cx = x.clamp(e + r, w - e - r);
+            let cy = y.clamp(e + r, h - e - r);
+            let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+            (d - r + 0.5).clamp(0.0, 1.0)
+        }
+        HomeMould::PokemonMini => {
+            let t = (2.0 * x / w - 1.0).abs();
+            let foot = h - 2.0 - 0.21 * h * t.powf(2.6);
+            let side = (1.5 - x).max(x - (w - 1.5));
+            (y - foot + 0.5).max(side + 0.5).clamp(0.0, 1.0)
+        }
+        _ => 0.0,
+    }
+}
+
+/// The plastic around a real label laid back over its edges (see
+/// `label_frame`), the label shaded where it slips under.
+fn frame_over_label(s: &Spec, m: HomeMould, face: &mut CartFace, bare: &[u8]) {
+    let (lx, ly, lw, lh) = s.label;
+    let k = density::scale();
+    // The very texels paste_label covered, so no row of the label is left
+    // out at the bottom or the right.
+    let (x0, y0) = (px(lx), px(ly));
+    let (x1, y1) = (x0 + px(lw), y0 + px(lh));
+    let (fw, fh) = (px(s.w), px(s.h));
+    let (w, h) = (lw as f32, lh as f32);
+    for y in y0..y1.min(fh) {
+        for x in x0..x1.min(fw) {
+            let (fx, fy) = ((x - x0) as f32 / k, (y - y0) as f32 / k);
+            let cover = label_frame(m, fx, fy, w, h);
+            // The label's shade just inside the plastic's edge.
+            let near = (0..=6)
+                .map(|step| label_frame(m, fx, fy - step as f32 * 0.5, w, h)
+                    .max(label_frame(m, fx - step as f32 * 0.5, fy, w, h))
+                    .max(label_frame(m, fx + step as f32 * 0.5, fy, w, h)))
+                .enumerate()
+                .find(|(_, c)| *c > 0.5)
+                .map(|(step, _)| 0.30 * (1.0 - step as f32 / 7.0))
+                .unwrap_or(0.0);
+            let i = ((y * fw + x) * 4) as usize;
+            if cover <= 0.0 {
+                if near > 0.0 {
+                    for c in 0..3 {
+                        face.rgba[i + c] = (face.rgba[i + c] as f32 * (1.0 - near)).round() as u8;
+                    }
+                }
+                continue;
+            }
+            // A clipped sticker has no ink outside its outline, even when
+            // the surrounding plastic is clear. Restore the bare alpha too.
+            let a = bare[i + 3] as f32 / 255.0 * cover;
+            let label_a = face.rgba[i + 3] as f32 / 255.0 * (1.0 - cover);
+            let out_a = a + label_a;
+            for c in 0..3 {
+                face.rgba[i + c] = if out_a > 0.0 {
+                    ((bare[i + c] as f32 * a + face.rgba[i + c] as f32 * label_a) / out_a).round() as u8
+                } else { 0 };
+            }
+            face.rgba[i + 3] = (out_a * 255.0).round() as u8;
         }
     }
 }
@@ -668,7 +825,19 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
     // compositor drew underneath (the board) shows through and stays put while the shell moves.
     // The label box stays opaque.
     let (lx, ly, lw, lh) = s.label;
-    let (lx0, ly0, lx1, ly1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    let (lx0, ly0, mut lx1, mut ly1) = (px(lx), px(ly), px(lx + lw), px(ly + lh));
+    if matches!(s.mould, Mould::Home(m) if crate::home_material::refined(m)) {
+        // paste_label scales the origin and size separately. Match its
+        // exact texels on fractional-density panels (e.g. the KPA's 4/3x).
+        lx1 = lx0 + px(lw);
+        ly1 = ly0 + px(lh);
+    }
+    // A mould's own clear plastic (the WonderSwan Color's, the Pokémon
+    // mini's frosted cap) instead of the same 80% everywhere.
+    let opacity = match s.mould {
+        Mould::Home(m) if clear => home::dense_opacity(m),
+        _ => None,
+    };
     for y in 0..th {
         for x in 0..tw {
             let on_label = !bare && (lx0..lx1).contains(&x) && (ly0..ly1).contains(&y);
@@ -684,7 +853,12 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
             rgba[i + 3] = if on_label {
                 255
             } else if clear {
-                ((own * u32::from(CLEAR_ALPHA) + 127) / 255) as u8
+                let k = opacity.as_ref().map_or(CLEAR_ALPHA, |o| o[(y * tw + x) as usize]);
+                let k = match s.mould {
+                    Mould::Home(m) => crate::home_material::clear_alpha(m, k, src[i]),
+                    _ => k,
+                };
+                ((own * u32::from(k) + 127) / 255) as u8
             } else {
                 own as u8
             };
@@ -692,7 +866,7 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
     }
     if let Mould::Home(m) = s.mould {
         if let Some(decal) = home::dense_decal(m) {
-            blend_over(&mut rgba, &decal);
+            blend_over(&mut rgba, &tinted_decal(m, &decal, shell.colour, clear));
         }
     }
     if shell.finish.has_flecks() {
@@ -707,9 +881,17 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
                 if rgba[i + 3] == 0 {
                     continue;
                 }
+                let refined = matches!(s.mould, Mould::Home(m) if crate::home_material::refined(m));
+                if let Mould::Home(m) = s.mould {
+                    if refined && !crate::home_material::plastic_at(m, x as f32 / k, y as f32 / k) {
+                        continue;
+                    }
+                }
                 let body = [rgba[i], rgba[i + 1], rgba[i + 2]];
                 rgba[i..i + 3].copy_from_slice(&lerp(body, [0xff; 3], 100, 255));
-                rgba[i + 3] = 255;
+                // Retain antialiasing at the outline instead of turning a
+                // barely covered edge texel into an opaque white speck.
+                rgba[i + 3] = if refined { rgba[i + 3].max(src[i + 3]) } else { 255 };
             }
         }
     }
@@ -718,6 +900,79 @@ fn shell_face_of(s: &Spec, shell: &Shell, bare: bool) -> CartFace {
         w: s.w,
         h: s.h,
     }
+}
+
+/// The parts of a mould's decal that are its plastic take the cart's colour
+/// as the shell does (Siham 2026-11-21): the WonderSwan's guide tabs beside
+/// its contacts, the Lynx's lip over them, the Pokemon mini's frosted cap.
+/// Boards, contacts and printing keep their own colours.
+fn tinted_decal(m: HomeMould, decal: &[u8], colour: [u8; 3], clear: bool) -> std::borrow::Cow<'_, [u8]> {
+    // Grey plastic of the decal: its usual grey and where the shell's mid
+    // grey sits for it (the tabs a little lighter than the body, the lip a
+    // little darker).
+    let (grey, at) = match m {
+        // The tabs were photographed on a white WonderSwan: their white is
+        // the body's own plastic, so it lands on the shell's mid grey and
+        // never shows as a light residue on dark colours (Siham 2026-11-21).
+        HomeMould::WonderSwan | HomeMould::WonderSwanColor => (232i32, 134i32),
+        HomeMould::Lynx => (47, 100),
+        // My Card: the white plastic rim of the contact window's photo is
+        // the card itself, so it takes the card's colour (no white corners).
+        HomeMould::MasterSystemCard => {
+            let mut out = decal.to_vec();
+            for px in out.chunks_exact_mut(4) {
+                if px[3] == 0 { continue; }
+                let sat = px[0].max(px[1]).max(px[2]) - px[0].min(px[1]).min(px[2]);
+                let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
+                if l < 24 || sat > 24 { continue; }
+                // Edge texels mix the white rim with the black window: keep
+                // that mix, with the card's colour in place of the white.
+                let t = ((l - 24) * 255 / (235 - 24)).clamp(0, 255) as u32;
+                for c in 0..3 {
+                    let plastic = overlay(128, colour[c]) as u32;
+                    px[c] = ((plastic * t + px[c] as u32 * (255 - t) + 127) / 255) as u8;
+                }
+            }
+            return std::borrow::Cow::Owned(out);
+        }
+        HomeMould::PokemonMini => {
+            let mut out = decal.to_vec();
+            let width = px(m.size().0);
+            let k = density::scale();
+            for (n, px) in out.chunks_exact_mut(4).enumerate() {
+                if px[3] == 0 { continue; }
+                let (x, y) = ((n as u32 % width) as f32 / k, (n as u32 / width) as f32 / k);
+                if !crate::home_material::decal_plastic_at(m, x, y) { continue; }
+                let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
+                let base = (128 + (l - 225)).clamp(0, 255) as u8;
+                for c in 0..3 {
+                    // Frosted: the plastic's colour, most of the way to
+                    // white (rc2's cap, kept by Siham 2026-11-21).
+                    let tinted = overlay(base, colour[c]) as u32;
+                    px[c] = ((tinted * 40 + 255 * 60 + 50) / 100) as u8;
+                }
+                if clear {
+                    let alpha = (148 + base.abs_diff(128) as u32 / 2).min(200);
+                    px[3] = ((px[3] as u32 * alpha + 102) / 204).min(255) as u8;
+                }
+            }
+            return std::borrow::Cow::Owned(out);
+        }
+        _ => return std::borrow::Cow::Borrowed(decal),
+    };
+    let mut out = decal.to_vec();
+    let width = px(m.size().0);
+    let k = density::scale();
+    for (n, px) in out.chunks_exact_mut(4).enumerate() {
+        if px[3] == 0 { continue; }
+        let (x, y) = ((n as u32 % width) as f32 / k, (n as u32 / width) as f32 / k);
+        if !crate::home_material::decal_plastic_at(m, x, y) { continue; }
+        let l = (px[0] as i32 + px[1] as i32 + px[2] as i32) / 3;
+        let gain = if matches!(m, HomeMould::WonderSwan | HomeMould::WonderSwanColor) { 3 } else { 4 };
+        let base = (at + (l - grey) * gain / 5).clamp(0, 255) as u8;
+        for c in 0..3 { px[c] = overlay(base, colour[c]); }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 fn fleck(x: u32, y: u32) -> bool {
@@ -841,5 +1096,39 @@ mod dense_tests {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod real_label_tests {
+    use super::*;
+
+    #[test]
+    fn a_3_0_cart_takes_only_a_label_of_its_wells_shape() {
+        // Game Gear: its scans (600x437) fit; a portrait one does not.
+        assert!(label_fits(HomeMould::GameGear, 600, 437));
+        assert!(!label_fits(HomeMould::GameGear, 300, 600));
+        // The western Master System's well is the strip on its top.
+        assert!(label_fits(HomeMould::MasterSystem, 690, 100));
+        assert!(!label_fits(HomeMould::MasterSystem, 400, 600));
+        // The other moulds keep fitting any picture, as before.
+        assert!(label_fits(HomeMould::MegaDriveSk, 400, 600));
+    }
+
+    #[test]
+    fn the_plastic_covers_the_game_gear_corners_and_the_pokemon_minis_foot() {
+        let (w, h) = (256.0, 185.0);
+        let gg = |x, y| label_frame(HomeMould::GameGear, x, y, w, h);
+        assert_eq!(gg(0.5, 0.5), 1.0);
+        assert_eq!(gg(w / 2.0, h / 2.0), 0.0);
+        assert_eq!(gg(w / 2.0, 1.0), 1.0, "a rim over the edge");
+        // The lower corners are less round than the upper ones.
+        assert!(gg(6.0, h - 6.0) < gg(6.0, 6.0));
+        let mini = |x, y| label_frame(HomeMould::PokemonMini, x, y, 274.0, 149.0);
+        assert_eq!(mini(137.0, 100.0), 0.0);
+        assert_eq!(mini(10.0, 140.0), 1.0, "the foot curves up at the sides");
+        assert_eq!(mini(137.0, 140.0), 0.0);
+        // Other moulds' labels stay whole.
+        assert_eq!(label_frame(HomeMould::Lynx, 0.0, 0.0, 302.0, 211.0), 0.0);
     }
 }

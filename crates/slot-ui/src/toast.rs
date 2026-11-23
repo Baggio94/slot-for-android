@@ -55,6 +55,9 @@ pub enum Toast {
     SunAuto,
     /// A tilt or gyro game's sensitivity, 1..=10.
     Motion(u8),
+    /// The WonderSwan's (0-3) and the Pokemon mini's (4-10) palettes from
+    /// SELECT + L2 / R2, as the Game Boy's.
+    OwnPalette(u8),
     RunAheadOff,
     RunAhead1,
     RunAhead2,
@@ -63,6 +66,12 @@ pub enum Toast {
 const SUN_TEXT: [&str; 11] = [
     "Sun: 0", "Sun: 1", "Sun: 2", "Sun: 3", "Sun: 4", "Sun: 5",
     "Sun: 6", "Sun: 7", "Sun: 8", "Sun: 9", "Sun: 10",
+];
+
+const OWN_PALETTE_TEXT: [&str; 11] = [
+    "Palette: Default", "Palette: WonderSwan", "Palette: WonderSwan Color", "Palette: SwanCrystal",
+    "Palette: Default", "Palette: Old", "Palette: Monochrome", "Palette: Green",
+    "Palette: Red", "Palette: Blue", "Palette: Sepia",
 ];
 
 const MOTION_TEXT: [&str; 10] = [
@@ -125,6 +134,7 @@ impl Toast {
             .chain(GbPalette::all().map(Toast::Palette))
             .chain((0..SUN_TEXT.len() as u8).map(Toast::Sun))
             .chain((1..=MOTION_TEXT.len() as u8).map(Toast::Motion))
+            .chain((0..OWN_PALETTE_TEXT.len() as u8).map(Toast::OwnPalette))
             .collect()
     }
 
@@ -135,6 +145,8 @@ impl Toast {
                 + usize::from(level.min(10)),
             Toast::Motion(level) => Self::FIXED.len() + GbPalette::COUNT + SUN_TEXT.len()
                 + usize::from(level.clamp(1, 10) - 1),
+            Toast::OwnPalette(at) => Self::FIXED.len() + GbPalette::COUNT + SUN_TEXT.len()
+                + MOTION_TEXT.len() + usize::from(at).min(OWN_PALETTE_TEXT.len() - 1),
             fixed => Self::FIXED.iter().position(|t| *t == fixed).unwrap_or(0),
         }
     }
@@ -185,6 +197,7 @@ impl Toast {
             Toast::SunSensor => "Sun: Sensor",
             Toast::SunAuto => "Sun: Auto",
             Toast::Motion(level) => MOTION_TEXT[usize::from(level.clamp(1, 10) - 1)],
+            Toast::OwnPalette(at) => OWN_PALETTE_TEXT[usize::from(at).min(OWN_PALETTE_TEXT.len() - 1)],
             Toast::RunAheadOff => "Run-Ahead: Off",
             Toast::RunAhead1 => "Run-Ahead: 1 Frame",
             Toast::RunAhead2 => "Run-Ahead: 2 Frames",

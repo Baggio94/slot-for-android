@@ -1,7 +1,8 @@
 //! Multiplayer artwork uses the same family and material as the inserted cartridge.
 use crate::{bitmaps, density, native_assets, CartFace, Face};
 
-const CABLES: [&[u8]; bitmaps::CONSOLE_SLOTS] = [
+/// The cable moulds. Master System shares Sega's DE-9 plug with Mega Drive.
+const CABLES: [&[u8]; 7] = [
     include_bytes!("../assets/link/fc.png"),
     include_bytes!("../assets/link/nes.png"),
     include_bytes!("../assets/link/snes.png"),
@@ -10,6 +11,10 @@ const CABLES: [&[u8]; bitmaps::CONSOLE_SLOTS] = [
     include_bytes!("../assets/link/gbc.png"),
     include_bytes!("../assets/link/gba.png"),
 ];
+/// The Master System's bar family (bitmaps::home_slot_family), and the Mega
+/// Drive's, whose DE-9 connector and cable it shares.
+const SMS_FAMILY: usize = 11;
+const MD_FAMILY: usize = 3;
 const RFU: &[u8] = include_bytes!("../assets/link/rfu.png");
 pub const BAR_Y: f32 = slot_gfx::OUT_H as f32 - bitmaps::SLOT_H as f32;
 const SOCKET_H: u32 = 18;
@@ -24,7 +29,14 @@ pub struct Hardware {
 
 impl Hardware {
     pub fn new(family: usize, theme: usize, wireless: bool) -> Self {
-        assert!(family < CABLES.len() && theme < bitmaps::BAR_THEMES);
+        // Keep the Master System's own fascia and palette. Only its physical
+        // connector geometry and cable artwork are shared with Mega Drive.
+        let family = if family < CABLES.len() || family == SMS_FAMILY {
+            family
+        } else {
+            6
+        };
+        assert!(theme < bitmaps::BAR_THEMES);
         Self {
             family,
             theme,
@@ -33,7 +45,14 @@ impl Hardware {
     }
 
     pub fn dual(self) -> bool {
-        matches!(self.family, 1..=3)
+        matches!(self.family, 1..=3 | SMS_FAMILY)
+    }
+    fn connector_family(self) -> usize {
+        if self.family == SMS_FAMILY {
+            MD_FAMILY
+        } else {
+            self.family
+        }
     }
     pub fn side_exit(self) -> bool {
         self.family == 0
@@ -43,13 +62,13 @@ impl Hardware {
     }
     /// Translate both endpoints by the old recess depth, preserving the travel.
     pub fn travel_offset(self) -> f32 {
-        17.0 + [10.3, 10.0, 7.4, 10.0, 7.3, 6.0, 7.7][self.family] + 8.5
+        17.0 + [10.3, 10.0, 7.4, 10.0, 7.3, 6.0, 7.7][self.connector_family()] + 8.5
     }
     pub fn shoulder(self) -> f32 {
         if self.wireless {
             127.0
         } else {
-            [218., 218., 218., 218., 220., 220., 219.][self.family]
+            [218., 218., 218., 218., 220., 220., 219.][self.connector_family()]
         }
     }
     pub fn offset(self, join: bool) -> f32 {
@@ -62,10 +81,10 @@ impl Hardware {
         }
     }
     fn half_width(self) -> f32 {
-        [39.85, 28.35, 38.85, 29.65, 23.45, 14.50, 19.45][self.family]
+        [39.85, 28.35, 38.85, 29.65, 23.45, 14.50, 19.45][self.connector_family()]
     }
     fn floor(self) -> f32 {
-        [15.6, 15.6, 12.8, 14.7, 12.4, 11.2, 13.4][self.family]
+        [15.6, 15.6, 12.8, 14.7, 12.4, 11.2, 13.4][self.connector_family()]
     }
 }
 
@@ -212,8 +231,8 @@ fn socket_faces(key: Hardware, wall: &CartFace) -> (CartFace, CartFace, CartFace
             r##"<use href="#mouth" fill="none" stroke="{stroke}" stroke-width="{thickness}"/>"##
         );
     }
-    let lift = [8.6, 8.7, 7.3, 8.1, 7.0, 6.4, 7.45][key.family];
-    let pins: Vec<(f32, f32)> = match key.family {
+    let lift = [8.6, 8.7, 7.3, 8.1, 7.0, 6.4, 7.45][key.connector_family()];
+    let pins: Vec<(f32, f32)> = match key.connector_family() {
         0 => [(-3.45, 7), (3.6, 8)]
             .into_iter()
             .flat_map(|(y, n)| (0..n).map(move |i| ((i as f32 - (n - 1) as f32 / 2.) * 9.3, y)))
@@ -247,7 +266,7 @@ fn socket_faces(key: Hardware, wall: &CartFace) -> (CartFace, CartFace, CartFace
     };
     let mut contacts = format!(r#"<g transform="translate(0 {lift})">"#);
     for (x, y) in pins {
-        if key.family >= 4 {
+        if key.connector_family() >= 4 {
             contacts += &format!(
                 r##"<rect x="{}" y="{}" width="2.3" height="2.1" rx=".35" fill="#917647"/><rect x="{}" y="{}" width="2.1" height="1.22" rx=".28" fill="#c1a374"/>"##,
                 x - 1.15,
@@ -387,9 +406,9 @@ pub fn hardware_art(key: Hardware) -> HardwareArt {
     let (bytes, w, h) = if key.wireless {
         (RFU, 240, 151)
     } else if key.side_exit() {
-        (CABLES[key.family], 244, 244)
+        (CABLES[key.connector_family()], 244, 244)
     } else {
-        (CABLES[key.family], 120, 244)
+        (CABLES[key.connector_family()], 120, 244)
     };
     let (pixels, aw, _) = crate::decode_png(bytes).expect("bundled link artwork");
     let cell = |x: u32, y: u32, w: u32, h: u32| {

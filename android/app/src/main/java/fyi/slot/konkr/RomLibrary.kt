@@ -15,6 +15,8 @@ import java.util.Locale
  * No commercial games, BIOS files, or writable access are requested or copied.
  */
 internal object RomLibrary {
+    /** Systems whose cart battery 3.0.0-rc3 learned (entries marked battery_v3). */
+    private val BATTERY_V3 = setOf(Systems.WS, Systems.SMS, Systems.GG)
     /**
      * The most carts a shelf holds (library.rs keeps the same bound). 5,000
      * left a 6,000-game folder with an empty shelf (issue #122). Each cart
@@ -238,7 +240,10 @@ internal object RomLibrary {
             // Older ones also lack whether a GB/GBA cart has a
             // battery (2026-11): read once more to learn it.
             (old.has("home_battery") && (old.optString("platform") == "GBA" ||
-                old.has("gb_cgb_flag") || old.has("home_maker")))
+                old.has("gb_cgb_flag") || old.has("home_maker"))) &&
+            // 3.0.0-rc3 learns the WonderSwan's, Master System's and Game
+            // Gear's batteries: their older entries are read once more.
+            (old.optString("platform") !in BATTERY_V3 || old.has("battery_v3"))
         // ZIP archives remain a single shelf cartridge identified
         // by the ZIP's SAF URI and filename. Resolve the embedded
         // ROM header/extension only on cache misses.
@@ -290,6 +295,14 @@ internal object RomLibrary {
             // A .bin is a Mega Drive cart only with a SEGA header.
             if (!Systems.acceptsHeader(embeddedExtension, header)) return null
             if (home) homeHeader = Systems.homeHeader(embeddedExtension, header, name)
+            // The WonderSwan's save type is in the footer, at the ROM's end.
+            if (Systems.platformFor(embeddedExtension) == Systems.WS) {
+                homeHeader = homeHeader.copy(battery = try {
+                    resolver.openInputStream(fileUri)?.use { input ->
+                        RomSource.useRom(input, name) { rom, _ -> Systems.wsBattery(rom) }
+                    } ?: false
+                } catch (_: Exception) { false })
+            }
             else if (!gba) homeHeader = Systems.HomeHeader("", "", Systems.gbBattery(header))
             else homeHeader = Systems.HomeHeader("", "", try {
                 resolver.openInputStream(fileUri)?.use { input ->
@@ -342,6 +355,7 @@ internal object RomLibrary {
                 .put("home_region", homeHeader.region)
                 .put("home_battery", homeHeader.battery)
                 .put("home_maker", homeHeader.maker)
+                .put("battery_v3", true)
         } else {
             // GB/GBC/GBA: the board shows a battery only for a
             // cart that keeps its save on one.
@@ -433,7 +447,7 @@ internal object RomLibrary {
         return lower in IGNORED_DIRECTORIES || lower in OTHER_SYSTEM_DIRECTORIES
     }
 
-    private val IGNORED_DIRECTORIES = setOf(
+    internal val IGNORED_DIRECTORIES = setOf(
         "bios", "saves", "savestates", "states", "screenshots", "videos",
         "themes", "media", "images", "artwork", "covers", "system volume information",
         // ES-DE's scraped media, gamelists and its own folder: never ROMs.
@@ -445,32 +459,33 @@ internal object RomLibrary {
      * convention most handheld setups follow). Their folders can hold
      * thousands of files, and listing them through SAF is most of a scan's
      * time. Our own systems' folders (gb, gbc, gba, sgb, nes, famicom, snes,
-     * sfc, snesna, megadrive, megadrivejp, genesis) and any folder with an
+     * sfc, snesna, megadrive, megadrivejp, genesis, mastersystem, gamegear, ngp, ngpc,
+     * wonderswan, wonderswancolor) and any folder with an
      * unknown name are still searched, so custom layouts keep working.
      */
-    private val OTHER_SYSTEM_DIRECTORIES = setOf(
+    internal val OTHER_SYSTEM_DIRECTORIES = setOf(
         "3do", "adam", "ags", "amiga", "amiga1200", "amiga600", "amigacd32", "amstradcpc",
         "android", "apple2", "apple2gs", "arcade", "arcadia", "archimedes", "arduboy",
         "astrocde", "atari2600", "atari5200", "atari7800", "atari800", "atarijaguar",
-        "atarijaguarcd", "atarilynx", "atarist", "atarixe", "atomiswave", "bbcmicro", "c64",
+        "atarijaguarcd", "atarist", "atarixe", "atomiswave", "bbcmicro", "c64",
         "cdimono1", "cdtv", "chailove", "channelf", "coco", "colecovision", "consolearcade",
         "cps", "cps1", "cps2", "cps3", "crvision", "daphne", "desktop", "doom", "dos",
         "dragon32", "dreamcast", "easyrpg", "electron", "emulators", "epic", "fba", "fbneo",
         "fds", "flash", "fm7", "fmtowns", "fpinball", "gamate", "gameandwatch", "gamecom",
-        "gamegear", "gc", "gmaster", "gx4000", "intellivision", "j2me", "kodi", "laserdisc",
-        "lcdgames", "lowresnx", "lutro", "macintosh", "mame", "mame-advmame", "mastersystem",
+        "gc", "gmaster", "gx4000", "intellivision", "j2me", "kodi", "laserdisc",
+        "lcdgames", "lowresnx", "lutro", "macintosh", "mame", "mame-advmame",
         "megacd", "megacdjp", "megaduck", "mess", "model2", "model3", "moto", "msx", "msx1",
         "msx2", "msxturbor", "mugen", "multivision", "n3ds", "n64", "n64dd", "naomi",
-        "naomi2", "naomigd", "nds", "neogeo", "neogeocd", "neogeocdjp", "ngage", "ngp",
-        "ngpc", "odyssey2", "openbor", "oric", "palm", "pc", "pc88", "pc98", "pcarcade",
-        "pcengine", "pcenginecd", "pcfx", "pico8", "plus4", "pokemini", "ports", "ps2", "ps3",
+        "naomi2", "naomigd", "nds", "neogeo", "neogeocd", "neogeocdjp", "ngage",
+        "odyssey2", "openbor", "oric", "palm", "pc", "pc88", "pc98", "pcarcade",
+        "pcengine", "pcenginecd", "pcfx", "pico8", "plus4", "ports", "ps2", "ps3",
         "ps4", "psp", "psvita", "psx", "pv1000", "quake", "samcoupe", "saturn", "saturnjp",
         "scummvm", "scv", "sega32x", "sega32xjp", "sega32xna", "segacd", "sg-1000",
         "solarus", "spectravideo", "steam", "stv", "supergrafx", "supervision", "supracan",
         "switch", "symbian", "tanodragon", "tg16", "tg-cd", "ti99", "tic80", "to8", "trs-80",
         "uzebox", "vectrex", "vic20", "videopac", "virtualboy", "vpinball", "vsmile",
-        "wasm4", "wii", "wiiu", "windows", "windows3x", "windows9x", "wonderswan",
-        "wonderswancolor", "x1", "x68000", "xbox", "xbox360", "zmachine", "zx81", "zxnext",
+        "wasm4", "wii", "wiiu", "windows", "windows3x", "windows9x",
+        "x1", "x68000", "xbox", "xbox360", "zmachine", "zx81", "zxnext",
         "zxspectrum"
     )
 

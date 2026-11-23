@@ -241,6 +241,10 @@ internal class RaPanelDialog(
         row("NES", ready(snapshot.cachedNes, snapshot.indexedNes))
         row("Super Nintendo", ready(snapshot.cachedSnes, snapshot.indexedSnes))
         row("Mega Drive", ready(snapshot.cachedMd, snapshot.indexedMd))
+        for ((name, console) in listOf("Master System" to 11, "Game Gear" to 15,
+                "Neo Geo Pocket" to 14, "WonderSwan" to 53, "Lynx" to 13, "Pokemon mini" to 24)) {
+            row(name, ready(snapshot.cachedBy?.get(console), snapshot.indexedBy?.get(console)))
+        }
         row("With achievements", snapshot.recognizedGames?.toString() ?: "Checking…")
         // RetroAchievements allows 100 cache requests per 30 minutes.
         section("CACHE")

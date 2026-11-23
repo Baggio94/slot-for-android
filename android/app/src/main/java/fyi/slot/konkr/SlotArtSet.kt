@@ -29,8 +29,7 @@ internal object SlotArtSet {
     private const val MAX_INDEX = 16 * 1024 * 1024
     private const val MAX_FILE = 6 * 1024 * 1024
     private val filePath = Regex("files/[0-9a-f]{2}/[0-9a-f]{40}\\.(png|webp|jpg)")
-    private val platforms = setOf(Systems.GB, Systems.GBC, Systems.GBA,
-        Systems.NES, Systems.SNES, Systems.MD)
+    private val platforms = Systems.PLATFORMS.flatMap { Systems.artKeys(it) }.toSet()
 
     class Entry(val type: String, val region: String, val file: String) {
         val url: String get() = BASE + file
@@ -45,8 +44,9 @@ internal object SlotArtSet {
      *  empty when it knows the dump has no art. */
     @Synchronized
     fun entries(context: Context, platform: String, crc: String): List<Entry>? {
-        val index = index(context, platform) ?: return null
-        val list = index.optJSONArray(crc.uppercase()) ?: return null
+        val list = Systems.artKeys(platform).firstNotNullOfOrNull { key ->
+            index(context, key)?.optJSONArray(crc.uppercase())
+        } ?: return null
         return (0 until list.length()).mapNotNull { i ->
             val e = list.optJSONArray(i) ?: return@mapNotNull null
             val file = e.optString(2)
@@ -58,16 +58,15 @@ internal object SlotArtSet {
     /** Whether the set's index for a platform could be read (fresh or
      *  cached): a dump it doesn't list then really isn't in the set. */
     @Synchronized
-    fun known(context: Context, platform: String): Boolean = index(context, platform) != null
+    fun known(context: Context, platform: String): Boolean =
+        Systems.artKeys(platform).any { index(context, it) != null }
 
     /** Indexes and names older than [maxAgeMs] fetched again (RomM's page,
      *  so labels published since show without waiting hours). */
     @Synchronized
     fun refresh(context: Context, maxAgeMs: Long) {
-        for (platform in platforms) {
-            index(context, platform, maxAgeMs)
-            writeNames(context, platform, maxAgeMs)
-        }
+        for (key in platforms) index(context, key, maxAgeMs)
+        for (platform in Systems.PLATFORMS) writeNames(context, platform, maxAgeMs)
     }
 
     private fun index(context: Context, platform: String, fresh: Long = INDEX_FRESH_MS): JSONObject? {
@@ -101,12 +100,15 @@ internal object SlotArtSet {
         val out = File(File(context.filesDir, "ArtNames").apply { mkdirs() }, "$platform.tsv")
         if (out.isFile && System.currentTimeMillis() - out.lastModified() < fresh) return
         try {
-            val bytes = get("$platform.names.json", MAX_INDEX) ?: return
-            val json = JSONObject(String(bytes, Charsets.UTF_8))
+            // A shelf's names: its own index's, then its Color carts'.
             val text = StringBuilder()
-            for (crc in json.keys()) {
-                val name = json.optString(crc).replace('\t', ' ').replace('\n', ' ')
-                if (name.isNotBlank()) text.append(crc).append('\t').append(name).append('\n')
+            for (key in Systems.artKeys(platform)) {
+                val bytes = get("$key.names.json", MAX_INDEX) ?: if (key == platform) return else continue
+                val json = JSONObject(String(bytes, Charsets.UTF_8))
+                for (crc in json.keys()) {
+                    val name = json.optString(crc).replace('\t', ' ').replace('\n', ' ')
+                    if (name.isNotBlank()) text.append(crc).append('\t').append(name).append('\n')
+                }
             }
             write(out, text.toString().toByteArray(Charsets.UTF_8))
         } catch (error: Exception) {

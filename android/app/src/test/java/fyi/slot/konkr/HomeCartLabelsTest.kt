@@ -3,6 +3,7 @@ package fyi.slot.konkr
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.util.zip.CRC32
@@ -67,6 +68,19 @@ class HomeCartLabelsTest {
     }
 
     @Test
+    fun the30SystemsTakeEveryRegionsLabel() {
+        assertEquals("jp", HomeCartLabels.labelRegions(rom(Systems.WS, "Gunpey (Japan)")).first())
+        assertEquals("us", HomeCartLabels.labelRegions(rom(Systems.GG, "Aladdin (USA)")).first())
+        assertEquals("eu", HomeCartLabels.labelRegions(rom(Systems.GG, "Aladdin (Europe)")).first())
+        // A western cart still takes the Japanese label when it's the only one.
+        assertTrue("jp" in HomeCartLabels.labelRegions(rom(Systems.NGP, "Metal Slug - 1st Mission (World)")))
+        assertTrue(Systems.LYNX in HomeCartLabels.LABEL_PLATFORMS)
+        assertEquals(listOf("NGP", "NGPC"), Systems.artKeys(Systems.NGP))
+        assertEquals(listOf("WS", "WSC"), Systems.artKeys(Systems.WS))
+        assertEquals(listOf("GG"), Systems.artKeys(Systems.GG))
+    }
+
+    @Test
     fun labelsComeFromTheShellsRegion() {
         assertEquals(listOf("jp"), HomeCartLabels.labelRegions(rom(Systems.NES, "Dig Dug (Japan)")))
         assertEquals("us", HomeCartLabels.labelRegions(rom(Systems.NES, "Metroid (USA)")).first())
@@ -107,6 +121,38 @@ class HomeCartLabelsTest {
             HomeCartLabels.pick(medias, rom(Systems.MD, "Sonic & Knuckles + Sonic 3 (Europe) (Lock-On)"))?.url)
         val boxOnly = medias.filter { it.type != "support-texture" || it.region == "wor" }
         assertNull(HomeCartLabels.pick(boxOnly, rom(Systems.MD, "Sonic & Knuckles (World)")))
+    }
+
+    @Test
+    fun newSystemLabelsFollowTheirActualMoulds() {
+        HomeCartLabels.readShells(java.io.File("../../crates/slot-ui/assets/home_shells.tsv").readText())
+        assertEquals("sms_card", HomeCartLabels.shell(rom(Systems.SMS, "Bomb Jack (Europe)")))
+        assertEquals("sms_jp", HomeCartLabels.shell(rom(Systems.SMS, "Hokuto no Ken (Japan)")))
+        assertEquals("sms_jp", HomeCartLabels.shell(rom(Systems.SMS, "Super Boy 4 (Korea)")))
+        assertEquals("sms", HomeCartLabels.shell(rom(Systems.SMS, "Sonic The Hedgehog (Europe)")))
+        assertEquals("gg_codemasters", HomeCartLabels.shell(rom(Systems.GG, "Micro Machines (Europe)")))
+        assertEquals("gg", HomeCartLabels.shell(rom(Systems.GG, "Sonic The Hedgehog (USA)")))
+        val sms = rom(Systems.SMS, "Sonic The Hedgehog (Europe)")
+        assertTrue("jp" !in HomeCartLabels.labelRegions(sms))
+        assertTrue("us" !in HomeCartLabels.labelRegions(rom(Systems.SMS, "Hokuto no Ken (Japan)")))
+        val gg = rom(Systems.GG, "Micro Machines (Europe)")
+        assertTrue(HomeCartLabels.recut(JSONObject().put(gg.uri, ""), gg))
+        assertEquals(false, HomeCartLabels.recut(JSONObject().put(gg.uri, "gg_codemasters"), gg))
+        val render = HomeCartLabels.Media("support-2D", "eu", "https://a/codemasters-cart")
+        val wrongScan = HomeCartLabels.Media("support-texture", "eu", "https://a/horizontal-label")
+        assertEquals(render, HomeCartLabels.pick(listOf(wrongScan, render), gg))
+        assertNull(HomeCartLabels.pick(listOf(wrongScan), gg))
+    }
+
+    @Test
+    fun newSystemRenderFallbacksAreAvailableWhenTheSetHasNoStickerScan() {
+        val render = HomeCartLabels.Media("support-2D", "us", "https://a/cart")
+        val sticker = HomeCartLabels.Media("support-texture", "us", "https://a/label")
+        for (platform in listOf(Systems.SMS, Systems.GG, Systems.NGP, Systems.WS, Systems.LYNX, Systems.POKEMINI)) {
+            val cart = rom(platform, "Example (USA)")
+            assertEquals(render, HomeCartLabels.pick(listOf(render), cart))
+            assertEquals(sticker, HomeCartLabels.pick(listOf(render, sticker), cart))
+        }
     }
 
     @Test

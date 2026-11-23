@@ -47,6 +47,9 @@ fn emulation_may_advance(link_touched: bool, link_active: bool) -> bool {
 const SRAM_PERIOD: Duration = Duration::from_secs(30);
 const REWIND_CAPTURE_FRAMES: u8 = 6; // 10 states/second at the original GBA FPS
 const UNDO_WINDOW: Duration = Duration::from_secs(30);
+/// Frames a paused redraw runs before showing its picture (see
+/// `redraw_paused`): enough for every 3.0 core to show its new look.
+const PAUSED_REDRAW_FRAMES: usize = 4;
 
 /// Read/reset on the renderer's GL thread only; no extra ROM/core work.
 #[derive(Clone, Copy, Default, Debug)]
@@ -142,6 +145,38 @@ fn solar_cart(rom: &Path, which: Core, platform: Platform) -> Option<Solar> {
     if code.starts_with(b"U3I") { Some(Solar::Boktai1) }
     else if code.starts_with(b"U32") || code.starts_with(b"U33") { Some(Solar::Later) }
     else { None }
+}
+
+/// A Neo Geo Pocket Color game (byte 0x23 of its header is 0x10, 0x00 for
+/// the black and white Neo Geo Pocket) or a WonderSwan Color one (the
+/// footer's second byte, the console it needs, is 1). Read from the ROM,
+/// whatever its file is called.
+pub fn colour_cart(platform: Platform, rom: &Path) -> bool {
+    let read = |from: SeekFrom| -> std::io::Result<u8> {
+        let mut file = std::fs::File::open(rom)?;
+        file.seek(from)?;
+        let mut byte = [0u8; 1];
+        file.read_exact(&mut byte)?;
+        Ok(byte[0])
+    };
+    match platform {
+        Platform::Ngp => read(SeekFrom::Start(0x23)).is_ok_and(|b| b == 0x10),
+        Platform::Ws => read(SeekFrom::End(-9)).is_ok_and(|b| b & 1 != 0),
+        _ => false,
+    }
+}
+
+/// A WonderSwan game made to be held upright: bit 0 of the flags byte in
+/// the footer, the ROM's last 10 bytes (Mednafen reads it there too).
+pub fn ws_upright(rom: &Path) -> bool {
+    let footer = || -> std::io::Result<[u8; 10]> {
+        let mut file = std::fs::File::open(rom)?;
+        file.seek(SeekFrom::End(-10))?;
+        let mut footer = [0u8; 10];
+        file.read_exact(&mut footer)?;
+        Ok(footer)
+    };
+    footer().is_ok_and(|f| f[6] & 1 != 0)
 }
 
 /// Tilt and gyro cartridges, which only mGBA emulates: Yoshi Topsy-Turvy
@@ -359,6 +394,13 @@ pub struct GameSession {
     core_kind: Core,
     /// SNES / Mega Drive: every face button goes to the core as is.
     full_pad: bool,
+    /// A WonderSwan game held upright: its Controls are "wsv"'s.
+    upright: bool,
+    /// A Master System or Mega Drive game played 256 pixels wide
+    /// (square_games): 8:7 on narrow screens.
+    square_listed: bool,
+    /// A Neo Geo Pocket Color or WonderSwan Color game (its overlay's logo).
+    colour: bool,
     /// NES, SNES and Mega Drive take a second local player on port 2.
     second_player: bool,
     /// Port 2's buttons as slot. read them (Settings > Controls).
@@ -412,6 +454,16 @@ fn xy_buttons(buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
 
 /// The cached cart under its game name, for a core that names its own
 /// battery file after the ROM (bsnes). A hard link, or a copy.
+/// Whether the player's own Sega boot ROM for this system is in the BIOS
+/// folder: bios.gg for the Game Gear, bios_U/E/J.sms for the Master System.
+fn boot_screen(platform: Platform, bios: &Path) -> bool {
+    match platform {
+        Platform::Gg => bios.join("bios.gg").is_file(),
+        Platform::Sms => ["bios_U.sms", "bios_E.sms", "bios_J.sms"].iter().any(|f| bios.join(f).is_file()),
+        _ => false,
+    }
+}
+
 fn named_rom_alias(storage: &Path, rom: &Path, rom_stem: &str) -> Result<PathBuf, String> {
     let dir = storage.join("RomNames");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot prepare ROM name: {e}"))?;
@@ -645,6 +697,10 @@ impl GameSession {
         // has already staged only allowed BIOS files into this private folder.
         let bios = storage.join("BIOS");
         std::fs::create_dir_all(&bios).map_err(|e| e.to_string())?;
+        // A state will be resumed over this boot (a Sega boot screen is
+        // then left out; see genesis_plus_gx_bios below).
+        let resuming = resume_state && linked_boot.is_none()
+            && (retroarch_import.is_file() || state.is_file());
         // Gambatte decides on the boot ROM in retro_init, before the
         // options below are set.
         let init_options = match which {
@@ -756,16 +812,63 @@ impl GameSession {
             Core::GenesisPlusGx => {
                 // Sega CD and the lock-on adapters are not carts slot. shows.
                 core.set_option("genesis_plus_gx_lock_on", "disabled");
+                // The Master System's and Game Gear's own boot screen when
+                // the player's BIOS is there (bios_U/E/J.sms, bios.gg; the
+                // core runs the game alone otherwise). Mega Drive games keep
+                // starting as before.
+                // Only with the BIOS file there, and never under a resumed
+                // state: the state is the console's whole picture, and the
+                // boot ROM mapped back in left Game Gear games showing their
+                // backdrop alone (Siham 2026-11-22).
+                let boot = boot_screen(platform, &bios) && !resuming;
+                core.set_option("genesis_plus_gx_bios", if boot { "enabled" } else { "disabled" });
             }
             Core::Picodrive => {}
+            // Gearsystem shows the Game Gear's boot screen when bios.gg is
+            // there; NeoPop and RACE run on their own defaults, as RetroArch
+            // starts them.
+            Core::Gearsystem => {
+                let gg = platform == Platform::Gg && boot_screen(platform, &bios) && !resuming;
+                core.set_option("gearsystem_bios_gg", if gg { "Enabled" } else { "Disabled" });
+            }
+            Core::Neopop | Core::Race => {}
+            // A game held upright is turned on screen, its buttons with it
+            // (Beetle Cygne's own Auto mapping); never SELECT to rotate.
+            Core::BeetleCygne => {
+                core.set_option("wswan_rotate_display", if ws_upright(rom) { "portrait" } else { "landscape" });
+                core.set_option("wswan_rotate_keymap", "auto");
+                core.set_option("wswan_60hz_mode", if crate::runtime::handheld_core_60hz(75.47) {
+                    "enabled"
+                } else { "disabled" });
+            }
+            // A Lynx game held upright is turned on screen, its buttons
+            // with it: both cores' own Auto, as RetroArch starts them.
+            // SELECT turns the screen by hand in Beetle Lynx's Manual
+            // mode only; slot. never maps SELECT for the Lynx.
+            Core::Handy => core.set_option("handy_rot", "Auto"),
+            Core::BeetleLynx => core.set_option("lynx_rot_screen", "auto"),
+            // PokeMini runs on its own defaults, as RetroArch starts it (the
+            // cart's rumble on the device), its LCD Filter the player's
+            // (Settings > Systems > Pokemon mini), and its LCD drawn at the
+            // scale that leaves the screen a whole multiple (KPA: 5x, then
+            // x2), else 4x as RetroArch.
+            Core::PokeMini => {
+                let scale = crate::video_mode::pokemini_scale(crate::runtime::panel_size());
+                core.set_option("pokemini_video_scale", &format!("{scale}x"));
+                core.set_option("pokemini_60hz_mode", if crate::runtime::handheld_core_60hz(72.0) {
+                    "enabled"
+                } else { "disabled" });
+            }
+        }
+        // The 3.0 systems' own options from Settings > Systems (sprite
+        // limit, language, palettes, the Pokemon mini's LCD).
+        for (key, value) in crate::settings::CoreExtras::current().options(platform, which) {
+            core.set_option(key, value);
         }
         // rcheevos shares ONE evaluator, protected against cross-console
         // memory reads. GB=4 / GBA=5 / GBC=6 use their own libretro maps.
         // Speculative frames never reach it (including GB/GBC Run-Ahead).
-        let console = match platform {
-            Platform::Gb => 4, Platform::Gba => 5, Platform::Gbc => 6,
-            Platform::Nes => 7, Platform::Snes => 3, Platform::Md => 1,
-        };
+        let console = platform.system().retroachievements;
         // Second-instance Run-Ahead boots its copy from these, solo only.
         let runahead_secondary_spec = linked_boot.is_none().then(|| crate::runahead_secondary::Spec {
             core_file: core_file.to_path_buf(),
@@ -783,8 +886,25 @@ impl GameSession {
         // bsnes keeps its battery itself, named after the ROM file and
         // written to the save directory when the game unloads, as in
         // RetroArch. Hand it the cart under its own name, so the file is
-        // Saves/bsnes/<game>.srm like every other core's.
-        let named_rom = if which == Core::Bsnes && linked_boot.is_none() {
+        // Saves/bsnes/<game>.srm like every other core's. Handy (.eeprom),
+        // PokeMini (.eep), Beetle NeoPop (.flash) and RACE (.ngf) name
+        // theirs the same way, as in RetroArch.
+        // 3.0-rc1 let NeoPop and RACE name their flash after the cached ROM
+        // file: that save becomes the game's own once.
+        if linked_boot.is_none() {
+            if let (Some(ext), Some(cached)) = (match which {
+                Core::Neopop => Some("flash"), Core::Race => Some("ngf"), _ => None,
+            }, rom.file_stem().and_then(|s| s.to_str())) {
+                let old = core_root.join(format!("{cached}.{ext}"));
+                let new = core_root.join(format!("{rom_stem}.{ext}"));
+                if cached != rom_stem && old.is_file() && !new.exists() {
+                    let _ = std::fs::rename(&old, &new);
+                }
+            }
+        }
+        let named_rom = if matches!(which, Core::Bsnes | Core::Handy | Core::PokeMini
+                | Core::Neopop | Core::Race)
+            && linked_boot.is_none() {
             Some(named_rom_alias(storage, rom, rom_stem)?)
         } else { None };
         core.load(named_rom.as_deref().unwrap_or(rom)).map_err(|e| e.to_string())?;
@@ -1022,8 +1142,15 @@ impl GameSession {
             gambatte_legacy_export, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
-            full_pad: matches!(platform, Platform::Snes | Platform::Md),
-            second_player: !platform.handheld(), port2: 0, layouts: [None, None],
+            full_pad: matches!(platform, Platform::Snes | Platform::Md | Platform::Ws),
+            upright: which == Core::BeetleCygne && ws_upright(rom),
+            square_listed: crate::square_games::listed(platform, rom),
+            colour: colour_cart(platform, rom),
+            // The Game Gear, Neo Geo Pocket and WonderSwan have no second
+            // pad: their link cable is another console.
+            second_player: !platform.handheld() && !matches!(platform,
+                Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini),
+            port2: 0, layouts: [None, None],
             blending: None, slot_blending: crate::frame_blend::Mode::Off,
             runahead_video: Vec::new(), runahead_size: (0, 0), runahead_state: Vec::new(),
             // bsnes shows the frame before an unserialize on the first run
@@ -1299,6 +1426,14 @@ impl GameSession {
     /// A second local player plays now: a home console game outside
     /// Multiplayer (Settings > Controls, Port 2).
     pub fn takes_port2(&self) -> bool { self.second_player && !self.in_multiplayer() }
+
+    /// A WonderSwan game held upright (turned on screen).
+    pub fn upright(&self) -> bool { self.upright }
+
+    /// A Neo Geo Pocket Color or WonderSwan Color game.
+    pub fn colour(&self) -> bool { self.colour }
+    /// One of the games played 256 pixels wide (square_games).
+    pub fn square_listed(&self) -> bool { self.square_listed }
 
     /// A home console game whose port 2 is the other console's right now.
     pub fn port2_is_remote(&self) -> bool { self.second_player && self.in_multiplayer() }
@@ -1826,18 +1961,27 @@ impl GameSession {
     }
 
     /// The paused picture with a look option the core draws itself (colour
-    /// correction, frame blending, GB palette) just changed: one frame run
-    /// as Run-Ahead runs its frames (no achievements, no sound) from a
+    /// correction, frame blending, GB palette) just changed: a few frames
+    /// run as Run-Ahead runs its frames (no achievements, no sound) from a
     /// snapshot that is then put back, so the game doesn't move a frame.
-    /// The picture stays in view until play resumes. False when the core
-    /// can't roll back safely: the change shows on resume.
-    pub fn redraw_paused(&mut self) -> bool {
+    /// A few, as one isn't always enough: a core can take an option a frame
+    /// late, or draw its screen only every few frames (PokeMini's LCD Mode),
+    /// and slot.'s Frame Blending mixes a picture with the one before. Every
+    /// frame but the last goes to `before_last`; the last stays in view
+    /// until play resumes. False when the core can't roll back safely: the
+    /// change shows on resume.
+    pub fn redraw_paused(&mut self, mut before_last: impl FnMut(&[u8], (u32, u32))) -> bool {
         if !self.runahead_supported() || self.runahead_rollback_failed { return false; }
         if self.core.serialize_into(&mut self.runahead_state).is_err()
             || self.core.capture_speculative_audio().is_err() { return false; }
         self.core.set_frame_skip(false);
         self.core.set_port2(ButtonMask::default());
-        self.core.run_speculative_frame(ButtonMask(0));
+        for frame in 0..PAUSED_REDRAW_FRAMES {
+            self.core.run_speculative_frame(ButtonMask(0));
+            if frame + 1 < PAUSED_REDRAW_FRAMES {
+                before_last(self.core.video_xrgb8888(), self.core.video_size());
+            }
+        }
         self.core.discard_audio();
         self.runahead_video.clear();
         self.runahead_video.extend_from_slice(self.core.video_xrgb8888());
@@ -1892,6 +2036,14 @@ impl GameSession {
         } else if self.palette_live {
             self.set_core_option("mgba_gb_colors_preset", "0");
             self.set_core_option("mgba_gb_colors", name);
+        }
+    }
+
+    /// The 3.0 systems' own options changed in game: the core takes them
+    /// at its next frame, without restarting.
+    pub fn apply_core_extras(&mut self, extras: crate::settings::CoreExtras, platform: Platform) {
+        for (key, value) in extras.options(platform, self.core_kind) {
+            self.set_core_option(key, value);
         }
     }
 
@@ -2237,6 +2389,17 @@ impl GameSession {
             .map_err(|e| format!("RetroArch state encoding: {e}"))?;
         atomic_write(&self.retroarch_export, &container)
             .map_err(|e| format!("RetroArch state export: {e}"))?;
+        // Its picture beside it, for Sync States with RomM (3.0): what the
+        // state shows in RomM. Only with the sync on; never fails the save.
+        let syncing = crate::runtime::ROMM_STATES.load(std::sync::atomic::Ordering::Acquire) == 2;
+        if let Some(png) = syncing.then(|| thumb::png_fit(self.core.video_xrgb8888(), self.core.video_size(),
+            self.core.display_aspect())).flatten() {
+            let mut picture = self.retroarch_export.clone().into_os_string();
+            picture.push(".png");
+            if let Err(error) = atomic_write(std::path::Path::new(&picture), &png) {
+                crate::log_warn(&format!("state picture not kept: {error}"));
+            }
+        }
         // The auto-state now matches this battery.
         if self.stale_state.is_some() {
             self.opening_battery = self.core.save_ram_verified().ok().flatten().map(|ram| battery_hash(&ram));

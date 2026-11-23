@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pack libretro-database's cheat files into slot.'s cheat packs.
 
-    python3 tools/cheats/pack.py <libretro-database checkout> <out dir>
+    python3 tools/cheats/pack.py <libretro-database checkout> <out dir> [system...]
 
 The checkout needs the folders cht/ and metadat/no-intro/ (pinned commit:
 see COMMIT below). For each system it writes <out>/<system>.cht.z, a zlib
@@ -26,6 +26,11 @@ SYSTEMS = {
     "nes": "Nintendo - Nintendo Entertainment System",
     "snes": "Nintendo - Super Nintendo Entertainment System",
     "md": "Sega - Mega Drive - Genesis",
+    "sms": "Sega - Master System - Mark III",
+    "gg": "Sega - Game Gear",
+    # One shelf, two consoles: both folders go into one pack. No Neo Geo
+    # Pocket pack: neither NeoPop nor RACE applies cheats.
+    "ws": ("Bandai - WonderSwan", "Bandai - WonderSwan Color"),
 }
 # Tags naming the cheat device, after the game's own No-Intro name.
 DEVICES = ("Action Replay", "Pro Action Replay", "Game Genie", "GameShark",
@@ -105,22 +110,27 @@ def read_dat(path):
     return games
 
 
-def pack(db, out, system, folder):
-    cht_dir = os.path.join(db, "cht", folder)
+def pack(db, out, system, folders):
+    if isinstance(folders, str):
+        folders = (folders,)
     files = []
-    for entry in sorted(os.listdir(cht_dir)):
-        if not entry.endswith(".cht") or entry.endswith("(Rumbles).cht"):
-            continue
-        cheats = read_cht(os.path.join(cht_dir, entry))
-        if cheats:
-            files.append((entry[:-4], cheats))
+    for folder in folders:
+        cht_dir = os.path.join(db, "cht", folder)
+        for entry in sorted(os.listdir(cht_dir)):
+            if not entry.endswith(".cht") or entry.endswith("(Rumbles).cht"):
+                continue
+            cheats = read_cht(os.path.join(cht_dir, entry))
+            if cheats:
+                files.append((entry[:-4], cheats))
     by_game, by_title = {}, {}
     for i, (stem, _) in enumerate(files):
         by_game.setdefault(strip_devices(stem), []).append(i)
         by_title.setdefault(title(stem), []).append(i)
     lines = ["slot-cheats 1"]
     matched = set()
-    for name, crcs in read_dat(os.path.join(db, "metadat", "no-intro", folder + ".dat")):
+    games = [g for folder in folders
+             for g in read_dat(os.path.join(db, "metadat", "no-intro", folder + ".dat"))]
+    for name, crcs in games:
         # RetroArch's file names: the No-Intro name with & and the
         # characters a file name can't hold as "_".
         hits = by_game.get(FORBIDDEN.sub("_", name)) or by_title.get(title(name))
@@ -142,9 +152,11 @@ def pack(db, out, system, folder):
 
 def main():
     db, out = sys.argv[1], sys.argv[2]
+    only = sys.argv[3:]
     os.makedirs(out, exist_ok=True)
     for system, folder in SYSTEMS.items():
-        pack(db, out, system, folder)
+        if not only or system in only:
+            pack(db, out, system, folder)
 
 
 if __name__ == "__main__":

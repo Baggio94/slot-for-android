@@ -832,6 +832,69 @@ mod render {
         shoot(&mut engine, &dir, "15_game_menu.png");
     }
 
+    /// $SCRATCH_SYSTEMS (3.0 visuals preview): each new system's shelf,
+    /// then its cart opened on its board where it opens, in Dark and Light.
+    #[test]
+    fn render_new_systems() {
+        let Ok(dir) = std::env::var("SCRATCH_SYSTEMS") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some((w, h)) = std::env::var("SCRATCH_PANEL").ok().as_deref()
+            .and_then(|size| size.split_once('x'))
+            .and_then(|(w, h)| Some((w.parse::<u64>().ok()?, h.parse::<u64>().ok()?))) {
+            PANEL_SIZE.store(w << 32 | h, Ordering::Release);
+        }
+        let carts: [(&str, &str, &str); 17] = [
+            ("SMS", "Alex Kidd in Miracle World (USA, Europe)", "sms"),
+            ("SMS", "Hokuto no Ken (Japan)", "sms"),
+            ("SMS", "Bomb Jack (Japan)", "sms"),
+            ("GG", "Sonic The Hedgehog (World)", "gg"),
+            ("GG", "Micro Machines (Europe)", "gg"),
+            ("GG", "Coca-Cola Kid (Japan)", "gg"),
+            ("NGP", "SNK vs. Capcom - The Match of the Millennium (World)", "ngc"),
+            ("NGP", "Metal Slug - 1st Mission (World)", "ngp"),
+            ("NGP", "Sonic the Hedgehog - Pocket Adventure (World)", "ngc"),
+            ("WS", "Final Fantasy (Japan)", "wsc"),
+            ("WS", "Gunpey (Japan)", "ws"),
+            ("WS", "Klonoa - Moonlight Museum (Japan)", "ws"),
+            ("LYNX", "California Games (USA, Europe)", "lnx"),
+            ("LYNX", "Chip's Challenge (USA, Europe)", "lnx"),
+            ("POKEMINI", "Pokemon Pinball Mini (USA)", "min"),
+            ("POKEMINI", "Pokemon Party Mini (Europe)", "min"),
+            ("POKEMINI", "Pokemon Puzzle Collection (Europe)", "min"),
+        ];
+        let json: Vec<String> = carts.iter().enumerate().map(|(i, (p, t, e))| format!(
+            r#"{{"title":"{t}","filename":"{t}.{e}","platform":"{p}","uri":"content://roms/{i}.{e}"}}"#)).collect();
+        let entries: Vec<RomEntry> = serde_json::from_str(&format!("[{}]", json.join(","))).unwrap();
+        let _surface = slot_gfx::TestEgl::new();
+        menu_style::set_palette(None);
+        menu_style::set_oled(false);
+        let mut engine = Engine::new(1, Some(&entries)).unwrap();
+        engine.settings.show_titles = true;
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Default;
+        // Dark, then Light (Dark > OLED > Light), then Original.
+        for (theme, steps) in [("dark", 0), ("light", 2), ("original", 1)] {
+            for _ in 0..steps { engine.cycle_appearance(true); }
+            engine.reload_wallpaper(None);
+            for (n, platform) in [Platform::Sms, Platform::Gg, Platform::Ngp, Platform::Ws,
+                Platform::Lynx, Platform::Pokemini].into_iter().enumerate() {
+                let rack = platform as usize;
+                engine.active = rack;
+                for at in 0..engine.shelves[rack].carts.len() {
+                    engine.shelves[rack].select(at);
+                    shoot(&mut engine, &dir, &format!("{theme}_{n}_{}_{at}.png", platform.system().dir));
+                    if theme == "dark" && slot_ui::cart_opens(&engine.shelves[rack].carts[at]) {
+                        engine.open_core_picker();
+                        for _ in 0..90 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+                        save(&engine, &dir, &format!("{theme}_{n}_{}_{at}_open.png", platform.system().dir));
+                        engine.picker = None;
+                        engine.overlay = ShelfOverlay::None;
+                    }
+                }
+            }
+        }
+    }
+
     /// $SCRATCH_STUDIO (preview): Cart Studio on the panel in
     /// $SCRATCH_PANEL, a row at a time.
     #[test]

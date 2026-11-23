@@ -42,6 +42,16 @@ pub struct EmulationProfile {
     pub dither_override: Option<bool>,
     /// A GBA Video cart's Upscaler (Siham 2026-11-10).
     pub upscaler_override: Option<Upscaler>,
+    /// The 3.0 systems' own picture options changed in game are this
+    /// game's too; Settings > Systems keeps each system's default (Siham
+    /// 2026-11-22). Sound and language stay the system's.
+    pub sprite_limit_override: Option<bool>,
+    pub left_bar_override: Option<bool>,
+    pub ws_palette_override: Option<u8>,
+    pub pokemini_palette_override: Option<u8>,
+    pub pokemini_filter_override: Option<u8>,
+    pub pokemini_lcd_mode_override: Option<u8>,
+    pub pokemini_shake_override: Option<bool>,
 }
 
 pub const MOTION_MIN: u8 = 1;
@@ -135,7 +145,10 @@ impl EmulationProfile {
             turbo_override: None, rumble_override: None,
             eject_save_override: None, sun: None, motion: None,
             blending_override: None, lcd_effect_override: None, dither_override: None,
-            upscaler_override: None }
+            upscaler_override: None,
+            sprite_limit_override: None, left_bar_override: None, ws_palette_override: None,
+            pokemini_palette_override: None, pokemini_filter_override: None,
+            pokemini_lcd_mode_override: None, pokemini_shake_override: None }
     }
     /// Materialise the *current* game's per-ROM settings without mutating
     /// Settings.json or any other game's configured defaults.
@@ -168,6 +181,29 @@ impl EmulationProfile {
         if let Some(value)=self.upscaler_override {
             if platform==Platform::Gba { settings.upscaler_gbav=value; }
         }
+        if let Some(value)=self.sprite_limit_override {
+            match platform {
+                Platform::Sms => settings.no_sprite_limit_sms=value,
+                Platform::Gg => settings.no_sprite_limit_gg=value,
+                _ => {}
+            }
+        }
+        if let Some(value)=self.left_bar_override {
+            match platform {
+                Platform::Sms => settings.hide_left_bar_sms=value,
+                Platform::Nes => settings.hide_left_bar_nes=value,
+                _ => {}
+            }
+        }
+        if platform==Platform::Ws {
+            if let Some(value)=self.ws_palette_override { settings.ws_palette=value; }
+        }
+        if platform==Platform::Pokemini {
+            if let Some(value)=self.pokemini_palette_override { settings.pokemini_palette=value; }
+            if let Some(value)=self.pokemini_filter_override { settings.pokemini_lcd_filter=value; }
+            if let Some(value)=self.pokemini_lcd_mode_override { settings.pokemini_lcd_mode=value; }
+            if let Some(value)=self.pokemini_shake_override { settings.pokemini_no_shake=value; }
+        }
     }
 
     /// Screen/Gameplay pause edits are scoped to the current cart and core.
@@ -195,10 +231,13 @@ impl EmulationProfile {
                 self.screen_shader=Some(view.shader_gba),
             // The paused game's rows send each system's own key (21 GBC
             // shader, 22/23/24 corrections); 1 and 2 are the old shared ones.
-            1|21|47..=49 if platform!=Platform::Gba =>
+            1|21|47..=49|settings::SHADER_SMS_KEY|settings::SHADER_GG_KEY
+            |settings::SHADER_NGP_KEY|settings::SHADER_WS_KEY
+            |settings::SHADER_LYNX_KEY|settings::SHADER_POKEMINI_KEY if platform!=Platform::Gba =>
                 self.screen_shader=Some(view.shader_for(platform)),
             2|22|23|24 => self.colour_correction_override=Some(view.colour_for(platform)),
-            25..=27|44..=46 => self.screen_bezel=Some(view.bezel_for(platform)),
+            25..=27|44..=46|settings::BEZEL_SMS_KEY..=settings::BEZEL_POKEMINI_KEY =>
+                self.screen_bezel=Some(view.bezel_for(platform)),
             3 if platform==Platform::Gb =>
                 self.gb_palettes_override=Some(view.gb_palettes),
             4 => self.ff_speed_override=Some(view.ff_speed),
@@ -210,10 +249,31 @@ impl EmulationProfile {
             7 => self.turbo_override=Some(view.turbo),
             8 => self.rumble_override=Some(view.rumble),
             9 => self.eject_save_override=Some(view.eject_save),
-            60..=65 => self.blending_override=Some(view.blending_for(platform)),
+            60..=65|settings::BLENDING_SMS_KEY|settings::BLENDING_GG_KEY
+            |settings::BLENDING_NGP_KEY|settings::BLENDING_WS_KEY
+            |settings::BLENDING_LYNX_KEY|settings::BLENDING_POKEMINI_KEY =>
+                self.blending_override=Some(view.blending_for(platform)),
             66..=68 => self.lcd_effect_override=Some(view.lcd_effect_for(platform)),
             69 if platform==Platform::Md => self.dither_override=Some(view.dither_blend_md),
             70 if platform==Platform::Gba => self.upscaler_override=Some(view.upscaler_gbav),
+            settings::SPRITE_LIMIT_SMS_KEY|settings::SPRITE_LIMIT_GG_KEY
+                if matches!(platform,Platform::Sms|Platform::Gg) =>
+                self.sprite_limit_override=Some(if platform==Platform::Gg
+                    {view.no_sprite_limit_gg} else {view.no_sprite_limit_sms}),
+            settings::LEFT_BAR_SMS_KEY if platform==Platform::Sms =>
+                self.left_bar_override=Some(view.hide_left_bar_sms),
+            settings::LEFT_BAR_NES_KEY if platform==Platform::Nes =>
+                self.left_bar_override=Some(view.hide_left_bar_nes),
+            settings::WS_PALETTE_KEY if platform==Platform::Ws =>
+                self.ws_palette_override=Some(view.ws_palette),
+            settings::POKEMINI_PALETTE_KEY if platform==Platform::Pokemini =>
+                self.pokemini_palette_override=Some(view.pokemini_palette),
+            settings::POKEMINI_FILTER_KEY if platform==Platform::Pokemini =>
+                self.pokemini_filter_override=Some(view.pokemini_lcd_filter),
+            settings::POKEMINI_LCD_MODE_KEY if platform==Platform::Pokemini =>
+                self.pokemini_lcd_mode_override=Some(view.pokemini_lcd_mode),
+            settings::POKEMINI_SHAKE_KEY if platform==Platform::Pokemini =>
+                self.pokemini_shake_override=Some(view.pokemini_no_shake),
             _ => return false,
         }
         true
@@ -407,6 +467,24 @@ impl EmulationProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_3_0_picture_options_changed_in_game_are_this_games() {
+        let global = Settings::default();
+        let mut profile = EmulationProfile::from_settings(&global);
+        assert!(profile.change_visual_and_gameplay(&global, Platform::Gg, settings::SPRITE_LIMIT_GG_KEY, true));
+        let mut view = global.clone();
+        profile.apply_visual_and_gameplay(&mut view, Platform::Gg);
+        assert_ne!(view.no_sprite_limit_gg, global.no_sprite_limit_gg, "this game's sprite limit");
+        assert_eq!(view.no_sprite_limit_sms, global.no_sprite_limit_sms, "the Master System keeps its own");
+        let mut mini = EmulationProfile::from_settings(&global);
+        assert!(mini.change_visual_and_gameplay(&global, Platform::Pokemini, settings::POKEMINI_PALETTE_KEY, true));
+        let mut view = global.clone();
+        mini.apply_visual_and_gameplay(&mut view, Platform::Pokemini);
+        assert_ne!(view.pokemini_palette, global.pokemini_palette);
+        // Sound and language are the system's, never a game's.
+        assert!(!mini.change_visual_and_gameplay(&global, Platform::Pokemini, settings::FM_SMS_KEY, true));
+    }
+
     #[test]
     fn a_games_pacing_and_overlay_from_another_handheld_are_this_ones() {
         let root = std::env::temp_dir().join(format!("slot-profile-device-{}", std::process::id()));

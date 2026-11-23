@@ -48,7 +48,10 @@ internal object RetroArchStorage {
         val isGba: Boolean,
         val romIdentity: String,
         val shareGbaSaves: Boolean = false
-    )
+    ) {
+        /** The in-game save's name: <rom>.srm, .eeprom (Handy) or .eep (PokeMini). */
+        val saveName: String get() = "$stem.${Systems.saveExtension(core)}"
+    }
 
     fun target(context: Context, rawUri: String, core: String, savesTree: Uri?, statesTree: Uri?,
                scannedFileName: String? = null,
@@ -70,7 +73,7 @@ internal object RetroArchStorage {
         val defaultStates = File(File(context.filesDir, "States"), core).apply { mkdirs() }
         val coreLower = coreLower(core)
         return Target(rawUri, stem, core,
-            File(coreFolder, "$stem.srm"),
+            File(coreFolder, "$stem.${Systems.saveExtension(core)}"),
             File(coreFolder, "$stem.rtc"),
             File(defaultStates, "$stem.state.auto"),
             File(File(prefix, "ManualExports").apply { mkdirs() }, "$digest.$coreLower"),
@@ -278,7 +281,7 @@ internal object RetroArchStorage {
         val out = HashSet<SaveDeletes.Kind>()
         try {
             target.savesTree?.let { root ->
-                val name = target.stem + ".srm"
+                val name = target.saveName
                 val own = target.saveLocal.isFile ||
                     (target.isGba && target.shareGbaSaves && sharedFiles(context, target).first.isFile)
                 if (own && lastSynced(files, root.toString(), target.core, name) != null &&
@@ -318,7 +321,7 @@ internal object RetroArchStorage {
         val lower = coreLower(target.core)
         val id = target.romIdentity
         fun retire(file: File, core: String = target.core) {
-            if (file.name.endsWith(".srm") || file.name.endsWith(".rtc") ||
+            if (Systems.isSaveName(file.name) || file.name.endsWith(".rtc") ||
                 file.name.endsWith(".state") || file.name.endsWith(".state.auto")) {
                 SaveDeletes.retire(files, file, core, now)
             } else {
@@ -340,7 +343,7 @@ internal object RetroArchStorage {
             folderSaveMark(files, target.core, target.stem).delete()
             File(target.saveLocal.parentFile, target.saveLocal.name + ".romm").delete()
             for (core in cores) {
-                folders += Triple(target.savesTree, core, target.stem + ".srm")
+                folders += Triple(target.savesTree, core, target.stem + "." + Systems.saveExtension(core))
                 folders += Triple(target.savesTree, core, target.stem + ".rtc")
             }
         }
@@ -351,7 +354,9 @@ internal object RetroArchStorage {
             generation?.let {
                 retire(File(saves, "$it.state"))
                 File(saves, "$it.retroarch-export.state.auto").delete()
+                File(saves, "$it.retroarch-export.state.auto.png").delete()
             }
+            File(target.stateExportLocal.path + ".png").delete()
             retire(File(saves, "$id.$lower.state"))
             if (target.core == "mGBA") retire(File(saves, "$id.state"))
             retire(target.stateDefaultLocal)
@@ -389,7 +394,7 @@ internal object RetroArchStorage {
             stage(pendingMark(files, target.core, target.stem + ".state.auto"), byteArrayOf(1))
             byId.delete()
         }
-        for ((root, name) in listOf(target.savesTree to target.stem + ".srm",
+        for ((root, name) in listOf(target.savesTree to target.saveName,
                 target.savesTree to target.stem + ".rtc",
                 target.statesTree to target.stem + ".state.auto")) {
             val mark = pendingMark(files, target.core, name)
@@ -424,7 +429,7 @@ internal object RetroArchStorage {
         }
         val coreLower = coreLower(target.core)
         val guardRoot = File(files, "Saves")
-        val saveName = target.stem + ".srm"
+        val saveName = target.saveName
         val stateName = target.stem + ".state.auto"
         val saveTree = target.savesTree?.toString()
         val stateTree = target.statesTree?.toString()
@@ -487,7 +492,7 @@ internal object RetroArchStorage {
                     // older states stay where they are (game.rs).
                     ownPrivate?.let {
                         val stamp = System.currentTimeMillis()
-                        stage(File(guardRoot, "FolderBackups/${target.core}/${target.stem}.$stamp.srm"), it)
+                        stage(File(guardRoot, "FolderBackups/${target.core}/${target.stem}.$stamp.${Systems.saveExtension(target.core)}"), it)
                     }
                     stage(File(guardRoot, "${target.romIdentity}.$coreLower.state-stale.once"),
                         byteArrayOf(1))
@@ -619,7 +624,7 @@ internal object RetroArchStorage {
                 val data = target.saveLocal.readBytes()
                 if (data.isNotEmpty() && data.size <= MAX_SAVE) {
                     writeSaf(context, target.savesTree, target.core,
-                        target.stem + ".srm", data, isState = false)
+                        target.saveName, data, isState = false)
                 }
             } catch (e: Exception) {
                 SlotLog.e(TAG, "RetroArch SRAM export failed for ${target.core}/${target.stem}", e)
@@ -674,6 +679,46 @@ internal object RetroArchStorage {
             }
         }
         return failures
+    }
+
+    // Sync States with RomM (3.0): the game's resume state, as RetroArch
+    // keeps it (RASTATE, compressed in its #RZIPv1# chunks on disk).
+
+    /** The resume state this launch would use, uncompressed: the one the
+     *  launch staged from the folder or slot.'s own copy, else slot.'s
+     *  latest export. Null when the game has none. */
+    internal fun currentAutoState(context: Context, target: Target): ByteArray? =
+        listOf(target.stateImportLocal, activeExport(context, target))
+            .firstOrNull { it.isFile && it.length() > 0 }?.readBytes()
+
+    /** slot.'s latest export of the resume state (RASTATE), and the picture
+     *  of the game the engine keeps beside it (<export>.png). */
+    internal fun autoStateExport(context: Context, target: Target): File = activeExport(context, target)
+
+    /** A core switch set the game's older states aside: an incoming state
+     *  would be ignored at this launch. */
+    internal fun autoStateProtected(context: Context, target: Target): Boolean =
+        File(context.filesDir, "Saves/${target.romIdentity}.${coreLower(target.core)}.state-export-protected").isFile
+
+    /** The one-shot mark that the save is newer than the resume state. */
+    internal fun staleStateMark(context: Context, target: Target): File =
+        File(context.filesDir, "Saves/${target.romIdentity}.${coreLower(target.core)}.state-stale.once")
+
+    /** A resume state from RomM becomes the game's: where the launch reads
+     *  it now, and where the next launch will (the RetroArch folder, with
+     *  what slot. synced there, else slot.'s own copy), so a crash before
+     *  the next state never brings the older one back. */
+    internal fun adoptAutoState(context: Context, target: Target, raw: ByteArray) {
+        require(raw.size in 16..MAX_STATE && raw.startsWithRASTATE()) { "Invalid RomM state" }
+        val compressed = RetroArchCompression.encode(raw)
+        val name = target.stem + ".state.auto"
+        if (target.statesTree != null) {
+            writeSaf(context, target.statesTree, target.core, name, compressed, isState = true)
+            rememberSynced(context.filesDir, target.statesTree.toString(), target.core, name, compressed)
+        } else {
+            stage(target.stateDefaultLocal, compressed)
+        }
+        stage(target.stateImportLocal, raw)
     }
 
     /** The state slot. last wrote for RetroArch: its protected generation's
@@ -1523,7 +1568,7 @@ internal object RetroArchStorage {
      *  the Polaroids, each with the picture RetroArch shows for it. */
     internal fun transferKind(name: String, states: Boolean): Boolean =
         if (states) Regex(".+\\.state(\\.auto|[1-9])?(\\.png)?").matches(name)
-        else name.endsWith(".srm") || name.endsWith(".rtc")
+        else Systems.isSaveName(name) || name.endsWith(".rtc")
 
     fun planTransfer(context: Context, root: Uri, states: Boolean): TransferPlan {
         val base = File(context.filesDir, if (states) "States" else "Saves")
@@ -1589,8 +1634,8 @@ internal object RetroArchStorage {
                     // The folder's save wins: slot.'s own save state, from
                     // before, must not bring slot.'s old save back over it
                     // at the next start (amadeus12, 2026-11-15).
-                    if (!plan.states && item.name.endsWith(".srm")) {
-                        markFolderSave(context.filesDir, item.core, item.name.removeSuffix(".srm"))
+                    if (!plan.states && Systems.isSaveName(item.name)) {
+                        markFolderSave(context.filesDir, item.core, Systems.saveStem(item.name))
                     }
                     kept++
                 }
@@ -1638,7 +1683,7 @@ internal object RetroArchStorage {
             "Manual RetroArch slot was occupied during sync; preserved"
         }
         // What slot. leaves in the folder is what it saw last (issue #116).
-        val printed = !createOnly && (name.endsWith(".srm") || name.endsWith(".state.auto"))
+        val printed = !createOnly && (Systems.isSaveName(name) || name.endsWith(".state.auto"))
         if (existing != null) {
             val old = read(context, existing, if (isState) MAX_STATE else MAX_SAVE)
             if (old.contentEquals(bytes)) {

@@ -1009,4 +1009,21 @@ fn home_console_hashes_skip_dump_headers_like_rcheevos() {
         format!("{:x}", md5::compute(&snes)));
     assert!(supported_console(7) && supported_console(3) && supported_console(1));
     assert!(!supported_console(2) && !supported_console(8));
+    // A .lnx Lynx cart without its 64-byte header; a raw .lyx, a Game Gear,
+    // Master System, Neo Geo Pocket, WonderSwan or Pokemon mini cart whole.
+    let mut lnx = b"LYNX\0".to_vec();
+    lnx.resize(64, 0);
+    lnx.extend_from_slice(&body);
+    std::fs::write(root.path().join("a.lnx"), &lnx).unwrap();
+    assert_eq!(library::content_hash(&root.path().join("a.lnx")).unwrap(), digest);
+    std::fs::write(root.path().join("a.lyx"), &body).unwrap();
+    assert_eq!(library::content_hash(&root.path().join("a.lyx")).unwrap(), digest);
+    for ext in ["gg", "sms", "ngc", "wsc", "min"] {
+        let path = root.path().join(format!("a.{ext}"));
+        std::fs::write(&path, &lnx).unwrap();
+        assert_eq!(library::content_hash(&path).unwrap(), format!("{:x}", md5::compute(&lnx)), "{ext}");
+    }
+    for console in [11, 13, 14, 15, 24, 53] {
+        assert!(supported_console(console), "{console}");
+    }
 }

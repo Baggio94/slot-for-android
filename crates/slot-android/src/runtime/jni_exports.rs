@@ -1306,6 +1306,15 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetRommSync(
     ROMM_SYNC.store(state.clamp(0, 2) as u8, Ordering::Release);
 }
 
+/// Sync States with RomM (3.0): 0 RomM not connected, 1 off, 2 on, 3 off
+/// and idle (Sync Saves with RomM is off).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetRommStates(
+    _env: *mut c_void, _this: *mut c_void, state: i32,
+) {
+    ROMM_STATES.store(state.clamp(0, 3) as u8, Ordering::Release);
+}
+
 /// The ROM folder's SD card isn't in: the shelf greys its carts and
 /// won't insert one (Siham 2026-11-16).
 #[unsafe(no_mangle)]

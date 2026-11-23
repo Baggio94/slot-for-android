@@ -19,7 +19,8 @@ import java.util.Locale
 import java.util.zip.CRC32
 
 /**
- * Automatic labels for NES / Famicom, Super Nintendo and Mega Drive carts,
+ * Automatic labels for the home systems' carts (NES / Famicom, Super
+ * Nintendo, Mega Drive and the 3.0 systems),
  * from ScreenScraper (jeuInfos.php by CRC, then name and size), with slot.'s
  * own developer credentials: the label scan ("support-texture") of the
  * region the shell is drawn in, else the label cut out of the cart's
@@ -59,13 +60,17 @@ internal object HomeCartLabels {
 
     internal data class Media(val type: String, val region: String, val url: String)
 
+    /** The 3.0 systems. Most share label shapes across regions; Master
+     *  System's western, Japanese and card moulds are selected separately. */
+    private val NEW_LABEL_PLATFORMS = setOf(
+        Systems.SMS, Systems.GG, Systems.NGP, Systems.WS, Systems.LYNX, Systems.POKEMINI)
+
+    /** The home systems whose real labels slot. fetches. */
+    internal val LABEL_PLATFORMS = setOf(Systems.NES, Systems.SNES, Systems.MD) + NEW_LABEL_PLATFORMS
+
     /** ScreenScraper's system ids. */
-    internal fun systemId(platform: String): Int? = when (platform) {
-        Systems.NES -> 3
-        Systems.SNES -> 4
-        Systems.MD -> 1
-        else -> null
-    }
+    internal fun systemId(platform: String): Int? =
+        Systems.row(platform)?.takeIf { it.home }?.screenScraper
 
     private fun credentials(): Triple<String, String, String>? {
         fun read(value: String) = try {
@@ -95,30 +100,32 @@ internal object HomeCartLabels {
         return if (j || u || e) Triple(j, u, e) else null
     }
 
-    /** Mega Drive titles slot. draws in another mould than Sega's (EA,
-     *  Accolade, Codemasters, Virtua Racing, Sonic & Knuckles), as
-     *  "key/region" (us, eu or any) to the label shell, from slot-ui's own
-     *  table (assets/home_shells.tsv). */
-    @Volatile private var mdCarts: Map<String, String> = emptyMap()
+    /** Per-game MD, SMS and GG moulds, keyed by platform/title/region,
+     *  from the same home_shells.tsv table as the native renderer. */
+    @Volatile private var homeCarts: Map<String, String> = emptyMap()
 
-    private val MD_MOULDS = mapOf(
+    private val LABEL_MOULDS = mapOf(
         "megadrive-ea" to "md_ea",
         "megadrive-accolade" to "md_accolade",
         "megadrive-codemasters" to "md_codemasters",
         "megadrive-vr" to "md_vr",
         "megadrive-sk" to "md_sk",
+        "mastersystem-jp" to "sms_jp",
+        "mastersystem-card" to "sms_card",
+        "gamegear-codemasters" to "gg_codemasters",
     )
 
     internal fun readShells(tsv: String) {
-        mdCarts = tsv.lineSequence().mapNotNull { line ->
+        homeCarts = tsv.lineSequence().mapNotNull { line ->
             val cols = line.split('\t')
-            val shell = MD_MOULDS[cols.getOrNull(1)]
-            if (cols.size >= 4 && cols[0] == "md" && shell != null) "${cols[2]}/${cols[3]}" to shell else null
+            val shell = LABEL_MOULDS[cols.getOrNull(1)]
+            if (cols.size >= 4 && cols[0] in setOf("md", "sms", "gg") && shell != null)
+                "${cols[0]}/${cols[2]}/${cols[3]}" to shell else null
         }.toMap()
     }
 
     private fun loadShells(context: Context) {
-        if (mdCarts.isNotEmpty()) return
+        if (homeCarts.isNotEmpty()) return
         try {
             readShells(context.assets.open("home_shells.tsv").bufferedReader().use { it.readText() })
         } catch (error: Exception) {
@@ -148,16 +155,29 @@ internal object HomeCartLabels {
         val japanOnly = regions?.let { it.first && !it.second && !it.third } ?: (rom.region == "J")
         val usa = regions?.second ?: (rom.region == "U")
         val maker = rom.maker.uppercase(Locale.ROOT)
+        val key = titleKey(rom.filename.ifBlank { rom.title })
+        val platform = rom.platform.lowercase(Locale.ROOT)
+        val own = homeCarts["$platform/$key/${if (usa) "us" else "eu"}"]
+            ?: homeCarts["$platform/$key/any"]
         return when (rom.platform) {
             Systems.NES -> if (japanOnly) "fc" else "nes"
             Systems.SNES -> if (usa) "snes_us" else "snes"
             Systems.MD -> when {
                 japanOnly -> "md_jp"
                 usa && ("T-50" in maker || "ELECTRONIC ARTS" in maker) -> "md_ea"
-                else -> titleKey(rom.filename.ifBlank { rom.title }).let { key ->
-                    mdCarts["$key/${if (usa) "us" else "eu"}"] ?: mdCarts["$key/any"]
-                } ?: "md"
+                else -> own ?: "md"
             }
+            Systems.SMS -> when {
+                own == "sms_card" -> "sms_card"
+                japanOnly || own == "sms_jp" -> "sms_jp"
+                else -> "sms"
+            }
+            Systems.GG -> own ?: "gg"
+            Systems.NGP -> "ngp"
+            // WS and WSC share the same outline and label window.
+            Systems.WS -> "ws"
+            Systems.LYNX -> "lynx"
+            Systems.POKEMINI -> "pokemini"
             else -> ""
         }
     }
@@ -166,6 +186,21 @@ internal object HomeCartLabels {
     internal fun labelRegions(rom: Rom): List<String> {
         val europe = listOf("eu", "fr", "de", "uk", "sp", "it", "nl", "se", "au")
         val regions = nameRegions(rom.filename.ifBlank { rom.title })
+        if (rom.platform == Systems.SMS) {
+            when (shell(rom)) {
+                "sms_jp" -> return listOf("jp", "kr", "asi")
+                "sms" -> return if (regions?.second == true && regions.third != true)
+                    listOf("us", "wor") + europe + listOf("ss")
+                else europe + listOf("us", "wor", "ss")
+            }
+        }
+        if (rom.platform in NEW_LABEL_PLATFORMS) {
+            val japanOnly = regions?.let { it.first && !it.second && !it.third } ?: (rom.region == "J")
+            val west = if (regions?.second == true && regions.third != true)
+                listOf("us", "wor") + europe else europe + listOf("us", "wor")
+            return if (japanOnly) listOf("jp") + west + listOf("asi", "kr", "ss")
+            else west + listOf("ss", "jp", "asi", "kr")
+        }
         return when (shell(rom)) {
             "fc", "md_jp" -> listOf("jp")
             "snes_us", "md_ea" -> listOf("us")
@@ -193,6 +228,15 @@ internal object HomeCartLabels {
         "md_codemasters" to floatArrayOf(52f / 312, 0f / 246, 214f / 312, 211f / 246),
         "md_vr" to floatArrayOf(34f / 312, 48f / 306, 248f / 312, 118f / 306),
         "md_sk" to floatArrayOf(17f / 312, 52f / 216, 276f / 312, 29f / 216),
+        "ngp" to floatArrayOf(31f / 312, 66f / 280, 252f / 312, 138f / 280),
+        "ws" to floatArrayOf(10f / 312, 26f / 188, 293f / 312, 108f / 188),
+        "gg" to floatArrayOf(28f / 312, 58f / 316, 256f / 312, 185f / 316),
+        "gg_codemasters" to floatArrayOf(41f / 312, 17f / 367, 231f / 312, 295f / 367),
+        "sms" to floatArrayOf(8f / 312, 4f / 200, 296f / 312, 42f / 200),
+        "sms_jp" to floatArrayOf(29f / 312, 2f / 360, 254f / 312, 209f / 360),
+        "sms_card" to floatArrayOf(18f / 312, 21f / 500, 279f / 312, 290f / 500),
+        "lynx" to floatArrayOf(5f / 312, 69f / 326, 302f / 312, 211f / 326),
+        "pokemini" to floatArrayOf(19f / 312, 107f / 300, 274f / 312, 149f / 300),
     )
 
     /** The label to fetch: the region's scan, else its front render when
@@ -207,7 +251,9 @@ internal object HomeCartLabels {
             medias.firstOrNull { it.type == type && it.region == region }
         }
         return when (val shell = shell(rom)) {
-            "md_vr" -> best("support-2D")
+            // Codemasters' GG scans can be the standard horizontal label
+            // (Micro Machines in our set), not this mould's tall sticker.
+            "md_vr", "gg_codemasters" -> best("support-2D")
             "md_sk" -> best("support-texture")
             else -> best("support-texture") ?: best("support-2D")?.takeIf { shell in WINDOWS }
         }
@@ -235,7 +281,7 @@ internal object HomeCartLabels {
             val row = rows.optJSONObject(i) ?: return@mapNotNull null
             val platform = row.optString("platform")
             val uri = row.optString("uri")
-            if (platform !in Systems.HOME_PLATFORMS || !uri.startsWith("content://")) return@mapNotNull null
+            if (platform !in LABEL_PLATFORMS || !uri.startsWith("content://")) return@mapNotNull null
             Rom(uri, platform, row.optString("title"), row.optString("filename"),
                 row.optLong("size", -1), row.optLong("modified", -1),
                 row.optString("home_region"), row.optString("home_maker"))
@@ -340,6 +386,9 @@ internal object HomeCartLabels {
 
     private fun known(state: JSONObject, rom: Rom): Boolean {
         val old = state.optJSONObject(rom.uri) ?: return false
+        // A previous 3.0 lookup may have rejected support-2D before its
+        // label window existed. Retry once with the current mould rules.
+        if (rom.platform in NEW_LABEL_PLATFORMS && old.optString("mould") != shell(rom)) return false
         return old.optLong("size") == rom.size && old.optLong("modified") == rom.modified
     }
 
@@ -736,7 +785,7 @@ internal object HomeCartLabels {
                         // again until the file changes.
                         retry.finished(rom.uri)
                         state.put(rom.uri, JSONObject().put("size", rom.size)
-                            .put("modified", rom.modified))
+                            .put("modified", rom.modified).put("mould", shell(rom)))
                         dirty = true
                     }
                     "NETWORK_ERROR" -> retry.transient(rom.uri, android.os.SystemClock.elapsedRealtime())

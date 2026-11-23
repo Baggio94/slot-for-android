@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 591 947" width="591" height="947">
+  <defs><linearGradient id="wallShade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity=".6"/><stop offset=".08" stop-color="#000" stop-opacity="0"/></linearGradient></defs>
+  <path d="M574 946.47 L23 946.49 L11 939.34 L1.81 928 L-0.5 923 L-0.5 29 L5.92 14 L9.59 9 L15 3.87 L25 -0.5 L570 -0.48 L581 4.57 L586.4 9 L590.5 14 L590.5 932 L582.85 941 L574 946.47 Z" fill="#ff00ff"/>
+  <path d="M561 933.47 L36 933.49 L24 926.34 L14.81 915 L12.5 910 L12.5 42 L19.55 26 L25.4 19 L30 15.7 L38 12.5 L557 12.52 L568 17.57 L573.4 22 L577.5 27 L577.5 919 L569.85 928 L561 933.47 Z" fill="#800080"/>
+  <path d="M561 933.47 L36 933.49 L24 926.34 L14.81 915 L12.5 910 L12.5 42 L19.55 26 L25.4 19 L30 15.7 L38 12.5 L557 12.52 L568 17.57 L573.4 22 L577.5 27 L577.5 919 L569.85 928 L561 933.47 Z" fill="url(#wallShade)"/>
+</svg>

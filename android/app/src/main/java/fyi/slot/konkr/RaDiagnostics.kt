@@ -34,6 +34,9 @@ internal object RaDiagnostics {
         val indexedNes: Int? = null, val cachedNes: Int? = null,
         val indexedSnes: Int? = null, val cachedSnes: Int? = null,
         val indexedMd: Int? = null, val cachedMd: Int? = null,
+        /** Every system's games, by RetroAchievements console id (the 3.0
+         *  systems' rows read these). */
+        val indexedBy: Map<Int, Int>? = null, val cachedBy: Map<Int, Int>? = null,
     )
 
     private data class PatchEntry(
@@ -122,22 +125,14 @@ internal object RaDiagnostics {
             }
         }
 
-        val totalByConsole = hashMapOf(4 to 0, 5 to 0, 6 to 0, 7 to 0, 3 to 0, 1 to 0)
-        val indexedByConsole = hashMapOf(4 to 0, 5 to 0, 6 to 0, 7 to 0, 3 to 0, 1 to 0)
-        val cachedByConsole = hashMapOf(4 to 0, 5 to 0, 6 to 0, 7 to 0, 3 to 0, 1 to 0)
+        val totalByConsole = HashMap(Systems.TABLE.associate { it.retroAchievements to 0 })
+        val indexedByConsole = HashMap(Systems.TABLE.associate { it.retroAchievements to 0 })
+        val cachedByConsole = HashMap(Systems.TABLE.associate { it.retroAchievements to 0 })
         val discovered = HashMap<String, Int>()
         if (games != null) {
             for (i in 0 until games.length().coerceAtMost(RomLibrary.MAX_ROMS)) {
                 val item = games.optJSONObject(i) ?: continue
-                val console = when (item.optString("platform")) {
-                    "GB" -> 4
-                    "GBA" -> 5
-                    "GBC" -> 6
-                    Systems.NES -> 7
-                    Systems.SNES -> 3
-                    Systems.MD -> 1
-                    else -> continue
-                }
+                val console = Systems.retroAchievementsId(item.optString("platform")) ?: continue
                 totalByConsole[console] = totalByConsole.getValue(console) + 1
                 val hash = hashesByUri[item.optString("uri")] ?: continue
                 if (discovered.putIfAbsent(hash, console) == null) {
@@ -235,6 +230,8 @@ internal object RaDiagnostics {
             cachedSnes = if (games != null) cachedByConsole.getValue(3) else null,
             indexedMd = if (games != null) indexedByConsole.getValue(1) else null,
             cachedMd = if (games != null) cachedByConsole.getValue(1) else null,
+            indexedBy = if (games != null) HashMap(indexedByConsole) else null,
+            cachedBy = if (games != null) HashMap(cachedByConsole) else null,
             pendingAwards = pending,
             recordedAwards = recorded,
             warning = warning,
@@ -309,6 +306,8 @@ internal object RaDiagnostics {
             cachedSnes = if (games != null) cachedByConsole.getValue(3) else null,
             indexedMd = if (games != null) indexedByConsole.getValue(1) else null,
             cachedMd = if (games != null) cachedByConsole.getValue(1) else null,
+            indexedBy = if (games != null) HashMap(indexedByConsole) else null,
+            cachedBy = if (games != null) HashMap(cachedByConsole) else null,
             pendingAwards = pending,
             recordedAwards = recorded,
             warning = warning,

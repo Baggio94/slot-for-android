@@ -45,6 +45,9 @@ pub struct RomEntry {
     /// The Mega Drive header's copyright field: "(C)T-50" is Electronic Arts.
     #[serde(default)]
     pub home_maker: String,
+    /// The ROM's own extension inside a ZIP (the scan's rom_ext).
+    #[serde(default)]
+    pub rom_ext: String,
 }
 
 pub struct LibraryState {
@@ -142,13 +145,25 @@ pub fn next_populated(current: usize, direction: i32, count: &[usize]) -> usize 
     current
 }
 
+/// A WonderSwan Color game (.wsc, zipped or not) comes in the Color's clear
+/// cart; the WonderSwan shelf's own mould is the black one.
+fn colour_swan(shell: ShellChoice, entry: &RomEntry) -> ShellChoice {
+    let colour = entry.filename.to_ascii_lowercase().ends_with(".wsc")
+        || entry.rom_ext.eq_ignore_ascii_case("wsc");
+    if !colour || shell.outline != slot_store::Outline::WonderSwan { return shell; }
+    ShellChoice { outline: slot_store::Outline::WonderSwanColor, colour: [145, 148, 148],
+        finish: slot_store::ShellFinish::Clear }
+}
+
 /// A cart's automatic shell, as the shelf gives it when Cart Studio names none.
 fn auto_shell(entry: &RomEntry, platform: Platform) -> Option<ShellChoice> {
     match platform {
         Platform::Gba => None,
         // The region's mould, a publisher's, and the game's colour.
-        Platform::Nes | Platform::Snes | Platform::Md => slot_ui::home_shell(
-            platform, entry.title.trim(), &entry.home_region, &entry.home_maker),
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini => slot_ui::home_shell(
+            platform, entry.title.trim(), &entry.home_region, &entry.home_maker)
+            .map(|shell| colour_swan(shell, entry)),
         Platform::Gb | Platform::Gbc => {
             // Cart Studio and the shelf must resolve the same automatic
             // per-game shell, even for SAF content URIs and zipped ROMs.
@@ -201,7 +216,7 @@ pub fn remote_shell(platform: Platform, title: &str, gb: Option<RemoteGbHeader>)
         title: title.to_owned(), platform: String::new(), uri: String::new(), code: String::new(),
         color_only: gb.cgb_flag == Some(0xc0), shell_override: None, gb_title: gb.title,
         gb_code: gb.code, gb_japan: gb.japan, gb_cgb_flag: gb.cgb_flag, home_title: String::new(),
-        home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
+        home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
     };
     auto_shell(&entry, platform)
 }
@@ -223,7 +238,7 @@ pub fn chosen_shell(platform: Platform, auto: Option<ShellChoice>, chosen: Optio
             // A Studio colour on a home cart keeps the automatic mould
             // unless it names one of that system's own.
             if let Some(auto) = auto.filter(|_| {
-                matches!(platform, Platform::Nes | Platform::Snes | Platform::Md)
+                !platform.handheld()
                     && chosen.outline.platform() != Some(platform)
             }) {
                 chosen.outline = auto.outline;
@@ -330,8 +345,20 @@ mod tests {
             code: String::new(), color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(), gb_japan: false, gb_cgb_flag: None,
             home_title: String::new(), home_region: String::new(), home_battery: false,
-            home_maker: String::new(), filename: filename.into(),
+            home_maker: String::new(), rom_ext: String::new(), filename: filename.into(),
         }
+    }
+
+    #[test]
+    fn a_zipped_wonderswan_color_game_takes_the_clear_cart() {
+        let black = ShellChoice { outline: slot_store::Outline::WonderSwan, colour: [30, 30, 30],
+            finish: slot_store::ShellFinish::Solid };
+        let mut zipped = named("WS", "Final Fantasy (Japan).zip", "content://x");
+        assert_eq!(colour_swan(black, &zipped).outline, slot_store::Outline::WonderSwan);
+        zipped.rom_ext = "wsc".into();
+        assert_eq!(colour_swan(black, &zipped).outline, slot_store::Outline::WonderSwanColor);
+        let plain = named("WS", "Final Fantasy (Japan).wsc", "content://y");
+        assert_eq!(colour_swan(black, &plain).finish, slot_store::ShellFinish::Clear);
     }
 
     #[test]
@@ -384,7 +411,7 @@ mod tests {
             code: String::new(), color_only: false, shell_override: Some("old".into()),
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
         };
         let mut entries = vec![entry("content://roms/studio-test"), entry("content://roms/other")];
         keep_saved_shells(&mut entries);
@@ -399,7 +426,7 @@ mod tests {
             code: String::new(), color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
         };
         let grouped = carts_by_platform(&[
             example("GBA", "Zelda", "content://roms/z"),
@@ -421,14 +448,14 @@ mod tests {
             color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
         };
         let grouped = carts_by_platform(&[
             entry("GBA", "gba"), entry("GB", "gb"), entry("GBC", "gbc"),
             entry("NES", "nes"), entry("SNES", "snes"), entry("MD", "md"),
         ]);
         assert_eq!(grouped.len(), slot_store::Platform::ALL.len());
-        assert!(grouped.iter().all(|shelf| shelf.len() == 1));
+        assert!(grouped[..6].iter().all(|shelf| shelf.len() == 1));
         let sources: Vec<&[Cart]> = grouped.iter().map(|shelf| shelf.as_slice()).collect();
         let recent = crate::recents::carts(&[
             "content://roms/nes".into(), "content://roms/snes".into(),
@@ -444,7 +471,7 @@ mod tests {
         assert!(favorites.iter().any(|c| c.platform == Platform::Nes));
         assert!(favorites.iter().any(|c| c.platform == Platform::Snes));
         assert!(favorites.iter().any(|c| c.platform == Platform::Md));
-        assert!(grouped.iter().all(|shelf| shelf.len() == 1),
+        assert!(grouped[..6].iter().all(|shelf| shelf.len() == 1),
             "special-rack materialization must not overwrite a system shelf");
     }
 
@@ -457,7 +484,7 @@ mod tests {
                 color_only: flag == 0xc0, shell_override: None,
                 gb_title: title.into(), gb_code: code.into(),
                 gb_japan: false, gb_cgb_flag: Some(flag),
-                home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), filename: String::new(),
+                home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
             }
         };
         let mut manual = entry("GB", "Manual", "POKEMON RED", "", 0);

@@ -12,6 +12,47 @@ class BiosFromRommTest {
         assertEquals(listOf("gbc_bios.bin"), BiosLibrary.namesFor(Systems.GBC))
         assertEquals(listOf("gb_bios.bin"), BiosLibrary.namesFor(Systems.GB))
         assertTrue(BiosLibrary.namesFor(Systems.SNES).isEmpty())
+        assertEquals(listOf("lynxboot.img"), BiosLibrary.namesFor(Systems.LYNX))
+        assertEquals(listOf("bios.gg"), BiosLibrary.namesFor(Systems.GG))
+        assertEquals(listOf("bios_U.sms", "bios_E.sms", "bios_J.sms"), BiosLibrary.namesFor(Systems.SMS))
+        assertEquals(listOf("bios_MD.bin"), BiosLibrary.namesFor(Systems.MD))
+        assertEquals(listOf("bios.min"), BiosLibrary.namesFor(Systems.POKEMINI))
+        assertTrue(BiosLibrary.namesFor(Systems.NGP).isEmpty())
+        assertTrue(BiosLibrary.namesFor(Systems.WS).isEmpty())
+    }
+
+    @Test fun onlyFourSystemsAreEligibleForAutomaticRommBios() {
+        assertEquals(setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX),
+            BiosLibrary.ROMM_AUTO_PLATFORMS)
+        assertEquals(listOf("gb_bios.bin"), BiosLibrary.automaticNamesFor(Systems.GB))
+        assertEquals(listOf("gbc_bios.bin"), BiosLibrary.automaticNamesFor(Systems.GBC))
+        assertEquals(listOf("gba_bios.bin"), BiosLibrary.automaticNamesFor(Systems.GBA))
+        assertEquals(listOf("lynxboot.img"), BiosLibrary.automaticNamesFor(Systems.LYNX))
+        for (system in listOf(Systems.GG, Systems.SMS, Systems.MD, Systems.POKEMINI,
+            Systems.NGP, Systems.WS, Systems.SNES)) {
+            assertTrue("No automatic BIOS for $system",
+                BiosLibrary.automaticNamesFor(system).isEmpty())
+        }
+        // This is only a download policy: BIOS chosen manually are still supported.
+        assertEquals(listOf("bios.gg"), BiosLibrary.namesFor(Systems.GG))
+        assertEquals(listOf("bios.min"), BiosLibrary.namesFor(Systems.POKEMINI))
+    }
+
+    @Test fun theNewSystemsBiosAreCheckedToo() {
+        assertTrue(BiosLibrary.valid("lynxboot.img", ByteArray(512)))
+        assertTrue(BiosLibrary.valid("LYNXBOOT.IMG", ByteArray(512)))
+        assertFalse(BiosLibrary.valid("lynxboot.img", ByteArray(1_024)))
+        assertTrue(BiosLibrary.valid("bios.gg", ByteArray(1_024)))
+        assertTrue(BiosLibrary.valid("bios_u.sms", ByteArray(8_192)))
+        assertTrue(BiosLibrary.valid("bios_E.sms", ByteArray(262_144)))
+        assertFalse(BiosLibrary.valid("bios_U.sms", ByteArray(5_000)))
+        assertTrue(BiosLibrary.valid("bios.min", ByteArray(4_096)))
+        val tmss = ByteArray(16_384).also { "GENESIS OS".toByteArray().copyInto(it, 0x120) }
+        assertTrue(BiosLibrary.valid("bios_MD.bin", tmss))
+        assertTrue(BiosLibrary.valid("bios_MD.bin", tmss.copyOf(2_048)))
+        assertFalse(BiosLibrary.valid("bios_MD.bin", ByteArray(2_048)))
+        assertEquals("Lynx", BiosLibrary.systemOf("lynxboot.img"))
+        assertEquals("Master System", BiosLibrary.systemOf("bios_j.sms"))
     }
 
     @Test fun onlyWholeKnownBiosAreKept() {

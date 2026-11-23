@@ -26,6 +26,20 @@ class SaveDeletesTest {
         assertNull(SaveDeletes.kindOf("konkr-favorites.json"))
     }
 
+    @Test fun lynxAndPokemonMiniSavesAreSaves() {
+        assertEquals(SaveDeletes.Kind.SAVE, SaveDeletes.kindOf("Saves/Handy/Chip's Challenge.eeprom"))
+        assertEquals(SaveDeletes.Kind.SAVE, SaveDeletes.kindOf("Saves/PokeMini/Pokemon Puzzle Collection.eep"))
+        val mine = SaveDeletes.forGame(listOf("Saves/Handy/Chip's Challenge.eeprom",
+            "Saves/Handy/Chip's Challenge.srm"), "Handy", "Chip's Challenge", id, shared = false)
+        assertEquals(mapOf("Saves/Handy/Chip's Challenge.eeprom" to SaveDeletes.Kind.SAVE), mine)
+        assertEquals("eeprom", Systems.saveExtension("Handy"))
+        assertEquals("eep", Systems.saveExtension("PokeMini"))
+        assertEquals("srm", Systems.saveExtension("Beetle Lynx"))
+        assertEquals("flash", Systems.saveExtension("Beetle NeoPop"))
+        assertEquals("ngf", Systems.saveExtension("RACE"))
+        assertEquals("Game", Systems.saveStem("Game.eeprom"))
+    }
+
     @Test fun onlyThisGamesFilesAreAskedAbout() {
         val paths = listOf("Saves/mGBA/Golden Sun.srm", "Saves/gpSP/Golden Sun.srm",
             "States/mGBA/Golden Sun.state.auto", "Saves/mGBA/Golden Sun 2.srm",

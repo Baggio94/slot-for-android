@@ -16,31 +16,90 @@ internal object Systems {
     const val NES = "NES"
     const val SNES = "SNES"
     const val MD = "MD"
+    const val SMS = "SMS"
+    const val GG = "GG"
+    const val NGP = "NGP"
+    const val WS = "WS"
+    const val LYNX = "LYNX"
+    const val POKEMINI = "POKEMINI"
 
-    private val NES_EXT = setOf("nes", "fc", "unf", "unif")
-    private val SNES_EXT = setOf("sfc", "smc")
-    // .bin is shared with other systems: only a SEGA header makes it a Mega Drive cart.
-    private val MD_EXT = setOf("md", "gen", "smd", "bin")
+    /** One system slot. plays: a row of slot_store::SYSTEMS, field for field
+     *  and in the same order (the native tests read these rows and compare,
+     *  so keep each one on a single line). */
+    class SystemRow(
+        /** The shelf key, as the native side parses it. */
+        val platform: String,
+        /** Cartridge extensions, lower case, without the .zip container. */
+        val extensions: List<String>,
+        /** ES-DE ROM folder names: an existing one is used, else the first is made. */
+        val folders: List<String>,
+        /** RomM's platform slugs (IGDB's). */
+        val romm: List<String>,
+        val retroAchievements: Int,
+        val screenScraper: Int,
+        /** libretro keys of the board's two cores, the default first. */
+        val cores: List<String>,
+        /** A home console: its own header, labels and shell. */
+        val home: Boolean,
+    )
+
+    val TABLE: List<SystemRow> = listOf(
+        SystemRow(GBA, listOf("gba"), listOf("gba"), listOf("gba"), 5, 12, listOf("mgba", "gpsp"), home = false),
+        SystemRow(GB, listOf("gb", "gbc"), listOf("gb"), listOf("gb"), 4, 9, listOf("mgba", "gambatte"), home = false),
+        SystemRow(GBC, listOf("gb", "gbc"), listOf("gbc"), listOf("gbc"), 6, 10, listOf("mgba", "gambatte"), home = false),
+        SystemRow(NES, listOf("nes", "fc", "unf", "unif"), listOf("nes", "famicom"), listOf("nes", "famicom"), 7, 3, listOf("fceumm", "nestopia"), home = true),
+        SystemRow(SNES, listOf("sfc", "smc"), listOf("snes", "sfc", "snesna"), listOf("snes", "sfam"), 3, 4, listOf("snes9x", "bsnes"), home = true),
+        // .bin is shared with other systems: only a SEGA header makes it a Mega Drive cart.
+        SystemRow(MD, listOf("md", "gen", "smd", "bin"), listOf("megadrive", "genesis", "megadrivejp"), listOf("genesis", "megadrive", "genesis-slash-megadrive", "sega-mega-drive"), 1, 1, listOf("genesis_plus_gx", "picodrive"), home = true),
+        SystemRow(SMS, listOf("sms"), listOf("mastersystem"), listOf("sms", "mastersystem", "master-system"), 11, 2, listOf("genesis_plus_gx", "gearsystem"), home = true),
+        SystemRow(GG, listOf("gg"), listOf("gamegear"), listOf("gamegear"), 15, 21, listOf("genesis_plus_gx", "gearsystem"), home = true),
+        // One shelf for both Neo Geo Pockets, one for both WonderSwans (Beetle Cygne only).
+        SystemRow(NGP, listOf("ngp", "ngc", "ngpc"), listOf("ngp", "ngpc"), listOf("neo-geo-pocket", "neo-geo-pocket-color", "ngp", "ngpc"), 14, 25, listOf("mednafen_ngp", "race"), home = true),
+        SystemRow(WS, listOf("ws", "wsc"), listOf("wonderswan", "wonderswancolor"), listOf("wonderswan", "wonderswan-color"), 53, 45, listOf("mednafen_wswan", "mednafen_wswan"), home = true),
+        // The Lynx (Beetle Lynx needs lynxboot.img) and the Pokemon mini (PokeMini only).
+        SystemRow(LYNX, listOf("lnx", "lyx"), listOf("atarilynx", "lynx"), listOf("lynx", "atari-lynx", "atarilynx"), 13, 28, listOf("handy", "mednafen_lynx"), home = true),
+        SystemRow(POKEMINI, listOf("min"), listOf("pokemini"), listOf("pokemon-mini", "pokemini"), 24, 211, listOf("pokemini", "pokemini"), home = true),
+    )
+
+    /** Every shelf key, in the native side's order. */
+    val PLATFORMS: List<String> = TABLE.map { it.platform }
+
+    /** The art set's indexes a shelf reads, in order: the Neo Geo Pocket's
+     *  and the WonderSwan's shelves hold their Color carts too, which the
+     *  set files apart (NGPC, WSC). */
+    fun artKeys(platform: String): List<String> = when (platform) {
+        NGP -> listOf(NGP, "NGPC")
+        WS -> listOf(WS, "WSC")
+        else -> listOf(platform)
+    }
+
+    fun row(platform: String?): SystemRow? = TABLE.firstOrNull { it.platform == platform }
 
     /** Every cartridge extension, without the .zip container. */
-    val ROM_EXTENSIONS: Set<String> = setOf("gba", "gb", "gbc") + NES_EXT + SNES_EXT + MD_EXT
+    val ROM_EXTENSIONS: Set<String> = TABLE.flatMap { it.extensions }.toSet()
 
-    val HOME_PLATFORMS = setOf(NES, SNES, MD)
+    val HOME_PLATFORMS: Set<String> = TABLE.filter { it.home }.map { it.platform }.toSet()
 
     private fun lower(ext: String) = ext.lowercase(Locale.ROOT)
 
     /** The shelf for a cartridge extension. A .gb may still be a GBC cart. */
-    fun platformFor(ext: String): String? = when (lower(ext)) {
-        "gba" -> GBA
+    fun platformFor(ext: String): String? = when (val e = lower(ext)) {
         "gb" -> GB
         "gbc" -> GBC
-        in NES_EXT -> NES
-        in SNES_EXT -> SNES
-        in MD_EXT -> MD
-        else -> null
+        else -> TABLE.firstOrNull { e in it.extensions }?.platform
     }
 
     fun isHome(ext: String) = platformFor(ext) in HOME_PLATFORMS
+
+    /** The system of a RomM platform slug, or null when slot. doesn't play it. */
+    fun platformForRommSlug(slug: String): String? =
+        lower(slug).let { s -> TABLE.firstOrNull { s in it.romm }?.platform }
+
+    /** RetroAchievements' console id of a shelf. */
+    fun retroAchievementsId(platform: String?): Int? = row(platform)?.retroAchievements
+
+    /** ScreenScraper's system id of a shelf. */
+    fun screenScraperId(platform: String?): Int? = row(platform)?.screenScraper
 
     /** libretro key -> RetroArch core name, also its saves/states folder. */
     private val FOLDERS = linkedMapOf(
@@ -53,23 +112,45 @@ internal object Systems {
         "bsnes" to "bsnes",
         "genesis_plus_gx" to "Genesis Plus GX",
         "picodrive" to "PicoDrive",
+        "gearsystem" to "Gearsystem",
+        "mednafen_ngp" to "Beetle NeoPop",
+        "race" to "RACE",
+        "mednafen_wswan" to "Beetle WonderSwan",
+        "handy" to "Handy",
+        "mednafen_lynx" to "Beetle Lynx",
+        "pokemini" to "PokeMini",
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
+
+    /** The in-game save's extension a core writes, as in RetroArch: Handy
+     *  keeps the Lynx EEPROM in .eeprom, PokeMini the Pokemon mini's in .eep,
+     *  Beetle NeoPop and RACE the Neo Geo Pocket's flash in .flash and .ngf. */
+    fun saveExtension(folder: String): String = when (folder) {
+        "Handy" -> "eeprom"
+        "PokeMini" -> "eep"
+        "Beetle NeoPop" -> "flash"
+        "RACE" -> "ngf"
+        else -> "srm"
+    }
+
+    private val SAVE_SUFFIXES = listOf(".srm", ".eeprom", ".eep", ".flash", ".ngf")
+
+    /** An in-game save's file name, whatever core wrote it. */
+    fun isSaveName(name: String): Boolean =
+        SAVE_SUFFIXES.any { name.endsWith(it, ignoreCase = true) }
+
+    /** A save's file name without its save extension. */
+    fun saveStem(name: String): String =
+        SAVE_SUFFIXES.firstOrNull { name.endsWith(it, ignoreCase = true) }
+            ?.let { name.dropLast(it.length) } ?: name
 
     /** The libretro key of a RetroArch core folder: Slot's private file prefix. */
     fun keyForFolder(folder: String): String =
         FOLDERS.entries.firstOrNull { it.value == folder }?.key ?: folder.lowercase(Locale.ROOT)
 
     /** The two cores of each shelf: the default first. */
-    private fun coresFor(platform: String?): List<String> = when (platform) {
-        GBA -> listOf("mgba", "gpsp")
-        GB, GBC -> listOf("mgba", "gambatte")
-        NES -> listOf("fceumm", "nestopia")
-        SNES -> listOf("snes9x", "bsnes")
-        MD -> listOf("genesis_plus_gx", "picodrive")
-        else -> emptyList()
-    }
+    private fun coresFor(platform: String?): List<String> = row(platform)?.cores ?: emptyList()
 
     /** The folder of the core that runs this cart: the one the native side
      *  picked when it runs this extension's system, else the system default. */
@@ -158,8 +239,51 @@ internal object Systems {
             NES -> nesHeader(header, fromName)
             SNES -> snesHeader(header, fromName)
             MD -> mdHeader(ext, header, fromName)
+            // Their headers say nothing of a battery: the games known to
+            // keep their save on one (a .srm seen later shows the others).
+            SMS, GG -> HomeHeader("", fromName, segaBattery(filename))
             else -> HomeHeader("", fromName, false)
         }
+    }
+
+    /** Master System and Game Gear games whose cartridge keeps its save on a
+     *  battery (by No-Intro title). Others show it once a save file exists. */
+    private val SEGA_BATTERY = listOf(
+        "phantasy star", "ys - the vanished omens", "ys (japan)", "golden axe warrior",
+        "ultima iv", "miracle warriors", "penguin land", "monopoly",
+        "shining force", "defenders of oasis", "sylvan tale", "tails adventure",
+        "madou monogatari", "lunar - sanposuru gakuen", "lunar - walking school",
+    )
+    internal fun segaBattery(filename: String): Boolean {
+        val title = filename.substringAfterLast('/').lowercase(Locale.ROOT)
+        return SEGA_BATTERY.any { title.startsWith(it) }
+    }
+
+    /** A WonderSwan cart keeps its save on a battery when its footer (the
+     *  ROM's last 10 bytes) names SRAM (types 1 to 5); EEPROM needs none.
+     *  Reads the cart once, from a stream, keeping only its tail. */
+    fun wsBattery(input: java.io.InputStream): Boolean {
+        val buffer = ByteArray(64 * 1024)
+        val tail = ByteArray(10)
+        var have = 0
+        var total = 0L
+        while (true) {
+            if (Thread.currentThread().isInterrupted) return false
+            val n = input.read(buffer)
+            if (n <= 0) break
+            total += n
+            if (total > 64L * 1024 * 1024) return false
+            if (n >= 10) {
+                System.arraycopy(buffer, n - 10, tail, 0, 10); have = 10
+            } else {
+                val keep = minOf(have, 10 - n)
+                System.arraycopy(tail, have - keep, tail, 0, keep)
+                System.arraycopy(buffer, 0, tail, keep, n)
+                have = keep + n
+            }
+        }
+        if (have < 10) return false
+        return (tail[5].toInt() and 0xff) in 0x01..0x05
     }
 
     /** No-Intro / GoodTools tags: (Japan), (USA), (Europe), (J), (U), (E)... */

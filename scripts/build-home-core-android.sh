@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Reproducible arm64 builds of the NES, SNES and Mega Drive libretro cores,
+# Reproducible arm64 builds of the NES, SNES, Mega Drive, Master System,
+# Game Gear, Neo Geo Pocket, WonderSwan, Lynx and Pokemon mini libretro cores,
 # each from a pinned upstream commit with the core's own Android recipe
 # (jni/Android.mk). No BIOS or ROMs. Usage: build-home-core-android.sh CORE
-#   fceumm nestopia snes9x bsnes genesis_plus_gx picodrive
+#   fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem
+#   mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NDK="${ANDROID_NDK_HOME:-${ANDROID_SDK_ROOT:?Set ANDROID_NDK_HOME or ANDROID_SDK_ROOT}/ndk/27.2.12479018}"
@@ -10,6 +12,7 @@ NDK="${ANDROID_NDK_HOME:-${ANDROID_SDK_ROOT:?Set ANDROID_NDK_HOME or ANDROID_SDK
 LLVM="$(echo "$NDK"/toolchains/llvm/prebuilt/*/bin)"
 CORE="${1:?core name}"
 SUBMODULES=0
+OWNER=libretro
 # name | upstream repository | pinned commit | jni folder | licence file
 case "$CORE" in
   fceumm)          REPO=libretro-fceumm;  PIN=ac0d00a7fc01166f84c7bac01d1084ebfd2b865e; JNI=jni;                         LICENCE=Copying ;;
@@ -18,6 +21,16 @@ case "$CORE" in
   bsnes)           REPO=bsnes;            PIN=63ee22f7af8f5d1ada295c2c98fd7bf261fa62a7; JNI=bsnes/target-libretro/jni;  LICENCE=LICENSE.txt ;;
   genesis_plus_gx) REPO=Genesis-Plus-GX;  PIN=b9c2316441978d4015ba30e9a95d9b0e6f8ee981; JNI=libretro/jni;                LICENCE=LICENSE.txt ;;
   picodrive)       REPO=picodrive;        PIN=1890c2932234c9d30f4cd3851d02228baae8f09e; JNI=jni;                         LICENCE=COPYING; SUBMODULES=1 ;;
+  # Gearsystem 3.9.25+ (2026-11-18), from its author's repository.
+  gearsystem)      REPO=Gearsystem;       PIN=4b3b1b266e536848ab23b8733f783ae17f0126a6; JNI=platforms/libretro/jni;      LICENCE=LICENSE; OWNER=drhelius ;;
+  # Beetle NeoPop (2026-06-14), RACE (2026-11-16), Beetle Cygne (2026-07-31).
+  mednafen_ngp)    REPO=beetle-ngp-libretro;   PIN=a50d5ac288a81f2104ddf43195a4efdd15c72227; JNI=jni;          LICENCE=COPYING ;;
+  race)            REPO=RACE;                  PIN=c660d9ab5aafb47aefff90182ca90d319ad9b077; JNI=jni;          LICENCE=license.txt ;;
+  mednafen_wswan)  REPO=beetle-wswan-libretro; PIN=4b01295838ea89e3f1355bbe4cb5cf98aa6108cd; JNI=jni;          LICENCE=COPYING ;;
+  # Handy (2026-04-20), Beetle Lynx (2026-04-20), PokeMini (2026-07-31).
+  handy)           REPO=libretro-handy;        PIN=bc55d462f0b2d6b073ea93dc552ebd73cec60fd1; JNI=jni;          LICENCE=lynx/license.txt ;;
+  mednafen_lynx)   REPO=beetle-lynx-libretro;  PIN=fcdefcfb3c11d6d2e71be076a5d3df2e88ab73ed; JNI=jni;          LICENCE=COPYING ;;
+  pokemini)        REPO=PokeMini;              PIN=132111b76343559860532a1ccc094f93f1ed5650; JNI=jni;          LICENCE=LICENSE ;;
   *) echo "Unknown home console core: $CORE" >&2; exit 1 ;;
 esac
 OUT="$ROOT/.build/$CORE"
@@ -25,7 +38,7 @@ SRC="$OUT/source"
 mkdir -p "$OUT"
 if [ ! -d "$SRC/.git" ]; then
   git init -q "$SRC"
-  git -C "$SRC" remote add origin "https://github.com/libretro/$REPO.git"
+  git -C "$SRC" remote add origin "https://github.com/$OWNER/$REPO.git"
 fi
 if [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" != "$PIN" ]; then
   git -C "$SRC" fetch --depth=1 origin "$PIN"

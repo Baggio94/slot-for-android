@@ -149,6 +149,7 @@ class MainActivity : Activity() {
     external fun nativeJournal(): String
     external fun nativeReloadAll()
     external fun nativeSetRommSync(state: Int)
+    external fun nativeSetRommStates(state: Int)
     external fun nativeSetRomsMissing(missing: Boolean)
     external fun nativeExternalClose()
     external fun nativeExternalBegin()
@@ -1217,6 +1218,13 @@ class MainActivity : Activity() {
                             Toast.LENGTH_SHORT).show()
                     }
                     nativeSetRommSync(RommSaves.state(this@MainActivity))
+                    nativeSetRommStates(RommStates.state(this@MainActivity))
+                }
+                72 -> {
+                    RommStates.toggle(this@MainActivity)?.let { note ->
+                        SlotToast.makeText(this@MainActivity, note, Toast.LENGTH_SHORT).show()
+                    }
+                    nativeSetRommStates(RommStates.state(this@MainActivity))
                 }
                 18 -> showPeerCartridgeConsent()
                 23 -> shareLinkCode()
@@ -1242,6 +1250,7 @@ class MainActivity : Activity() {
                 // Library's values: RomM's sync and the slot. folder's place.
                 lastLibraryStatePoll = nowPerf
                 nativeSetRommSync(RommSaves.state(this@MainActivity))
+                nativeSetRommStates(RommStates.state(this@MainActivity))
                 nativeSetSlotFolder(slotFolder.place())
                 nativeSetRomsMissing(romCardMissing())
                 slotFolder.cardCheck(resumed && nativeCanRefreshLibrary())
@@ -1370,8 +1379,16 @@ class MainActivity : Activity() {
                             RetroArchStorage.exportAfterSave(this@MainActivity, target).also {
                                 // Then to RomM, when Sync Saves with RomM is on:
                                 // on its own queue, the next launch doesn't wait.
+                                // The resume state follows its save (Sync States, 3.0).
                                 if (RommSaves.enabled(this@MainActivity)) rommLater(target, upload = true) {
-                                    RommSaves.afterSave(this@MainActivity, target)
+                                    var saveUploaded = false
+                                    var stateUploaded = false
+                                    val save = RommSaves.afterSave(this@MainActivity, target) { saveUploaded = true }
+                                    val state = RommStates.afterSave(this@MainActivity, target) { stateUploaded = true }
+                                    // Both transfers use this one worker. Report them only after
+                                    // both finished; an unchanged or deferred file never counts.
+                                    TaskPill.rommSyncWords(saveUploaded, stateUploaded)?.let { TaskPill.confirm(it) }
+                                    save ?: state
                                 }
                             }
                         }
@@ -2287,10 +2304,14 @@ class MainActivity : Activity() {
                 slotFolder.putBack(inFolder.keys)
             }
             SaveDeletes.Choice.DELETE -> {
-                RetroArchStorage.deleteEverywhere(this, target,
-                    if (withState) kinds + SaveDeletes.Kind.STATE else kinds)
+                val all = if (withState) kinds + SaveDeletes.Kind.STATE else kinds
+                RetroArchStorage.deleteEverywhere(this, target, all)
                 if (SaveDeletes.Kind.SAVE in kinds) rommLater(target, upload = false) {
                     RommSaves.deleted(this, target)
+                    null
+                }
+                if (SaveDeletes.Kind.STATE in all) rommLater(target, upload = false) {
+                    RommStates.deleted(this, target)
                     null
                 }
                 slotFolder.deleted(inFolder.keys)
@@ -2335,6 +2356,65 @@ class MainActivity : Activity() {
 
     /** A save another handheld deleted, seen through RomM (beta39): true
      *  to delete it here too; B or no answer keeps it. */
+    /** Sync States with RomM (3.0): both the server's resume state and this
+     *  handheld's changed since they last met. */
+    private fun askRommStateConflict(): RommStates.Choice {
+        val askedAt = SystemClock.elapsedRealtime()
+        val ready = CountDownLatch(1)
+        val selected = java.util.concurrent.atomic.AtomicReference(RommStates.Choice.KEEP_HANDHELD)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "ROMM STATE",
+                    "This game was also played from a state on another handheld. " +
+                        "Which one do you want to resume? The other one is kept.",
+                    onDismiss = { ready.countDown() })
+                dialog.addButton("KEEP THIS ONE") { dialog.dismiss() }
+                dialog.addButton("USE ROMM'S") {
+                    selected.set(RommStates.Choice.USE_SERVER)
+                    dialog.dismiss()
+                }
+                dialog.show()
+            } catch (error: Exception) {
+                SlotLog.e(TAG, "Cannot open the RomM state choice", error)
+                ready.countDown()
+            }
+        }
+        val answer = if (ready.await(120L, TimeUnit.SECONDS)) selected.get()
+            else RommStates.Choice.KEEP_HANDHELD
+        nativeLaunchAsked(SystemClock.elapsedRealtime() - askedAt)
+        return answer
+    }
+
+    /** Sync States with RomM (3.0): the game's resume state is gone from
+     *  the server. True to delete it here too. */
+    private fun askStateDeletedElsewhere(title: String): Boolean {
+        val askedAt = SystemClock.elapsedRealtime()
+        val ready = CountDownLatch(1)
+        val delete = java.util.concurrent.atomic.AtomicBoolean(false)
+        runOnUiThread {
+            if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
+            try {
+                val dialog = SlotModalDialog(this, "DELETED",
+                    "The save state of $title was deleted from RomM. Delete it here too, " +
+                        "or keep this handheld's?",
+                    onDismiss = { ready.countDown() })
+                dialog.addButton("DELETE IT") {
+                    delete.set(true)
+                    dialog.dismiss()
+                }
+                dialog.addButton("KEEP IT") { dialog.dismiss() }
+                dialog.show()
+            } catch (error: Exception) {
+                SlotLog.e(TAG, "Cannot open the state deleted elsewhere choice", error)
+                ready.countDown()
+            }
+        }
+        val answer = ready.await(120L, TimeUnit.SECONDS) && delete.get()
+        nativeLaunchAsked(SystemClock.elapsedRealtime() - askedAt)
+        return answer
+    }
+
     private fun askDeletedElsewhere(title: String): Boolean {
         val askedAt = SystemClock.elapsedRealtime()
         val ready = CountDownLatch(1)
@@ -2343,7 +2423,7 @@ class MainActivity : Activity() {
             if (isDestroyed || isFinishing) { ready.countDown(); return@runOnUiThread }
             try {
                 val dialog = SlotModalDialog(this, "DELETED",
-                    "The save of $title was deleted on another handheld. Delete it here too, " +
+                    "The save of $title was deleted from RomM. Delete it here too, " +
                         "or keep this handheld's?",
                     onDismiss = { ready.countDown() })
                 dialog.addButton("DELETE IT") {
@@ -2639,6 +2719,7 @@ class MainActivity : Activity() {
                 if (rommBusy.containsKey(rommKey(shared))) {
                     SlotLog.i(TAG, "RomM: ${shared.stem}'s save is still being sent; launching with it")
                 } else {
+                    val rommAt = SystemClock.elapsedRealtime()
                     val romm = RommSaves.beforeLaunch(this@MainActivity, shared, { askRommConflict() },
                         { askDeletedElsewhere(shared.stem) })
                     if (romm.deleteHere) {
@@ -2647,8 +2728,29 @@ class MainActivity : Activity() {
                         val kinds = if (RetroArchStorage.hasOwnState(this@MainActivity, shared))
                             setOf(SaveDeletes.Kind.SAVE, SaveDeletes.Kind.STATE) else setOf(SaveDeletes.Kind.SAVE)
                         RetroArchStorage.deleteEverywhere(this@MainActivity, shared, kinds)
+                        if (SaveDeletes.Kind.STATE in kinds) rommLater(shared, upload = false) {
+                            RommStates.deleted(this@MainActivity, shared)
+                            null
+                        }
                     }
-                    romm.message?.let { note ->
+                    // Sync States with RomM (3.0, beta): the server's newer
+                    // resume state, for this core, in what's left of the wait.
+                    // One wait for both, 2 s at most: none left, the
+                    // handheld's state, checked again at the next launch.
+                    val left = RommSaves.LAUNCH_BUDGET_MS - (SystemClock.elapsedRealtime() - rommAt)
+                    val stateNote = if (romm.deleteHere || !RommStates.enabled(this@MainActivity)) null
+                    else if (left < 150L) {
+                        RommStates.unchecked(this@MainActivity, shared)
+                        null
+                    } else {
+                        val states = RommStates.beforeLaunch(this@MainActivity, shared, romm, left,
+                            { askRommStateConflict() }, { askStateDeletedElsewhere(shared.stem) })
+                        if (states.deleteHere) {
+                            RetroArchStorage.deleteEverywhere(this@MainActivity, shared, setOf(SaveDeletes.Kind.STATE))
+                        }
+                        states.message
+                    }
+                    (romm.message ?: stateNote)?.let { note ->
                         runOnUiThread {
                             if (!isDestroyed) SlotToast.makeText(this@MainActivity, note, Toast.LENGTH_SHORT).show()
                         }

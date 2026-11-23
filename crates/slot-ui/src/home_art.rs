@@ -10,12 +10,18 @@ use std::sync::OnceLock;
 
 use unicode_normalization::UnicodeNormalization;
 
-/// The three home consoles.
+/// The three home consoles, and the 3.0 systems on the test shelf.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum HomeSystem {
     Nes,
     Snes,
     Md,
+    NeoGeoPocket,
+    WonderSwan,
+    GameGear,
+    MasterSystem,
+    Lynx,
+    PokemonMini,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -35,6 +41,20 @@ pub enum HomeMould {
     MegaDriveVr,
     /// Sonic & Knuckles' lock-on cart.
     MegaDriveSk,
+    // The 3.0 systems (3.0.0-cartes1: on the test shelf only).
+    NeoGeoPocket,
+    WonderSwan,
+    WonderSwanColor,
+    GameGear,
+    MasterSystem,
+    Lynx,
+    PokemonMini,
+    /// The Japanese Master System's (Mark III) taller cart.
+    MasterSystemJp,
+    /// Sega's My Card, a card in the Master System's card slot: it never opens.
+    MasterSystemCard,
+    /// Codemasters' taller Game Gear cart.
+    GameGearCodemasters,
 }
 
 /// A mould's art and where things sit on it, in its logical pixels.
@@ -54,6 +74,18 @@ pub(crate) struct MouldArt {
     pub board: &'static [u8],
     pub board_battery: &'static [u8],
     pub chip_svg: &'static str,
+    /// The outline when the shell leaves part of it open (the WonderSwan's
+    /// and Lynx's exposed contacts, drawn by the decal): else the neutral
+    /// shell's own alpha.
+    pub silhouette: Option<&'static [u8]>,
+    /// How opaque a clear shell is, texel by texel (its red channel), where
+    /// it is not the same 80% everywhere (the Pokémon mini's frosted cap).
+    pub opacity: Option<&'static [u8]>,
+    /// One core only: the board has no empty footprints and never opens.
+    pub single_core: bool,
+    /// The front that lifts off when the cart opens, where it differs from
+    /// the outline: the Lynx's contacts stay on the board (alpha only).
+    pub lid: Option<&'static [u8]>,
 }
 
 pub const HOME_CART_W: u32 = 312;
@@ -76,12 +108,32 @@ macro_rules! art {
             board: include_bytes!(concat!("../../../assets/home/", $name, "_board.png")),
             board_battery: include_bytes!(concat!("../../../assets/home/", $name, "_board_battery.png")),
             chip_svg: include_str!(concat!("../../../assets/home/", $name, "_chip.svg")),
+            silhouette: None,
+            opacity: None,
+            single_core: false,
+            lid: None,
+        }
+    };
+    ($name:literal, $h:expr, $label:expr, $fp:expr, $title:expr, $colour:expr, $decal:expr,
+     $silhouette:expr, $opacity:expr, $single:expr, $lid:expr) => {
+        MouldArt {
+            lid: $lid,
+            ..art!($name, $h, $label, $fp, $title, $colour, $decal, $silhouette, $opacity, $single)
+        }
+    };
+    ($name:literal, $h:expr, $label:expr, $fp:expr, $title:expr, $colour:expr, $decal:expr,
+     $silhouette:expr, $opacity:expr, $single:expr) => {
+        MouldArt {
+            silhouette: $silhouette,
+            opacity: $opacity,
+            single_core: $single,
+            ..art!($name, $h, $label, $fp, $title, $colour, $decal)
         }
     };
 }
 
 // Printed by nes-megadrive/export_app.py.
-static ARTS: [MouldArt; 13] = [
+static ARTS: [MouldArt; 23] = [
     art!("nes", 352, (126, 0, 145, 239),
         [(40.6, 234.6, 101.0, 46.5), (170.4, 234.6, 101.0, 46.5)],
         (166.3, 103.6, 121.6, 39.5), [126, 126, 128], None),
@@ -123,11 +175,76 @@ static ARTS: [MouldArt; 13] = [
     art!("md_sk", 216, (17, 52, 276, 29),
         [(66.3, 88.7, 88.6, 49.9), (162.5, 88.7, 88.6, 49.9)],
         (152.8, 34.6, 93.0, 29.7), [14, 14, 15], None),
+    // The 3.0 systems, from the 3.0 art package and slot.'s own boards
+    // (3.0.0-cartes1).
+    art!("ngp", 280, (31, 66, 252, 138),
+        [(46.0, 132.0, 98.0, 64.0), (168.0, 132.0, 98.0, 64.0)],
+        (150.0, 58.0, 100.0, 38.0), [18, 18, 18],
+        None,
+        None,
+        None, false),
+    art!("ws", 188, (10, 26, 293, 108),
+        [(30.0, 30.0, 110.0, 54.0), (30.0, 30.0, 110.0, 54.0)],
+        (30.0, 30.0, 110.0, 54.0), [30, 30, 30],
+        Some(include_bytes!("../../../assets/home/ws_decal.png")),
+        Some(include_bytes!("../../../assets/home/ws_silhouette.png")),
+        None, true),
+    art!("wsc", 188, (10, 26, 293, 108),
+        [(30.0, 30.0, 110.0, 54.0), (30.0, 30.0, 110.0, 54.0)],
+        (30.0, 30.0, 110.0, 54.0), [145, 148, 148],
+        Some(include_bytes!("../../../assets/home/wsc_decal.png")),
+        Some(include_bytes!("../../../assets/home/wsc_silhouette.png")),
+        Some(include_bytes!("../../../assets/home/wsc_opacity.png")), true),
+    art!("gg", 316, (28, 58, 256, 185),
+        [(52.0, 150.0, 98.0, 64.0), (162.0, 150.0, 98.0, 64.0)],
+        (150.0, 64.0, 102.0, 40.0), [20, 20, 20],
+        None,
+        None,
+        None, false),
+    art!("sms", 200, (8, 4, 296, 42),
+        [(28.0, 66.0, 92.0, 58.0), (136.0, 66.0, 92.0, 58.0)],
+        (180.0, 20.0, 102.0, 32.0), [18, 18, 18],
+        None,
+        None,
+        None, false),
+    art!("lynx", 326, (5, 69, 302, 211),
+        [(36.0, 150.0, 110.0, 66.0), (166.0, 150.0, 110.0, 66.0)],
+        (150.0, 64.0, 122.0, 40.0), [25, 25, 25],
+        Some(include_bytes!("../../../assets/home/lynx_decal.png")),
+        Some(include_bytes!("../../../assets/home/lynx_silhouette.png")),
+        None, false,
+        Some(include_bytes!("../../../assets/home/lynx_lid.png"))),
+    art!("pokemini", 300, (19, 107, 274, 149),
+        [(82.0, 28.0, 150.0, 64.0), (82.0, 28.0, 150.0, 64.0)],
+        (0.0, 0.0, 0.0, 0.0), [128, 150, 178],
+        Some(include_bytes!("../../../assets/home/pokemini_decal.png")),
+        None,
+        Some(include_bytes!("../../../assets/home/pokemini_opacity.png")), true),
+    // Per-game 3.0 moulds from ScreenScraper's support-2D (validated by
+    // Siham 2026-11-20), printed by couleurs-cartouches/3.0/pipeline/export3.py.
+    art!("sms_jp", 360, (29, 2, 254, 209),
+        [(31.1, 204.6, 89.8, 62.3), (136.5, 204.6, 89.8, 62.3)],
+        (179.4, 155.2, 99.5, 34.4), [18, 18, 18],
+        None,
+        None,
+        None, false),
+    art!("sms_card", 500, (18, 21, 279, 290),
+        [(0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)],
+        (0.0, 0.0, 0.0, 0.0), [236, 236, 232],
+        Some(include_bytes!("../../../assets/home/sms_card_decal.png")),
+        None,
+        None, true),
+    art!("gg_codemasters", 367, (41, 17, 231, 295),
+        [(46.4, 172.2, 102.8, 71.3), (161.8, 172.2, 102.8, 71.3)],
+        (149.2, 76.5, 107.0, 44.5), [20, 20, 20],
+        None,
+        None,
+        None, false),
 ];
 
 
 impl HomeMould {
-    pub const ALL: [HomeMould; 13] = [
+    pub const ALL: [HomeMould; 23] = [
         HomeMould::Nes,
         HomeMould::Famicom,
         HomeMould::FamicomNamco,
@@ -141,6 +258,16 @@ impl HomeMould {
         HomeMould::MegaDriveCodemasters,
         HomeMould::MegaDriveVr,
         HomeMould::MegaDriveSk,
+        HomeMould::NeoGeoPocket,
+        HomeMould::WonderSwan,
+        HomeMould::WonderSwanColor,
+        HomeMould::GameGear,
+        HomeMould::MasterSystem,
+        HomeMould::Lynx,
+        HomeMould::PokemonMini,
+        HomeMould::MasterSystemJp,
+        HomeMould::MasterSystemCard,
+        HomeMould::GameGearCodemasters,
     ];
 
     pub fn index(self) -> usize {
@@ -168,7 +295,23 @@ impl HomeMould {
             | HomeMould::MegaDriveCodemasters
             | HomeMould::MegaDriveVr
             | HomeMould::MegaDriveSk => HomeSystem::Md,
+            HomeMould::NeoGeoPocket => HomeSystem::NeoGeoPocket,
+            HomeMould::WonderSwan | HomeMould::WonderSwanColor => HomeSystem::WonderSwan,
+            HomeMould::GameGear | HomeMould::GameGearCodemasters => HomeSystem::GameGear,
+            HomeMould::MasterSystem | HomeMould::MasterSystemJp | HomeMould::MasterSystemCard => {
+                HomeSystem::MasterSystem
+            }
+            HomeMould::Lynx => HomeSystem::Lynx,
+            HomeMould::PokemonMini => HomeSystem::PokemonMini,
         }
+    }
+
+    /// One of the 3.0 systems, which slot. shows but does not play yet.
+    pub fn is_preview(self) -> bool {
+        !matches!(self.system(), HomeSystem::Nes | HomeSystem::Snes | HomeSystem::Md
+            | HomeSystem::MasterSystem | HomeSystem::GameGear
+            | HomeSystem::NeoGeoPocket | HomeSystem::WonderSwan
+            | HomeSystem::Lynx | HomeSystem::PokemonMini)
     }
 
     /// The shell a system's carts get when nothing picks another.
@@ -177,6 +320,12 @@ impl HomeMould {
             HomeSystem::Nes => HomeMould::Nes,
             HomeSystem::Snes => HomeMould::Snes,
             HomeSystem::Md => HomeMould::MegaDrive,
+            HomeSystem::NeoGeoPocket => HomeMould::NeoGeoPocket,
+            HomeSystem::WonderSwan => HomeMould::WonderSwan,
+            HomeSystem::GameGear => HomeMould::GameGear,
+            HomeSystem::MasterSystem => HomeMould::MasterSystem,
+            HomeSystem::Lynx => HomeMould::Lynx,
+            HomeSystem::PokemonMini => HomeMould::PokemonMini,
         }
     }
 
@@ -196,6 +345,16 @@ impl HomeMould {
             HomeMould::MegaDriveCodemasters => "megadrive-codemasters",
             HomeMould::MegaDriveVr => "megadrive-vr",
             HomeMould::MegaDriveSk => "megadrive-sk",
+            HomeMould::NeoGeoPocket => "ngp",
+            HomeMould::WonderSwan => "wonderswan",
+            HomeMould::WonderSwanColor => "wonderswan-color",
+            HomeMould::GameGear => "gamegear",
+            HomeMould::MasterSystem => "mastersystem",
+            HomeMould::Lynx => "lynx",
+            HomeMould::PokemonMini => "pokemini",
+            HomeMould::MasterSystemJp => "mastersystem-jp",
+            HomeMould::MasterSystemCard => "mastersystem-card",
+            HomeMould::GameGearCodemasters => "gamegear-codemasters",
         }
     }
 
@@ -378,6 +537,34 @@ pub fn home_pick(system: HomeSystem, stem: &str, region: &str, maker: &str) -> (
             };
             let (colour, glitter) = own_shell(mould, &key, usa).unwrap_or((mould.art().colour, false));
             (mould, colour, glitter)
+        }
+        // Japanese Master System carts are the Mark III's taller shape, as
+        // are a few Korean ones; Bomb Jack came on a Sega My Card
+        // (ScreenScraper's support-2D, Siham 2026-11-20).
+        HomeSystem::MasterSystem => {
+            let mould = if own_shell(HomeMould::MasterSystemCard, &key, usa).is_some() {
+                HomeMould::MasterSystemCard
+            } else if japan_only || own_shell(HomeMould::MasterSystemJp, &key, usa).is_some() {
+                HomeMould::MasterSystemJp
+            } else {
+                HomeMould::MasterSystem
+            };
+            let (colour, glitter) = own_shell(mould, &key, usa).unwrap_or((mould.art().colour, false));
+            (mould, colour, glitter)
+        }
+        // Codemasters' own taller cart, and three red Sega carts.
+        HomeSystem::GameGear => {
+            let mould = if own_shell(HomeMould::GameGearCodemasters, &key, usa).is_some() {
+                HomeMould::GameGearCodemasters
+            } else {
+                HomeMould::GameGear
+            };
+            let (colour, glitter) = own_shell(mould, &key, usa).unwrap_or((mould.art().colour, false));
+            (mould, colour, glitter)
+        }
+        _ => {
+            let mould = HomeMould::default_of(system);
+            (mould, mould.art().colour, false)
         }
     }
 }
