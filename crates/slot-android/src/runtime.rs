@@ -11267,3 +11267,50 @@ mod library_update_tests {
                 "the same ROMs with another title build everything again");
     }
 }
+
+
+#[cfg(test)]
+mod audio_and_refresh_parity_tests {
+    use super::*;
+
+    #[test]
+    fn audio_options_appear_only_in_system_settings_not_paused_game() {
+        use crate::settings::{NES_AUDIO_FILTER_KEY, MD_FM_SOUND_KEY, WS_AUDIO_FILTER_KEY};
+        for (platform, key) in [
+            (Platform::Nes, NES_AUDIO_FILTER_KEY),
+            (Platform::Md, MD_FM_SOUND_KEY),
+            (Platform::Ws, WS_AUDIO_FILTER_KEY),
+        ] {
+            assert!(Engine::system_page_keys(platform).contains(&key));
+            assert!(Engine::extra_rows(platform, false).1.contains(&key));
+            assert!(!Engine::extra_rows(platform, true).1.contains(&key));
+        }
+    }
+
+    #[test]
+    fn audio_values_preserve_rotate_value_offsets() {
+        assert_eq!(MENU_TEXT[176], "Audio Filter");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES], "RF");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES + 1], "Soft");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES + 2], "MAME");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES + 3], "Nuked");
+        assert_eq!(SETTING_VALUE_NAMES[AUDIO_OPTION_VALUES + 4], "Analog");
+        assert_eq!(SETTING_VALUE_NAMES[ROTATE_VALUES], "INSERTED CART");
+    }
+
+    #[test]
+    fn high_refresh_native_only_on_exact_native_refresh_multiples() {
+        // KPA 60 Hz, 120 Hz panels: 60 Hz pulldown avoids 72/75 fps throttling.
+        for hz in [60.0, 120.0] {
+            assert!(handheld_core_60hz_for_display(72.0, hz));
+            assert!(handheld_core_60hz_for_display(75.47, hz));
+            assert!(handheld_core_60hz_for_display(75.0, hz));
+        }
+        // A rare native-refresh panel should keep original timing.
+        assert!(!handheld_core_60hz_for_display(72.0, 72.0));
+        assert!(!handheld_core_60hz_for_display(72.0, 144.0));
+        assert!(!handheld_core_60hz_for_display(75.47, 75.47));
+        assert!(!handheld_core_60hz_for_display(75.47, 150.0));
+        assert!(handheld_core_60hz_for_display(72.0, 0.0));
+    }
+}
