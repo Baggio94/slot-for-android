@@ -2920,3 +2920,53 @@ mod tests {
     }
 }
 
+
+
+/// Audio preferences belong to the portable slot. folder, not the device.
+#[cfg(test)]
+mod audio_parity_tests {
+    use super::*;
+    use slot_store::{Core, Platform};
+
+    fn value(options: &[(&str, &str)], key: &str) -> Option<String> {
+        options.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_string())
+    }
+
+    #[test]
+    fn defaults_match_libretro_audio_and_survive_older_settings_json() {
+        let s = Settings::default();
+        assert!(!s.nes_audio_filter && !s.md_fm_nuked && !s.ws_audio_filter);
+        let extras = CoreExtras::of(&s);
+        assert_eq!(value(&extras.options(Platform::Nes, Core::Fceumm), "fceumm_sndlowpass"), Some("disabled".into()));
+        assert_eq!(value(&extras.options(Platform::Nes, Core::Nestopia), "nestopia_audio_filter"), Some("disabled".into()));
+        assert_eq!(value(&extras.options(Platform::Md, Core::GenesisPlusGx), "genesis_plus_gx_ym2612"), Some("mame (ym2612)".into()));
+        assert_eq!(value(&extras.options(Platform::Ws, Core::BeetleCygne), "wswan_sound_low_pass"), Some("disabled".into()));
+
+        let mut json = serde_json::to_value(s).expect("settings serialized");
+        let object = json.as_object_mut().expect("object");
+        for field in ["nes_audio_filter", "md_fm_nuked", "ws_audio_filter"] {
+            object.remove(field);
+        }
+        let restored: Settings = serde_json::from_value(json).expect("older settings");
+        assert!(!restored.nes_audio_filter && !restored.md_fm_nuked && !restored.ws_audio_filter);
+    }
+
+    #[test]
+    fn audio_rows_toggle_and_apply_only_to_supported_cores() {
+        let mut s = Settings::default();
+        s.change(NES_AUDIO_FILTER_KEY, true);
+        s.change(MD_FM_SOUND_KEY, true);
+        s.change(WS_AUDIO_FILTER_KEY, true);
+        assert!(s.nes_audio_filter && s.md_fm_nuked && s.ws_audio_filter);
+        let extras = CoreExtras::of(&s);
+        assert_eq!(value(&extras.options(Platform::Nes, Core::Fceumm), "fceumm_sndlowpass"), Some("enabled".into()));
+        assert_eq!(value(&extras.options(Platform::Nes, Core::Nestopia), "nestopia_audio_filter"), Some("enabled".into()));
+        assert_eq!(value(&extras.options(Platform::Md, Core::GenesisPlusGx), "genesis_plus_gx_ym2612"), Some("nuked (ym2612)".into()));
+        assert!(value(&extras.options(Platform::Md, Core::Picodrive), "genesis_plus_gx_ym2612").is_none());
+        assert_eq!(value(&extras.options(Platform::Ws, Core::BeetleCygne), "wswan_sound_low_pass"), Some("enabled".into()));
+
+        let stored = serde_json::to_string(&s).expect("serialized");
+        let loaded: Settings = serde_json::from_str(&stored).expect("reloaded");
+        assert!(loaded.nes_audio_filter && loaded.md_fm_nuked && loaded.ws_audio_filter);
+    }
+}
