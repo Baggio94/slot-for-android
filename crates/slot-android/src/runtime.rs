@@ -307,6 +307,22 @@ static SAMPLE_RATE: AtomicI32 = AtomicI32::new(0);
 // RETROARCH pacing inputs from Kotlin: the panel refresh rate (mHz) and the
 // AudioTrack queue depth/capacity in frames, sampled by the audio worker.
 static DISPLAY_REFRESH_MILLIHZ: AtomicI32 = AtomicI32::new(0);
+
+/// Match a core's native refresh if the panel can show every frame at an
+/// integer refresh multiple; otherwise use its own 60Hz pulldown mode.
+/// PokeMini and Beetle WonderSwan preserve game/audio speed by emulating
+/// their missing intermediate frames inside a 60Hz libretro callback.
+/// Unknown Android display rate falls back to 60Hz (KPA's normal display).
+pub(crate) fn handheld_core_60hz(native_hz: f64) -> bool {
+    let display_hz = f64::from(DISPLAY_REFRESH_MILLIHZ.load(Ordering::Acquire)) / 1000.0;
+    handheld_core_60hz_for_display(native_hz, display_hz)
+}
+
+pub(crate) fn handheld_core_60hz_for_display(native_hz: f64, display_hz: f64) -> bool {
+    if !(native_hz > 0.0) || !(display_hz > 0.0) { return true; }
+    let multiple = (display_hz / native_hz).round().max(1.0);
+    ((display_hz / native_hz) - multiple).abs() > 0.02
+}
 static AUDIO_OUT_QUEUED_FRAMES: AtomicI32 = AtomicI32::new(0);
 static AUDIO_OUT_CAPACITY_FRAMES: AtomicI32 = AtomicI32::new(0);
 static DISPLAY_SYNC: AtomicBool = AtomicBool::new(false);
