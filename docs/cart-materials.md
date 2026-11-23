@@ -1,53 +1,37 @@
-# 3.0.0-materials2 — cartridge materials
+# Cartridge materials and label registration
 
-Base: `beta/3.0-rc2`, `dc51f28c776baa23c2e924b1505cd5ceee334cfd`.
-Android version code: 571 (materials1 was 570). This branch builds a signed test APK; it does not publish a stable release.
+Technical reference for the cartridge materials introduced in
+slot. for Android 3.0.
 
 ## Rendering
 
-The existing native renderer is shared by Cart Studio, the carousel and the
-separate animated cartridge layers. `home_material.rs` calibrates the 3.0
-fronts before their usual colour overlay, cached once per mould and density.
-It softens contrast and removes the baked black/white base colour of the
-photographic special moulds. The source PNGs and PCB art are unchanged.
+Cart Studio, the carousel and animated cartridge layers share the
+native renderer. The cartridge mould determines its geometry, label
+window, plastic material and PCB presentation.
 
-The Pokémon mini clear front and cap are less opaque, with denser reliefs
-and a lighter frost. The real board remains a separate layer; opaque labels
-remain opaque. Rounded/curved sticker cuts restore bare plastic including
-its alpha, so clipped ink cannot show through a clear shell. Codemasters'
-Game Gear scan uses the existing back-shell SVG outline to remove internal
-alpha cracks, and its remaining donor-label strip is neutralised.
+`home_material.rs` calibrates selected cartridge fronts before the
+usual colour overlay. The source PNGs and PCB artwork remain separate.
 
-Glitter keeps its deterministic positions, has softer highlights and retains
-edge coverage. Explicit plastic regions protect the exposed WS/Lynx contacts,
-My Card contact panel and mini screw holes from tinting/glitter.
-GB/GBC/GBA and the older home moulds retain their existing material path.
-Slot bars, their themes and mechanisms are unchanged by this beta.
+The Japanese Master System cartridge, Sega My Card and Game Gear
+Codemasters moulds use additional material calibration. Other moulds
+retain their existing material treatment.
 
-## materials2
+## Material behavior
 
-Siham compared both renders and kept the best of each:
-
-- NGP, Game Gear, Master System, WonderSwan/WSC and Lynx keep the rc2
-  masters (sharper reliefs) and rc2 clear plastic. Only the Japanese Master
-  System, My Card and Game Gear Codemasters are recalibrated
-  (`home_material::calibrated`).
-- The Pokémon mini keeps the more translucent clear body and the rc2 frosted cap.
-- Glitter has the same strength as GB/GBC/GBA on every mould; contacts,
-  the My Card contact panel and the mini's screws stay free of it.
-- WonderSwan guide tabs and the My Card window rim (white plastic in their
-  photos) take the cart colour; the Japanese Master System's lower body is
-  one flat plastic with the frame.
-- The disk cache of cart faces redraws the six 3.0 systems once.
-
-## materials3
-
-- Master System (`assets/home/sms_neutral.png`): the photo grain under the ribs
-  is gone; the body is one flat plastic, the ribs and the side and bottom rims
-  keep their relief without speckles.
-- Pokemon mini: rc2's frosted clear plastic again (only the recalibrated special
-  moulds keep the more translucent one).
-- The disk cache key moves to `materials-3`, so the 3.0 faces are drawn again.
+- Solid and clear finishes preserve the mould's relief and geometry.
+- Transparent plastics keep the underlying PCB visible.
+- Opaque labels remain opaque, including on transparent shells.
+- Rounded label corners preserve the underlying plastic transparency.
+- Glitter uses deterministic placement and consistent intensity.
+- Exposed contacts, the My Card contact area and Pokémon mini screws
+  are protected from plastic tinting and glitter.
+- Pokémon mini retains its frosted clear-plastic appearance.
+- Master System plastic regions retain their relief without the
+  unwanted photographic grain.
+- WonderSwan guide tabs and the My Card window rim follow the
+  selected cartridge colour.
+- The cartridge material treatment does not change slot bars,
+  themes or cartridge insertion mechanisms.
 
 ## Label registration
 
