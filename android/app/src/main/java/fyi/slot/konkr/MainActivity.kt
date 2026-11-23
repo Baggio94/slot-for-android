@@ -1381,8 +1381,13 @@ class MainActivity : Activity() {
                                 // on its own queue, the next launch doesn't wait.
                                 // The resume state follows its save (Sync States, 3.0).
                                 if (RommSaves.enabled(this@MainActivity)) rommLater(target, upload = true) {
-                                    val save = RommSaves.afterSave(this@MainActivity, target)
-                                    val state = RommStates.afterSave(this@MainActivity, target)
+                                    var saveUploaded = false
+                                    var stateUploaded = false
+                                    val save = RommSaves.afterSave(this@MainActivity, target) { saveUploaded = true }
+                                    val state = RommStates.afterSave(this@MainActivity, target) { stateUploaded = true }
+                                    // Both transfers use this one worker. Report them only after
+                                    // both finished; an unchanged or deferred file never counts.
+                                    TaskPill.rommSyncWords(saveUploaded, stateUploaded)?.let(TaskPill::confirm)
                                     save ?: state
                                 }
                             }
