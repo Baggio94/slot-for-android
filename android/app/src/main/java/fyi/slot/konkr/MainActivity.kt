@@ -1387,7 +1387,7 @@ class MainActivity : Activity() {
                                     val state = RommStates.afterSave(this@MainActivity, target) { stateUploaded = true }
                                     // Both transfers use this one worker. Report them only after
                                     // both finished; an unchanged or deferred file never counts.
-                                    TaskPill.rommSyncWords(saveUploaded, stateUploaded)?.let(TaskPill::confirm)
+                                    TaskPill.rommSyncWords(saveUploaded, stateUploaded)?.let { TaskPill.confirm(it) }
                                     save ?: state
                                 }
                             }
