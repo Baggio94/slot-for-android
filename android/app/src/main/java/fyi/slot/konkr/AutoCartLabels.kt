@@ -106,11 +106,69 @@ internal object AutoCartLabels {
 
     /** A cart's label scan from our own set: by its CRC, else by its name
      *  (ArtNames: a hack, a translation, another region's dump). */
-    private fun ownScan(context: Context, rom: CartStudioCatalog.Rom, crc: String): ByteArray? =
-        SlotArtSet.scanPng(context, rom.platform, crc)
-            ?: ArtNames.crcFor(context, rom.platform, rom.filename.ifBlank { rom.title })
-                ?.takeIf { !it.equals(crc, ignoreCase = true) }
-                ?.let { SlotArtSet.scanPng(context, rom.platform, it) }
+    private data class ArtIdentity(val platform: String, val crc: String)
+    private data class OwnArtwork(val identity: ArtIdentity, val bytes: ByteArray)
+
+    private fun artworkTitle(rom: CartStudioCatalog.Rom): String =
+        ArtNames.stem(rom.filename.ifBlank { rom.title })
+
+    private fun ownArtwork(context: Context, rom: CartStudioCatalog.Rom, crc: String,
+                           shouldContinue: () -> Boolean): OwnArtwork? {
+        val tried = HashSet<ArtIdentity>()
+        fun scan(platform: String, dump: String): OwnArtwork? {
+            if (!shouldContinue()) return null
+            val identity = ArtIdentity(platform, dump)
+            if (!tried.add(identity)) return null
+            return SlotArtSet.scanPng(context, platform, dump)?.let { OwnArtwork(identity, it) }
+        }
+        scan(rom.platform, crc)?.let { return it }
+        val alternate = GbFamilyArtwork.other(rom.platform)
+        if (alternate != null) {
+            scan(alternate, crc)?.let { return it }
+            val title = artworkTitle(rom)
+            for ((platform, name) in GbFamilyArtwork.names(rom.platform, title)) {
+                if (!shouldContinue()) return null
+                ArtNames.exactCrcFor(context, platform, name)?.let { named ->
+                    scan(platform, named)?.let { return it }
+                }
+            }
+            // For colour hacks a broad prefix could turn Land 2 into Land 1.
+            if (GbFamilyArtwork.originalTitle(title) != null) return null
+        }
+        if (!shouldContinue()) return null
+        return ArtNames.crcFor(context, rom.platform, rom.filename.ifBlank { rom.title })
+            ?.let { scan(rom.platform, it) }
+    }
+
+    private fun ownScan(context: Context, rom: CartStudioCatalog.Rom, crc: String,
+                        shouldContinue: () -> Boolean): ByteArray? =
+        ownArtwork(context, rom, crc, shouldContinue)?.bytes
+
+    /** The older art set has one index but separate DATs. Preserve its strict
+     *  matching, and only try the other Game Boy family catalogue on a miss. */
+    private fun officialMatch(rom: CartStudioCatalog.Rom, crc: CartStudioCatalog.Fingerprint,
+                              index: JSONObject, catalog: (String) -> OfficialArtMatcher.Catalog?,
+                              shouldContinue: () -> Boolean): Pair<ArtIdentity?, Boolean> {
+        val platforms = listOfNotNull(rom.platform, GbFamilyArtwork.other(rom.platform))
+        for (platform in platforms) {
+            if (!shouldContinue()) return null to false
+            if (OfficialArtResolver.artPath(index, platform, crc.hex) != null)
+                return ArtIdentity(platform, crc.hex) to false
+        }
+        var unavailable = false
+        val titles = if (platforms.size == 1) listOf(rom.platform to rom.title)
+            else GbFamilyArtwork.names(rom.platform, artworkTitle(rom))
+        for ((platform, name) in titles) {
+            if (!shouldContinue()) return null to unavailable
+            val dat = catalog(platform)
+            if (dat == null) { unavailable = true; continue }
+            val dump = OfficialArtMatcher.fromCatalog(platform, name, crc.head, dat) {
+                OfficialArtResolver.artPath(index, platform, it)
+            }
+            if (dump != null) return ArtIdentity(platform, dump) to false
+        }
+        return null to unavailable
+    }
 
     /** The carts' label scans from our own set, as PNG: a cart is left out
      *  when it couldn't be asked (the pass asks again), null when the set
@@ -123,7 +181,7 @@ internal object AutoCartLabels {
                 try {
                     val crc = CartStudioCatalog.cached(context, rom)
                         ?: CartStudioCatalog.identify(context, rom)
-                    true to ownScan(context, rom, crc.hex)
+                    true to ownScan(context, rom, crc.hex, shouldContinue)
                 } catch (error: Exception) {
                     false to null
                 }
@@ -154,7 +212,8 @@ internal object AutoCartLabels {
             missFile(context).takeIf { it.isFile }?.readLines()?.forEach { line ->
                 val at = line.substringBefore('\t').toLongOrNull() ?: return@forEach
                 val rom = byUri[line.substringAfter('\t')] ?: return@forEach
-                if (at >= oldest && PortableArtwork.read(context, "gb-miss", rom.uri) == null) {
+                if (GbFamilyArtwork.other(rom.platform) == null && at >= oldest &&
+                    PortableArtwork.read(context, "gb-miss", rom.uri) == null) {
                     PortableArtwork.write(context, "gb-miss", rom.uri,
                         PortableArtwork.gbMiss(rom.size, rom.modified, at))
                 }
@@ -163,7 +222,7 @@ internal object AutoCartLabels {
     }
 
     private fun rememberMiss(context: Context, rom: CartStudioCatalog.Rom) {
-        PortableArtwork.write(context, "gb-miss", rom.uri,
+        PortableArtwork.write(context, GbFamilyArtwork.missKind(rom.platform), rom.uri,
             PortableArtwork.gbMiss(rom.size, rom.modified, System.currentTimeMillis()))
     }
 
@@ -182,7 +241,7 @@ internal object AutoCartLabels {
         val nowWall = System.currentTimeMillis()
         val missing = games.filter {
             !CartLabelPaths.file(context.filesDir, it.uri).exists() &&
-                !PortableArtwork.validGbMiss(PortableArtwork.read(context, "gb-miss", it.uri),
+                !PortableArtwork.validGbMiss(PortableArtwork.read(context, GbFamilyArtwork.missKind(it.platform), it.uri),
                     it.size, it.modified, nowWall, MISS_DAYS * 24 * 3600 * 1000)
         }
         val pending = missing.filter { retry.pending(it.uri) }
@@ -253,7 +312,7 @@ internal object AutoCartLabels {
                 // slot. for Android's own art set first (art.slot-android.app),
                 // then slot.'s, matched as before.
                 var bytes: ByteArray? = if (pre.containsKey(rom.uri)) pre[rom.uri] else try {
-                    ownScan(context, rom, crc.hex)
+                    ownScan(context, rom, crc.hex, shouldContinue)
                 } catch (error: Exception) {
                     SlotLog.w(TAG, "Own art set lookup failed; trying slot.'s", error)
                     null
@@ -265,27 +324,24 @@ internal object AutoCartLabels {
                         outcome = if (shouldContinue()) "NETWORK_ERROR" else "INTERRUPTED"
                         continue
                     }
-                    val direct = OfficialArtResolver.artPath(index, rom.platform, crc.hex)
-                    // Kotlin getOrPut() re-invokes the initializer when it returns
-                    // null. Preserve null failures within THIS pass explicitly,
-                    // to avoid repeated 9s+12s DAT timeouts on each of 16 carts.
-                    if (direct == null && !dats.containsKey(rom.platform)) {
-                        dats[rom.platform] = OfficialDatSource.load(
-                            context, rom.platform, shouldContinue)
-                    }
+                    // Remember null DAT failures too, avoiding repeated timeouts
+                    // across this batch even when both GB and GBC are needed.
+                    val (resolved, unavailable) = officialMatch(rom, crc, index, { platform ->
+                        if (!dats.containsKey(platform))
+                            dats[platform] = OfficialDatSource.load(context, platform, shouldContinue)
+                        dats[platform]
+                    }, shouldContinue)
                     if (!shouldContinue()) {
                         outcome = "INTERRUPTED"
                         break
                     }
-                    val dat = if (direct != null) null else dats[rom.platform]
-                    if (direct == null && dat == null) {
+                    if (resolved == null && unavailable) {
                         outcome = "DAT_UNAVAILABLE"
                         continue
                     }
-                    val resolved = OfficialArtResolver.match(rom, crc, index, dat)
                     val path = resolved?.let {
-                        OfficialArtResolver.artPath(index, rom.platform, it)
-                    } ?: continue // Verified official no-match: session-terminal.
+                        OfficialArtResolver.artPath(index, it.platform, it.crc)
+                    } ?: continue
                     val response = art.intercept(path)
                     if (response.statusCode != 200) {
                         outcome = when (response.statusCode) {
@@ -410,6 +466,43 @@ internal object AutoCartLabels {
                 JSONObject(String(indexed.data.use { it.readBytes() }, Charsets.UTF_8)) else null
         } catch (error: Exception) {
             SlotLog.w(TAG, "slot.'s art set index unavailable for Cart Studio", error); null
+        }
+        if (GbFamilyArtwork.other(rom.platform) != null) {
+            val own = try { ownArtwork(context, rom, crc.hex) { true } }
+                catch (error: Exception) {
+                    SlotLog.w(TAG, "Own artwork lookup failed for Cart Studio", error); null
+                }
+            var identity = own?.identity
+            var bytes = own?.bytes
+            if (bytes == null && index != null) {
+                try {
+                    val dats = HashMap<String, OfficialArtMatcher.Catalog?>()
+                    identity = officialMatch(rom, crc, index, { platform ->
+                        if (!dats.containsKey(platform))
+                            dats[platform] = OfficialDatSource.load(context, platform) { true }
+                        dats[platform]
+                    }, { true }).first
+                    bytes = identity?.let { hit ->
+                        OfficialArtResolver.artPath(index, hit.platform, hit.crc)?.let { path ->
+                            val response = proxy.intercept(path)
+                            if (response.statusCode == 200) response.data.use { it.readBytes() } else null
+                        }
+                    }
+                } catch (error: Exception) {
+                    SlotLog.w(TAG, "GB family artwork deferred for Cart Studio", error)
+                }
+            }
+            val real = bytes?.takeIf { it.size >= 8 && it.copyOfRange(0, 8).contentEquals(pngSignature) }
+                ?.let { cropPhysicalCartLabel(it, rom.platform) }
+            val logo = try {
+                listOfNotNull(identity, ArtIdentity(rom.platform, crc.hex)).distinct()
+                    .firstNotNullOfOrNull { hit ->
+                        SlotArtSet.entries(context, hit.platform, hit.crc)?.firstOrNull { it.type == "wheel" }
+                    }?.let { SlotArtSet.file(context, it) }?.let(SlotArtSet::toPng)
+            } catch (error: Exception) {
+                SlotLog.w(TAG, "GB family logo lookup failed", error); null
+            }
+            return real to logo
         }
         fun ownScan(dump: String): ByteArray? = try {
             SlotArtSet.scanPng(context, rom.platform, dump)

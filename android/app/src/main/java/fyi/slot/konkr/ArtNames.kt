@@ -124,6 +124,14 @@ internal object ArtNames {
         return match(platform, stem(name), set.byName, set.catalog, set.keys)
     }
 
+    /** Cross-system fallback accepts a full title, never a prefix or short name. */
+    fun exactCrcFor(context: Context, platform: String, title: String): String? {
+        val set = names(context, platform) ?: return null
+        return OfficialArtMatcher.inArtSet(platform, title, set.catalog, relaxed = false)
+            ?: OfficialArtMatcher.inArtSet(platform, title, set.catalog, relaxed = true)
+            ?: OfficialArtMatcher.inArtSet(platform, title, set.catalog, relaxed = true, anyRegion = true)
+    }
+
     internal fun match(platform: String, title: String, byName: Map<String, String>,
                        catalog: OfficialArtMatcher.Catalog, keys: List<String>): String? {
         byName[title.lowercase(Locale.ROOT)]?.let { return it }

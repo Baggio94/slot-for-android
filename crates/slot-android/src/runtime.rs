@@ -2360,6 +2360,15 @@ impl Engine {
         let has_multiple_systems = shelves.iter().filter(|s| !s.carts.is_empty()).count() > 1;
         steps.mark("rest");
         crate::game::log_launch_timing(&steps.line());
+        // All themes stay preloaded. Pack only the static CPU recovery copies
+        // after startup uploads, not on the GL thread or for live cart faces.
+        if let Some(tex) = wallpaper_texture { gpu.pack_static_recovery(tex); }
+        for (back, front) in std::iter::once(slot_dark_faces)
+            .chain(std::iter::once(slot_light_faces))
+            .chain(home_slot_themes.iter().flatten().copied()) {
+            gpu.pack_static_recovery(back);
+            gpu.pack_static_recovery(front);
+        }
         Ok(Self {
             gpu,
             size,
@@ -2680,7 +2689,9 @@ impl Engine {
         if jobs.is_empty() { return; }
         let root = root.map(Path::to_path_buf);
         let theme = self.settings.appearance.mosaic_theme();
-        let (tx, rx) = std::sync::mpsc::channel();
+        // Only a few native-sized RGBA images may wait for the GL uploader.
+        // The producer alone waits; the GL thread still polls without blocking.
+        let (tx, rx) = std::sync::mpsc::sync_channel(3);
         let spawned = std::thread::Builder::new().name("slot-wallpaper".into()).spawn(move || {
             for (index, pick, look) in jobs {
                 let (rgba, personal) = shelf_wallpaper_pixels(root.as_deref(), &pick, look, index, theme);
@@ -2723,6 +2734,7 @@ impl Engine {
         } else {
             self.gpu.create_texture(w, h, &rgba)
         });
+        if let Some(tex) = *slot { self.gpu.pack_static_recovery(tex); }
         self.shelf_wallpaper_ready[index] = true;
         if let Some(slot) = self.shelf_wallpaper_luma.get_mut(index) { *slot = Some(luma); }
         if let Some(slot) = self.shelf_wallpaper_personal.get_mut(index) { *slot = personal; }
@@ -7001,6 +7013,7 @@ impl Engine {
             } else {
                 self.gpu.create_texture(slot_ui::native_w(), slot_ui::native_h(), &rgba)
             });
+            if let Some(tex) = self.wallpaper_texture { self.gpu.pack_static_recovery(tex); }
         }
         // None deliberately leaves the texture allocated for quick reactivation
         // but never draws it, avoiding repeated GL allocations on toggling.

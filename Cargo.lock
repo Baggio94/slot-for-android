@@ -1886,7 +1886,9 @@ dependencies = [
  "gl",
  "glutin",
  "glutin-winit",
+ "libc",
  "libloading",
+ "lz4_flex",
  "raw-window-handle",
  "winit",
 ]

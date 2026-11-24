@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicLong
  *  whole-library last-writer-wins merges between handhelds. */
 internal object PortableArtwork {
     private val change = AtomicLong()
-    private val record = Regex("ArtworkHistory/(home-cut|home-miss|gb-miss)/[0-9a-f]{16}\\.txt")
+    private val record = Regex("ArtworkHistory/(home-cut|home-miss|gb-miss|gb-miss-v2)/[0-9a-f]{16}\\.txt")
     private val studio = Regex("home-real-labels/[0-9A-F]{8}\\.png")
     fun travels(path: String): Boolean = record.matches(path) || studio.matches(path)
     fun revision(): Long = change.get()

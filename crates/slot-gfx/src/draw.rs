@@ -1,4 +1,5 @@
 use crate::quad::Quad;
+use crate::recovery_pixels::RecoveryPixels;
 use crate::shaders::{SPRITE_FRAG, SPRITE_VERT};
 use crate::surface::{GfxError, OUT_H, out_w};
 
@@ -76,7 +77,7 @@ struct TexturePixels {
     w: u32,
     h: u32,
     filter: u32,
-    rgba: std::sync::Arc<[u8]>,
+    rgba: std::sync::Arc<RecoveryPixels>,
 }
 
 pub struct Sprites {
@@ -120,7 +121,8 @@ impl Sprites {
             .ok_or_else(|| GfxError::Context("texture recovery was not enabled".into()))?;
         // Upload first without allocating a second CPU copy of every texture.
         for p in pixels {
-            target.push(p.w, p.h, &p.rgba, p.filter);
+            p.rgba.with_rgba(|rgba| target.push(p.w, p.h, rgba, p.filter))
+                .map_err(GfxError::Context)?;
         }
         target.recovery = Some(pixels.clone());
         Ok(())
@@ -198,7 +200,7 @@ impl Sprites {
                 w,
                 h,
                 filter,
-                rgba: rgba.into(),
+                rgba: RecoveryPixels::new(rgba),
             });
         }
         TexId(self.textures.len() - 1)
@@ -217,7 +219,7 @@ impl Sprites {
         if let Some(pixels) = self.recovery.as_mut().and_then(|r| r.get_mut(id.0)) {
             pixels.w = w;
             pixels.h = h;
-            pixels.rgba = rgba.into();
+            pixels.rgba = RecoveryPixels::new(rgba);
         }
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D, *tex);
@@ -233,6 +235,13 @@ impl Sprites {
                 gl::UNSIGNED_BYTE,
                 rgba.as_ptr() as *const std::ffi::c_void,
             );
+        }
+    }
+
+    /// Opt in only for static UI sprites, never live frames or scrolling carts.
+    pub(crate) fn pack_static_recovery(&self, id: TexId) {
+        if let Some(pixels) = self.recovery.as_ref().and_then(|r| r.get(id.0)) {
+            RecoveryPixels::schedule(&pixels.rgba);
         }
     }
 

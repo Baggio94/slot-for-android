@@ -233,6 +233,11 @@ impl Compositor {
         self.sprites.update_texture(id, w, h, rgba);
     }
 
+    /// Compress the CPU recovery copy of a static sprite asynchronously.
+    pub fn pack_static_recovery(&self, id: TexId) {
+        self.sprites.pack_static_recovery(id);
+    }
+
     pub fn set_blue_light(&mut self, step: u8) {
         self.gain = blue_light_gain(step);
     }

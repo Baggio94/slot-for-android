@@ -13,6 +13,7 @@ mod lcd_cache;
 mod pipeline;
 mod power;
 mod quad;
+mod recovery_pixels;
 mod royale;
 mod shaders;
 mod surface;
