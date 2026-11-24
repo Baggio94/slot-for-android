@@ -750,8 +750,7 @@ internal object Romm {
         }
     }
 
-    /** Fetches only the four RomM-auto-approved BIOS (GB/GBC/GBA/Lynx).
-     *  Other systems' BIOS may still be imported explicitly, but never fetched here. */
+    /** Fetches recognized missing firmware only; downloading never enables a core option. */
     fun fetchBios(context: Context, wanted: Set<String>): List<String> {
         val systems = BiosLibrary.ROMM_AUTO_PLATFORMS
         val permitted = systems.flatMap { BiosLibrary.automaticNamesFor(it) }
@@ -761,9 +760,12 @@ internal object Romm {
         if (left.isEmpty()) return added
         for (console in consoles(context).filter { it.platform in systems }) {
             if (left.isEmpty()) break
+            val consoleNames = BiosLibrary.automaticNamesFor(console.platform)
+                .map { it.lowercase(Locale.ROOT) }.toSet()
+            if (left.none { it in consoleNames }) continue
             for ((id, file) in firmware(context, console.id)) {
                 val name = file.lowercase(Locale.ROOT)
-                if (name !in left) continue
+                if (name !in left || name !in consoleNames) continue
                 val reply = authorizedRaw(context, "/api/firmware/$id/content/" +
                     URLEncoder.encode(file, "UTF-8").replace("+", "%20"))
                 if (reply.code != 200) continue

@@ -47,9 +47,8 @@ internal object BiosLibrary {
     fun namesFor(platform: String): List<String> =
         KINDS.filter { it.platform == platform }.map { it.name }
 
-    /** Only these four systems receive BIOS automatically from a RomM game download.
-     * Others stay available through Choose BIOS Folder without changing core boot behaviour. */
-    internal val ROMM_AUTO_PLATFORMS = setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX)
+    /** Download policy only: activation is independently decided by each core. */
+    internal val ROMM_AUTO_PLATFORMS = KINDS.map { it.platform }.toSet()
 
     internal fun automaticNamesFor(platform: String): List<String> =
         if (platform in ROMM_AUTO_PLATFORMS) namesFor(platform) else emptyList()
@@ -67,14 +66,15 @@ internal object BiosLibrary {
         else -> name
     }
 
-    /** BIOS missing locally for RomM's four automatic-download systems only.
-     *  Explicit imports and pre-existing BIOS for other systems are untouched. */
+    /** Check each regional firmware independently. */
+    internal fun missingNames(platforms: Set<String>, exists: (String) -> Boolean): Set<String> =
+        platforms.flatMapTo(linkedSetOf()) { platform ->
+            automaticNamesFor(platform).filterNot(exists).map { it.lowercase(java.util.Locale.ROOT) }
+        }
+
     fun missing(context: Context, platforms: Set<String>): Set<String> {
         val dest = File(context.filesDir, "BIOS")
-        return platforms.flatMapTo(linkedSetOf()) { platform ->
-            val names = automaticNamesFor(platform)
-            if (names.any { File(dest, it).isFile }) emptyList() else names.map { it.lowercase() }
-        }
+        return missingNames(platforms) { File(dest, it).isFile }
     }
 
     internal fun valid(name: String, bytes: ByteArray): Boolean =

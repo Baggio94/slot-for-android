@@ -1781,6 +1781,7 @@ struct Engine {
     lid_shelf_index: Option<(usize, usize)>,
     /// 0 open .. 1 closed: the close and open animations' progress.
     lid_t: f32,
+    lid_title_started: Option<Instant>,
     /// LidStep ticks (6 s) since the last Random Cart.
     lid_ticks: u32,
     /// The clock and battery percentage drawn three times finer, so they
@@ -2602,6 +2603,7 @@ impl Engine {
             lid_ticks: 0,
             lid_faces: Default::default(),
             lid_clock_faces: Default::default(),
+            lid_title_started: None,
             play_time: 0.0,
             select_physical: false,
             combo_releases: 0,
@@ -4372,6 +4374,7 @@ impl Engine {
             Input::LidCover(closed, now) => {
                 if closed == self.lid_covered { return; }
                 self.lid_covered = closed;
+                self.lid_title_started = None;
                 // Animations are always on (Siham 2026-11-15).
                 if now { self.lid_t = if closed { 1.0 } else { 0.0 }; }
                 if self.game.is_some() { return; }
@@ -7672,6 +7675,9 @@ impl Engine {
         let line = |engine: &mut Self, slot: usize, text: String, y: f32, scale: f32,
                         lit: bool, a: f32, commands: &mut Vec<Draw>| -> f32 {
             let key = format!("{text}/{lit}");
+            if slot == 4 && engine.lid_clock_faces[slot].0 != key {
+                engine.lid_title_started = None;
+            }
             let Some((tex, w, h)) = engine.lid_clock_face(slot, &key,
                 || slot_ui::quick_value_face_within(&text, lit, 1400)) else { return 0.0 };
             let (w, h) = (w * scale, h * scale);
@@ -7679,9 +7685,16 @@ impl Engine {
             if w <= room {
                 commands.push(Draw::Tex { x: cx - w / 2.0, y, w, h, tex, alpha: a });
             } else {
+                let travel = w - room;
+                let shift = if slot == 4 && engine.lid_covered && a >= 1.0 {
+                    let since = engine.lid_title_started.get_or_insert_with(Instant::now);
+                    finite_title_scroll(travel, since.elapsed().as_secs_f32()).0
+                } else { 0.0 };
                 commands.push(Draw::Span(Some(slot_gfx::Span {
-                    left: 24.0, right: width - 24.0, feather_left: 0.01, feather_right: 24.0 })));
-                commands.push(Draw::Tex { x: 24.0, y, w, h, tex, alpha: a });
+                    left: 24.0, right: width - 24.0,
+                    feather_left: if shift > 0.5 { 24.0 } else { 0.01 },
+                    feather_right: if travel - shift > 0.5 { 24.0 } else { 0.01 } })));
+                commands.push(Draw::Tex { x: 24.0 - shift, y, w, h, tex, alpha: a });
                 commands.push(Draw::Span(None));
             }
             h
@@ -8184,15 +8197,31 @@ impl Engine {
             _ => now,
         };
         self.title_marquee.set(Some((key, since, now)));
-        const HOLD: f32 = 1.2;
-        const PACE: f32 = 40.0;
-        const PASSES: f32 = 3.0;
-        let run = travel / PACE;
-        let pass = HOLD + run + HOLD;
-        let t = now.duration_since(since).as_secs_f32();
-        if t >= PASSES * pass { return (0.0, false); }
-        (((t % pass - HOLD) / run).clamp(0.0, 1.0) * travel, true)
+        finite_title_scroll(travel, now.duration_since(since).as_secs_f32())
     }
+}
+
+/// Same finite marquee for the carousel and the closed Rotate cover.
+fn finite_title_scroll(travel: f32, t: f32) -> (f32, bool) {
+    if travel <= 0.5 { return (0.0, false); }
+    const HOLD: f32 = 1.2;
+    const PACE: f32 = 40.0;
+    const PASSES: f32 = 3.0;
+    let run = travel / PACE;
+    let pass = HOLD + run + HOLD;
+    if t >= PASSES * pass { return (0.0, false); }
+    (((t % pass - HOLD) / run).clamp(0.0, 1.0) * travel, true)
+}
+
+#[cfg(test)]
+#[test]
+fn finite_title_scroll_holds_moves_and_stops_after_three_passes() {
+    assert_eq!(finite_title_scroll(0.0, 2.0), (0.0, false));
+    assert_eq!(finite_title_scroll(80.0, 1.0), (0.0, true));
+    assert!((finite_title_scroll(80.0, 2.2).0 - 40.0).abs() < 0.01);
+    assert_eq!(finite_title_scroll(80.0, 3.5), (80.0, true));
+    assert_eq!(finite_title_scroll(80.0, 4.5), (0.0, true));
+    assert_eq!(finite_title_scroll(80.0, 13.3), (0.0, false));
 }
 
 /// How far a long text has scrolled, kept in `cell` (see marquee_offset).

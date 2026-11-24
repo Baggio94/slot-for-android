@@ -647,7 +647,8 @@ internal object HomeCartLabels {
 
     /** The home carts still to label, out of all of them. */
     private fun missingOf(context: Context, state: JSONObject, real: JSONObject): Pair<List<Rom>, List<Rom>> {
-        val all = games(context)
+        val all = ArtworkPriority.order(games(context), ArtworkPriority.focus(context),
+            { it.uri }, { it.platform }, { it.title })
         // Convert only records whose old URI belongs to this library. A
         // transferred shelf label does not need a Studio cache backfill.
         for (rom in all) {
@@ -686,11 +687,12 @@ internal object HomeCartLabels {
         }
     }
 
-    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit): Boolean {
+    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit,
+             ownOnly: Boolean = false): Boolean {
         loadShells(context)
-        val creds = credentials() ?: return false
+        val creds = credentials()
         val now = android.os.SystemClock.elapsedRealtime()
-        if (now < closedUntil || !shouldContinue()) return false
+        if ((!ownOnly && (creds == null || now < closedUntil)) || !shouldContinue()) return false
         val state = state(context)
         val real = realDone(context)
         val (all, missing) = missingOf(context, state, real)
@@ -707,10 +709,10 @@ internal object HomeCartLabels {
         val pre = HashMap<String, Prefetched>()
         var prefetchedUntil = 0
         for ((i, rom) in ready.withIndex()) {
-            if (!shouldContinue() || asks >= MAX_ATTEMPTS) break
+            if (!shouldContinue() || (!ownOnly && asks >= MAX_ATTEMPTS)) break
             if (i >= prefetchedUntil) {
                 // The next few carts' checksums and own labels, side by side.
-                prefetchedUntil = minOf(ready.size, i + PREFETCH)
+                prefetchedUntil = minOf(ready.size, i + (if (ownOnly) 3 else PREFETCH))
                 pre.clear()
                 pre.putAll(prefetch(context, ready.subList(i, prefetchedUntil), shouldContinue))
                 if (!shouldContinue()) break
@@ -734,12 +736,14 @@ internal object HomeCartLabels {
                 var media: Media? = own?.first
                 var imageBytes: ByteArray? = own?.second
                 if (own == null) {
+                    if (ownOnly) { outcome = "DEFERRED"; continue }
+                    val auth = creds ?: continue
                     asks++
                     asked = true
                     var reply: Http? = null
                     for (crc in listOfNotNull(whole, bare).distinct()) {
                         if (!shouldContinue()) break
-                        reply = lookup(rom, crc, creds, shouldContinue)
+                        reply = lookup(rom, crc, auth, shouldContinue)
                         if (reply.code != 404) break
                         Thread.sleep(150L)
                     }
@@ -767,6 +771,7 @@ internal object HomeCartLabels {
                 }
                 val chosen = media ?: continue
                 val png = labelPng(imageBytes ?: continue, chosen, rom) ?: continue
+                if (!shouldContinue()) { outcome = "INTERRUPTED"; break }
                 val stale = needsRecut(context, real, rom)
                 val crcFiles = listOfNotNull(whole, bare).distinct().map { File(File(context.filesDir, REAL_DIR), "$it.png") }
                 val before = if (stale) crcFiles.firstOrNull { it.isFile }?.readBytes() else null
@@ -800,6 +805,7 @@ internal object HomeCartLabels {
                 outcome = "NETWORK_ERROR"
                 Log.w(TAG, "Label deferred for ${rom.title.take(80)}", error)
             } finally {
+                if (ownOnly && outcome != "SAVED" && outcome != "EXISTS") outcome = "DEFERRED"
                 when (outcome) {
                     "SAVED", "EXISTS" -> retry.finished(rom.uri)
                     "NOT_FOUND" -> {
@@ -828,6 +834,6 @@ internal object HomeCartLabels {
             Log.w(TAG, "Could not remember label misses", error)
         }
         val left = missing.any { retry.pending(it.uri) }
-        return left && shouldContinue() && android.os.SystemClock.elapsedRealtime() >= closedUntil
+        return !ownOnly && left && shouldContinue() && android.os.SystemClock.elapsedRealtime() >= closedUntil
     }
 }

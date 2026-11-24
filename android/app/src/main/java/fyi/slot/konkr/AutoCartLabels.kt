@@ -227,12 +227,15 @@ internal object AutoCartLabels {
     }
 
     /** Returns true if more bounded foreground work is pending, including retries. */
-    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit): Boolean {
+    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit,
+             ownOnly: Boolean = false): Boolean {
         if (!shouldContinue()) return false
         batchDelayMs = NEXT_BATCH_MS
         // The official GB/GBC/GBA art only: HomeCartLabels fetches the NES,
         // Super Nintendo and Mega Drive labels from ScreenScraper.
-        val games = CartStudioCatalog.games(context).filter { it.platform !in Systems.HOME_PLATFORMS }
+        val games = ArtworkPriority.order(CartStudioCatalog.games(context)
+            .filter { it.platform !in Systems.HOME_PLATFORMS }, ArtworkPriority.focus(context),
+            { it.uri }, { it.platform }, { it.title })
         if (games.isEmpty()) {
             SlotLog.i(TAG, "Deferred: cached ROM library not ready (zero indexed games)")
             return false
@@ -249,12 +252,12 @@ internal object AutoCartLabels {
             SlotLog.i(TAG, "No pending official art: games=${games.size}, missing=${missing.size}, savedTotal=$savedTotal")
             return false
         }
-        var checked = games.count { !retry.pending(it.uri) }
+        var checked = games.size - pending.size
         AutoCartLabelDiagnostics.start(checked, checked + pending.size, savedTotal)
 
         val now = android.os.SystemClock.elapsedRealtime()
         val due = pending.filter { retry.ready(it.uri, now) }
-        if (due.isEmpty()) return reschedule(pending, shouldContinue)
+        if (due.isEmpty()) return !ownOnly && reschedule(pending, shouldContinue)
 
         // Our own art set (art.slot-android.app) answers first. slot.'s older
         // set is a fallback: its index is fetched the first time a cart isn't
@@ -288,7 +291,7 @@ internal object AutoCartLabels {
         val pre = HashMap<String, ByteArray?>()
         var prefetchedUntil = 0
         for ((i, rom) in due.withIndex()) {
-            if (!shouldContinue() || attempted >= MAX_ATTEMPTS) break
+            if (!shouldContinue() || (!ownOnly && attempted >= MAX_ATTEMPTS)) break
             val target = CartLabelPaths.file(context.filesDir, rom.uri)
             if (target.exists()) {
                 retry.finished(rom.uri)
@@ -296,7 +299,7 @@ internal object AutoCartLabels {
             }
             if (i >= prefetchedUntil) {
                 // The next few carts' labels from our own set, side by side.
-                prefetchedUntil = minOf(due.size, i + PREFETCH)
+                prefetchedUntil = minOf(due.size, i + (if (ownOnly) 3 else PREFETCH))
                 pre.clear()
                 pre.putAll(prefetch(context, due.subList(i, prefetchedUntil), shouldContinue))
                 if (!shouldContinue()) break
@@ -318,6 +321,7 @@ internal object AutoCartLabels {
                     null
                 }
                 if (bytes == null) {
+                    if (ownOnly) { outcome = "DEFERRED"; continue }
                     attempted++
                     val index = officialIndex()
                     if (index == null) {
@@ -419,7 +423,7 @@ internal object AutoCartLabels {
                 // A real stored label always wins, including when the user
                 // navigated away just after a successful atomic write.
                 if (target.exists()) retry.finished(rom.uri)
-                else if (shouldContinue()) {
+                else if (!ownOnly && shouldContinue()) {
                     when (outcome) {
                         "NOT_FOUND", "INVALID_ARTWORK", "EXISTS" -> {
                             retry.finished(rom.uri)
@@ -437,7 +441,8 @@ internal object AutoCartLabels {
                     }
                 }
                 if (wasPending && !retry.pending(rom.uri)) checked++
-                AutoCartLabelDiagnostics.result(checked, savedTotal, outcome)
+                AutoCartLabelDiagnostics.result(checked, savedTotal,
+                    if (ownOnly && outcome != "SAVED" && outcome != "EXISTS") "DEFERRED" else outcome)
                 if (outcome == "NOT_FOUND") notFound++
                 SlotLog.i(TAG, "ART_RESULT $outcome [${rom.platform}] ${rom.title.take(96)}")
             }
@@ -447,7 +452,7 @@ internal object AutoCartLabels {
 
         SlotLog.i(TAG, "Art pass: attempted=$attempted, saved=$saved, fetched=$fetched, " +
             "no_official_match=$notFound, retryable_errors=$errors")
-        return reschedule(pending, shouldContinue)
+        return !ownOnly && reschedule(pending, shouldContinue)
     }
 
     /** Cart Studio's pictures for a Game Boy family cart: the real label as

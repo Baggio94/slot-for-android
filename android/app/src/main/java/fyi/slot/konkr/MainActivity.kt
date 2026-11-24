@@ -379,6 +379,7 @@ class MainActivity : Activity() {
     private val autoLabelsNeedSync = AtomicBoolean(false)
     /** Labels saved before this run of passes, for its "N LABELS ADDED". */
     @Volatile private var autoLabelsChainBase = -1
+    private var autoLabelsOwnPassDone = false
     /** Only retries left (a server that timed out): the visible pass ends,
      *  they go on unseen (it stayed on LABELS 12/13: Siham 2026-11-17). */
     @Volatile private var autoLabelsQuiet = false
@@ -3314,20 +3315,28 @@ class MainActivity : Activity() {
                     // successful saved label for an idle carousel repaint.
                     // Status/UI snapshots are completely separate.
                     val keepGoing = { autoLabelsMayRun() }
+                    val savedLabel: (String) -> Unit = { uri ->
+                        autoLabelUpdates.add(uri)
+                        autoLabelsNeedSync.set(true)
+                    }
                     HomeCartLabels.announce(applicationContext)
-                    anotherBatch = AutoCartLabels.fill(applicationContext,
-                        shouldContinue = keepGoing,
-                        onSaved = { uri ->
-                            autoLabelUpdates.add(uri)
-                            autoLabelsNeedSync.set(true)
-                        })
-                    // NES, Super Nintendo and Mega Drive labels from ScreenScraper.
-                    anotherBatch = HomeCartLabels.fill(applicationContext,
-                        shouldContinue = keepGoing,
-                        onSaved = { uri ->
-                            autoLabelUpdates.add(uri)
-                            autoLabelsNeedSync.set(true)
-                        }) || anotherBatch
+                    if (!autoLabelsOwnPassDone) {
+                        // Both catalogue families precede slow external fallback.
+                        val focus = ArtworkPriority.focus(applicationContext)
+                        val platform = CartStudioCatalog.games(applicationContext)
+                            .firstOrNull { it.uri == focus }?.platform
+                        if (platform != null && platform in Systems.HOME_PLATFORMS) {
+                            HomeCartLabels.fill(applicationContext, keepGoing, savedLabel, ownOnly = true)
+                            AutoCartLabels.fill(applicationContext, keepGoing, savedLabel, ownOnly = true)
+                        } else {
+                            AutoCartLabels.fill(applicationContext, keepGoing, savedLabel, ownOnly = true)
+                            HomeCartLabels.fill(applicationContext, keepGoing, savedLabel, ownOnly = true)
+                        }
+                        autoLabelsOwnPassDone = keepGoing()
+                    }
+                    // Existing permissive matching and paced sources.
+                    anotherBatch = AutoCartLabels.fill(applicationContext, keepGoing, savedLabel)
+                    anotherBatch = HomeCartLabels.fill(applicationContext, keepGoing, savedLabel) || anotherBatch
                 } catch (error: Exception) {
                     Log.w("SlotAutoLabels", "Automatic artwork deferred", error)
                 } finally {
@@ -3336,6 +3345,7 @@ class MainActivity : Activity() {
                     val report = AutoCartLabelDiagnostics.snapshot()
                     val added = (report.saved - autoLabelsChainBase.coerceAtLeast(0)).coerceAtLeast(0)
                     if (!anotherBatch && !recheck) autoLabelsChainBase = -1
+                    if (!anotherBatch || recheck || !autoLabelsMayRun()) autoLabelsOwnPassDone = false
                     val progressKey = (report.checked.toLong() shl 32) or report.saved.toLong()
                     if (anotherBatch && !recheck) {
                         // A batch that moved nothing on: only retries wait.
