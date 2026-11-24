@@ -384,7 +384,15 @@ internal object HomeCartLabels {
     internal fun recut(real: JSONObject, rom: Rom): Boolean =
         real.has(rom.uri) && cutFor(real, rom).let { it != null && it != shell(rom) }
 
-    private fun known(state: JSONObject, rom: Rom): Boolean {
+    private fun portableCut(context: Context, real: JSONObject, rom: Rom): String? =
+        PortableArtwork.read(context, "home-cut", rom.uri) ?: cutFor(real, rom)
+
+    private fun needsRecut(context: Context, real: JSONObject, rom: Rom): Boolean =
+        portableCut(context, real, rom)?.let { it != shell(rom) } == true
+
+    private fun known(context: Context, state: JSONObject, rom: Rom): Boolean {
+        val portable = PortableArtwork.read(context, "home-miss", rom.uri)
+        if (portable == PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom))) return true
         val old = state.optJSONObject(rom.uri) ?: return false
         // A previous 3.0 lookup may have rejected support-2D before its
         // label window existed. Retry once with the current mould rules.
@@ -640,11 +648,21 @@ internal object HomeCartLabels {
     /** The home carts still to label, out of all of them. */
     private fun missingOf(context: Context, state: JSONObject, real: JSONObject): Pair<List<Rom>, List<Rom>> {
         val all = games(context)
-        // A cart is missing its label, or (scraped before Studio offered it)
-        // the copy Cart Studio shows as its real label.
+        // Convert only records whose old URI belongs to this library. A
+        // transferred shelf label does not need a Studio cache backfill.
+        for (rom in all) {
+            if (PortableArtwork.read(context, "home-cut", rom.uri) == null) {
+                cutFor(real, rom)?.let { PortableArtwork.write(context, "home-cut", rom.uri, it) }
+            }
+            if (PortableArtwork.read(context, "home-miss", rom.uri) == null && known(context, state, rom)) {
+                PortableArtwork.write(context, "home-miss", rom.uri,
+                    PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom)))
+            }
+        }
         val missing = all.filter {
-            (!CartLabelPaths.file(context.filesDir, it.uri).exists() || !real.has(it.uri) || recut(real, it)) &&
-                !known(state, it) && retry.pending(it.uri)
+            val exists = CartLabelPaths.file(context.filesDir, it.uri).exists()
+            PortableArtwork.needsLookup(exists, portableCut(context, real, it), shell(it)) &&
+                !known(context, state, it) && retry.pending(it.uri)
         }
         return all to missing
     }
@@ -749,7 +767,7 @@ internal object HomeCartLabels {
                 }
                 val chosen = media ?: continue
                 val png = labelPng(imageBytes ?: continue, chosen, rom) ?: continue
-                val stale = recut(real, rom)
+                val stale = needsRecut(context, real, rom)
                 val crcFiles = listOfNotNull(whole, bare).distinct().map { File(File(context.filesDir, REAL_DIR), "$it.png") }
                 val before = if (stale) crcFiles.firstOrNull { it.isFile }?.readBytes() else null
                 for (file in crcFiles) writeAtomic(file, png)
@@ -759,7 +777,10 @@ internal object HomeCartLabels {
                 // A label cut for the cart's old shell is replaced, unless it
                 // is no longer the automatic one (a Cart Studio choice).
                 val replace = stale && before != null && target.isFile && target.readBytes().contentEquals(before)
-                if (target.exists() && !replace) { outcome = "EXISTS"; saved++; continue }
+                if (target.exists() && !replace) {
+                    PortableArtwork.write(context, "home-cut", rom.uri, shell(rom))
+                    outcome = "EXISTS"; saved++; continue
+                }
                 target.parentFile?.mkdirs()
                 val atomic = AtomicFile(target)
                 val out = atomic.startWrite()
@@ -773,6 +794,7 @@ internal object HomeCartLabels {
                 saved++
                 savedTotal++
                 outcome = "SAVED"
+                PortableArtwork.write(context, "home-cut", rom.uri, shell(rom))
                 onSaved(rom.uri)
             } catch (error: Exception) {
                 outcome = "NETWORK_ERROR"
@@ -786,6 +808,8 @@ internal object HomeCartLabels {
                         retry.finished(rom.uri)
                         state.put(rom.uri, JSONObject().put("size", rom.size)
                             .put("modified", rom.modified).put("mould", shell(rom)))
+                        PortableArtwork.write(context, "home-miss", rom.uri,
+                            PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom)))
                         dirty = true
                     }
                     "NETWORK_ERROR" -> retry.transient(rom.uri, android.os.SystemClock.elapsedRealtime())

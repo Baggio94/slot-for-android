@@ -145,23 +145,26 @@ internal object AutoCartLabels {
 
     private fun missFile(context: Context) = java.io.File(context.filesDir, "AutoLabels/no-official-label.txt")
 
-    private fun rememberedMisses(context: Context) {
+    private fun rememberedMisses(context: Context, games: List<CartStudioCatalog.Rom>) {
         if (missesLoaded) return
         missesLoaded = true
         val oldest = System.currentTimeMillis() - MISS_DAYS * 24 * 3600 * 1000
         try {
+            val byUri = games.associateBy { it.uri }
             missFile(context).takeIf { it.isFile }?.readLines()?.forEach { line ->
                 val at = line.substringBefore('\t').toLongOrNull() ?: return@forEach
-                if (at >= oldest) retry.finished(line.substringAfter('\t'))
+                val rom = byUri[line.substringAfter('\t')] ?: return@forEach
+                if (at >= oldest && PortableArtwork.read(context, "gb-miss", rom.uri) == null) {
+                    PortableArtwork.write(context, "gb-miss", rom.uri,
+                        PortableArtwork.gbMiss(rom.size, rom.modified, at))
+                }
             }
         } catch (_: Exception) {}
     }
 
-    private fun rememberMiss(context: Context, uri: String) {
-        try {
-            missFile(context).apply { parentFile?.mkdirs() }
-                .appendText("${System.currentTimeMillis()}\t$uri\n")
-        } catch (_: Exception) {}
+    private fun rememberMiss(context: Context, rom: CartStudioCatalog.Rom) {
+        PortableArtwork.write(context, "gb-miss", rom.uri,
+            PortableArtwork.gbMiss(rom.size, rom.modified, System.currentTimeMillis()))
     }
 
     /** Returns true if more bounded foreground work is pending, including retries. */
@@ -175,8 +178,13 @@ internal object AutoCartLabels {
             SlotLog.i(TAG, "Deferred: cached ROM library not ready (zero indexed games)")
             return false
         }
-        rememberedMisses(context)
-        val missing = games.filter { !CartLabelPaths.file(context.filesDir, it.uri).exists() }
+        rememberedMisses(context, games)
+        val nowWall = System.currentTimeMillis()
+        val missing = games.filter {
+            !CartLabelPaths.file(context.filesDir, it.uri).exists() &&
+                !PortableArtwork.validGbMiss(PortableArtwork.read(context, "gb-miss", it.uri),
+                    it.size, it.modified, nowWall, MISS_DAYS * 24 * 3600 * 1000)
+        }
         val pending = missing.filter { retry.pending(it.uri) }
         if (pending.isEmpty()) {
             SlotLog.i(TAG, "No pending official art: games=${games.size}, missing=${missing.size}, savedTotal=$savedTotal")
@@ -359,7 +367,7 @@ internal object AutoCartLabels {
                     when (outcome) {
                         "NOT_FOUND", "INVALID_ARTWORK", "EXISTS" -> {
                             retry.finished(rom.uri)
-                            if (outcome != "EXISTS") rememberMiss(context, rom.uri)
+                            if (outcome != "EXISTS") rememberMiss(context, rom)
                         }
                         "DAT_UNAVAILABLE", "NETWORK_ERROR", "ERROR" -> {
                             val scheduled = retry.transient(

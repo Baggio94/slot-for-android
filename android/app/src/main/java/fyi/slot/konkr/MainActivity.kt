@@ -376,6 +376,7 @@ class MainActivity : Activity() {
     }
     private val autoLabelsRunning = AtomicBoolean(false)
     private val autoLabelsRestartRequested = AtomicBoolean(false)
+    private val autoLabelsNeedSync = AtomicBoolean(false)
     /** Labels saved before this run of passes, for its "N LABELS ADDED". */
     @Volatile private var autoLabelsChainBase = -1
     /** Only retries left (a server that timed out): the visible pass ends,
@@ -3294,6 +3295,7 @@ class MainActivity : Activity() {
         try {
             autoLabelsWorker.execute {
                 var anotherBatch = false
+                val artworkRevision = PortableArtwork.revision()
                 // Only a pass that has carts to look at shows or reports
                 // anything: one that finds nothing to do stays silent, not
                 // "LABELS 2/2" again from the last pass's count (beta41).
@@ -3315,11 +3317,17 @@ class MainActivity : Activity() {
                     HomeCartLabels.announce(applicationContext)
                     anotherBatch = AutoCartLabels.fill(applicationContext,
                         shouldContinue = keepGoing,
-                        onSaved = { uri -> autoLabelUpdates.add(uri) })
+                        onSaved = { uri ->
+                            autoLabelUpdates.add(uri)
+                            autoLabelsNeedSync.set(true)
+                        })
                     // NES, Super Nintendo and Mega Drive labels from ScreenScraper.
                     anotherBatch = HomeCartLabels.fill(applicationContext,
                         shouldContinue = keepGoing,
-                        onSaved = { uri -> autoLabelUpdates.add(uri) }) || anotherBatch
+                        onSaved = { uri ->
+                            autoLabelUpdates.add(uri)
+                            autoLabelsNeedSync.set(true)
+                        }) || anotherBatch
                 } catch (error: Exception) {
                     Log.w("SlotAutoLabels", "Automatic artwork deferred", error)
                 } finally {
@@ -3367,6 +3375,13 @@ class MainActivity : Activity() {
                         uiHandler.post {
                             if (::autoLabelIndicator.isInitialized) autoLabelIndicator.hide()
                         }
+                    }
+                    if (PortableArtwork.revision() != artworkRevision) autoLabelsNeedSync.set(true)
+                    // Sync once a chain finishes, is interrupted, or is waiting
+                    // on retries. Both label providers have finished their writes.
+                    if ((!anotherBatch && !recheck || autoLabelsQuiet || !autoLabelsMayRun()) &&
+                        autoLabelsNeedSync.getAndSet(false) && !isDestroyed) {
+                        slotFolder.sync(pull = autoLabelsMayRun(), confirm = true)
                     }
                     if ((anotherBatch || recheck) && autoLabelsMayRun()) {
                         // A pause between bounded batches prevents continuous
@@ -3750,12 +3765,37 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun openBiosFolderPicker() {
+    private fun suggestBiosFolder(romFolder: Uri) {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        if (prefs.contains(BIOS_ROOT) || isDestroyed || nativeIsPlaying()) return
+        val initial = try {
+            if (romFolder.authority != "com.android.externalstorage.documents") null else {
+                val doc = android.provider.DocumentsContract.getTreeDocumentId(romFolder)
+                val volume = doc.substringBefore(':')
+                val parent = doc.substringAfter(':', "").substringBeforeLast('/', "")
+                val path = if (parent.isEmpty()) "BIOS" else "$parent/BIOS"
+                android.provider.DocumentsContract.buildDocumentUri(romFolder.authority!!, "$volume:$path")
+            }
+        } catch (_: Exception) { null }
+        val dialog = SlotModalDialog(this, "BIOS FOLDER",
+            "Have a BIOS folder? Choose it now, or skip and add it later in Library.")
+        dialog.addButton("CHOOSE BIOS FOLDER") {
+            dialog.dismiss()
+            nativeExternalBegin()
+            openBiosFolderPicker(initial)
+        }
+        dialog.addButton("SKIP") { dialog.dismiss() }
+        dialog.show()
+    }
+
+    private fun openBiosFolderPicker(initial: Uri? = null) {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
             )
+            if (initial != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initial)
         }
         try {
             @Suppress("DEPRECATION")
@@ -3776,17 +3816,16 @@ class MainActivity : Activity() {
         }
         gameLoader.execute {
             try {
-                BiosLibrary.importFrom(this, uri)
-                // Restoring the already selected BIOS at startup is silent.
-                // Only the first explicit selection ever shows 'BIOS ready'.
+                val imported = BiosLibrary.importFrom(this, uri)
+                SlotLog.i(TAG, "BIOS imported (${imported.size}): ${imported.joinToString()}")
+                // Restoring the already selected BIOS at startup stays silent.
                 val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-                val firstExplicitImport = persistSelection &&
-                    !prefs.contains(BIOS_ROOT)
                 if (persistSelection) {
                     prefs.edit().putString(BIOS_ROOT, uri.toString()).apply()
                 }
-                if (firstExplicitImport) runOnUiThread {
+                if (persistSelection) runOnUiThread {
                     if (!isDestroyed) {
+                        TaskPill.confirm("BIOS READY")
                         SlotToast.makeText(this, "BIOS ready. Used from your next game.",
                             Toast.LENGTH_LONG).show()
                     }
@@ -4251,6 +4290,7 @@ class MainActivity : Activity() {
             when (requestCode) {
                 FOLDER_REQUEST -> {
                     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                    val firstRomFolder = !prefs.contains(ROM_ROOT)
                     val same = prefs.getString(ROM_ROOT, null) == uri.toString()
                     prefs.edit().putString(ROM_ROOT, uri.toString()).apply()
                     // The same folder chosen again for RomM: only the right
@@ -4259,6 +4299,8 @@ class MainActivity : Activity() {
                     // From RomM the folder is often still empty: its own
                     // "games added" message speaks once the downloads land.
                     if (!(same && forRomm)) scanFolder(uri, quiet = forRomm, shown = true)
+                    if (firstRomFolder && !forRomm && !prefs.contains(BIOS_ROOT))
+                        uiHandler.post { suggestBiosFolder(uri) }
                 }
                 BIOS_REQUEST -> importBiosFolder(uri, persistSelection = true)
                 SAVE_REQUEST, STATE_REQUEST -> {

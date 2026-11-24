@@ -179,7 +179,7 @@ internal object FolderSync {
                 step(path, mine[path], theirs[path], base, private, folder, start, pull, now, report,
                     tombs, restore)
             } catch (error: Exception) {
-                report.failures.add("$path: ${error.message}")
+                report.failures.add("$path: ${SlotStorageProblem.describe(error)}")
             }
         }
         if (!launchDone) launchFilesDone()
@@ -372,6 +372,9 @@ internal object FolderSync {
      *  device links, caches, nor slot.'s own one-shot markers and copies. */
     fun travels(path: String): Boolean {
         if (path in TRAVELLING_FILES) return true
+        // Only portable per-game records and CRC-keyed Studio images; never
+        // the legacy URI-keyed databases or other private caches.
+        if (PortableArtwork.travels(path)) return true
         if (UNWALKED_DIRS.any { path.startsWith("$it/") }) return false
         val top = path.substringBefore('/')
         if (top !in TRAVELLING_DIRS || !path.contains('/')) return false
