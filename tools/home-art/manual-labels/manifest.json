@@ -6,7 +6,7 @@
     "region": "us",
     "image": "GB/20647C74.png",
     "sha1": "ec0c703b56bf63eac7cfcf1bbd4d6159b7ddea8d",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   },
   {
     "platform": "GBC",
@@ -15,7 +15,7 @@
     "region": "us",
     "image": "GBC/22954588.png",
     "sha1": "e5ef56d3002b8c371c47f3067ac7b46f467daed4",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   },
   {
     "platform": "GBC",
@@ -24,7 +24,7 @@
     "region": "wor",
     "image": "GBC/2E7C7D39.png",
     "sha1": "62c2b9499e8362d66ebaa7fef5b3b483a595dc2d",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   },
   {
     "platform": "GBC",
@@ -33,7 +33,7 @@
     "region": "us",
     "image": "GBC/3AC93216.png",
     "sha1": "eb4af36986748787d1be67659e8b7681d25c70f2",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   },
   {
     "platform": "GBC",
@@ -42,7 +42,7 @@
     "region": "us",
     "image": "GBC/3B8722BC.png",
     "sha1": "bcba7f148b3fb0b23bf9c294397be2d29ea2770d",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   },
   {
     "platform": "GBC",
@@ -51,16 +51,16 @@
     "region": "us",
     "image": "GBC/4F80F39D.png",
     "sha1": "0ad14ac546ac1330fc02e73441388bf5c27edfaf",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   },
   {
-    "platform": "GBC",
+    "platform": "GB",
     "crc32": "66DD2C00",
     "name": "Chantey",
     "region": "wor",
-    "image": "GBC/66DD2C00.png",
+    "image": "GB/66DD2C00.png",
     "sha1": "e6dd21586daba7e67d2112abf5c76de07abdc850",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   },
   {
     "platform": "GBC",
@@ -69,7 +69,7 @@
     "region": "us",
     "image": "GBC/7384CFCC.png",
     "sha1": "f972b3d0b2c6ac3f72a6a61e6fc08aef0ef227bc",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   },
   {
     "platform": "GBC",
@@ -78,7 +78,7 @@
     "region": "us",
     "image": "GBC/A1378C6B.png",
     "sha1": "5317e8bda5f3f0c532be4b4aab928c11ff1ade0e",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   },
   {
     "platform": "GBC",
@@ -87,6 +87,6 @@
     "region": "us",
     "image": "GBC/C8C7B456.png",
     "sha1": "e38cb17c14e7753ccd433263dd1a3f78d21207b4",
-    "source": "User-supplied cartridge label"
+    "source": "Community contribution"
   }
 ]
