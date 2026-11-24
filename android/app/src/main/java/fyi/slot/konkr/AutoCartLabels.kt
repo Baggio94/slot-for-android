@@ -198,7 +198,8 @@ internal object AutoCartLabels {
     /** Games with no official label (hacks, homebrew), remembered between
      *  runs for a week: "2/2 labels, 0 saved" no longer showed at every
      *  start (beta38). After a week, a newer art set may have them. */
-    private const val MISS_DAYS = 7L
+    private const val MISS_TTL_MS = PortableArtwork.MISS_TTL_MS
+    fun resetForRefresh() = retry.resetAll()
     private var missesLoaded = false
 
     private fun missFile(context: Context) = java.io.File(context.filesDir, "AutoLabels/no-official-label.txt")
@@ -206,7 +207,7 @@ internal object AutoCartLabels {
     private fun rememberedMisses(context: Context, games: List<CartStudioCatalog.Rom>) {
         if (missesLoaded) return
         missesLoaded = true
-        val oldest = System.currentTimeMillis() - MISS_DAYS * 24 * 3600 * 1000
+        val oldest = System.currentTimeMillis() - MISS_TTL_MS
         try {
             val byUri = games.associateBy { it.uri }
             missFile(context).takeIf { it.isFile }?.readLines()?.forEach { line ->
@@ -242,10 +243,12 @@ internal object AutoCartLabels {
         }
         rememberedMisses(context, games)
         val nowWall = System.currentTimeMillis()
+        val since = PortableArtwork.refreshEpoch(context)
+        retry.expireMisses(nowWall, MISS_TTL_MS)
         val missing = games.filter {
             !CartLabelPaths.file(context.filesDir, it.uri).exists() &&
                 !PortableArtwork.validGbMiss(PortableArtwork.read(context, GbFamilyArtwork.missKind(it.platform), it.uri),
-                    it.size, it.modified, nowWall, MISS_DAYS * 24 * 3600 * 1000)
+                    it.size, it.modified, nowWall, MISS_TTL_MS, since)
         }
         val pending = missing.filter { retry.pending(it.uri) }
         if (pending.isEmpty()) {
@@ -425,10 +428,13 @@ internal object AutoCartLabels {
                 if (target.exists()) retry.finished(rom.uri)
                 else if (!ownOnly && shouldContinue()) {
                     when (outcome) {
-                        "NOT_FOUND", "INVALID_ARTWORK", "EXISTS" -> {
-                            retry.finished(rom.uri)
-                            if (outcome != "EXISTS") rememberMiss(context, rom)
+                        "NOT_FOUND", "INVALID_ARTWORK" -> {
+                            if (SlotArtSet.hasFreshIndexes(context, listOfNotNull(rom.platform, GbFamilyArtwork.other(rom.platform)))) {
+                                retry.missed(rom.uri, System.currentTimeMillis())
+                                rememberMiss(context, rom)
+                            } else retry.transient(rom.uri, android.os.SystemClock.elapsedRealtime())
                         }
+                        "EXISTS" -> retry.finished(rom.uri)
                         "DAT_UNAVAILABLE", "NETWORK_ERROR", "ERROR" -> {
                             val scheduled = retry.transient(
                                 rom.uri, android.os.SystemClock.elapsedRealtime())

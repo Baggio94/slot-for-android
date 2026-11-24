@@ -18,6 +18,7 @@ internal class AutoLabelRetryPolicy {
     private data class Failure(val attempts: Int, val dueAt: Long)
     private val complete = HashSet<String>()
     private val deferred = HashMap<String, Failure>()
+    private val misses = HashMap<String, Long>()
 
     fun pending(key: String): Boolean = key !in complete
 
@@ -29,10 +30,27 @@ internal class AutoLabelRetryPolicy {
         deferred.remove(key)
     }
 
+    fun missed(key: String, at: Long) {
+        finished(key)
+        misses[key] = at
+    }
+
+    fun expireMisses(now: Long, ttl: Long) {
+        val expired = misses.filterValues { it > now || now - it >= ttl }.keys.toList()
+        expired.forEach(::reset)
+    }
+
+    fun resetAll() {
+        complete.clear()
+        deferred.clear()
+        misses.clear()
+    }
+
     /** A successful index fetch resets its temporary outage counter. */
     fun reset(key: String) {
         complete.remove(key)
         deferred.remove(key)
+        misses.remove(key)
     }
 
     /** True when retry is scheduled; false after bounded attempts exhausted. */

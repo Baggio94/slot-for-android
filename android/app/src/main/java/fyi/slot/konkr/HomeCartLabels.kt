@@ -50,6 +50,7 @@ internal object HomeCartLabels {
     private const val LABEL_MAX = 960
 
     private val retry = AutoLabelRetryPolicy()
+    fun resetForRefresh() = retry.resetAll()
     /** Set when ScreenScraper refuses slot.'s credentials or closes its API. */
     @Volatile private var closedUntil = 0L
 
@@ -390,14 +391,14 @@ internal object HomeCartLabels {
     private fun needsRecut(context: Context, real: JSONObject, rom: Rom): Boolean =
         portableCut(context, real, rom)?.let { it != shell(rom) } == true
 
-    private fun known(context: Context, state: JSONObject, rom: Rom): Boolean {
+    private fun known(context: Context, state: JSONObject, rom: Rom, now: Long, since: Long): Boolean {
         val portable = PortableArtwork.read(context, "home-miss", rom.uri)
-        if (portable == PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom))) return true
+        if (PortableArtwork.validHomeMiss(portable, rom.size, rom.modified, shell(rom), now, since)) return true
         val old = state.optJSONObject(rom.uri) ?: return false
-        // A previous 3.0 lookup may have rejected support-2D before its
-        // label window existed. Retry once with the current mould rules.
-        if (rom.platform in NEW_LABEL_PLATFORMS && old.optString("mould") != shell(rom)) return false
-        return old.optLong("size") == rom.size && old.optLong("modified") == rom.modified
+        val at = old.optLong("at", 0L)
+        return old.optLong("size") == rom.size && old.optLong("modified") == rom.modified &&
+            old.optString("mould") == shell(rom) && at > 0 && at >= since && at <= now &&
+            now - at < PortableArtwork.MISS_TTL_MS
     }
 
     // ------------------------------------------------------------- fetch ---
@@ -649,21 +650,26 @@ internal object HomeCartLabels {
     private fun missingOf(context: Context, state: JSONObject, real: JSONObject): Pair<List<Rom>, List<Rom>> {
         val all = ArtworkPriority.order(games(context), ArtworkPriority.focus(context),
             { it.uri }, { it.platform }, { it.title })
+        val now = System.currentTimeMillis()
+        val since = PortableArtwork.refreshEpoch(context)
+        retry.expireMisses(now, PortableArtwork.MISS_TTL_MS)
         // Convert only records whose old URI belongs to this library. A
         // transferred shelf label does not need a Studio cache backfill.
         for (rom in all) {
             if (PortableArtwork.read(context, "home-cut", rom.uri) == null) {
                 cutFor(real, rom)?.let { PortableArtwork.write(context, "home-cut", rom.uri, it) }
             }
-            if (PortableArtwork.read(context, "home-miss", rom.uri) == null && known(context, state, rom)) {
-                PortableArtwork.write(context, "home-miss", rom.uri,
-                    PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom)))
+            if (PortableArtwork.read(context, "home-miss", rom.uri) == null &&
+                known(context, state, rom, now, since)) {
+                val at = state.optJSONObject(rom.uri)?.optLong("at", 0L) ?: 0L
+                if (at > 0) PortableArtwork.write(context, "home-miss", rom.uri,
+                    PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom), at))
             }
         }
         val missing = all.filter {
             val exists = CartLabelPaths.file(context.filesDir, it.uri).exists()
             PortableArtwork.needsLookup(exists, portableCut(context, real, it), shell(it)) &&
-                !known(context, state, it) && retry.pending(it.uri)
+                !known(context, state, it, now, since) && retry.pending(it.uri)
         }
         return all to missing
     }
@@ -809,14 +815,17 @@ internal object HomeCartLabels {
                 when (outcome) {
                     "SAVED", "EXISTS" -> retry.finished(rom.uri)
                     "NOT_FOUND" -> {
-                        // ScreenScraper has no label for this file: don't ask
-                        // again until the file changes.
-                        retry.finished(rom.uri)
-                        state.put(rom.uri, JSONObject().put("size", rom.size)
-                            .put("modified", rom.modified).put("mould", shell(rom)))
-                        PortableArtwork.write(context, "home-miss", rom.uri,
-                            PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom)))
-                        dirty = true
+                        // Only a current catalogue may establish a negative.
+                        // An offline or stale own index is not a verified miss.
+                        if (shouldContinue() && SlotArtSet.hasFreshIndexes(context, listOf(rom.platform))) {
+                            val at = System.currentTimeMillis()
+                            retry.missed(rom.uri, at)
+                            state.put(rom.uri, JSONObject().put("size", rom.size)
+                                .put("modified", rom.modified).put("mould", shell(rom)).put("at", at))
+                            PortableArtwork.write(context, "home-miss", rom.uri,
+                                PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom), at))
+                            dirty = true
+                        } else if (shouldContinue()) retry.transient(rom.uri, android.os.SystemClock.elapsedRealtime())
                     }
                     "NETWORK_ERROR" -> retry.transient(rom.uri, android.os.SystemClock.elapsedRealtime())
                 }

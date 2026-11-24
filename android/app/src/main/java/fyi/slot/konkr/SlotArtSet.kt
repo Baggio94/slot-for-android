@@ -37,6 +37,7 @@ internal object SlotArtSet {
 
     private class Loaded(val at: Long, val index: JSONObject)
     private val loaded = HashMap<String, Loaded>()
+    private val failedIndexes = HashSet<String>()
 
     private fun dir(context: Context) = File(context.cacheDir, "slot-art").apply { mkdirs() }
 
@@ -69,6 +70,33 @@ internal object SlotArtSet {
         for (platform in Systems.PLATFORMS) writeNames(context, platform, maxAgeMs)
     }
 
+    /** The explicit refresh is scoped to systems present on the shelf. */
+    @Synchronized
+    fun refreshLibrary(context: Context, shelves: Set<String>, shouldContinue: () -> Boolean): Boolean {
+        val relevant = shelves.toMutableSet()
+        if (Systems.GB in relevant || Systems.GBC in relevant) {
+            relevant.add(Systems.GB)
+            relevant.add(Systems.GBC)
+        }
+        for (key in relevant.flatMap { Systems.artKeys(it) }.distinct()) {
+            if (!shouldContinue()) return false
+            index(context, key, 0L)
+        }
+        for (platform in relevant) {
+            if (!shouldContinue()) return false
+            writeNames(context, platform, 0L)
+        }
+        return shouldContinue()
+    }
+
+    @Synchronized
+    fun hasFreshIndexes(context: Context, shelves: List<String>): Boolean {
+        val now = System.currentTimeMillis()
+        return shelves.flatMap { Systems.artKeys(it) }.distinct().all { key ->
+            key !in failedIndexes && loaded[key]?.let { now - it.at in 0 until INDEX_FRESH_MS } == true
+        }
+    }
+
     private fun index(context: Context, platform: String, fresh: Long = INDEX_FRESH_MS): JSONObject? {
         if (platform !in platforms) return null
         val now = System.currentTimeMillis()
@@ -81,14 +109,19 @@ internal object SlotArtSet {
             cached()?.let { loaded[platform] = Loaded(cache.lastModified(), it); return it }
         }
         return try {
-            val bytes = get("$platform.json", MAX_INDEX) ?: return cached()
+            val bytes = get("$platform.json", MAX_INDEX) ?: run {
+                failedIndexes.add(platform)
+                return cached()
+            }
             val json = JSONObject(String(bytes, Charsets.UTF_8))
             write(cache, bytes)
             loaded[platform] = Loaded(now, json)
+            failedIndexes.remove(platform)
             json
         } catch (error: Exception) {
             Log.w(TAG, "Art set index unavailable: $platform", error)
             // A stale index still names files that exist: they never change.
+            failedIndexes.add(platform)
             cached()?.also { loaded[platform] = Loaded(now, it) }
         }
     }
@@ -167,6 +200,10 @@ internal object SlotArtSet {
             readTimeout = 12_000
             instanceFollowRedirects = false
             setRequestProperty("User-Agent", "slot. for Android")
+            if (path.endsWith(".json")) {
+                useCaches = false
+                setRequestProperty("Cache-Control", "no-cache")
+            }
         }
         try {
             val status = connection.responseCode

@@ -45,12 +45,31 @@ internal object PortableArtwork {
     }
     fun needsLookup(labelExists: Boolean, cut: String?, shell: String): Boolean =
         !labelExists || (cut != null && cut != shell)
-    fun homeMiss(size: Long, modified: Long, shell: String): String = "$size\t$modified\t$shell"
+    const val MISS_TTL_MS = 7L * 24 * 60 * 60 * 1000
+    private const val REFRESH_PREFS = "artwork-refresh"
+    fun refreshEpoch(context: Context): Long =
+        context.getSharedPreferences(REFRESH_PREFS, Context.MODE_PRIVATE).getLong("at", 0L)
+    fun beginRefresh(context: Context) {
+        // Older portable negatives may be pulled again from the slot folder.
+        context.getSharedPreferences(REFRESH_PREFS, Context.MODE_PRIVATE).edit()
+            .putLong("at", System.currentTimeMillis()).apply()
+    }
+    fun homeMiss(size: Long, modified: Long, shell: String, at: Long): String =
+        "$size\t$modified\t$shell\t$at"
+    fun validHomeMiss(value: String?, size: Long, modified: Long, shell: String,
+                      now: Long, since: Long = 0L): Boolean {
+        val fields = value?.split('\t') ?: return false
+        if (fields.size != 4 || fields[0].toLongOrNull() != size ||
+            fields[1].toLongOrNull() != modified || fields[2] != shell) return false
+        return validMissTime(fields[3].toLongOrNull() ?: return false, now, MISS_TTL_MS, since)
+    }
+    private fun validMissTime(at: Long, now: Long, ttl: Long, since: Long): Boolean =
+        at > 0 && at >= since && at <= now && now - at < ttl
     fun gbMiss(size: Long, modified: Long, at: Long): String = "$size\t$modified\t$at"
-    fun validGbMiss(value: String?, size: Long, modified: Long, now: Long, ttl: Long): Boolean {
+    fun validGbMiss(value: String?, size: Long, modified: Long, now: Long, ttl: Long, since: Long = 0L): Boolean {
         val fields = value?.split('\t') ?: return false
         if (fields.size != 3 || fields[0].toLongOrNull() != size || fields[1].toLongOrNull() != modified) return false
         val at = fields[2].toLongOrNull() ?: return false
-        return at > 0 && at <= now && now - at < ttl
+        return validMissTime(at, now, ttl, since)
     }
 }

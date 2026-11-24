@@ -20,6 +20,16 @@ class PortableArtworkTest {
         assertFalse(FolderSync.travels("AutoLabels/no-official-label.txt"))
         assertFalse(FolderSync.travels("ArtworkHistory/home-cut/0123456789abcdef.txt.bak"))
     }
+    @Test fun manualRefreshAndWeeklyHomeExpiry() {
+        val at = 1000L
+        val record = PortableArtwork.homeMiss(32, 44, "md", at)
+        assertTrue(PortableArtwork.validHomeMiss(record, 32, 44, "md", at + 1))
+        assertFalse(PortableArtwork.validHomeMiss(record, 32, 44, "md", at + 1, at + 1))
+        assertFalse(PortableArtwork.validHomeMiss(record, 32, 44, "md", at + PortableArtwork.MISS_TTL_MS))
+        assertFalse(PortableArtwork.validHomeMiss("32\t44\tmd", 32, 44, "md", at + 1))
+        assertFalse(PortableArtwork.validHomeMiss(record, 32, 44, "md_ea", at + 1))
+        assertFalse(PortableArtwork.validGbMiss(PortableArtwork.gbMiss(32, 44, at), 32, 44, at + 1, 200, at + 1))
+    }
     @Test fun negativeRecordsExpireAndDoNotMatchChangedRoms() {
         val record = PortableArtwork.gbMiss(32, 44, 1000)
         assertTrue(PortableArtwork.validGbMiss(record, 32, 44, 1100, 200))
