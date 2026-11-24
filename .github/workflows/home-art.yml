@@ -9,6 +9,10 @@ on:
     branches: [main]
     paths:
       - 'tools/home-art/manual-labels/**'
+  pull_request:
+    paths:
+      - 'tools/home-art/**'
+      - '.github/workflows/home-art.yml'
   schedule:
     # The set is full (2026-11-09): once a week, for new dumps and, a month after
     # ScreenScraper last had nothing for a dump, to ask it again.
@@ -72,7 +76,7 @@ jobs:
           aws s3 sync "s3://$R2_BUCKET/" art/ --exclude 'files/*' \
             --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --only-show-errors
       - name: Harvest
-        if: ${{ github.event_name != 'push' && !inputs.manual_only }}
+        if: ${{ github.event_name != 'push' && github.event_name != 'pull_request' && !inputs.manual_only }}
         env:
           SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
           SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
@@ -94,7 +98,7 @@ jobs:
         if: always() && env.PUBLISH == 'true' && steps.load_published.outcome == 'success' && steps.manual_tests.outcome == 'success'
         run: python3 tools/home-art/import_manual.py --out art
       - name: Trial contributed labels (local empty set)
-        if: inputs.manual_only && env.PUBLISH != 'true'
+        if: (github.event_name == 'pull_request' || inputs.manual_only) && env.PUBLISH != 'true'
         run: python3 tools/home-art/import_manual.py --out art --allow-empty
       - name: Publish
         if: always() && env.PUBLISH == 'true' && steps.load_published.outcome == 'success' && steps.manual_labels.outcome == 'success'
