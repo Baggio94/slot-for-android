@@ -5,6 +5,10 @@ name: Cart art
 # grows run after run within ScreenScraper's daily quota, then keeps up with new dumps.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/home-art/manual-labels/**'
   schedule:
     # The set is full (2026-11-09): once a week, for new dumps and, a month after
     # ScreenScraper last had nothing for a dump, to ask it again.
@@ -42,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 340
     env:
-      PUBLISH: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+      PUBLISH: ${{ github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
       PLATFORM: ${{ inputs.platform || 'all' }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -68,7 +72,7 @@ jobs:
           aws s3 sync "s3://$R2_BUCKET/" art/ --exclude 'files/*' \
             --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --only-show-errors
       - name: Harvest
-        if: ${{ !inputs.manual_only }}
+        if: ${{ github.event_name != 'push' && !inputs.manual_only }}
         env:
           SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
           SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
@@ -114,7 +118,7 @@ jobs:
         run: if [ -d art/files ]; then python3 tools/home-art/stats.py --out art | tail -3; fi
       # The contact sheet takes most of an hour on the full set: trials and runs by hand only.
       - name: Contact sheet
-        if: always() && github.event_name != 'schedule' && !inputs.manual_only
+        if: always() && github.event_name == 'workflow_dispatch' && !inputs.manual_only
         run: python3 tools/home-art/preview.py --out art --platform "$PLATFORM" | tail -5 || true
       # Non-publishing manual trials are kept as artifacts.
       - uses: actions/upload-artifact@v6
