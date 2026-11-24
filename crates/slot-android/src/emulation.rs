@@ -225,6 +225,9 @@ impl EmulationProfile {
             (_,47..=49)=>Settings::home_shader_key(platform).unwrap_or(key),
             _=>key,
         };
+        if let Some(owner) = Settings::lcd_effect_platform(actual_key) {
+            if owner != platform { return false; }
+        }
         if !view.change(actual_key,right) { return false; }
         match key {
             0 if platform==Platform::Gba =>
@@ -253,7 +256,8 @@ impl EmulationProfile {
             |settings::BLENDING_NGP_KEY|settings::BLENDING_WS_KEY
             |settings::BLENDING_LYNX_KEY|settings::BLENDING_POKEMINI_KEY =>
                 self.blending_override=Some(view.blending_for(platform)),
-            66..=68 => self.lcd_effect_override=Some(view.lcd_effect_for(platform)),
+            k if Settings::lcd_effect_platform(k) == Some(platform) =>
+                self.lcd_effect_override=Some(view.lcd_effect_for(platform)),
             69 if platform==Platform::Md => self.dither_override=Some(view.dither_blend_md),
             70 if platform==Platform::Gba => self.upscaler_override=Some(view.upscaler_gbav),
             settings::SPRITE_LIMIT_SMS_KEY|settings::SPRITE_LIMIT_GG_KEY
@@ -650,6 +654,21 @@ mod tests {
         assert!(profile.change(11, false) && !profile.responsive_loop);
     }
 
+    #[test]
+    fn new_handheld_lcd_effect_overrides_are_per_game() {
+        let globals = Settings::first_install_defaults();
+        for platform in [Platform::Gg, Platform::Ngp, Platform::Ws, Platform::Lynx] {
+            let key = Settings::lcd_effect_key(platform).unwrap();
+            let mut profile = EmulationProfile::from_settings(&globals);
+            assert!(profile.change_visual_and_gameplay(&globals, platform, key, true));
+            let mut view = globals.clone();
+            profile.apply_visual_and_gameplay(&mut view, platform);
+            assert_eq!(view.lcd_effect_for(platform), settings::LcdEffect::Transparency);
+            assert_eq!(globals.lcd_effect_for(platform), settings::LcdEffect::Off);
+            assert!(!profile.change_visual_and_gameplay(&globals, Platform::Pokemini, key, true));
+            assert_eq!(serde_json::from_str::<EmulationProfile>(&serde_json::to_string(&profile).unwrap()).unwrap(), profile);
+        }
+    }
     #[test]
     fn in_game_lcd_effect_blending_and_dither_stay_the_games() {
         let globals = Settings::first_install_defaults();

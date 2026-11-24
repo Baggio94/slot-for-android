@@ -867,13 +867,21 @@ pub struct Settings {
     pub blending_lynx: Blending,
     #[serde(default)]
     pub blending_pokemini: Blending,
-    /// LCD Effect of each Game Boy (Systems > [system] > LCD Effect).
+    /// LCD Effect of each supported handheld (Systems > [system] > LCD Effect).
     #[serde(default)]
     pub lcd_effect_gba: LcdEffect,
     #[serde(default)]
     pub lcd_effect_gbc: LcdEffect,
     #[serde(default)]
     pub lcd_effect_gb: LcdEffect,
+    #[serde(default)]
+    pub lcd_effect_gg: LcdEffect,
+    #[serde(default)]
+    pub lcd_effect_ngp: LcdEffect,
+    #[serde(default)]
+    pub lcd_effect_ws: LcdEffect,
+    #[serde(default)]
+    pub lcd_effect_lynx: LcdEffect,
     /// Mega Drive: Sp00kyFox's GDAPT blends the dithering games used for
     /// transparency (Systems > Mega Drive > Dither Blending).
     #[serde(default)]
@@ -956,6 +964,8 @@ impl Default for Settings {
             blending_ngp: Blending::Off, blending_ws: Blending::Mix,
             blending_lynx: Blending::Off, blending_pokemini: Blending::Off,
             lcd_effect_gba: LcdEffect::Off, lcd_effect_gbc: LcdEffect::Off, lcd_effect_gb: LcdEffect::Off,
+            lcd_effect_gg: LcdEffect::Off, lcd_effect_ngp: LcdEffect::Off,
+            lcd_effect_ws: LcdEffect::Off, lcd_effect_lynx: LcdEffect::Off,
             dither_blend_md: false,
             shader_gbav: Shader::Lcd3x, upscaler_gbav: Upscaler::Fsr,
             colour_correction_gbav: false, gbav_fsr: false }
@@ -1370,17 +1380,40 @@ impl Settings {
         }
     }
 
-    /// The Settings key of a Game Boy's LCD Effect row (66..=68), or the
-    /// Mega Drive's Dither Blending row (69): the row after the shader.
-    pub fn look_key(platform: slot_store::Platform) -> Option<usize> {
+    /// LCD Effects apply only to the handhelds using slot.'s LCD shaders.
+    /// PokeMini already simulates its own LCD in the core.
+    pub fn lcd_effect_key(platform: slot_store::Platform) -> Option<usize> {
         use slot_store::Platform::*;
-        match platform { Gba => Some(66), Gbc => Some(67), Gb => Some(68), Md => Some(69), _ => None }
+        match platform {
+            Gba => Some(66), Gbc => Some(67), Gb => Some(68),
+            Gg => Some(LCD_EFFECT_GG_KEY), Ngp => Some(LCD_EFFECT_NGP_KEY),
+            Ws => Some(LCD_EFFECT_WS_KEY), Lynx => Some(LCD_EFFECT_LYNX_KEY),
+            _ => None,
+        }
+    }
+
+    pub fn lcd_effect_platform(key: usize) -> Option<slot_store::Platform> {
+        use slot_store::Platform::*;
+        match key {
+            66 => Some(Gba), 67 => Some(Gbc), 68 => Some(Gb),
+            LCD_EFFECT_GG_KEY => Some(Gg), LCD_EFFECT_NGP_KEY => Some(Ngp),
+            LCD_EFFECT_WS_KEY => Some(Ws), LCD_EFFECT_LYNX_KEY => Some(Lynx),
+            _ => None,
+        }
+    }
+
+    /// LCD Effect, or Mega Drive's Dither Blending.
+    pub fn look_key(platform: slot_store::Platform) -> Option<usize> {
+        if platform == slot_store::Platform::Md { Some(69) }
+        else { Self::lcd_effect_key(platform) }
     }
 
     pub fn lcd_effect_for(&self, platform: slot_store::Platform) -> LcdEffect {
         use slot_store::Platform::*;
         match platform {
             Gba => self.lcd_effect_gba, Gbc => self.lcd_effect_gbc, Gb => self.lcd_effect_gb,
+            Gg => self.lcd_effect_gg, Ngp => self.lcd_effect_ngp,
+            Ws => self.lcd_effect_ws, Lynx => self.lcd_effect_lynx,
             _ => LcdEffect::Off,
         }
     }
@@ -1389,7 +1422,10 @@ impl Settings {
         use slot_store::Platform::*;
         match platform {
             Gba => self.lcd_effect_gba = value, Gbc => self.lcd_effect_gbc = value,
-            Gb => self.lcd_effect_gb = value, _ => {}
+            Gb => self.lcd_effect_gb = value,
+            Gg => self.lcd_effect_gg = value, Ngp => self.lcd_effect_ngp = value,
+            Ws => self.lcd_effect_ws = value, Lynx => self.lcd_effect_lynx = value,
+            _ => {}
         }
     }
 
@@ -1515,7 +1551,10 @@ impl Settings {
                 let blending = self.blending_mut(platform);
                 *blending = blending.step(right);
             }
-            66 => self.lcd_effect_gba = self.lcd_effect_gba.step(right),
+            66..=68 | LCD_EFFECT_GG_KEY | LCD_EFFECT_NGP_KEY | LCD_EFFECT_WS_KEY | LCD_EFFECT_LYNX_KEY => {
+                let Some(platform) = Self::lcd_effect_platform(key) else { return false };
+                self.set_lcd_effect_for(platform, self.lcd_effect_for(platform).step(right));
+            }
             80 => self.rotate_game_cover = step_index(self.rotate_game_cover, 3, right),
             // Drifting Shelf, Last Played, Random Cart, Black, Digital
             // Clock, Analog Clock.
@@ -1525,8 +1564,6 @@ impl Settings {
             // Game Info: Off, Title, Time, All.
             84 => self.rotate_game_info = step_index(self.rotate_game_info, 4, right),
             70 => self.upscaler_gbav = self.upscaler_gbav.step(right),
-            67 => self.lcd_effect_gbc = self.lcd_effect_gbc.step(right),
-            68 => self.lcd_effect_gb = self.lcd_effect_gb.step(right),
             69 => self.dither_blend_md = !self.dither_blend_md,
             25 => self.step_bezel(slot_store::Platform::Gba,right),
             26 => self.step_bezel(slot_store::Platform::Gbc,right),
@@ -1659,6 +1696,10 @@ pub const LEFT_BAR_NES_KEY: usize = 141;
 pub const NES_AUDIO_FILTER_KEY: usize = 142;
 pub const MD_FM_SOUND_KEY: usize = 143;
 pub const WS_AUDIO_FILTER_KEY: usize = 144;
+pub const LCD_EFFECT_GG_KEY: usize = 145;
+pub const LCD_EFFECT_NGP_KEY: usize = 146;
+pub const LCD_EFFECT_WS_KEY: usize = 147;
+pub const LCD_EFFECT_LYNX_KEY: usize = 148;
 
 /// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
 /// grey first, then the three consoles' screens.
@@ -2551,6 +2592,33 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"shader_md":"zfastcrt"}"#).unwrap();
         assert_eq!((old.lcd_effect_gbc, old.dither_blend_md), (LcdEffect::Off, false));
         assert_eq!(Settings::look_key(slot_store::Platform::Nes), None);
+    }
+    #[test]
+    fn handheld_lcd_effects_are_independent_and_off_for_old_settings() {
+        use slot_store::Platform::*;
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        for platform in [Gg, Ngp, Ws, Lynx] {
+            let mut s = old.clone();
+            let key = Settings::lcd_effect_key(platform).unwrap();
+            assert_eq!(Settings::lcd_effect_platform(key), Some(platform));
+            assert_eq!(s.lcd_effect_for(platform), LcdEffect::Off);
+            assert!(s.change(key, true));
+            assert_eq!(s.lcd_effect_for(platform), LcdEffect::Transparency);
+            for other in slot_store::Platform::ALL {
+                if other != platform { assert_eq!(s.lcd_effect_for(other), LcdEffect::Off); }
+            }
+            assert!(s.change(key, true));
+            assert_eq!(s.lcd_effect_for(platform), LcdEffect::Sunlight);
+            assert_eq!(serde_json::from_str::<Settings>(&serde_json::to_string(&s).unwrap()).unwrap(), s);
+            assert!(s.change(key, true));
+            assert_eq!(s.lcd_effect_for(platform), LcdEffect::Off);
+        }
+        for platform in [Nes, Snes, Md, Sms, Pokemini] {
+            assert_eq!(Settings::lcd_effect_key(platform), None);
+            let mut s = old.clone();
+            s.set_lcd_effect_for(platform, LcdEffect::Sunlight);
+            assert_eq!(s, old);
+        }
     }
     #[test]
     fn gba_grid_v2_migration_keeps_original_gb_gbc() {

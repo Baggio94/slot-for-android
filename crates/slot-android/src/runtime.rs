@@ -1168,9 +1168,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
                 crate::settings::Blending::Ghosting => 97,
             }
         }
-        66..=68 => {
-            use slot_store::Platform::*;
-            match scoped.lcd_effect_for([Gba, Gbc, Gb][key - 66]) {
+        k if Settings::lcd_effect_platform(k).is_some() => {
+            match scoped.lcd_effect_for(Settings::lcd_effect_platform(k)?) {
                 crate::settings::LcdEffect::Off => 5,
                 crate::settings::LcdEffect::Transparency => 111,
                 crate::settings::LcdEffect::Sunlight => 112,
@@ -6028,7 +6027,7 @@ impl Engine {
             .unwrap_or_else(|| self.settings.blending_for(platform))
     }
     fn game_lcd_effect(&self, platform: Platform) -> crate::settings::LcdEffect {
-        if !matches!(platform, Platform::Gba | Platform::Gbc | Platform::Gb) || self.playing_video() {
+        if Settings::lcd_effect_key(platform).is_none() || self.playing_video() {
             return crate::settings::LcdEffect::Off;
         }
         self.game_emulation.and_then(|p| p.lcd_effect_override)
@@ -6373,6 +6372,7 @@ impl Engine {
         // Bezel, even where the WonderSwan's overlay fits only its upright
         // games (Siham 2026-11-22).
         Self::palette_after_shader(&mut rows, &mut keys);
+        Self::lcd_after_shader(platform, &mut rows, &mut keys);
         Self::blending_before_shake(&mut rows, &mut keys);
         rows.push(125);
         keys.push(usize::MAX);
@@ -6411,6 +6411,7 @@ impl Engine {
                 }
             }
             Self::palette_after_shader(&mut rows, &mut keys);
+            Self::lcd_after_shader(platform, &mut rows, &mut keys);
             Self::blending_before_shake(&mut rows, &mut keys);
         }
         (rows, keys)
@@ -6439,6 +6440,22 @@ impl Engine {
         let Some(shader) = keys.iter().position(|&k| k == SHADER_WS_KEY) else { return };
         let (row, key) = (rows.remove(from), keys.remove(from));
         let to = if from < shader { shader } else { shader + 1 };
+        rows.insert(to, row); keys.insert(to, key);
+    }
+    /// The new LCD handhelds put LCD Effect directly after Shader, before
+    /// the optional bezel and (on WonderSwan) the palette. Keep the original
+    /// Game Boy and Mega Drive layouts unchanged.
+    fn lcd_after_shader(platform: Platform, rows: &mut Vec<usize>, keys: &mut Vec<usize>) {
+        let shader = match platform {
+            Platform::Gg => SHADER_GG_KEY, Platform::Ngp => SHADER_NGP_KEY,
+            Platform::Ws => SHADER_WS_KEY, Platform::Lynx => SHADER_LYNX_KEY,
+            _ => return,
+        };
+        let Some(lcd) = Settings::lcd_effect_key(platform) else { return };
+        let Some(from) = keys.iter().position(|&k| k == lcd) else { return };
+        let Some(at) = keys.iter().position(|&k| k == shader) else { return };
+        let (row, key) = (rows.remove(from), keys.remove(from));
+        let to = if from < at { at } else { at + 1 };
         rows.insert(to, row); keys.insert(to, key);
     }
     fn system_rows(platform: Platform)-> &'static [usize] {
@@ -6744,7 +6761,8 @@ impl Engine {
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
         if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70
-            |crate::settings::SHADER_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY)) {
+            |crate::settings::SHADER_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY)
+            && Settings::lcd_effect_platform(key) != Some(platform)) {
             set_message("Not available during Multiplayer.".into());
             return;
         }
@@ -6783,7 +6801,7 @@ impl Engine {
         }
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
-        if matches!(key,0|1|3|21|47|48|49|66..=68|70) || matches!(key,
+        if Settings::lcd_effect_platform(key).is_some() || matches!(key,0|1|3|21|47|48|49|70) || matches!(key,
             crate::settings::SHADER_SMS_KEY|crate::settings::SHADER_GG_KEY
             |crate::settings::SHADER_NGP_KEY|crate::settings::SHADER_WS_KEY
             |crate::settings::SHADER_LYNX_KEY|crate::settings::SHADER_POKEMINI_KEY) {
@@ -7916,7 +7934,7 @@ impl Engine {
         // Clock formatting can change independently of Android's next
         // status event. Force one re-render of the existing clock value.
         if key == 28 { self.last_system_status_rev = 0; }
-        if (66..=68).contains(&key) && self.game.is_some() { self.apply_game_look(); }
+        if Settings::lcd_effect_platform(key).is_some() && self.game.is_some() { self.apply_game_look(); }
         if key == 5 {
             FF_AUDIO_ENABLED.store(self.settings.ff_sound, Ordering::Release);
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -8313,7 +8331,8 @@ impl Engine {
     /// A 3.0 system's option the paused game shows at once, redrawn.
     fn previewed_extra(key: usize) -> bool {
         use crate::settings::*;
-        matches!(key, SPRITE_LIMIT_SMS_KEY | SPRITE_LIMIT_GG_KEY | LEFT_BAR_SMS_KEY | LEFT_BAR_NES_KEY
+        Settings::lcd_effect_platform(key).is_some()
+            || matches!(key, SPRITE_LIMIT_SMS_KEY | SPRITE_LIMIT_GG_KEY | LEFT_BAR_SMS_KEY | LEFT_BAR_NES_KEY
             | WS_PALETTE_KEY
             | POKEMINI_PALETTE_KEY | POKEMINI_FILTER_KEY | POKEMINI_LCD_MODE_KEY)
             || (SHADER_SMS_KEY..=SHADER_GG_KEY).contains(&key)
@@ -11051,6 +11070,41 @@ mod settings_value_tests {
     use super::*;
 
     #[test]
+    fn lcd_effect_follows_shader_on_every_new_lcd_handheld_and_panel() {
+        for (platform, shader) in [(Platform::Gg, SHADER_GG_KEY), (Platform::Ngp, SHADER_NGP_KEY),
+            (Platform::Ws, SHADER_WS_KEY), (Platform::Lynx, SHADER_LYNX_KEY)] {
+            for panel in PANELS {
+                for in_game in [false, true] {
+                    let (base_rows, base_keys) = if in_game {
+                        (Engine::screen_rows_on(platform, panel), Engine::screen_keys_on(platform, panel))
+                    } else {
+                        (Engine::system_rows_on(platform, panel), Engine::system_keys_on(platform, panel))
+                    };
+                    let (mut rows, mut keys) = (base_rows.to_vec(), base_keys.to_vec());
+                    let (look_rows, look_keys) = Engine::look_rows(platform);
+                    rows.extend(look_rows); keys.extend(look_keys);
+                    let (extra_rows, extra_keys) = Engine::extra_rows(platform, in_game);
+                    rows.extend(extra_rows); keys.extend(extra_keys);
+                    Engine::palette_after_shader(&mut rows, &mut keys);
+                    Engine::lcd_after_shader(platform, &mut rows, &mut keys);
+                    assert_eq!(rows.len(), keys.len());
+                    let at = keys.iter().position(|&k| k == shader).unwrap() + 1;
+                    let lcd = Settings::lcd_effect_key(platform).unwrap();
+                    assert_eq!(keys[at], lcd, "{platform:?} {panel:?}");
+                    assert_eq!(MENU_TEXT[rows[at]], "LCD Effect");
+                    assert_eq!(keys.iter().filter(|&&k| k == lcd).count(), 1);
+                    if platform == Platform::Ws {
+                        assert_eq!(keys[at + 1], crate::settings::WS_PALETTE_KEY);
+                    }
+                }
+            }
+        }
+        for platform in [Platform::Sms, Platform::Nes, Platform::Snes, Platform::Md, Platform::Pokemini] {
+            assert!(!Engine::look_rows(platform).1.iter().any(|&k| Settings::lcd_effect_platform(k).is_some()));
+        }
+    }
+
+    #[test]
     fn pokemini_frame_blending_comes_second_to_last() {
         let keys = Engine::system_page_keys(Platform::Pokemini);
         let at = |key| keys.iter().position(|&k| k == key).unwrap();
@@ -11181,6 +11235,11 @@ mod settings_value_tests {
                 for key in screen.1 {
                     keys.push((format!("{platform:?} game menu > Screen on {panel:?}"), *key, platform));
                 }
+            }
+            let (look_rows, look_keys) = Engine::look_rows(platform);
+            assert_eq!(look_rows.len(), look_keys.len());
+            for key in look_keys {
+                keys.push((format!("{platform:?} LCD Effect / Frame Blending"), key, platform));
             }
             // The 3.0 systems' own options, each with a label and a value.
             for in_game in [false, true] {

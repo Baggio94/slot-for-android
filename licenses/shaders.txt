@@ -67,7 +67,8 @@ Its two passes run on the picture before it is drawn, MODE 0, PWR 2, STEPS 1.
 Used in slot. with the author's permission.
 Source: https://github.com/libretro/glsl-shaders/tree/master/dithering
 
-LCD Effect (Game Boy, Game Boy Color, Game Boy Advance): Pixel Transparency
+LCD Effect (Game Boy, Game Boy Color, Game Boy Advance, Game Gear, Neo Geo Pocket,
+WonderSwan, Atari Lynx): Pixel Transparency
 and Sunlight Shimmer v3.0, copyright (C) Matt Akins. Adapted for slot. with
 the author's permission. Author defaults; its cache passes (shadow, film
 noise, light field) are computed in place, in one pass after the LCD shader.
