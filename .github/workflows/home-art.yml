@@ -21,6 +21,10 @@ on:
       match:
         description: Only dat names matching this regex (empty for all)
         default: ''
+      manual_only:
+        description: Import contributed labels only (no ScreenScraper lookup)
+        type: boolean
+        default: false
       publish:
         description: Publish to the R2 bucket
         type: boolean
@@ -51,7 +55,11 @@ jobs:
         run: python3 -m pip install --quiet Pillow
       - name: Tests
         run: python3 -m unittest tools/home-art/test_harvest.py
+      - name: Test manual label import
+        id: manual_tests
+        run: python3 -m unittest discover -s tools/home-art -p test_import_manual.py
       - name: Start from the published set
+        id: load_published
         if: env.PUBLISH == 'true'
         run: |
           set -euo pipefail
@@ -60,6 +68,7 @@ jobs:
           aws s3 sync "s3://$R2_BUCKET/" art/ --exclude 'files/*' \
             --endpoint-url "https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com" --only-show-errors
       - name: Harvest
+        if: ${{ !inputs.manual_only }}
         env:
           SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
           SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
@@ -76,8 +85,15 @@ jobs:
           [ -n "$LIMIT" ] && args+=(--limit "$LIMIT")
           [ -n "$MATCH" ] && args+=(--match "$MATCH")
           python3 tools/home-art/harvest.py "${args[@]}"
+      - name: Import contributed labels
+        id: manual_labels
+        if: always() && env.PUBLISH == 'true' && steps.load_published.outcome == 'success' && steps.manual_tests.outcome == 'success'
+        run: python3 tools/home-art/import_manual.py --out art
+      - name: Trial contributed labels (local empty set)
+        if: inputs.manual_only && env.PUBLISH != 'true'
+        run: python3 tools/home-art/import_manual.py --out art --allow-empty
       - name: Publish
-        if: always() && env.PUBLISH == 'true'
+        if: always() && env.PUBLISH == 'true' && steps.load_published.outcome == 'success' && steps.manual_labels.outcome == 'success'
         run: |
           set -euo pipefail
           endpoint="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
@@ -98,7 +114,7 @@ jobs:
         run: if [ -d art/files ]; then python3 tools/home-art/stats.py --out art | tail -3; fi
       # The contact sheet takes most of an hour on the full set: trials and runs by hand only.
       - name: Contact sheet
-        if: always() && github.event_name != 'schedule'
+        if: always() && github.event_name != 'schedule' && !inputs.manual_only
         run: python3 tools/home-art/preview.py --out art --platform "$PLATFORM" | tail -5 || true
       # Non-publishing manual trials are kept as artifacts.
       - uses: actions/upload-artifact@v6
