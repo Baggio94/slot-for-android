@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ class TestManual(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.out = Path(self.tmp.name)
+        self.count = len(json.loads(m.MANIFEST.read_text()))
         for p in m.PLATFORMS:
             m.write_map(self.out / f'{p}.json', {'00000001': [['wheel','wor','files/aa/other.png']]})
             m.write_map(self.out / f'{p}.names.json', {'00000001': 'Existing'})
@@ -20,9 +22,9 @@ class TestManual(unittest.TestCase):
     def test_add_idempotence_and_restore_names(self):
         count = len(m.read_map(self.out / 'GBC.json'))
         self.assertEqual(count, 1)
-        self.assertEqual(m.merge(self.out)['added'], 10)
-        self.assertEqual(m.merge(self.out)['unchanged'], 10)
-        self.assertEqual(len(list((self.out/'files').rglob('*.png'))), 10)
+        self.assertEqual(m.merge(self.out)['added'], self.count)
+        self.assertEqual(m.merge(self.out)['unchanged'], self.count)
+        self.assertEqual(len(list((self.out/'files').rglob('*.png'))), self.count)
         p = self.out/'GBC.names.json'
         data = m.read_map(p); del data['A1378C6B']; m.write_map(p, data)
         m.merge(self.out)
@@ -42,11 +44,11 @@ class TestManual(unittest.TestCase):
         data['A1378C6B'] = [['support-texture','us','files/aa/borrowed.png']]; m.write_map(p,data)
         state = self.out/'.state/GBC.derived.json'
         m.write_map(state, {'A1378C6B':'00000001'})
-        self.assertEqual(m.merge(self.out)['added'], 10)
+        self.assertEqual(m.merge(self.out)['added'], self.count)
         self.assertNotIn('A1378C6B',m.read_map(state))
 
     def test_dry_run(self):
-        self.assertEqual(m.merge(self.out,dry_run=True)['added'],10)
+        self.assertEqual(m.merge(self.out,dry_run=True)['added'], self.count)
         self.assertFalse((self.out/'files').exists())
 
     def test_missing_indexes_refused(self):
