@@ -64,6 +64,7 @@ fn export(destination: &std::path::Path) -> Result<(), Box<dyn std::error::Error
         ("heading-two-saves.png", heading("TWO SAVES")),
         ("heading-deleted.png", heading("DELETED")),
         ("heading-save-folder.png", heading("SAVE FOLDER")),
+        ("heading-bios-folder.png", heading("BIOS FOLDER")),
         ("heading-slot-folder.png", heading("SLOT. FOLDER")),
         ("heading-old-slot-folder.png", heading("OLD SLOT FOLDER")),
         ("heading-sleep-when-closed.png", heading("SLEEP WHEN CLOSED")),
