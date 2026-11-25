@@ -128,18 +128,25 @@ impl Sprites {
         Ok(())
     }
 
+    /// Test the logical texture contents, independent of asynchronous packing.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn hash_recovery(&self, hash: &mut impl std::hash::Hasher) -> Result<(), String> {
+        use std::hash::Hash;
+        self.recovery.is_some().hash(hash);
+        if let Some(pixels) = &self.recovery {
+            pixels.len().hash(hash);
+            for p in pixels {
+                (p.w, p.h, p.filter).hash(hash);
+                p.rgba.with_rgba(|rgba| rgba.hash(hash))?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn recovery_bytes(&self) -> usize {
         self.recovery
             .as_ref()
             .map_or(0, |p| p.iter().map(|p| p.rgba.len()).sum())
-    }
-
-    /// The pixels the recovery copies hold, packed or not: unchanged by the
-    /// background packing, so a recovery that lost a texture shows here.
-    pub(crate) fn recovery_pixel_bytes(&self) -> usize {
-        self.recovery
-            .as_ref()
-            .map_or(0, |p| p.iter().map(|p| p.w as usize * p.h as usize * 4).sum())
     }
 
     pub fn new() -> Result<Self, GfxError> {

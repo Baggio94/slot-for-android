@@ -1059,10 +1059,10 @@ pub(crate) fn exercise_session_graphics_recovery(game: GameSession) -> GameSessi
     engine.inserted = true;
     engine.game_accum = 42.0;
     let session_address = engine.game.as_ref().unwrap().frame().as_ptr();
-    // Pixels, not stored bytes: static copies are packed in the background.
-    let retained = engine.gpu.recovery_pixel_bytes();
-    assert!(retained > 0);
-    eprintln!("bundled UI recovery pixels: {retained} bytes");
+    let retained_bytes = engine.gpu.recovery_bytes();
+    assert!(retained_bytes > 0);
+    let retained = engine.gpu.recovery_fingerprint().unwrap();
+    eprintln!("bundled UI recovery pixels: {retained_bytes} bytes");
     ENGINE.with(|holder| *holder.borrow_mut() = Some(engine));
     Java_fyi_slot_konkr_MainActivity_nativeGraphicsContextLost(std::ptr::null_mut(), std::ptr::null_mut());
     assert_eq!(Java_fyi_slot_konkr_MainActivity_nativeGraphicsReady(std::ptr::null_mut(), std::ptr::null_mut()), 0);
@@ -1079,6 +1079,7 @@ pub(crate) fn exercise_session_graphics_recovery(game: GameSession) -> GameSessi
         let mut guard = holder.borrow_mut();
         let e = guard.as_mut().unwrap();
         assert!(!e.gpu.graphics_ready());
+        assert_eq!(e.gpu.recovery_fingerprint().unwrap(), retained);
         e.draw(0, || panic!("audio must not advance during failed recovery"));
         assert_eq!(e.game_accum, 42.0);
         assert_eq!(e.game.as_ref().unwrap().frame().as_ptr(), session_address);
@@ -1090,7 +1091,7 @@ pub(crate) fn exercise_session_graphics_recovery(game: GameSession) -> GameSessi
         let engine = guard.as_mut().unwrap();
         assert!(engine.gpu.graphics_ready());
         assert_eq!(engine.game_accum, 0.0);
-        assert_eq!(engine.gpu.recovery_pixel_bytes(), retained);
+        assert_eq!(engine.gpu.recovery_fingerprint().unwrap(), retained);
         assert_eq!(engine.game.as_ref().unwrap().frame().as_ptr(), session_address);
         engine.game.take().unwrap()
     });

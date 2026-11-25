@@ -146,10 +146,16 @@ impl Compositor {
         !self.context_lost
     }
 
-    /// Pixels kept for a context recovery, as pixels (see recovery_bytes).
-    pub fn recovery_pixel_bytes(&self) -> usize {
-        self.sprites.recovery_pixel_bytes() + self.game.recovery_bytes()
-            + self.bezel_pixels.as_ref().map_or(0, |p| p.2.len())
+    /// Stable fingerprint of all retained recovery pixels and sprite layout.
+    /// Physical memory usage may shrink while lossless compression completes.
+    #[cfg(feature = "test-support")]
+    pub fn recovery_fingerprint(&self) -> Result<u64, String> {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.sprites.hash_recovery(&mut hash)?;
+        self.game.hash_recovery(&mut hash);
+        self.bezel_pixels.hash(&mut hash);
+        Ok(hash.finish())
     }
 
     pub fn recovery_bytes(&self) -> usize {
