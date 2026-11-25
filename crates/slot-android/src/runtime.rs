@@ -355,6 +355,17 @@ const FF_MAX_BUDGET_US: u64 = 11_000;
 static FF_AUDIO_SUPPORTED: AtomicBool = AtomicBool::new(true);
 static FF_AUDIO_ENABLED: AtomicBool = AtomicBool::new(true);
 static RUMBLE_STRENGTH: AtomicI32 = AtomicI32::new(0);
+static RUMBLE_PEAK: AtomicI32 = AtomicI32::new(0);
+
+fn clear_rumble() {
+    RUMBLE_STRENGTH.store(0, Ordering::Release);
+    RUMBLE_PEAK.store(0, Ordering::Release);
+}
+fn scale_rumble(strength: u16, level: u8) -> i32 {
+    // Preserve nonzero signals, even at Low. Four levels are 25/50/75/100%.
+    if strength == 0 || level == 0 { return 0; }
+    (i32::from(strength) * i32::from(level.min(4)) / 4).max(1)
+}
 // Updated once per second by the GL thread; read-only and optional on Android.
 static PERF_STATUS: Mutex<Option<String>> = Mutex::new(None);
 static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -1060,7 +1071,9 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             match scoped.rewind_speed { 1 => 38, 2 => 39, 3 => 40, _ => 41 }
         },
         7 => if scoped.turbo { 15 } else { 16 },
-        8 => if scoped.rumble { 4 } else { 5 },
+        8 => if !scoped.rumble { 5 } else {
+            match scoped.rumble_level.clamp(1,4) { 1 => 23, 2 => 24, 3 => 25, _ => 118 }
+        },
         9 => if scoped.eject_save { 4 } else { 5 },
         10 => if profile.show_fps { 4 } else { 5 },
         11 => if profile.responsive_loop { 11 } else { 45 },
@@ -1420,6 +1433,7 @@ struct LiveGameOptions {
     rewind_speed: u8,
     turbo: bool, // KONKR X/Y Buttons
     rumble: bool,
+    rumble_level: u8,
     eject_save: bool,
 }
 impl LiveGameOptions {
@@ -1432,6 +1446,7 @@ impl LiveGameOptions {
             rewind_speed:p.and_then(|v|v.rewind_speed_override).unwrap_or(global.rewind_speed),
             turbo:p.and_then(|v|v.turbo_override).unwrap_or(global.turbo),
             rumble:p.and_then(|v|v.rumble_override).unwrap_or(global.rumble),
+            rumble_level:p.and_then(|v|v.rumble_level_override).unwrap_or(global.rumble_level).clamp(1,4),
             eject_save:p.and_then(|v|v.eject_save_override).unwrap_or(global.eject_save),
         }
     }
@@ -1521,6 +1536,7 @@ struct Engine {
     ink_hints: Vec<menu_look::InkHint>,
     /// The ink those twins are written in (None: the white of Dark).
     hint_ink: Option<[u8; 3]>,
+    hint_swap_ab: bool,
     controls_view: controls_ui::ControlsView,
     /// Game menu > Cheats: the game's cheat files, and the one shown.
     cheat_sources: Vec<crate::cheats::Source>,
@@ -2435,6 +2451,7 @@ impl Engine {
             controls_hint_faces: Default::default(),
             ink_hints: Vec::new(),
             hint_ink: None,
+            hint_swap_ab: false,
             controls_view: Default::default(),
             cheat_sources: Vec::new(),
             cheat_source: 0,
@@ -3070,7 +3087,7 @@ impl Engine {
         self.hud.set_ff(FfState::Off);
         self.hud.release_rewind();
         AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
-        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        clear_rumble();
     }
 
 
@@ -3088,7 +3105,7 @@ impl Engine {
             self.game_accum=0.0;
             AUDIO.lock().unwrap_or_else(|e|e.into_inner()).clear();
             self.reset_time_controls();
-            RUMBLE_STRENGTH.store(0, Ordering::Release);
+            clear_rumble();
             if is_double {
                 self.menu_reveal_at=None;
                 self.states_from_menu=false;
@@ -3180,7 +3197,7 @@ impl Engine {
         self.game_accum = 0.0;
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.reset_time_controls();
-        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        clear_rumble();
         self.menu_reveal_at = None;
         self.mode_last_tap = None;
         self.footer = 0.0;
@@ -3689,7 +3706,7 @@ impl Engine {
         };
         SAMPLE_RATE.store(replacement.sample_rate, Ordering::Release);
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        clear_rumble();
         self.game_accum = 0.0;
         self.buttons = 0;
         self.game = Some(replacement);
@@ -3820,7 +3837,7 @@ impl Engine {
             }
             SAMPLE_RATE.store(private.sample_rate, Ordering::Release);
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
-            RUMBLE_STRENGTH.store(0, Ordering::Release);
+            clear_rumble();
             self.game_accum = 0.0;
             self.buttons = 0;
             self.game = Some(private);
@@ -3921,7 +3938,7 @@ impl Engine {
             which.text(), stem, backup.display()));
         SAMPLE_RATE.store(solo.sample_rate, Ordering::Release);
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        clear_rumble();
         self.game_accum = 0.0;
         self.buttons = 0;
         self.reset_time_controls();
@@ -9179,12 +9196,12 @@ impl Engine {
         polaroids.set_faces(faces);
         let hints=[("B","Back"),("Y","Delete"),("A","Load"),("X","Undo")];
         let hint_faces=hints.map(|(key,label)| {
-            let face=hint_face(key,label);
+            let face=hint_face(crate::controls::menu_keycap(key, self.controls.menu_swap_ab),label);
             self.gpu.create_face(&face)
         });
         polaroids.set_hint_faces(hint_faces.to_vec());
         let confirm_faces=slot_ui::CONFIRM_LEGEND.map(|(key,label)| {
-            let face=hint_face(key,label);
+            let face=hint_face(crate::controls::menu_keycap(key, self.controls.menu_swap_ab),label);
             self.gpu.create_face(&face)
         });
         polaroids.set_confirm_faces(confirm_faces.to_vec());
@@ -9221,8 +9238,10 @@ impl Engine {
         self.tick_menu_repeat();
         // A game on screen, no menu or polaroid over it: Android keeps the
         // screen on (MainActivity.keepScreenOn).
-        GAME_UNPAUSED.store(self.game.is_some() && matches!(self.overlay, ShelfOverlay::None)
-            && self.polaroids.is_none() && !self.exiting_screen, Ordering::Release);
+        let unpaused = self.game.is_some() && matches!(self.overlay, ShelfOverlay::None)
+            && self.polaroids.is_none() && !self.exiting_screen && !self.lid_covered;
+        GAME_UNPAUSED.store(unpaused, Ordering::Release);
+        if !unpaused || self.rewind_held { clear_rumble(); }
         let (dim, sleep) = self.settings.rotate_delays();
         ROTATE_DELAYS.store(u32::from(dim) << 16 | u32::from(sleep)
             | u32::from(self.settings.rotate_shelf_cover == 3) << 30
@@ -9990,7 +10009,7 @@ impl Engine {
                 self.rewind_held = false;
                 self.ff_held = false;
                 self.ff_latched = false;
-                RUMBLE_STRENGTH.store(0, Ordering::Release);
+                clear_rumble();
                 PLAYING.store(false, Ordering::Release);
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
                 self.overlay = ShelfOverlay::GameMenu { row: 0 };
@@ -10028,12 +10047,11 @@ impl Engine {
                         session.display_aspect(), session.frame_size(), square));
                 }
                 frame_phases.gpu_upload_us = upload_started.elapsed().as_micros() as u64;
-                RUMBLE_STRENGTH.store(
-                    if live.rumble && !self.rewind_held {
-                        i32::from(session.rumble_strength())
-                    } else { 0 },
-                    Ordering::Release,
-                );
+                let peak = session.take_rumble_peak();
+                if live.rumble && !self.rewind_held && GAME_UNPAUSED.load(Ordering::Acquire) {
+                    RUMBLE_PEAK.fetch_max(scale_rumble(peak, live.rumble_level), Ordering::AcqRel);
+                    RUMBLE_STRENGTH.store(scale_rumble(session.rumble_strength(), live.rumble_level), Ordering::Release);
+                } else { clear_rumble(); }
             }
             // CPU wall time issuing the GL draw work. This is NOT asynchronous
             // GPU execution and excludes Android's later eglSwapBuffers.

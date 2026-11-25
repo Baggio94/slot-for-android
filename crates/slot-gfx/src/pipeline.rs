@@ -644,7 +644,7 @@ impl GamePass {
             let canvas = [0.0, 0.0, out_w() as f32, OUT_H as f32];
             let out = (canvas[2] * self.fbo_scale[0], canvas[3] * self.fbo_scale[1]);
             let mut window = fit_window(self.fit, self.size, out);
-            if self.top { window[1] = 0.0; }
+            if self.top && window[3] >= 1.0 { window[1] = 0.0; }
             return (window, self.size, WHOLE_TEXTURE, canvas);
         }
         let src = match self.effect {

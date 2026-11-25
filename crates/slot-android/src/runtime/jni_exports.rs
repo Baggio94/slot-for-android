@@ -723,7 +723,14 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollUiAction(
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollRumbleStrength(
     _env: *mut c_void, _this: *mut c_void,
 ) -> jint {
-    RUMBLE_STRENGTH.load(Ordering::Acquire)
+    if !GAME_UNPAUSED.load(Ordering::Acquire) {
+        clear_rumble();
+        return 0;
+    }
+    // Low 16 bits: current motor. High 16: strongest transient since poll.
+    let peak = RUMBLE_PEAK.swap(0, Ordering::AcqRel);
+    let current = RUMBLE_STRENGTH.load(Ordering::Acquire);
+    (peak << 16) | current
 }
 
 /// Device sensors as a mask: 1 accelerometer, 2 gyroscope, 4 light.

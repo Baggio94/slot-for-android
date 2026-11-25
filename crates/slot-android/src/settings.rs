@@ -646,7 +646,9 @@ impl Device {
 #[serde(default)]
 pub struct Settings {
     pub ff_speed: u8, pub ff_sound: bool, pub colour_correction: bool,
-    pub rumble: bool, pub shader_gba: Shader, pub shader_gb: Shader,
+    pub rumble: bool,
+    pub rumble_level: u8,
+    pub shader_gba: Shader, pub shader_gb: Shader,
     pub shader_gbc: Shader,
     /// The home consoles' CRT shaders (new in 1.3.5: zfast-crt by default).
     pub shader_nes: Shader, pub shader_snes: Shader, pub shader_md: Shader,
@@ -918,7 +920,7 @@ impl Default for Settings {
         // Historical defaults for serde's partial legacy JSON. Do not change:
         // old installs may omit fields and still need their prior values.
         Self { ff_speed: 2, ff_sound: true, colour_correction: false,
-            rumble: true, shader_gba: Shader::Off, shader_gb: Shader::Off,
+            rumble: true, rumble_level: 3, shader_gba: Shader::Off, shader_gb: Shader::Off,
             shader_gbc: Shader::Off,
             shader_nes: Shader::ZfastCrt, shader_snes: Shader::ZfastCrt,
             shader_md: Shader::ZfastCrt,
@@ -1610,7 +1612,12 @@ impl Settings {
             5 => self.ff_sound = !self.ff_sound,
             6 => cycle_rewind_setting(&mut self.rewind, &mut self.rewind_speed, right),
             7 => self.turbo = !self.turbo,
-            8 => self.rumble = !self.rumble,
+            8 => {
+                let at = if self.rumble { self.rumble_level.clamp(1, 4) } else { 0 };
+                let next = if right { (at + 1) % 5 } else { (at + 4) % 5 };
+                self.rumble = next != 0;
+                if next != 0 { self.rumble_level = next; }
+            },
             9 => self.eject_save = !self.eject_save,
             10 => self.show_fps = !self.show_fps,
             11 => self.responsive_loop = !self.responsive_loop,
@@ -2523,6 +2530,23 @@ mod tests {
         assert_eq!(previous.run_ahead_frames,0);
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn rumble_levels_cycle_and_legacy_off_stays_off() {
+        let mut s: Settings = serde_json::from_str(r#"{"rumble":false}"#).unwrap();
+        assert!(!s.rumble);
+        assert_eq!(s.rumble_level, 3);
+        for level in 1..=4 {
+            assert!(s.change(8, true));
+            assert!(s.rumble);
+            assert_eq!(s.rumble_level, level);
+        }
+        assert!(s.change(8, true));
+        assert!(!s.rumble);
+        assert!(s.change(8, false));
+        assert!(s.rumble);
+        assert_eq!(s.rumble_level, 4);
+    }
+
     #[test]
     fn defaults_preserve_dev13() {
         let s = Settings::default();

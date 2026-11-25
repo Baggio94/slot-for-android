@@ -51,13 +51,14 @@ pub(super) enum HintSpec {
 }
 
 impl HintSpec {
-    fn face(&self, ink: Option<[u8; 3]>) -> slot_ui::UndoFace {
+    fn face(&self, ink: Option<[u8; 3]>, swap: bool) -> slot_ui::UndoFace {
+        let cap = |key: &str| -> String { crate::controls::menu_keycap(key, swap).to_owned() };
         match (self, ink) {
-            (Self::Key(key, label), Some(ink)) => slot_ui::hint_face_ink(key, label, ink),
-            (Self::Key(key, label), None) => slot_ui::hint_face(key, label),
+            (Self::Key(key, label), Some(ink)) => slot_ui::hint_face_ink(&cap(key), label, ink),
+            (Self::Key(key, label), None) => slot_ui::hint_face(&cap(key), label),
             (Self::Arrows(label), Some(ink)) => slot_ui::arrows_hint_face_ink(label, ink),
             (Self::Arrows(label), None) => slot_ui::arrows_hint_face(label),
-            (Self::Art(key), _) => slot_ui::key_art(key).unwrap_or_else(|| slot_ui::hint_face(key, "")),
+            (Self::Art(key), _) => slot_ui::key_art(&cap(key)).unwrap_or_else(|| slot_ui::hint_face(&cap(key), "")),
         }
     }
 }
@@ -185,7 +186,9 @@ impl Engine {
     /// A legend's twin in the current ink (see theme_hints).
     pub(super) fn register_ink_hint(&mut self, white: slot_gfx::TexId, spec: HintSpec) {
         if self.ink_hints.iter().any(|hint| hint.white == white) { return; }
-        let themed = self.gpu.create_face(&spec.face(self.hint_ink));
+        let swap = self.controls.menu_swap_ab;
+        if swap { self.gpu.update_face(white, &spec.face(None, true)); }
+        let themed = self.gpu.create_face(&spec.face(self.hint_ink, swap));
         self.ink_hints.push(InkHint { white, themed, spec });
     }
 
@@ -209,11 +212,44 @@ impl Engine {
     fn refresh_ink_hints(&mut self) {
         if self.ink_hints.is_empty() { self.register_engine_hints(); }
         let ink = menu_style::palette().and_then(|p| p.ink);
-        if ink == self.hint_ink { return; }
+        let swap = self.controls.menu_swap_ab;
+        if ink == self.hint_ink && swap == self.hint_swap_ab { return; }
+        let changed = swap != self.hint_swap_ab;
         self.hint_ink = ink;
+        self.hint_swap_ab = swap;
         for i in 0..self.ink_hints.len() {
-            let face = self.ink_hints[i].spec.face(ink);
-            self.gpu.update_face(self.ink_hints[i].themed, &face);
+            let hint = &self.ink_hints[i];
+            if changed { self.gpu.update_face(hint.white, &hint.spec.face(None, swap)); }
+            self.gpu.update_face(hint.themed, &hint.spec.face(ink, swap));
+        }
+        if changed { self.refresh_fixed_ab_hints(); }
+    }
+
+    fn refresh_fixed_ab_hints(&mut self) {
+        let swap = self.controls.menu_swap_ab;
+        let cap = |key: &'static str| crate::controls::menu_keycap(key, swap);
+        let plain = [
+            (self.screen_key_hints[0].0, "B", ""),
+            (self.core_legend_faces[0].0, "B", "Cancel"),
+            (self.core_legend_faces[2].0, "A", "Choose"),
+        ];
+        for (tex, key, label) in plain {
+            self.gpu.update_face(tex, &slot_ui::hint_face(cap(key), label));
+        }
+        let dark = menu_style::MenuPalette::LIGHT.ink.unwrap_or([0; 3]);
+        for (tex, key, label) in [(self.core_legend_dark[0].0, "B", "Cancel"),
+            (self.core_legend_dark[2].0, "A", "Choose")] {
+            self.gpu.update_face(tex, &slot_ui::hint_face_ink(cap(key), label, dark));
+        }
+        for (i, ink) in [[246,244,239], [23,23,25]].into_iter().enumerate() {
+            for (tex, key, label) in [
+                (self.link_switch_hints[i][0].0, "B", "Cancel"),
+                (self.link_switch_hints[i][3].0, "A", "Link"),
+                (self.link_connected_hints[i][0].0, "B", "Back"),
+                (self.link_connected_hints[i][1].0, "A", "End Link"),
+                (self.link_failed_hints[i][0].0, "A", "OK"),
+                (self.link_inet_hints[i][5].0, "A", "Join"),
+            ] { self.gpu.update_face(tex, &slot_ui::hint_face_ink(cap(key), label, ink)); }
         }
     }
 

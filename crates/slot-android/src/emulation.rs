@@ -26,6 +26,7 @@ pub struct EmulationProfile {
     pub rewind_speed_override: Option<u8>,
     pub turbo_override: Option<bool>, // original KONKR "X/Y Buttons"
     pub rumble_override: Option<bool>,
+    pub rumble_level_override: Option<u8>,
     pub eject_save_override: Option<bool>,
     // Boktai's sun: 0..=10, SUN_AUTO for the time of day, or SUN_SENSOR
     // for the light sensor. None follows the handheld (sensor if it has
@@ -142,7 +143,7 @@ impl EmulationProfile {
             gb_palettes_override: None, ff_speed_override: None,
             ff_sound_override: None, rewind_override: None,
             rewind_speed_override: None,
-            turbo_override: None, rumble_override: None,
+            turbo_override: None, rumble_override: None, rumble_level_override: None,
             eject_save_override: None, sun: None, motion: None,
             blending_override: None, lcd_effect_override: None, dither_override: None,
             upscaler_override: None,
@@ -172,6 +173,7 @@ impl EmulationProfile {
         if let Some(speed)=self.rewind_speed_override { settings.rewind_speed=speed; }
         if let Some(value)=self.turbo_override { settings.turbo=value; }
         if let Some(value)=self.rumble_override { settings.rumble=value; }
+        if let Some(level)=self.rumble_level_override { settings.rumble_level=level.clamp(1,4); }
         if let Some(value)=self.eject_save_override { settings.eject_save=value; }
         if let Some(value)=self.blending_override { *settings.blending_mut(platform)=value; }
         if let Some(value)=self.lcd_effect_override { settings.set_lcd_effect_for(platform,value); }
@@ -250,7 +252,10 @@ impl EmulationProfile {
                 self.rewind_speed_override=Some(view.rewind_speed);
             },
             7 => self.turbo_override=Some(view.turbo),
-            8 => self.rumble_override=Some(view.rumble),
+            8 => {
+                self.rumble_override=Some(view.rumble);
+                self.rumble_level_override=Some(view.rumble_level);
+            },
             9 => self.eject_save_override=Some(view.eject_save),
             60..=65|settings::BLENDING_SMS_KEY|settings::BLENDING_GG_KEY
             |settings::BLENDING_NGP_KEY|settings::BLENDING_WS_KEY

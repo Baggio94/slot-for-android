@@ -67,3 +67,13 @@ fn an_unknown_effect_is_refused() {
     assert!(!r.set(0, 7, u16::MAX));
     assert_eq!(r.strength(), 0);
 }
+
+#[test]
+fn a_short_pulse_survives_until_the_host_reads_it() {
+    let r = Rumble::default();
+    r.set(0, STRONG, 900);
+    r.set(0, STRONG, 0);
+    assert_eq!(r.strength(), 0);
+    assert_eq!(r.take_peak(), 900);
+    assert_eq!(r.take_peak(), 0);
+}

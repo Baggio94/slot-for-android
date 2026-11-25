@@ -367,7 +367,7 @@ pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u
         VideoMode::Actual => slot_gfx::smart_integer_size(frame, a, (ow, oh)),
         VideoMode::Stretch => (ow, oh),
     };
-    let y = if top { 0.0 } else { (oh - ph) / 2.0 };
+    let y = if top && ph <= oh { 0.0 } else { (oh - ph) / 2.0 };
     [(ow - pw) / 2.0, y, pw, ph]
 }
 
@@ -566,7 +566,7 @@ mod tests {
         assert!(!bezel_has_room(Bezel::Default, Platform::Gb, rpc));
         assert!(!bezel_has_room(Bezel::Gb, Platform::Gbc, rpc));
         let wide = (1920, 1080);
-        assert_eq!(picture_rect(Platform::Gba, VideoMode::Actual, wide), [240.0, 60.0, 1440.0, 960.0]);
+        assert_eq!(picture_rect(Platform::Gba, VideoMode::Actual, wide), [120.0, -20.0, 1680.0, 1120.0]);
         assert!(bezel_has_room(Bezel::Gb, Platform::Gb, wide));
         let four_three = (1440, 1080);
         assert!(bezel_has_room(Bezel::Pocket, Platform::Gb, four_three));
@@ -593,7 +593,8 @@ mod tests {
         let gba = Bezel::GbaClassic;
         assert_eq!(gb(gba, Platform::Gba, Actual, (960, 640)), None);
         assert!(matches!(gb(gba, Platform::Gba, Aspect, (1920, 1080)), Some(Side(Shape::SixteenNine, _))));
-        assert_eq!(gb(gba, Platform::Gba, Actual, (1920, 1080)), Some(Band([240.0, 0.0, 1440.0, 960.0])));
+        // Smart 7x clips fewer than four native lines; the old band no longer fits.
+        assert_eq!(gb(gba, Platform::Gba, Actual, (1920, 1080)), None);
         assert_eq!(gb(gba, Platform::Gba, Aspect, (1024, 768)), Some(Band([0.0, 0.0, 1024.0, 682.6667])));
         assert_eq!(gb(gba, Platform::Gba, Actual, (1240, 1080)), Some(Band([20.0, 0.0, 1200.0, 800.0])));
         assert_eq!(gb(gba, Platform::Gba, Actual, (720, 720)), Some(Band([0.0, 0.0, 720.0, 480.0])));

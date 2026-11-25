@@ -697,6 +697,15 @@ class MainActivity : Activity() {
     }
     private val vibrator by lazy { getSystemService(VIBRATOR_SERVICE) as? Vibrator }
     private var lastRumbleAt = 0L
+    private var lastRumbleAmplitude = 0
+    private var rumbleUntil = 0L
+    private val rumblePulse = object : Runnable {
+        override fun run() {
+            if (!resumed || isDestroyed) { stopRumble(); return }
+            pollRumble()
+            uiHandler.postDelayed(this, if (nativeGameUnpaused()) 16L else 100L)
+        }
+    }
     // Tilt, gyro and solar cartridges: the core switches sensors on and
     // Android listens only while it wants them, like RetroArch.
     private val sensorManager by lazy { getSystemService(SENSOR_SERVICE) as? SensorManager }
@@ -1105,7 +1114,6 @@ class MainActivity : Activity() {
                 // Library feedback and START are rendered inside Slot's
                 // GL carousel, not overlaid by an Android TextView.
             }
-            pollRumble()
             updateSensors()
             updateDisplaySyncMode()
             updateCarouselPacing()
@@ -1727,6 +1735,8 @@ class MainActivity : Activity() {
         setContentView(frame)
         immersive()
         uiHandler.post(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        uiHandler.post(rumblePulse)
         if (!cleanSignOut) {
             uiHandler.postDelayed({
                 SlotToast.makeText(this,
@@ -2884,19 +2894,43 @@ class MainActivity : Activity() {
         sensorsListening = 0
     }
 
+    private fun stopRumble() {
+        if (lastRumbleAmplitude != 0) {
+            try { vibrator?.cancel() } catch (_: RuntimeException) { }
+        }
+        lastRumbleAmplitude = 0
+        lastRumbleAt = 0L
+        rumbleUntil = 0L
+    }
+
     private fun pollRumble() {
-        if (!resumed || !nativeIsPlaying()) return
-        val strength = nativePollRumbleStrength()
-        if (strength <= 4096) return
+        if (!resumed || !nativeGameUnpaused()) { stopRumble(); return }
+        val packet = nativePollRumbleStrength()
+        val current = packet and 0xffff
+        val peak = packet ushr 16
+        val strength = maxOf(current, peak)
         val now = SystemClock.elapsedRealtime()
-        if (now - lastRumbleAt < 100L) return
-        lastRumbleAt = now
+        if (strength == 0) {
+            if (now >= rumbleUntil) stopRumble()
+            return
+        }
         val device = vibrator ?: return
         if (!device.hasVibrator()) return
         try {
-            val intensity = (strength / 257).coerceIn(10, 255)
-            device.vibrate(VibrationEffect.createOneShot(45L, intensity))
+            val intensity = if (device.hasAmplitudeControl())
+                ((strength + 256) / 257).coerceIn(1, 255)
+            else VibrationEffect.DEFAULT_AMPLITUDE
+            // A transient gets a brief physical pulse. Renew a sustained
+            // signal before expiry, without restarting it on every frame.
+            if (peak > current) rumbleUntil = maxOf(rumbleUntil, now + 32L)
+            if (intensity != lastRumbleAmplitude || now - lastRumbleAt >= 32L) {
+                device.vibrate(VibrationEffect.createOneShot(48L, intensity))
+                lastRumbleAt = now
+                lastRumbleAmplitude = intensity
+            }
+            if (current != 0) rumbleUntil = maxOf(rumbleUntil, now + 16L)
         } catch (error: RuntimeException) {
+            stopRumble()
             SlotLog.w(TAG, "KONKR rumble unavailable", error)
         }
     }
@@ -4796,6 +4830,8 @@ class MainActivity : Activity() {
         romWarmWorker.shutdownNow()
         autoLabelsWorker.shutdownNow()
         uiHandler.removeCallbacks(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        stopRumble()
         synchronized(raSmartForeground) { raSmartForeground.notifyAll() }
         if (::raAchievementOverlay.isInitialized) raAchievementOverlay.destroy()
         if (::shelfStatus.isInitialized) shelfStatus.close()
@@ -4811,6 +4847,7 @@ class MainActivity : Activity() {
     private var homeHoldPause = false
 
     override fun onPause() {
+        stopRumble()
         if (RgRotate.device && rotateMiddleDown) {
             homeHoldPause = true
             SlotLog.i(TAG, "Rotate: middle button Home; light pause")
@@ -4836,6 +4873,8 @@ class MainActivity : Activity() {
         resumed = false
         warmedCandidate.set(null)
         uiHandler.removeCallbacks(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        stopRumble()
         stopSensors()
         carouselDozing = false
         // Rust nativeSuspend aborts discovery/linked play; never keep a
@@ -4900,7 +4939,11 @@ class MainActivity : Activity() {
         carouselDozing = false
         view.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         uiHandler.removeCallbacks(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        stopRumble()
         uiHandler.post(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        uiHandler.post(rumblePulse)
         if (::shelfStatus.isInitialized) shelfStatus.onResume()
         if (::lidCover.isInitialized) lidCover.onResume()
         // Android's quick settings may return without a fresh onAvailable().

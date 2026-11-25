@@ -2150,6 +2150,10 @@ impl GameSession {
         self.core.rumble().strength()
     }
 
+    pub fn take_rumble_peak(&self) -> u16 {
+        self.core.rumble().take_peak()
+    }
+
     pub fn rewind_fill(&self) -> u8 {
         self.rewind.fill()
     }

@@ -45,7 +45,8 @@ pub(crate) fn menu_key(device: i32, code: i32) -> i32 {
     let Some(keys) = keys.as_ref() else { return code };
     let fp = keys.devices.iter().find(|(id, _)| *id == device)
         .map_or(BUILTIN, |(_, fp)| fp.as_str());
-    keys.controls.slot_code(fp, code, false).unwrap_or(-1)
+    controls::menu_action(keys.controls.slot_code(fp, code, false).unwrap_or(-1),
+        keys.controls.menu_swap_ab)
 }
 
 impl Engine {
@@ -368,6 +369,8 @@ impl Engine {
             self.pad_held.press(device, held, Sink::Nowhere);
             return;
         };
+        let menu = !matches!(self.overlay, ShelfOverlay::None);
+        let slot = controls::menu_action(slot, menu && self.controls.menu_swap_ab);
         let sink = controls::sink(port, slot, self.controls_moment());
         self.pad_held.press(device, held, sink);
         match sink {
@@ -531,10 +534,15 @@ impl Engine {
                 },
                 96 if row < PORTS => self.overlay = ShelfOverlay::ControlsPort { port: row, row: 0 },
                 96 if row == PORTS => self.overlay = ShelfOverlay::Hotkeys { row: 0 },
+                21 | 22 | 96 if row == PORTS + 1 => {
+                    self.controls.menu_swap_ab = !self.controls.menu_swap_ab;
+                    self.persist_controls();
+                    self.publish_menu_keys();
+                }
                 // Touchscreen: swipe the shelf, tap or pull down the middle
                 // cart (Siham 2026-11-16, off by default); only on a
                 // handheld with a touchscreen (beta41).
-                21 | 22 | 96 if row == PORTS + 1 && has_touchscreen() => {
+                21 | 22 | 96 if row == PORTS + 2 && has_touchscreen() => {
                     self.settings.touchscreen = !self.settings.touchscreen;
                     self.persist_settings();
                 }
@@ -716,6 +724,7 @@ impl Engine {
                 line("Port 1", self.pad_name(self.controls.on_port(0)), false),
                 line("Port 2", self.pad_name(self.controls.on_port(1)), false),
                 line("Hotkeys", String::new(), false),
+                line("Swap Menu A/B", if self.controls.menu_swap_ab { "ON" } else { "OFF" }.into(), true),
             ].into_iter().chain(has_touchscreen().then(||
                 line("Touchscreen", if self.settings.touchscreen { "On" } else { "Off" }.into(), true)))
             .chain([line("Reset to Default", String::new(), false)]).collect(),
@@ -1081,7 +1090,7 @@ pub(super) fn has_touchscreen() -> bool {
 /// Rows of Settings > Controls: two ports, Hotkeys, Touchscreen on a
 /// touchscreen handheld, Reset to Default.
 fn controls_rows() -> usize {
-    if has_touchscreen() { 5 } else { 4 }
+    if has_touchscreen() { 6 } else { 5 }
 }
 
 #[cfg(test)]
@@ -1091,6 +1100,20 @@ mod menu_key_tests {
 
     /// Issue #123: with A and B swapped in Settings > Controls, Android's
     /// pages read the keys as the shelf does.
+    #[test]
+    fn menu_swap_is_independent_of_the_game_mapping() {
+        let mut c = Controls::default();
+        assert!(!c.menu_swap_ab);
+        c.menu_swap_ab = true;
+        assert_eq!(crate::controls::menu_action(96, true), 97);
+        assert_eq!(crate::controls::menu_action(97, true), 96);
+        assert_eq!(crate::controls::menu_action(96, false), 96);
+        assert_eq!(crate::controls::menu_action(108, true), 108);
+        assert_eq!(c.slot_code(BUILTIN, 96, false), Some(96));
+        c.reset_all();
+        assert!(!c.menu_swap_ab);
+    }
+
     #[test]
     fn android_pages_read_swapped_a_and_b_as_the_shelf_does() {
         let mut controls = Controls::default();
