@@ -185,12 +185,19 @@ fn exhausted_smart_cache_does_not_delay_foreground_awards_or_badges() {
     let mut core = service.wrap(Box::<TestCore>::default());
     core.load(&rom).unwrap();
     wait_for(|| service.take_notice().is_some_and(|n| n.title == "Test game"));
-    core.run_frame(ButtonMask(0));
-    // The trigger is satisfied by TestCore's first real frame. The old
-    // scheduler slept for up to 30 minutes after setting up the session.
+    // rcheevos needs a false -> true transition. Keep driving real
+    // frames until the evaluator has finished its initial queue drain and
+    // recorded the award, without ejecting or reconnecting the game.
+    wait_for(|| {
+        core.run_frame(ButtonMask(0));
+        core.run_frame(ButtonMask(1));
+        Store::open(root.path(), "Player").is_ok_and(|s| s.unlocks.contains_key(&7))
+    });
+    // The old scheduler slept for up to 30 minutes after setting up the
+    // session. The award must reach the server with the game still active.
     wait_for(|| Store::open(root.path(), "Player").is_ok_and(|s|
         s.unlocks.get(&7).is_some_and(|u| u.synced)));
-    assert!(badges::path(&store.dir, "12345").unwrap().is_file());
+    wait_for(|| badges::path(&store.dir, "12345").unwrap().is_file());
     let calls: Vec<_> = requests.try_iter().collect();
     assert!(calls.iter().any(|r| r == "startsession"));
     assert!(calls.iter().any(|r| r == "awardachievement"));
