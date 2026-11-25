@@ -133,6 +133,7 @@ impl Engine {
         let order = self.shelf_grid_order();
         let Some(&rack) = order.iter().find(|&&r| r == self.active).or_else(|| order.first()) else { return; };
         self.shelves[self.active].release_hold();
+        self.cancel_shelves_triggers();
         self.touch = None;
         self.studio_when_settled = false;
         self.menu_held = None;
@@ -148,6 +149,9 @@ impl Engine {
         self.shelves_grid.closing = Some((rack, Instant::now()));
         self.menu_held = None;
         self.overlay = ShelfOverlay::None;
+        if select && order.contains(&rack) && (rack == VIDEO_RACK || rack == 0) {
+            self.gba_video = rack == VIDEO_RACK;
+        }
         if select && order.contains(&rack) && rack != self.active {
             self.shelves[self.active].release_hold();
             self.active = rack;
@@ -216,7 +220,13 @@ impl Engine {
         if !open && (!matches!(self.overlay, ShelfOverlay::None)
             || self.last_cart_navigation.elapsed() < Duration::from_millis(1800)
             || self.shelves[self.active].is_scrolling()) { return; }
-        if self.shelf_grid_order().is_empty() { return; }
+        if self.shelf_grid_order().is_empty() {
+            if open {
+                self.overlay = ShelfOverlay::None;
+                self.shelves_grid.reset();
+            }
+            return;
+        }
         if self.shelves_grid.art.is_empty() {
             self.shelves_grid.art.resize(Platform::ALL.len(), None);
         }

@@ -5085,6 +5085,10 @@ impl Engine {
                     }
                     return;
                 }
+                if matches!(self.overlay, ShelfOverlay::Shelves { .. }) && matches!(code, 104 | 105) {
+                    self.shelves_trigger(code, pressed);
+                    return;
+                }
                 if self.overlay != ShelfOverlay::None {
                     if pressed {
                         match self.overlay {
