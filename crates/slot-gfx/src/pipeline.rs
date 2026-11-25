@@ -131,16 +131,18 @@ pub enum Fit {
     /// picture doesn't fit exactly, its edges cut. Hi-res frames (448
     /// lines and up) count lines double.
     Overscale(f32),
-    /// Select the next integer only when at most four logical pixels are
-    /// clipped per edge. The logical frame is independent of core upscaling.
-    SmartInteger(f32, (u32, u32)),
+    /// The next whole multiple up when it cuts at most `crop` of the
+    /// frame's own pixels per edge (8 on home consoles, their TV overscan;
+    /// 4 on handhelds), else the one below. The logical frame is
+    /// independent of core upscaling.
+    SmartInteger(f32, (u32, u32), f32),
     /// The whole screen.
     Stretch,
 }
 
 /// Shared game/overlay geometry in output pixels. The aspect is the
 /// chosen display shape, while the logical frame measures crop in native dots.
-pub fn smart_integer_size(frame: (u32, u32), aspect: f32, out: (f32, f32)) -> (f32, f32) {
+pub fn smart_integer_size(frame: (u32, u32), aspect: f32, out: (f32, f32), crop: f32) -> (f32, f32) {
     let (w, h) = (frame.0.max(1) as f32, frame.1.max(1) as f32);
     let a = if aspect.is_finite() && aspect > 0.0 { aspect } else { w / h };
     let (ow, oh) = (out.0.max(1.0), out.1.max(1.0));
@@ -156,7 +158,7 @@ pub fn smart_integer_size(frame: (u32, u32), aspect: f32, out: (f32, f32)) -> (f
     let (pw, ph) = size(upper);
     let crop_x = (pw - ow).max(0.0) * w / (2.0 * pw);
     let crop_y = (ph - oh).max(0.0) * h / (2.0 * ph);
-    if crop_x <= 4.0 + 1e-4 && crop_y <= 4.0 + 1e-4 {
+    if crop_x <= crop + 1e-4 && crop_y <= crop + 1e-4 {
         (pw, ph)
     } else {
         size(lower)
@@ -175,7 +177,7 @@ pub fn fit_window(fit: Fit, tex: (u32, u32), out: (f32, f32)) -> [f32; 4] {
             let a = picture(aspect);
             if oh * a <= ow { (oh * a, oh) } else { (ow, ow / a) }
         }
-        Fit::SmartInteger(aspect, frame) => smart_integer_size(frame, aspect, out),
+        Fit::SmartInteger(aspect, frame, crop) => smart_integer_size(frame, aspect, out, crop),
         Fit::Overscale(aspect) => {
             let a = picture(aspect);
             let unit = if th >= 400.0 { th / 2.0 } else { th };
@@ -879,14 +881,21 @@ mod tests {
     #[test]
     fn smart_integer_limits_native_crop_on_both_axes() {
         let rpc = (1240.0, 1080.0);
-        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, rpc), (1280.0, 1120.0));
-        assert_eq!(smart_integer_size((144, 224), 9.0 / 14.0, rpc), (720.0, 1120.0));
-        assert_eq!(smart_integer_size((248, 224), 248.0 / 224.0, rpc), (1240.0, 1120.0));
-        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, (720.0, 720.0)), (512.0, 448.0));
-        assert_eq!(smart_integer_size((240, 160), 1.5, (960.0, 640.0)), (960.0, 640.0));
-        assert_eq!(smart_integer_size((160, 144), 10.0 / 9.0, rpc), (1120.0, 1008.0));
-        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, (1239.0, 1080.0)), (1024.0, 896.0));
-        let fit = Fit::SmartInteger(8.0 / 7.0, (256, 224));
+        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, rpc, 4.0), (1280.0, 1120.0));
+        assert_eq!(smart_integer_size((144, 224), 9.0 / 14.0, rpc, 4.0), (720.0, 1120.0));
+        assert_eq!(smart_integer_size((248, 224), 248.0 / 224.0, rpc, 4.0), (1240.0, 1120.0));
+        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, (720.0, 720.0), 4.0), (512.0, 448.0));
+        assert_eq!(smart_integer_size((240, 160), 1.5, (960.0, 640.0), 4.0), (960.0, 640.0));
+        assert_eq!(smart_integer_size((160, 144), 10.0 / 9.0, rpc, 4.0), (1120.0, 1008.0));
+        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, (1239.0, 1080.0), 4.0), (1024.0, 896.0));
+        // Home consoles: up to 8 per edge, their overscan. The RG Rotate's
+        // 720 width shows 240 of 256 columns at 3x, as before 3.0.1; the
+        // KONKR's 640 lines 219 of 224 (SNES and Mega Drive at 3x).
+        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, (720.0, 720.0), 8.0), (768.0, 672.0));
+        assert_eq!(smart_integer_size((256, 224), 4.0 / 3.0, (960.0, 640.0), 8.0).1, 672.0);
+        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, rpc, 8.0), (1280.0, 1120.0));
+        assert_eq!(smart_integer_size((320, 224), 4.0 / 3.0, rpc, 8.0).1, 896.0, "27 columns: too many");
+        let fit = Fit::SmartInteger(8.0 / 7.0, (256, 224), 4.0);
         assert_eq!(fit_window(fit, (256, 224), rpc), fit_window(fit, (512, 448), rpc));
     }
 

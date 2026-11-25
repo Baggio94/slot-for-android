@@ -261,6 +261,18 @@ pub fn home_aspect(platform: Platform, core: f32, frame: (u32, u32), square: boo
     }
 }
 
+/// Integer's cut, in the frame's own pixels per edge (Siham 2026-11-25):
+/// up to 8 on home consoles, the overscan a TV hid (the RG Rotate shows
+/// 240 of the SNES's 256 columns at 3x, as before 3.0.1); up to 4 on
+/// handhelds, whose screens showed every pixel (issue #132: an upright
+/// WonderSwan game at 5x on the Retroid Pocket Classic, 4 lines cut).
+pub fn crop_limit(platform: Platform) -> f32 {
+    match platform {
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms => 8.0,
+        _ => 4.0,
+    }
+}
+
 /// Logical pixels for the crop limit: SNES high-res/interlaced samples
 /// and PokeMini's internal LCD multiplier must not count as native dots.
 pub fn logical_frame(platform: Platform, frame: (u32, u32)) -> (u32, u32) {
@@ -284,14 +296,14 @@ pub fn home_fit(platform: Platform, mode: VideoMode, aspect: f32, frame: (u32, u
     if square {
         let a = square_shape(platform, frame);
         return match mode {
-            VideoMode::Actual => slot_gfx::Fit::SmartInteger(a, logical_frame(platform, frame)),
+            VideoMode::Actual => slot_gfx::Fit::SmartInteger(a, logical_frame(platform, frame), crop_limit(platform)),
             VideoMode::Aspect => slot_gfx::Fit::Aspect(a),
             VideoMode::Stretch => slot_gfx::Fit::Stretch,
         };
     }
     let aspect = home_aspect(platform, aspect, frame, false);
     match mode {
-        VideoMode::Actual => slot_gfx::Fit::SmartInteger(aspect, logical_frame(platform, frame)),
+        VideoMode::Actual => slot_gfx::Fit::SmartInteger(aspect, logical_frame(platform, frame), crop_limit(platform)),
         VideoMode::Aspect => slot_gfx::Fit::Aspect(aspect),
         VideoMode::Stretch => slot_gfx::Fit::Stretch,
     }
@@ -311,7 +323,7 @@ pub fn picture_rect(platform: Platform, mode: VideoMode, panel: (u32, u32)) -> [
     let (w, h) = (w as f32, h as f32);
     let fit = (pw / w).min(ph / h);
     let (dw, dh) = match mode {
-        VideoMode::Actual => slot_gfx::smart_integer_size((w as u32, h as u32), w / h, (pw, ph)),
+        VideoMode::Actual => slot_gfx::smart_integer_size((w as u32, h as u32), w / h, (pw, ph), crop_limit(platform)),
         VideoMode::Aspect => (w * fit, h * fit),
         VideoMode::Stretch => (pw, ph),
     };
@@ -355,16 +367,17 @@ fn panel_aspect(panel: (u32, u32)) -> f32 {
 }
 
 /// A home console picture on `panel`, as slot_gfx::fit_window draws it
-/// (`top`: at the top of the screen instead of centred).
-pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u32), top: bool)
-    -> [f32; 4]
+/// (`top`: at the top of the screen instead of centred; `crop`: Integer's,
+/// crop_limit).
+pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u32), top: bool,
+    crop: f32) -> [f32; 4]
 {
     let (ow, oh) = (panel.0.max(1) as f32, panel.1.max(1) as f32);
     let (tw, th) = (frame.0.max(1) as f32, frame.1.max(1) as f32);
     let a = if aspect > 0.0 { aspect } else { tw / th };
     let (pw, ph) = match mode {
         VideoMode::Aspect => if oh * a <= ow { (oh * a, oh) } else { (ow, ow / a) },
-        VideoMode::Actual => slot_gfx::smart_integer_size(frame, a, (ow, oh)),
+        VideoMode::Actual => slot_gfx::smart_integer_size(frame, a, (ow, oh), crop),
         VideoMode::Stretch => (ow, oh),
     };
     let y = if top && ph <= oh { 0.0 } else { (oh - ph) / 2.0 };
@@ -376,18 +389,18 @@ pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u
 /// of the screen's height, else in a band of at least as much under the
 /// picture moved to the top, else nowhere. Never in Stretch. The window is
 /// the picture of `mode` itself.
-pub fn own_place(aspect: f32, frame: (u32, u32), mode: VideoMode, panel: (u32, u32))
+pub fn own_place(aspect: f32, frame: (u32, u32), mode: VideoMode, panel: (u32, u32), crop: f32)
     -> Option<(Place, [f32; 4])>
 {
     if mode == VideoMode::Stretch { return None; }
     let (pw, ph) = (panel.0.max(1) as f32, panel.1.max(1) as f32);
-    let full = home_rect(VideoMode::Aspect, aspect, frame, panel, false);
+    let full = home_rect(VideoMode::Aspect, aspect, frame, panel, false, crop);
     let min = own_overlay::MIN_BAR * ph;
     if full[3] >= ph - 0.5 && full[0] >= min {
-        let pic = home_rect(mode, aspect, frame, panel, false);
+        let pic = home_rect(mode, aspect, frame, panel, false, crop);
         (pic[0] >= min).then_some((Place::Side, pic))
     } else if full[2] >= pw - 0.5 && ph - full[3] >= min {
-        let pic = home_rect(mode, aspect, frame, panel, true);
+        let pic = home_rect(mode, aspect, frame, panel, true, crop);
         (ph - pic[3] >= min).then_some((Place::Band, pic))
     } else {
         None
@@ -414,7 +427,8 @@ fn own_aspects(platform: Platform) -> &'static [f32] {
 pub fn own_room(platform: Platform, panel: (u32, u32)) -> f32 {
     let (pw, ph) = (panel.0.max(1) as f32, panel.1.max(1) as f32);
     own_aspects(platform).iter().filter_map(|&aspect| {
-        let (place, pic) = own_place(aspect, platform.picture(), VideoMode::Aspect, panel)?;
+        let (place, pic) = own_place(aspect, platform.picture(), VideoMode::Aspect, panel,
+            crop_limit(platform))?;
         Some(match place {
             Place::Side => pic[0] / ph,
             Place::Band => (ph - pic[3]) / ph,
@@ -439,7 +453,7 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
 {
     if !bezel_fits(bezel, mode) || !Bezel::list(platform).contains(&bezel) { return None; }
     if bezel.own(false).is_some() {
-        let (place, pic) = own_place(home.0, home.1, mode, panel)?;
+        let (place, pic) = own_place(home.0, home.1, mode, panel, crop_limit(platform))?;
         return Some(WatomskFit::Own(place, pic));
     }
     let design = bezel.watomsk()?;
@@ -463,11 +477,11 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
         }
         Platform::Nes | Platform::Snes | Platform::Md => {
             if a > 4.0 / 3.0 * 1.01 {
-                side(home_rect(VideoMode::Aspect, 4.0 / 3.0, home.1, panel, false))
+                side(home_rect(VideoMode::Aspect, 4.0 / 3.0, home.1, panel, false, crop_limit(platform)))
             } else if a < 4.0 / 3.0 * 0.99 && watomsk::has_band(design)
                 && (home.0 - 4.0 / 3.0).abs() < 0.01 {
                 // Not over a 256x224 game's 8:7 picture, which fills the screen.
-                band(home_rect(mode, home.0, home.1, panel, true))
+                band(home_rect(mode, home.0, home.1, panel, true, crop_limit(platform)))
             } else {
                 None
             }
@@ -488,7 +502,7 @@ pub fn bezel_offered(platform: Platform, panel: (u32, u32)) -> bool {
         Platform::Nes | Platform::Snes => a > 4.0 / 3.0 * 1.01,
         Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
         | Platform::Lynx | Platform::Pokemini => own_aspects(platform).iter().any(|&aspect|
-            own_place(aspect, platform.picture(), VideoMode::Aspect, panel).is_some()),
+            own_place(aspect, platform.picture(), VideoMode::Aspect, panel, crop_limit(platform)).is_some()),
     }
 }
 
@@ -615,13 +629,32 @@ mod tests {
     }
 
     #[test]
+    fn integer_cuts_up_to_eight_columns_on_home_consoles_four_on_handhelds() {
+        let rotate = (720, 720);
+        for platform in [Platform::Nes, Platform::Snes, Platform::Md, Platform::Sms] {
+            assert_eq!(crop_limit(platform), 8.0);
+        }
+        // The RG Rotate: NES and SNES at 3x again, 8 columns cut each side.
+        for platform in [Platform::Nes, Platform::Snes] {
+            assert!(square_pixels(platform, rotate));
+            let fit = home_fit(platform, VideoMode::Actual, 4.0 / 3.0, (256, 224), true);
+            assert_eq!(fit, slot_gfx::Fit::SmartInteger(8.0 / 7.0, (256, 224), 8.0));
+            let pic = home_rect(VideoMode::Actual, 8.0 / 7.0, (256, 224), rotate, false, crop_limit(platform));
+            assert_eq!((pic[2], pic[3]), (768.0, 672.0), "{platform:?}");
+        }
+        for platform in [Platform::Gb, Platform::Gba, Platform::Ws, Platform::Gg, Platform::Pokemini] {
+            assert_eq!(crop_limit(platform), 4.0);
+        }
+    }
+
+    #[test]
     fn smart_integer_uses_the_live_frame_and_overlay_geometry() {
         let panel = (1240, 1080);
         let frame = (144, 224);
         let aspect = 9.0 / 14.0;
         let fit = home_fit(Platform::Ws, VideoMode::Actual, aspect, frame, false);
-        assert_eq!(fit, slot_gfx::Fit::SmartInteger(aspect, frame));
-        let (_, picture) = own_place(aspect, frame, VideoMode::Actual, panel).unwrap();
+        assert_eq!(fit, slot_gfx::Fit::SmartInteger(aspect, frame, 4.0));
+        let (_, picture) = own_place(aspect, frame, VideoMode::Actual, panel, 4.0).unwrap();
         assert!((picture[0] - 260.0).abs() < 0.001);
         assert!((picture[1] + 20.0).abs() < 0.001);
         assert!((picture[3] - 1120.0).abs() < 0.001);
@@ -647,11 +680,11 @@ mod tests {
         assert_eq!(default_mode(Platform::Md, rpc), VideoMode::Aspect);
         assert_eq!(default_mode(Platform::Snes, (960, 640)), VideoMode::Aspect);
         assert_eq!(home_fit(Platform::Snes, VideoMode::Actual, 4.0 / 3.0, (512, 448), square_pixels(Platform::Snes, rpc)),
-            Fit::SmartInteger(256.0 / 224.0, (256, 224)));
+            Fit::SmartInteger(256.0 / 224.0, (256, 224), 8.0));
         assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, 4.0 / 3.0, (256, 240), square_pixels(Platform::Nes, rpc)),
             Fit::Aspect(256.0 / 240.0));
         assert_eq!(home_fit(Platform::Nes, VideoMode::Actual, 4.0 / 3.0, (256, 240), square_pixels(Platform::Nes, (960, 640))),
-            Fit::SmartInteger(4.0 / 3.0, (256, 240)));
+            Fit::SmartInteger(4.0 / 3.0, (256, 240), 8.0));
     }
 
     #[test]
@@ -663,7 +696,7 @@ mod tests {
                 assert_eq!(home_fit(platform, VideoMode::Aspect, par, (256, 240), square_pixels(platform, panel)),
                     Fit::Aspect(4.0 / 3.0), "{platform:?} {panel:?}");
                 assert_eq!(home_fit(platform, VideoMode::Actual, 1.5238, (320, 224), square_pixels(platform, panel)),
-                    Fit::SmartInteger(4.0 / 3.0, (320, 224)), "{platform:?} {panel:?}");
+                    Fit::SmartInteger(4.0 / 3.0, (320, 224), 8.0), "{platform:?} {panel:?}");
             }
         }
         // Narrow screens: NES and SNES keep square pixels, the Mega Drive 4:3.
@@ -684,18 +717,18 @@ mod tests {
             assert!(!square_game(platform, rpc, false), "{platform:?}: other games keep 4:3");
             assert!(!square_game(platform, (960, 640), true), "{platform:?}: wider screens keep 4:3");
             assert_eq!(home_fit(platform, VideoMode::Actual, 4.0 / 3.0, (256, 224), true),
-                Fit::SmartInteger(8.0 / 7.0, (256, 224)));
+                Fit::SmartInteger(8.0 / 7.0, (256, 224), 8.0));
         }
         // The cropped left bar: the Integer picture is the 248 columns shown.
         assert_eq!(home_fit(Platform::Sms, VideoMode::Actual, 4.0 / 3.0, (248, 224), true),
-            Fit::SmartInteger(248.0 / 224.0, (248, 224)));
+            Fit::SmartInteger(248.0 / 224.0, (248, 224), 8.0));
         // A listed game's 320-wide screens (logos, menus): 4:3, the whole picture.
         assert_eq!(home_fit(Platform::Md, VideoMode::Actual, 1.5238, (320, 224), true),
             Fit::Aspect(4.0 / 3.0));
         assert_eq!(home_fit(Platform::Md, VideoMode::Stretch, 1.5238, (320, 224), true), Fit::Stretch);
         // A European game's 240 lines: square too.
         assert_eq!(home_fit(Platform::Md, VideoMode::Actual, 1.0, (256, 240), true),
-            Fit::SmartInteger(256.0 / 240.0, (256, 240)));
+            Fit::SmartInteger(256.0 / 240.0, (256, 240), 8.0));
         assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), true), 8.0 / 7.0);
         assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), false), 4.0 / 3.0);
         // Hidden bars on a wider screen: the columns keep their width.
@@ -704,7 +737,7 @@ mod tests {
         // A 320-wide frame isn't a 256-wide game's.
         assert!(!narrow_frame((320, 224)) && narrow_frame((248, 192)));
         // No room beside an 8:7 picture on the Retroid Pocket Classic: no overlay.
-        assert!(own_place(8.0 / 7.0, (256, 224), VideoMode::Aspect, rpc).is_none());
+        assert!(own_place(8.0 / 7.0, (256, 224), VideoMode::Aspect, rpc, 8.0).is_none());
     }
 
     #[test]
@@ -786,7 +819,7 @@ mod tests {
     fn the_new_systems_overlays_go_where_there_is_room() {
         use VideoMode::*;
         let panels = [(1620, 1080), (1800, 1080), (1920, 1080), (1440, 1080), (1240, 1080), (1080, 1080)];
-        let place = |aspect: f32, frame, panel| own_place(aspect, frame, Aspect, panel).map(|(p, _)| p);
+        let place = |aspect: f32, frame, panel| own_place(aspect, frame, Aspect, panel, 4.0).map(|(p, _)| p);
         let row = |aspect: f32, frame: (u32, u32)| panels.map(|panel| place(aspect, frame, panel));
         let (s, b, n) = (Some(Place::Side), Some(Place::Band), None);
         assert_eq!(row(4.0 / 3.0, (256, 192)), [s, s, s, n, b, b], "Master System");
@@ -797,10 +830,10 @@ mod tests {
         assert_eq!(row(160.0 / 102.0, (160, 102)), [n, n, s, b, b, b], "Lynx");
         assert_eq!(row(1.5, (96, 64)), [n, s, s, b, b, b], "Pokemon mini");
         // Never in Stretch; the window is the picture of the size shown.
-        assert_eq!(own_place(4.0 / 3.0, (256, 192), Stretch, (1620, 1080)), None);
-        let (_, pic) = own_place(160.0 / 152.0, (160, 152), Actual, (1620, 1080)).unwrap();
+        assert_eq!(own_place(4.0 / 3.0, (256, 192), Stretch, (1620, 1080), 8.0), None);
+        let (_, pic) = own_place(160.0 / 152.0, (160, 152), Actual, (1620, 1080), 4.0).unwrap();
         assert_eq!(pic[3], 152.0 * 7.0);
-        let (_, pic) = own_place(224.0 / 144.0, (224, 144), Aspect, (1440, 1080)).unwrap();
+        let (_, pic) = own_place(224.0 / 144.0, (224, 144), Aspect, (1440, 1080), 4.0).unwrap();
         assert_eq!(pic[1], 0.0, "picture at the top over a band");
     }
 

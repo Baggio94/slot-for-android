@@ -369,9 +369,11 @@ impl Engine {
             self.pad_held.press(device, held, Sink::Nowhere);
             return;
         };
-        let menu = !matches!(self.overlay, ShelfOverlay::None);
-        let slot = controls::menu_action(slot, menu && self.controls.menu_swap_ab);
-        let sink = controls::sink(port, slot, self.controls_moment());
+        // Swap Menu A/B (issue #127): everywhere but in the game itself, the
+        // shelf and the shelves grid too, as Android's pages (menu_key).
+        let moment = self.controls_moment();
+        let slot = controls::menu_action(slot, !moment.playing && self.controls.menu_swap_ab);
+        let sink = controls::sink(port, slot, moment);
         self.pad_held.press(device, held, sink);
         match sink {
             Sink::Slot(slot) => self.handle(Input::Key(slot, true)),

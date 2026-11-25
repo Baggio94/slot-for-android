@@ -182,25 +182,28 @@ internal object CartStudioCatalog {
      * recalculation, while unchanged ROMs reuse the exact previous CRC/header.
      * The partial batch is flushed when the label passes end.
      */
-    @Synchronized
+    // The ROM is read outside the lock (3.0.1-beta11): the label workers
+    // checksum carts side by side instead of one after the other; only
+    // the cache is changed under it. Two workers on one cart read it twice.
     fun identify(context: Context, rom: Rom): Fingerprint {
         require(rom.uri.startsWith("content://")) { "A SAF ROM URI is required" }
         cached(context, rom)?.let { return it }
-        val entries = records(context)
-        val content = context.contentResolver.openInputStream(Uri.parse(rom.uri))
-            ?: throw IllegalArgumentException("Unable to read the ROM")
         val filename = rom.filename.ifBlank { Uri.parse(rom.uri).lastPathSegment.orEmpty() }
-        val fingerprint = RomSource.useRom(content, filename) { input, embeddedExt ->
-            require(when (rom.platform) {
-                "GBA" -> embeddedExt == "gba"
-                "GB", "GBC" -> embeddedExt in setOf("gb", "gbc")
-                in Systems.HOME_PLATFORMS -> Systems.platformFor(embeddedExt) == rom.platform
-                else -> false
-            }) { "Unexpected cartridge platform in ZIP" }
-            fingerprintStream(input, copierHeader = rom.platform == Systems.SNES)
+        val fingerprint = RomReads.read(rom.uri) {
+            val content = context.contentResolver.openInputStream(Uri.parse(rom.uri))
+                ?: throw IllegalArgumentException("Unable to read the ROM")
+            RomSource.useRom(content, filename) { input, embeddedExt ->
+                require(when (rom.platform) {
+                    "GBA" -> embeddedExt == "gba"
+                    "GB", "GBC" -> embeddedExt in setOf("gb", "gbc")
+                    in Systems.HOME_PLATFORMS -> Systems.platformFor(embeddedExt) == rom.platform
+                    else -> false
+                }) { "Unexpected cartridge platform in ZIP" }
+                fingerprintStream(input, copierHeader = rom.platform == Systems.SNES)
+            }
         }
-        if (rom.size > 0 && rom.modified > 0 && fingerprint.head.size == HEAD_BYTES) {
-            entries.put(rom.uri, JSONObject()
+        if (rom.size > 0 && rom.modified > 0 && fingerprint.head.size == HEAD_BYTES) synchronized(this) {
+            records(context).put(rom.uri, JSONObject()
                 .put("size", rom.size)
                 .put("modified", rom.modified)
                 .put("crc", fingerprint.crc)

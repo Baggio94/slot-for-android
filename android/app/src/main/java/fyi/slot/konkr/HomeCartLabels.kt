@@ -624,9 +624,11 @@ internal object HomeCartLabels {
 
     private fun fingerprints(context: Context, rom: Rom): Pair<String, String?> =
         HomeFingerprintCache.get(context, rom.uri, rom.size, rom.modified) {
-            val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
-                ?: throw IllegalStateException("ROM unreadable")
-            RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ -> checksums(input) }
+            RomReads.read(rom.uri) {
+                val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
+                    ?: throw IllegalStateException("ROM unreadable")
+                RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ -> checksums(input) }
+            }
         }
 
     private fun prefetch(context: Context, roms: List<Rom>,

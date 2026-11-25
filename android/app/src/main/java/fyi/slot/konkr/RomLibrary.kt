@@ -185,7 +185,11 @@ internal object RomLibrary {
                 for (job in jobs) {
                     checkActive()
                     if (games.length() >= MAX_ROMS) { truncated = true; break }
-                    val read = job.get()
+                    // A worker that saw the scan superseded reports it as a
+                    // superseded scan, not as a failed one.
+                    val read = try { job.get() } catch (error: java.util.concurrent.ExecutionException) {
+                        throw (error.cause as? java.util.concurrent.CancellationException) ?: error
+                    }
                     index++
                     progress?.invoke(index, found.size)
                     if (read != null) {

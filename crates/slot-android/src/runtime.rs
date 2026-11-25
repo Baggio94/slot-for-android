@@ -6472,7 +6472,8 @@ impl Engine {
     /// overlay (its own shape: a WonderSwan game is wide or upright).
     fn game_has_bezel_room(&self) -> bool {
         let (aspect, frame) = self.home_shape();
-        video_mode::own_place(aspect, frame, VideoMode::Aspect, panel_size()).is_some()
+        video_mode::own_place(aspect, frame, VideoMode::Aspect, panel_size(),
+            video_mode::crop_limit(self.current_cart_platform())).is_some()
     }
     /// WS Palette straight after the Shader row (Siham 2026-11-22); the
     /// Pokemon mini's PK Palette already follows its LCD Filter.

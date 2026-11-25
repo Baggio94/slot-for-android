@@ -16,8 +16,8 @@ android {
         // Dedicated KONKR ARM64 build; retain the stable package and signing
         // identity so adb install -r preserves existing data and SAF grants.
         // 1.2.3: Frame Pacing NATIVE / RESPONSIVE.
-        versionCode = 589
-        versionName = "3.0.1-beta10"
+        versionCode = 590
+        versionName = "3.0.1-beta11"
         ndk { abiFilters += listOf("arm64-v8a") }
         // slot.'s ScreenScraper developer credentials for the NES, Super
         // Nintendo and Mega Drive labels, from GitHub secrets at build time

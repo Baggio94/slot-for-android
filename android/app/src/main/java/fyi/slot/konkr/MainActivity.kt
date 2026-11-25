@@ -2661,10 +2661,19 @@ class MainActivity : Activity() {
                     return@execute
                 }
                 val folderWaitAt = SystemClock.elapsedRealtime()
-                // Only saves, states, cheats and game settings are waited for
-                // (beta39): a long copy of labels never holds up a game.
-                if (slotFolder.launchFilesPending() && !slotFolder.awaitLaunchFiles(15_000L))
-                    SlotLog.w(TAG, "Slot folder copy still running; launching anyway")
+                // Only this game's saves, states, cheats and settings are
+                // waited for (3.0.1-beta11): the copy takes them first, the
+                // other games' follow after the launch. A game whose own
+                // files haven't come in doesn't start without them.
+                if (slotFolder.launchFilesPending()) {
+                    val own = setOf(shared.stem, GameKeys.digest(rawUri), GameKeys.legacyDigest(rawUri),
+                        GameKeys.key(rawUri), GameKeys.legacyKey(rawUri))
+                    if (!slotFolder.awaitGameFiles(own, 15_000L)) {
+                        SlotLog.w(TAG, "Slot folder still bringing ${shared.stem}'s files: not launched")
+                        nativeGameError(rawUri, "say:Still copying this game's saves from your slot. folder. Try again in a moment.")
+                        return@execute
+                    }
+                }
                 (SystemClock.elapsedRealtime() - folderWaitAt).takeIf { it > 20 }?.let {
                     SlotLog.i(TAG, "Slot launch waited ${it}ms for the slot. folder")
                 }
@@ -3336,8 +3345,23 @@ class MainActivity : Activity() {
         startAutoCartLabels()
     }
 
+    /** The slot. folder's labels are in: those still missing are looked for. */
+    internal fun folderArtworkIn() {
+        uiHandler.removeCallbacks(labelsAfterFolder)
+        startAutoCartLabels()
+    }
+    private val labelsAfterFolder = Runnable { startAutoCartLabels() }
+
     private fun startAutoCartLabels() {
         if (!autoLabelsMayRun()) return
+        // A new handheld's labels come from its slot. folder first; only
+        // those it hasn't are searched for (3.0.1-beta11).
+        if (!slotFolder.artworkSettled()) {
+            Log.i("SlotAutoLabels", "Deferred: the slot. folder's labels are still coming in")
+            uiHandler.removeCallbacks(labelsAfterFolder)
+            uiHandler.postDelayed(labelsAfterFolder, 30_000L)
+            return
+        }
         if (!autoLabelsRunning.compareAndSet(false, true)) {
             // A short Studio visit may return before the previous worker exits.
             autoLabelsRestartRequested.set(true)

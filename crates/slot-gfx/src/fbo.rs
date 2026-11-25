@@ -146,6 +146,12 @@ impl Compositor {
         !self.context_lost
     }
 
+    /// Pixels kept for a context recovery, as pixels (see recovery_bytes).
+    pub fn recovery_pixel_bytes(&self) -> usize {
+        self.sprites.recovery_pixel_bytes() + self.game.recovery_bytes()
+            + self.bezel_pixels.as_ref().map_or(0, |p| p.2.len())
+    }
+
     pub fn recovery_bytes(&self) -> usize {
         self.sprites.recovery_bytes() + self.game.recovery_bytes() + self.bezel_pixels.as_ref().map_or(0, |p| p.2.len())
     }

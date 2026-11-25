@@ -169,6 +169,18 @@ internal object FolderSync {
         }
     }
 
+    /** A game's own files (save, states, settings, cheats), asked for first
+     *  by its launch while a copy brings files in (3.0.1-beta11): a path
+     *  is the game's when one of its parts is a [tokens] name, or starts
+     *  with one and a dot (`Pokemon Emerald.srm`, `<digest>.mgba.state`). */
+    class Priority(tokens: Set<String>) {
+        private val tokens = tokens.filter { it.isNotBlank() }.toSet()
+        val served = java.util.concurrent.CountDownLatch(1)
+        fun wants(path: String): Boolean = path.split('/').any { part ->
+            tokens.any { part == it || part.startsWith("$it.") }
+        }
+    }
+
     /**
      * [pull]: false copies to the folder only (during a game, at pause).
      * [tombs]: the folder's deletions, read and updated ([Report.tombsChanged]).
@@ -180,7 +192,8 @@ internal object FolderSync {
              tombs: MutableMap<String, Tomb> = HashMap(), restore: Set<String> = emptySet(),
              progress: (Int, Int) -> Unit = { _, _ -> },
              launchFilesDone: () -> Unit = {}, scope: Scope = Scope.ALL,
-             changed: () -> Unit = {}, shouldYield: () -> Boolean = { false }): Report {
+             changed: () -> Unit = {}, shouldYield: () -> Boolean = { false },
+             priority: () -> Priority? = { null }): Report {
         val report = Report()
         // What no longer travels is forgotten, never taken for a deletion
         // (beta39: the RetroAchievements cache left the folder).
@@ -192,14 +205,8 @@ internal object FolderSync {
         // those only, never for the labels behind them.
         val paths = (mine.keys + theirs.keys).sortedWith(compareBy({ !forLaunch(it) }, { it }))
         var launchDone = false
-        for ((done, path) in paths.withIndex()) {
-            if (!launchDone && !forLaunch(path)) { launchDone = true; launchFilesDone() }
-            if (!forLaunch(path) && shouldYield()) {
-                report.yielded = true
-                return report
-            }
-            progress(done, paths.size)
-            if (path.startsWith("Conflicts/")) continue
+        fun copy(path: String) {
+            if (path.startsWith("Conflicts/")) return
             try {
                 val before = report.toFolder + report.toPrivate + report.removed + report.deletedHere.size
                 step(path, mine[path], theirs[path], base, private, folder, start, pull, now, report,
@@ -208,6 +215,27 @@ internal object FolderSync {
             } catch (error: Exception) {
                 report.failures.add("$path: ${SlotStorageProblem.describe(error)}")
             }
+        }
+        // A launch's own files go first, by the same steps (conflicts,
+        // deletions, the one writer): the rest follows in its order.
+        val early = HashSet<String>()
+        var asked: Priority? = null
+        for ((done, path) in paths.withIndex()) {
+            priority()?.takeIf { it !== asked }?.let { want ->
+                asked = want
+                for (next in paths.subList(done, paths.size)) {
+                    if (next !in early && want.wants(next)) { early.add(next); copy(next) }
+                }
+                want.served.countDown()
+            }
+            if (!launchDone && !forLaunch(path)) { launchDone = true; launchFilesDone() }
+            if (!forLaunch(path) && shouldYield()) {
+                report.yielded = true
+                return report
+            }
+            progress(done, paths.size)
+            if (path in early) continue
+            copy(path)
         }
         if (!launchDone) launchFilesDone()
         progress(paths.size, paths.size)

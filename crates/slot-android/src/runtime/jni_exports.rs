@@ -1059,7 +1059,8 @@ pub(crate) fn exercise_session_graphics_recovery(game: GameSession) -> GameSessi
     engine.inserted = true;
     engine.game_accum = 42.0;
     let session_address = engine.game.as_ref().unwrap().frame().as_ptr();
-    let retained = engine.gpu.recovery_bytes();
+    // Pixels, not stored bytes: static copies are packed in the background.
+    let retained = engine.gpu.recovery_pixel_bytes();
     assert!(retained > 0);
     eprintln!("bundled UI recovery pixels: {retained} bytes");
     ENGINE.with(|holder| *holder.borrow_mut() = Some(engine));
@@ -1089,7 +1090,7 @@ pub(crate) fn exercise_session_graphics_recovery(game: GameSession) -> GameSessi
         let engine = guard.as_mut().unwrap();
         assert!(engine.gpu.graphics_ready());
         assert_eq!(engine.game_accum, 0.0);
-        assert_eq!(engine.gpu.recovery_bytes(), retained);
+        assert_eq!(engine.gpu.recovery_pixel_bytes(), retained);
         assert_eq!(engine.game.as_ref().unwrap().frame().as_ptr(), session_address);
         engine.game.take().unwrap()
     });

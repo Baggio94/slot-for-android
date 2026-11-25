@@ -35,6 +35,31 @@ class FolderSyncTest {
         val f = File(root, path); f.parentFile?.mkdirs(); f.writeText(text); f.setLastModified(modified)
     }
 
+    @Test fun aLaunchedGamesOwnFilesComeInFirst() {
+        val (mine, card) = dirs()
+        // The folder brings three games' saves in; Zelda is launched.
+        put(card, "Saves/mGBA/Advance Wars.srm", "a")
+        put(card, "Saves/mGBA/Mario Kart.srm", "m")
+        put(card, "Saves/mGBA/Zelda.srm", "z")
+        put(card, "Saves/abc123.mgba.state", "zs")
+        put(card, "GameEmulation/f00d.json", "{}")
+        val order = ArrayList<String>()
+        val private = object : FolderSync.PrivateSide(mine) {
+            override fun write(path: String, bytes: ByteArray): FolderSync.Meta {
+                order.add(path); return super.write(path, bytes)
+            }
+        }
+        val want = FolderSync.Priority(setOf("Zelda", "abc123", "f00d", ""))
+        val report = FolderSync.sync(private, Card(card), FolderSync.Base(), FolderSync.Start.MERGE,
+            scope = FolderSync.Scope.LAUNCH, priority = { want })
+        assertEquals(0L, want.served.count)
+        assertEquals(setOf("Saves/mGBA/Zelda.srm", "Saves/abc123.mgba.state", "GameEmulation/f00d.json"),
+            order.take(3).toSet())
+        assertEquals("every file still comes in, once", 5, report.toPrivate)
+        assertFalse("a name is whole: Mario isn't Mario Kart", FolderSync.Priority(setOf("Mario"))
+            .wants("Saves/mGBA/Mario Kart.srm"))
+    }
+
     @Test fun theFirstCopyTakesWhatTravelsAndNoSecrets() {
         val (mine, card) = dirs()
         put(mine, "Saves/mGBA/Emerald.srm", "save")

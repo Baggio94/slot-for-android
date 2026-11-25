@@ -129,19 +129,44 @@ internal class SlotFolder(private val activity: MainActivity) {
     @Volatile private var copyAt = -1
 
     fun pulling(): Boolean = queued.get() == 2 || pullRunning
+
+    /** The folder's labels are on their way in (3.0.1-beta11): a new handheld
+     *  doesn't look for them on the Internet while they're coming. Settled
+     *  by the first copy, by the first two-way pass (done or failed), or
+     *  after two minutes at most. */
+    @Volatile private var artworkIn = false
+    private val createdAt = SystemClock.elapsedRealtime()
+    fun artworkSettled(): Boolean = copyAt < 0 &&
+        (tree() == null || artworkIn || SystemClock.elapsedRealtime() - createdAt > 120_000L)
+    private fun artworkArrived() {
+        if (artworkIn) return
+        artworkIn = true
+        ui { activity.folderArtworkIn() }
+    }
     fun copyPercent(): Int? = copyAt.takeIf { it >= 0 }
 
-    /** Waits, at most [millis], until what a game reads at its launch has
-     *  come in. True when it has. */
-    fun awaitLaunchFiles(millis: Long): Boolean {
-        val until = SystemClock.elapsedRealtime() + millis
-        while (launchPending.get() > 0) {
-            if (SystemClock.elapsedRealtime() >= until) return false
-            Thread.sleep(50)
-        }
-        return true
-    }
     fun launchFilesPending(): Boolean = launchPending.get() > 0
+
+    /** The launch's own files, asked for first by the copy bringing files in. */
+    private val priority = java.util.concurrent.atomic.AtomicReference<FolderSync.Priority?>(null)
+
+    /** Waits, at most [millis], until this game's own files ([tokens]: see
+     *  FolderSync.Priority) have come in: the copy takes them first, the
+     *  rest goes on after the launch. True when they have, or when nothing
+     *  comes in (3.0.1-beta11: no more launching anyway after 15 s). */
+    fun awaitGameFiles(tokens: Set<String>, millis: Long): Boolean {
+        if (launchPending.get() == 0) return true
+        val want = FolderSync.Priority(tokens)
+        priority.set(want)
+        try {
+            val until = SystemClock.elapsedRealtime() + millis
+            while (launchPending.get() > 0 && want.served.count > 0L) {
+                if (SystemClock.elapsedRealtime() >= until) return false
+                want.served.await(20L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
+            return true
+        } finally { priority.compareAndSet(want, null) }
+    }
 
     /** A copy bringing files in, as the task pill shows it: files done, of
      *  all; null when none runs (beta39). */
@@ -426,6 +451,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         }
         retryAt = 0L
         prefs.edit().putString(TREE, tree.toString()).putString(ROOT, doc).putString(ENV, env).apply()
+        artworkArrived()
         ui {
             activity.nativeSetSlotFolder(place())
             // Files came in (labels, favourites, settings): the shelf shows
@@ -528,8 +554,12 @@ internal class SlotFolder(private val activity: MainActivity) {
                 // Persist launch data and conflict choices before release.
                 val ok = try { runSync(asPull, scope = FolderSync.Scope.LAUNCH) }
                 finally { syncRunning = false; pullRunning = false; settle() }
-                if (ok) queueSecondary(FolderSync.Scope.REST, asPull, announce) {}
-                else if (announce) confirmAfterSync.set(true)
+                // Labels come in with the rest: then the Internet's turn.
+                if (ok) queueSecondary(FolderSync.Scope.REST, asPull, announce) { if (asPull) artworkArrived() }
+                else {
+                    if (announce) confirmAfterSync.set(true)
+                    if (asPull) artworkArrived()
+                }
             }
         } catch (error: Exception) {
             if (queued.getAndSet(0) == 2) launchPending.decrementAndGet()
@@ -645,7 +675,10 @@ internal class SlotFolder(private val activity: MainActivity) {
                 FolderSync.sync(privateSide(), side, base, pull = pull, tombs = tombs,
                     restore = paths(restoreFile), launchFilesDone = launchFilesDone,
                     progress = { done, total -> syncDone = done; syncTotal = total },
-                    scope = scope, changed = { syncHasChanges = true }, shouldYield = shouldYield).also {
+                    scope = scope, changed = { syncHasChanges = true }, shouldYield = shouldYield,
+                    // Only a copy bringing the launch files in answers a
+                    // launch: a push alone would let it start before them.
+                    priority = if (pull && scope == FolderSync.Scope.LAUNCH) { { priority.get() } } else { { null } }).also {
                     if (it.tombsChanged) writeTombs(side, tombs)?.let { error -> it.failures.add(error) }
                     if (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.LAUNCH || scope == FolderSync.Scope.SAVES) { keepGone(it); keepTwoSaves(it) }
                     if (pull && (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.REST) && !it.yielded && it.failures.isEmpty()) side.makeCheatFolders()?.let { error -> it.failures.add(error) }

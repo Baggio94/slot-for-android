@@ -134,6 +134,14 @@ impl Sprites {
             .map_or(0, |p| p.iter().map(|p| p.rgba.len()).sum())
     }
 
+    /// The pixels the recovery copies hold, packed or not: unchanged by the
+    /// background packing, so a recovery that lost a texture shows here.
+    pub(crate) fn recovery_pixel_bytes(&self) -> usize {
+        self.recovery
+            .as_ref()
+            .map_or(0, |p| p.iter().map(|p| p.w as usize * p.h as usize * 4).sum())
+    }
+
     pub fn new() -> Result<Self, GfxError> {
         let prog = crate::shaders::program(SPRITE_VERT, SPRITE_FRAG)?;
         let white = crate::gl::texture(
