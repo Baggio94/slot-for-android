@@ -13,6 +13,7 @@ internal object PortableArtwork {
     private val studio = Regex("home-real-labels/[0-9A-F]{8}\\.png")
     fun travels(path: String): Boolean = record.matches(path) || studio.matches(path)
     fun revision(): Long = change.get()
+    fun noteChange() { change.incrementAndGet() }
 
     private fun file(context: Context, kind: String, uri: String): File? {
         val name = GameKeys.name(uri)

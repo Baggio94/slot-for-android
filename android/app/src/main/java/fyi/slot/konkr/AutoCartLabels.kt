@@ -95,9 +95,9 @@ internal object AutoCartLabels {
         return index
     }
 
-    /** Three low-priority threads: our own set has no quota, and the carousel
+    /** Four low-priority threads: our own set has no quota, and the carousel
      *  keeps the device's attention. */
-    private val workers = java.util.concurrent.Executors.newFixedThreadPool(3) { task ->
+    private val workers = java.util.concurrent.Executors.newFixedThreadPool(4) { task ->
         Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             task.run()
@@ -174,14 +174,19 @@ internal object AutoCartLabels {
      *  when it couldn't be asked (the pass asks again), null when the set
      *  doesn't hold one. */
     private fun prefetch(context: Context, roms: List<CartStudioCatalog.Rom>,
-                         shouldContinue: () -> Boolean): Map<String, ByteArray?> {
+                         shouldContinue: () -> Boolean, ownOnly: Boolean): Map<String, ByteArray?> {
         val jobs = roms.map { rom ->
             rom.uri to workers.submit<Pair<Boolean, ByteArray?>> {
                 if (!shouldContinue()) return@submit false to null
                 try {
                     val crc = CartStudioCatalog.cached(context, rom)
                         ?: CartStudioCatalog.identify(context, rom)
-                    true to ownScan(context, rom, crc.hex, shouldContinue)
+                    val shelves = listOfNotNull(rom.platform, GbFamilyArtwork.other(rom.platform))
+                    val bytes = if (!ownOnly && rom in ownMisses && SlotArtSet.hasFreshIndexes(context, shelves)) null
+                    else ownScan(context, rom, crc.hex, shouldContinue).also {
+                        if (ownOnly && it == null && shouldContinue() && SlotArtSet.hasFreshIndexes(context, shelves)) ownMisses.add(rom)
+                    }
+                    true to bytes
                 } catch (error: Exception) {
                     false to null
                 }
@@ -199,7 +204,9 @@ internal object AutoCartLabels {
      *  runs for a week: "2/2 labels, 0 saved" no longer showed at every
      *  start (beta38). After a week, a newer art set may have them. */
     private const val MISS_TTL_MS = PortableArtwork.MISS_TTL_MS
-    fun resetForRefresh() = retry.resetAll()
+    private val ownMisses = java.util.concurrent.ConcurrentHashMap.newKeySet<CartStudioCatalog.Rom>()
+    fun resetForRefresh() { retry.resetAll(); ownMisses.clear() }
+    fun clearOwnPass() { ownMisses.clear() }
     private var missesLoaded = false
 
     private fun missFile(context: Context) = java.io.File(context.filesDir, "AutoLabels/no-official-label.txt")
@@ -302,9 +309,9 @@ internal object AutoCartLabels {
             }
             if (i >= prefetchedUntil) {
                 // The next few carts' labels from our own set, side by side.
-                prefetchedUntil = minOf(due.size, i + (if (ownOnly) 3 else PREFETCH))
+                prefetchedUntil = minOf(due.size, i + (if (ownOnly) 4 else PREFETCH))
                 pre.clear()
-                pre.putAll(prefetch(context, due.subList(i, prefetchedUntil), shouldContinue))
+                pre.putAll(prefetch(context, due.subList(i, prefetchedUntil), shouldContinue, ownOnly))
                 if (!shouldContinue()) break
             }
             var outcome = "NOT_FOUND"

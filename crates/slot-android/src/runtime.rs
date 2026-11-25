@@ -1205,8 +1205,11 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
 fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
     -> (Vec<Vec<slot_store::Cart>>, Vec<slot_store::Cart>)
 {
-    let mut grouped = library.map(carts_by_platform)
-        .unwrap_or_else(|| std::array::from_fn(|_| Vec::new()));
+    let mut grouped = library.map(|entries| {
+        if let Some(root) = root {
+            carts_by_platform(&crate::library::load_shell_profiles(root, entries))
+        } else { carts_by_platform(entries) }
+    }).unwrap_or_else(|| std::array::from_fn(|_| Vec::new()));
     let (video, gba): (Vec<slot_store::Cart>, Vec<slot_store::Cart>) =
         std::mem::take(&mut grouped[Platform::Gba as usize]).into_iter()
             .partition(carousel_delete::is_gba_video);

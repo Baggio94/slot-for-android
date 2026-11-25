@@ -50,7 +50,9 @@ internal object HomeCartLabels {
     private const val LABEL_MAX = 960
 
     private val retry = AutoLabelRetryPolicy()
-    fun resetForRefresh() = retry.resetAll()
+    private val ownMisses = java.util.concurrent.ConcurrentHashMap.newKeySet<Rom>()
+    fun resetForRefresh() { retry.resetAll(); ownMisses.clear() }
+    fun clearOwnPass() { ownMisses.clear() }
     /** Set when ScreenScraper refuses slot.'s credentials or closes its API. */
     @Volatile private var closedUntil = 0L
 
@@ -515,10 +517,7 @@ internal object HomeCartLabels {
     internal fun studioArt(context: Context, uri: String): Pair<ByteArray?, ByteArray?> {
         loadShells(context)
         val rom = games(context).firstOrNull { it.uri == uri } ?: return null to null
-        val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri)) ?: return null to null
-        val (whole, bare) = RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
-            checksums(input)
-        }
+        val (whole, bare) = try { fingerprints(context, rom) } catch (_: Exception) { return null to null }
         val crcs = listOfNotNull(whole, bare).distinct()
         var real: ByteArray? = try {
             ownLabel(context, rom, crcs)?.let { (media, bytes) -> labelPng(bytes, media, rom) }
@@ -613,27 +612,35 @@ internal object HomeCartLabels {
     /** A cart's checksums and its label from our own set, worked out ahead. */
     private class Prefetched(val whole: String, val bare: String?, val own: Pair<Media, ByteArray>?)
 
-    /** Three low-priority threads: our own set has no quota, and the carousel
+    /** Four low-priority threads: our own set has no quota, and the carousel
      *  keeps the device's attention. */
-    private val workers = java.util.concurrent.Executors.newFixedThreadPool(3) { task ->
+    private val workers = java.util.concurrent.Executors.newFixedThreadPool(4) { task ->
         Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             task.run()
         }, "slot-home-labels").apply { isDaemon = true }
     }
 
+    private fun fingerprints(context: Context, rom: Rom): Pair<String, String?> =
+        HomeFingerprintCache.get(context, rom.uri, rom.size, rom.modified) {
+            val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
+                ?: throw IllegalStateException("ROM unreadable")
+            RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ -> checksums(input) }
+        }
+
     private fun prefetch(context: Context, roms: List<Rom>,
-                         shouldContinue: () -> Boolean): Map<String, Prefetched> {
+                         shouldContinue: () -> Boolean, ownOnly: Boolean): Map<String, Prefetched> {
         val jobs = roms.map { rom ->
             rom.uri to workers.submit<Prefetched?> {
                 if (!shouldContinue()) return@submit null
                 try {
-                    val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
-                        ?: return@submit null
-                    val (whole, bare) = RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
-                        checksums(input)
+                    val (whole, bare) = fingerprints(context, rom)
+                    val own = try {
+                        if (!ownOnly && rom in ownMisses && SlotArtSet.hasFreshIndexes(context, listOf(rom.platform))) null
+                        else ownLabel(context, rom, listOfNotNull(whole, bare).distinct()).also {
+                            if (ownOnly && it == null && shouldContinue() && SlotArtSet.hasFreshIndexes(context, listOf(rom.platform))) ownMisses.add(rom)
+                        }
                     }
-                    val own = try { ownLabel(context, rom, listOfNotNull(whole, bare).distinct()) }
                         catch (error: Exception) { Log.w(TAG, "Own art set lookup failed", error); null }
                     Prefetched(whole, bare, own)
                 } catch (error: Exception) {
@@ -718,22 +725,16 @@ internal object HomeCartLabels {
             if (!shouldContinue() || (!ownOnly && asks >= MAX_ATTEMPTS)) break
             if (i >= prefetchedUntil) {
                 // The next few carts' checksums and own labels, side by side.
-                prefetchedUntil = minOf(ready.size, i + (if (ownOnly) 3 else PREFETCH))
+                prefetchedUntil = minOf(ready.size, i + (if (ownOnly) 4 else PREFETCH))
                 pre.clear()
-                pre.putAll(prefetch(context, ready.subList(i, prefetchedUntil), shouldContinue))
+                pre.putAll(prefetch(context, ready.subList(i, prefetchedUntil), shouldContinue, ownOnly))
                 if (!shouldContinue()) break
             }
             var asked = false
             var outcome = "NOT_FOUND"
             try {
                 val early = pre[rom.uri]
-                val (whole, bare) = early?.let { it.whole to it.bare } ?: run {
-                    val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
-                        ?: throw IllegalStateException("ROM unreadable")
-                    RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
-                        checksums(input)
-                    }
-                }
+                val (whole, bare) = early?.let { it.whole to it.bare } ?: fingerprints(context, rom)
                 // slot. for Android's own art set first (art.slot-android.app),
                 // then ScreenScraper for the dumps it doesn't hold.
                 val own = if (early != null) early.own
@@ -842,6 +843,8 @@ internal object HomeCartLabels {
         } catch (error: Exception) {
             Log.w(TAG, "Could not remember label misses", error)
         }
+        try { HomeFingerprintCache.flush(context) }
+        catch (error: Exception) { Log.w(TAG, "Could not persist cartridge checksums", error) }
         val left = missing.any { retry.pending(it.uri) }
         return !ownOnly && left && shouldContinue() && android.os.SystemClock.elapsedRealtime() >= closedUntil
     }

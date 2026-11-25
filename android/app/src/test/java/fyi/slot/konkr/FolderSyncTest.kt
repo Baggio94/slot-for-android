@@ -58,6 +58,27 @@ class FolderSyncTest {
         assertTrue(FolderSync.travels("Saves/abc.mgba.state"))
     }
 
+    @Test fun artworkSyncPreservesUnrelatedBaseAndDoesNotTouchSaves() {
+        val (mine, card) = dirs()
+        put(mine, "Saves/mGBA/Emerald.srm", "first")
+        put(mine, "Labels/a.png", "old")
+        val base = FolderSync.Base()
+        val private = FolderSync.PrivateSide(mine)
+        FolderSync.sync(private, Card(card), base)
+        val saved = base.entries.getValue("Saves/mGBA/Emerald.srm")
+        put(mine, "Saves/mGBA/Emerald.srm", "local new", 3_000_000L)
+        put(card, "Saves/mGBA/Emerald.srm", "remote new", 2_000_000L)
+        put(mine, "Labels/b.png", "new")
+        val report = FolderSync.sync(private, Card(card), base, scope = FolderSync.Scope.ARTWORK)
+        assertEquals(1, report.toFolder)
+        assertEquals(saved, base.entries["Saves/mGBA/Emerald.srm"])
+        assertEquals("remote new", File(card, "Saves/mGBA/Emerald.srm").readText())
+        assertEquals("local new", File(mine, "Saves/mGBA/Emerald.srm").readText())
+        assertFalse(private.list(FolderSync.Scope.ARTWORK).containsKey("Saves/mGBA/Emerald.srm"))
+        assertTrue(File(card, "Labels/b.png").isFile)
+        assertEquals(1, FolderSync.sync(private, Card(card), base, scope = FolderSync.Scope.SAVES).conflicts)
+    }
+
     @Test fun whatAnotherHandheldChangedComesBack() {
         val (mine, card) = dirs()
         put(mine, "Saves/mGBA/Emerald.srm", "first")

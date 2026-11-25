@@ -281,6 +281,31 @@ pub fn remember_shell(uri: &str, chosen: Option<ShellChoice>) {
     }
 }
 
+/// The profile on disk is authoritative, including after a slot-folder pull.
+pub fn load_shell_profiles(root: &std::path::Path, entries: &[RomEntry]) -> Vec<RomEntry> {
+    let dir = root.join("Studio");
+    let keys = game_keys(entries);
+    let present: std::collections::HashSet<_> = std::fs::read_dir(&dir)
+        .map(|files| files.flatten().map(|f| f.file_name()).collect()).unwrap_or_default();
+    let mut result = entries.to_vec();
+    for entry in &mut result {
+        let name = keys.get(&entry.uri).map(String::as_str).unwrap_or(&entry.uri);
+        let portable = format!("{}.shell", crate::core_selection::key_of_name(name));
+        let legacy = format!("{}.shell", crate::core_selection::legacy_key(&entry.uri));
+        if !present.contains(std::ffi::OsStr::new(&portable)) &&
+            present.contains(std::ffi::OsStr::new(&legacy)) {
+            crate::core_selection::carry(&dir.join(&legacy), &dir.join(&portable));
+        }
+        entry.shell_override = if present.contains(std::ffi::OsStr::new(&portable)) ||
+            present.contains(std::ffi::OsStr::new(&legacy)) {
+            std::fs::read_to_string(dir.join(portable)).ok()
+                .filter(|s| s.len() <= 100 && ShellChoice::parse(s.trim()).is_some())
+                .map(|s| s.trim().to_owned())
+        } else { None };
+    }
+    result
+}
+
 pub fn carts_by_platform(entries: &[RomEntry]) -> [Vec<Cart>; Platform::ALL.len()] {
     let mut groups: [Vec<Cart>; Platform::ALL.len()] = std::array::from_fn(|_| Vec::new());
     for entry in entries.iter().take(MAX_ROMS) {
@@ -359,6 +384,23 @@ mod tests {
         assert_eq!(colour_swan(black, &zipped).outline, slot_store::Outline::WonderSwanColor);
         let plain = named("WS", "Final Fantasy (Japan).wsc", "content://y");
         assert_eq!(colour_swan(black, &plain).finish, slot_store::ShellFinish::Clear);
+    }
+
+    #[test]
+    fn shell_profiles_are_loaded_from_the_incoming_keys_and_not_stale_json() {
+        let root = std::env::temp_dir().join(format!("slot-shell-profile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Studio")).unwrap();
+        let mut entry = named("GBA", "Emerald.gba", "content://card/Emerald.gba");
+        entry.shell_override = Some("auto ff0000 solid".into());
+        let name = game_keys(&[entry.clone()])[&entry.uri].clone();
+        let file = root.join("Studio").join(format!("{}.shell", crate::core_selection::key_of_name(&name)));
+        std::fs::write(&file, "auto 123abc clear").unwrap();
+        assert_eq!(load_shell_profiles(&root, &[entry.clone()])[0].shell_override.as_deref(),
+            Some("auto 123abc clear"));
+        std::fs::remove_file(&file).unwrap();
+        assert!(load_shell_profiles(&root, &[entry])[0].shell_override.is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
