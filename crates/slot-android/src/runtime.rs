@@ -560,6 +560,7 @@ impl LinkEntry {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ShelfOverlay {
     None,
+    Shelves { rack: usize },
     Menu { row: usize },
     Library { row: usize },
     /// Library > Saves & States.
@@ -1596,6 +1597,7 @@ struct Engine {
     /// L2 / R2 on the carousel: delete held, GBA Video tapped.
     triggers: carousel_delete::Triggers,
     touch: Option<touch::Touch>,
+    shelves_grid: shelves_grid::GridState,
     /// The cart flying between the shelf and Cart Studio (cart_studio.rs).
     studio_flight: Option<cart_studio::StudioFlight>,
     /// A long press on a side cart: Cart Studio once it reaches the middle.
@@ -2482,6 +2484,7 @@ impl Engine {
             romm: None,
             triggers: Default::default(),
             touch: None,
+            shelves_grid: Default::default(),
             studio_flight: None,
             studio_when_settled: false,
             gba_video: false,
@@ -2881,7 +2884,7 @@ impl Engine {
     /// Over a menu page: at the top right, in the page's colours.
     fn draw_menu_task_pill(&mut self, out: &mut Vec<Draw>) {
         if self.game.is_some() || self.progress > 0.0
-            || matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::CartStudio) { return; }
+            || matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::CartStudio | ShelfOverlay::Shelves { .. }) { return; }
         let Some((kind, tex, w, h)) = self.task_pill_tex() else { return };
         let margin = if out_w() < 640 { 12.0 } else { 24.0 };
         let ink = self.menu_ink();
@@ -4286,6 +4289,7 @@ impl Engine {
             }
             Input::Reset => {
                 self.reset_time_controls();
+                self.shelves_grid.reset();
                 self.menu_held = None;
                 self.buttons = 0;
                 // Android won't tell the releases of keys held while away.
@@ -5084,6 +5088,7 @@ impl Engine {
                 if self.overlay != ShelfOverlay::None {
                     if pressed {
                         match self.overlay {
+                            ShelfOverlay::Shelves { .. } => self.shelves_key(code),
                             ShelfOverlay::Menu { row } => match code {
                                 19 | 20 | 102 | 103 => {
                                     self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 6, self.menu_repeat_dispatch) };
@@ -5435,6 +5440,12 @@ impl Engine {
                                 self.awaiting_game = true;
                                 *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(uri);
                             }
+                            return;
+                        }
+                        97 if !self.inserted && self.progress <= 0.0
+                            && self.triggers.hold.is_none() && self.triggers.ejecting.is_none()
+                            && !self.lid_covered && self.lid_t <= 0.0 => {
+                            self.open_shelves();
                             return;
                         }
                         97 => {
@@ -8712,6 +8723,7 @@ impl Engine {
     }
 
     fn draw_overlay(&self, out: &mut Vec<Draw>) {
+        if self.draw_shelves_overlay(out) { return; }
         // Light and Original: the pages' text turns dark on their light grounds.
         let ink = self.menu_ink();
         if ink.is_some() { out.push(Draw::Ink(ink)); }
@@ -8748,7 +8760,7 @@ impl Engine {
 
     fn draw_overlay_page(&self, out: &mut Vec<Draw>) {
         match self.overlay {
-            ShelfOverlay::None => {}
+            ShelfOverlay::None | ShelfOverlay::Shelves { .. } => {}
             ShelfOverlay::Menu { row } => {
                 let items = [1, 2, 3, 48, 25, 31];
                 self.draw_original_style_menu(0, &items, row, out);
@@ -10107,6 +10119,7 @@ impl Engine {
         let upload_at = Instant::now();
         self.relabel_one();
         self.prepare_visible();
+        self.prepare_shelves_grid();
         crate::frame_watch::part(crate::frame_watch::PART_UPLOAD, upload_at.elapsed());
         self.start_waiting_picker();
         // Only warm a settled carousel selection. Actual ROM I/O takes place
@@ -10404,7 +10417,8 @@ impl Engine {
         // A first run shows its sentence alone: no clock, battery or icons
         // until the first scan starts (Siham 2026-11-09).
         let first_run = self.shelf_status == 0 && self.shelves.iter().all(|s| s.carts.is_empty());
-        let chrome = self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None) && !first_run;
+        let shelves_chrome = matches!(self.overlay, ShelfOverlay::Shelves { .. });
+        let chrome = self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::Shelves { .. }) && !first_run;
         let mut indicator_flags = 0;
         if chrome {
             indicator_flags |= 1; // show upper indicators
@@ -10416,8 +10430,8 @@ impl Engine {
             // Settings > Status Bar: where the icons and the clock go. On
             // the same line they share it, the icons on the left.
             let near_square = near_square_panel();
-            let clock_top = self.settings.clock_on_top || near_square;
-            let icons_bottom = self.settings.icons_on_bottom && !near_square;
+            let clock_top = shelves_chrome || self.settings.clock_on_top || near_square;
+            let icons_bottom = !shelves_chrome && self.settings.icons_on_bottom && !near_square;
             let icons = self.settings.show_wifi || self.settings.show_bluetooth
                 || self.settings.show_integrations;
             let grouped = icons && clock_top != icons_bottom;
@@ -10427,7 +10441,7 @@ impl Engine {
             // Each line is inked for what is behind it, the icons as the
             // clock and battery: on the console bar, the bar's own ink; at
             // the top, black on a light wallpaper, white on a dark one.
-            let top_dark = self.top_line_dark_ink();
+            let top_dark = if shelves_chrome { menu_style::ink_map().is_some() } else { self.top_line_dark_ink() };
             let line_dark = |bottom: bool| if bottom { self.footer_dark_ink() } else { top_dark };
             if line_dark(icons_bottom) { indicator_flags |= 256; }
             let dark_ink = line_dark(!clock_top);
@@ -11071,6 +11085,7 @@ mod cart_library;
 mod romm;
 mod carousel_delete;
 mod touch;
+mod shelves_grid;
 use carousel_delete::VIDEO_RACK;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) use jni_exports::exercise_session_graphics_recovery;

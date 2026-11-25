@@ -330,7 +330,7 @@ impl Engine {
     /// The path line and side-cart faces the shown page needs.
     pub(super) fn prepare_menu_look(&mut self) {
         let path = match self.overlay {
-            ShelfOverlay::None | ShelfOverlay::Core | ShelfOverlay::States
+            ShelfOverlay::None | ShelfOverlay::Core | ShelfOverlay::States | ShelfOverlay::Shelves { .. }
             | ShelfOverlay::Multiplayer | ShelfOverlay::About { .. } => "",
             ShelfOverlay::CartStudio | ShelfOverlay::CartLibrary | ShelfOverlay::Romm => self.studio_page_path(),
             ShelfOverlay::InterfaceSettings { .. } => self.menu_path(59),

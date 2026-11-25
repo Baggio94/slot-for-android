@@ -130,6 +130,10 @@ impl Engine {
     /// time.
     pub(super) fn touch(&mut self, action: u8, x: f32, y: f32, ms: i64) {
         let (x, y) = (x * out_w() as f32, y * OUT_H as f32);
+        if matches!(self.overlay, ShelfOverlay::Shelves { .. }) {
+            if self.settings.touchscreen { self.shelves_touch(action, x, y, ms); }
+            return;
+        }
         if action == DOWN {
             self.touch = None;
             if self.picker_touchable() {
