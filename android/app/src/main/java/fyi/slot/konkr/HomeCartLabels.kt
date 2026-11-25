@@ -630,8 +630,8 @@ internal object HomeCartLabels {
         }
 
     private fun prefetch(context: Context, roms: List<Rom>,
-                         shouldContinue: () -> Boolean, ownOnly: Boolean): Map<String, Prefetched> {
-        val jobs = roms.map { rom ->
+                         shouldContinue: () -> Boolean, ownOnly: Boolean): Map<String, java.util.concurrent.Future<Prefetched?>> {
+        return roms.associate { rom ->
             rom.uri to workers.submit<Prefetched?> {
                 if (!shouldContinue()) return@submit null
                 try {
@@ -649,9 +649,6 @@ internal object HomeCartLabels {
                 }
             }
         }
-        return jobs.mapNotNull { (uri, job) ->
-            try { job.get()?.let { uri to it } } catch (_: Exception) { null }
-        }.toMap()
     }
 
     /** The home carts still to label, out of all of them. */
@@ -720,22 +717,22 @@ internal object HomeCartLabels {
         var asks = 0
         var dirty = false
         val ready = missing.filter { retry.ready(it.uri, now) }
-        val pre = HashMap<String, Prefetched>()
+        val pre = HashMap<String, java.util.concurrent.Future<Prefetched?>>()
         var prefetchedUntil = 0
+        try {
         for ((i, rom) in ready.withIndex()) {
             if (!shouldContinue() || (!ownOnly && asks >= MAX_ATTEMPTS)) break
-            if (i >= prefetchedUntil) {
-                // The next few carts' checksums and own labels, side by side.
-                prefetchedUntil = minOf(ready.size, i + (if (ownOnly) 4 else PREFETCH))
-                pre.clear()
-                pre.putAll(prefetch(context, ready.subList(i, prefetchedUntil), shouldContinue, ownOnly))
-                if (!shouldContinue()) break
+            val end = minOf(ready.size, i + 8)
+            if (end > prefetchedUntil) {
+                pre.putAll(prefetch(context, ready.subList(prefetchedUntil, end), shouldContinue, ownOnly))
+                prefetchedUntil = end
             }
+            val early = try { pre.remove(rom.uri)?.get() } catch (_: Exception) { null }
+            if (!shouldContinue()) break
             var asked = false
             var outcome = "NOT_FOUND"
             try {
-                val early = pre[rom.uri]
-                val (whole, bare) = early?.let { it.whole to it.bare } ?: fingerprints(context, rom)
+                 val (whole, bare) = early?.let { it.whole to it.bare } ?: fingerprints(context, rom)
                 // slot. for Android's own art set first (art.slot-android.app),
                 // then ScreenScraper for the dumps it doesn't hold.
                 val own = if (early != null) early.own
@@ -838,6 +835,7 @@ internal object HomeCartLabels {
             }
             if (asked) Thread.sleep(250L)
         }
+        } finally { pre.values.forEach { it.cancel(true) } }
         if (dirty) try {
             saveState(context, state)
             writeAtomic(File(context.filesDir, REAL_DONE), real.toString().toByteArray(Charsets.UTF_8))

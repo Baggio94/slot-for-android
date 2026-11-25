@@ -174,8 +174,8 @@ internal object AutoCartLabels {
      *  when it couldn't be asked (the pass asks again), null when the set
      *  doesn't hold one. */
     private fun prefetch(context: Context, roms: List<CartStudioCatalog.Rom>,
-                         shouldContinue: () -> Boolean, ownOnly: Boolean): Map<String, ByteArray?> {
-        val jobs = roms.map { rom ->
+                         shouldContinue: () -> Boolean, ownOnly: Boolean): Map<String, java.util.concurrent.Future<Pair<Boolean, ByteArray?>>> {
+        return roms.associate { rom ->
             rom.uri to workers.submit<Pair<Boolean, ByteArray?>> {
                 if (!shouldContinue()) return@submit false to null
                 try {
@@ -192,12 +192,6 @@ internal object AutoCartLabels {
                 }
             }
         }
-        val out = HashMap<String, ByteArray?>()
-        for ((uri, job) in jobs) {
-            val (asked, bytes) = try { job.get() } catch (_: Exception) { false to null }
-            if (asked) out[uri] = bytes
-        }
-        return out
     }
 
     /** Games with no official label (hacks, homebrew), remembered between
@@ -298,22 +292,27 @@ internal object AutoCartLabels {
         var errors = 0
         // Only the carts our own set doesn't hold are bounded per pass: it has
         // no quota, so every label it holds comes in one pass.
-        val pre = HashMap<String, ByteArray?>()
+        val pre = HashMap<String, java.util.concurrent.Future<Pair<Boolean, ByteArray?>>>()
         var prefetchedUntil = 0
+        try {
         for ((i, rom) in due.withIndex()) {
             if (!shouldContinue() || (!ownOnly && attempted >= MAX_ATTEMPTS)) break
+            // Sliding bounded window: submit the next cart as a result is
+            // consumed, without waiting for every worker in a batch.
+            val end = minOf(due.size, i + 8)
+            if (end > prefetchedUntil) {
+                pre.putAll(prefetch(context, due.subList(prefetchedUntil, end), shouldContinue, ownOnly))
+                prefetchedUntil = end
+            }
+            val job = pre.remove(rom.uri)
             val target = CartLabelPaths.file(context.filesDir, rom.uri)
             if (target.exists()) {
+                job?.cancel(true)
                 retry.finished(rom.uri)
                 continue
             }
-            if (i >= prefetchedUntil) {
-                // The next few carts' labels from our own set, side by side.
-                prefetchedUntil = minOf(due.size, i + (if (ownOnly) 4 else PREFETCH))
-                pre.clear()
-                pre.putAll(prefetch(context, due.subList(i, prefetchedUntil), shouldContinue, ownOnly))
-                if (!shouldContinue()) break
-            }
+            val early = try { job?.get() } catch (_: Exception) { null }
+            if (!shouldContinue()) break
             var outcome = "NOT_FOUND"
             try {
                 val crc = CartStudioCatalog.cached(context, rom)
@@ -324,7 +323,7 @@ internal object AutoCartLabels {
                 }
                 // slot. for Android's own art set first (art.slot-android.app),
                 // then slot.'s, matched as before.
-                var bytes: ByteArray? = if (pre.containsKey(rom.uri)) pre[rom.uri] else try {
+                var bytes: ByteArray? = if (early?.first == true) early.second else try {
                     ownScan(context, rom, crc.hex, shouldContinue)
                 } catch (error: Exception) {
                     SlotLog.w(TAG, "Own art set lookup failed; trying slot.'s", error)
@@ -460,6 +459,7 @@ internal object AutoCartLabels {
                 SlotLog.i(TAG, "ART_RESULT $outcome [${rom.platform}] ${rom.title.take(96)}")
             }
         }
+        } finally { pre.values.forEach { it.cancel(true) } }
         try { CartStudioCatalog.flush(context) }
         catch (error: Exception) { SlotLog.w(TAG, "Could not persist cartridge checksums", error) }
 

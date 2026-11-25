@@ -45,16 +45,20 @@ internal object FolderSync {
     /** One side: the private files or the folder. Paths are relative,
      *  with '/' (`Saves/mGBA/Pokemon.srm`). */
     enum class Scope {
-        ALL, ARTWORK, SAVES;
+        ALL, ARTWORK, SAVES, LAUNCH, REST;
         fun includes(path: String): Boolean = travels(path) && when (this) {
             ALL -> true
             ARTWORK -> path.startsWith("Labels/") || path.startsWith("ArtNames/") || PortableArtwork.travels(path)
             SAVES -> path.startsWith("Saves/") || path.startsWith("States/")
+            LAUNCH -> forLaunch(path)
+            REST -> !forLaunch(path)
         }
         fun descends(path: String): Boolean = when (this) {
             ALL -> path.substringBefore('/') in WALKED_DIRS
             ARTWORK -> path.substringBefore('/') in ARTWORK_DIRS
             SAVES -> path.substringBefore('/') in SAVE_DIRS
+            LAUNCH -> path.substringBefore('/') in LAUNCH_DIRS
+            REST -> path.substringBefore('/') in WALKED_DIRS && path.substringBefore('/') !in LAUNCH_DIRS
         }
     }
 
@@ -148,6 +152,7 @@ internal object FolderSync {
         /** Removed here because another handheld deleted them on purpose. */
         val deletedHere = ArrayList<String>()
         var tombsChanged = false
+        var yielded = false
         /** What came in from the folder. */
         val pulled = ArrayList<String>()
         /** Old leftovers removed from the folder ([Side.dropStale]). */
@@ -175,7 +180,7 @@ internal object FolderSync {
              tombs: MutableMap<String, Tomb> = HashMap(), restore: Set<String> = emptySet(),
              progress: (Int, Int) -> Unit = { _, _ -> },
              launchFilesDone: () -> Unit = {}, scope: Scope = Scope.ALL,
-             changed: () -> Unit = {}): Report {
+             changed: () -> Unit = {}, shouldYield: () -> Boolean = { false }): Report {
         val report = Report()
         // What no longer travels is forgotten, never taken for a deletion
         // (beta39: the RetroAchievements cache left the folder).
@@ -189,6 +194,10 @@ internal object FolderSync {
         var launchDone = false
         for ((done, path) in paths.withIndex()) {
             if (!launchDone && !forLaunch(path)) { launchDone = true; launchFilesDone() }
+            if (!forLaunch(path) && shouldYield()) {
+                report.yielded = true
+                return report
+            }
             progress(done, paths.size)
             if (path.startsWith("Conflicts/")) continue
             try {
@@ -204,7 +213,7 @@ internal object FolderSync {
         progress(paths.size, paths.size)
         // Old leftovers go last (beta40): removing thousands of badges from
         // a card takes minutes, and held up a launch when it came first.
-        if (pull && scope == Scope.ALL) report.stale = folder.dropStale()
+        if (pull && (scope == Scope.ALL || scope == Scope.REST)) report.stale = folder.dropStale()
         // Gone from both since the last copy: deleted here on purpose (DELETE
         // IT, at a game's launch). Other handhelds follow it.
         for ((path, entry) in base.entries) {
@@ -357,8 +366,16 @@ internal object FolderSync {
     private fun stamp(now: Long): String = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT)
         .apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(now))
 
-    fun sha1(bytes: ByteArray): String = MessageDigest.getInstance("SHA-1").digest(bytes)
-        .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 0xff) }
+    fun sha1(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-1").digest(bytes)
+        val hex = "0123456789abcdef"
+        return buildString(digest.size * 2) {
+            for (byte in digest) {
+                val n = byte.toInt() and 0xff
+                append(hex[n ushr 4]); append(hex[n and 15])
+            }
+        }
+    }
 
     // -----------------------------------------------------------------
     // What travels in the slot. folder (scenarios §2), from slot.'s files.
@@ -368,6 +385,7 @@ internal object FolderSync {
         "Cheats", "CustomCheats", "Wallpapers", "ArtNames")
     private val ARTWORK_DIRS = setOf("Labels", "ArtNames", "ArtworkHistory", "home-real-labels")
     private val SAVE_DIRS = setOf("Saves", "States")
+    private val LAUNCH_DIRS = LAUNCH_ONLY.map { it.trimEnd('/') }.toSet()
     private val WALKED_DIRS = TRAVELLING_DIRS.toSet() + ARTWORK_DIRS + setOf("Config")
     /** Single files that travel. */
     private val TRAVELLING_FILES = setOf("slot-konkr-settings.json", "slot-konkr-controls.json",

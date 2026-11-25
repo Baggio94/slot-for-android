@@ -525,9 +525,11 @@ internal class SlotFolder(private val activity: MainActivity) {
                 if (asPull) pullRunning = true
                 val settled = java.util.concurrent.atomic.AtomicBoolean(!asPull)
                 val settle = { if (settled.compareAndSet(false, true)) launchPending.decrementAndGet() }
-                try { runSync(asPull, settle, announce) } finally {
-                    syncRunning = false; pullRunning = false; settle()
-                }
+                // Persist launch data and conflict choices before release.
+                val ok = try { runSync(asPull, scope = FolderSync.Scope.LAUNCH) }
+                finally { syncRunning = false; pullRunning = false; settle() }
+                if (ok) queueSecondary(FolderSync.Scope.REST, asPull, announce) {}
+                else if (announce) confirmAfterSync.set(true)
             }
         } catch (error: Exception) {
             if (queued.getAndSet(0) == 2) launchPending.decrementAndGet()
@@ -538,17 +540,43 @@ internal class SlotFolder(private val activity: MainActivity) {
     /** Artwork never needs to wait for, enumerate or modify saves and states. */
     fun syncArtwork(pull: Boolean, finished: (Boolean) -> Unit = {}) {
         if (tree() == null) { finished(true); return }
-        try {
-            worker.execute {
-                syncDone = 0; syncTotal = 0; syncHasChanges = false; syncRunning = true
-                val ok = try {
-                    runSync(pull && activity.nativeCanRefreshLibrary(), scope = FolderSync.Scope.ARTWORK)
-                } catch (error: Exception) {
-                    SlotLog.w(TAG, "Artwork folder copy failed", error); false
-                } finally { syncRunning = false }
-                finished(ok)
-            }
-        } catch (error: Exception) { finished(false) }
+        queueSecondary(FolderSync.Scope.ARTWORK, pull, false, finished)
+    }
+
+    /** Single writer, with checkpoints before handing over to urgent work. */
+    private fun queueSecondary(scope: FolderSync.Scope, pull: Boolean, announce: Boolean,
+                               finished: (Boolean) -> Unit) {
+        val expectedTree = tree()
+        if (expectedTree == null) { finished(false); return }
+        fun enqueue() {
+            if (activity.isDestroyed || tree() != expectedTree) { finished(false); return }
+            try {
+                worker.execute {
+                    if (activity.isDestroyed || tree() != expectedTree) { finished(false); return@execute }
+                    var yielded = false
+                    syncDone = 0; syncTotal = 0; syncHasChanges = false; syncRunning = true
+                    val ok = try {
+                        runSync(pull && activity.nativeCanRefreshLibrary(), announce = announce, scope = scope,
+                            shouldYield = { queued.get() != 0 || launchPending.get() > 0 ||
+                                saveCopyQueued.get() || activity.nativeIsPlaying() },
+                            onYield = { yielded = true })
+                    } catch (error: Exception) {
+                        SlotLog.w(TAG, "Secondary folder copy failed", error); false
+                    } finally { syncRunning = false }
+                    if (yielded && ok) {
+                        ui {
+                            fun resumeCopy() {
+                                if (activity.isDestroyed || tree() != expectedTree) { finished(false); return }
+                                if (activity.nativeIsPlaying()) activity.window.decorView.postDelayed({ resumeCopy() }, 500L)
+                                else enqueue()
+                            }
+                            resumeCopy()
+                        }
+                    } else finished(ok)
+                }
+            } catch (error: Exception) { finished(false) }
+        }
+        enqueue()
     }
 
     /** A normal in-game save never needs to walk the artwork folders. */
@@ -566,7 +594,8 @@ internal class SlotFolder(private val activity: MainActivity) {
     }
 
     private fun runSync(pull: Boolean, launchFilesDone: () -> Unit = {}, announce: Boolean = false,
-                        scope: FolderSync.Scope = FolderSync.Scope.ALL): Boolean =
+                        scope: FolderSync.Scope = FolderSync.Scope.ALL,
+                        shouldYield: () -> Boolean = { false }, onYield: () -> Unit = {}): Boolean =
         run {
             // Which folder, read when the copy runs: one asked for just
             // before the player chose another went to the old one with the
@@ -616,10 +645,10 @@ internal class SlotFolder(private val activity: MainActivity) {
                 FolderSync.sync(privateSide(), side, base, pull = pull, tombs = tombs,
                     restore = paths(restoreFile), launchFilesDone = launchFilesDone,
                     progress = { done, total -> syncDone = done; syncTotal = total },
-                    scope = scope, changed = { syncHasChanges = true }).also {
+                    scope = scope, changed = { syncHasChanges = true }, shouldYield = shouldYield).also {
                     if (it.tombsChanged) writeTombs(side, tombs)?.let { error -> it.failures.add(error) }
-                    if (scope != FolderSync.Scope.ARTWORK) { keepGone(it); keepTwoSaves(it) }
-                    if (pull && scope == FolderSync.Scope.ALL && it.failures.isEmpty()) side.makeCheatFolders()?.let { error -> it.failures.add(error) }
+                    if (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.LAUNCH || scope == FolderSync.Scope.SAVES) { keepGone(it); keepTwoSaves(it) }
+                    if (pull && (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.REST) && !it.yielded && it.failures.isEmpty()) side.makeCheatFolders()?.let { error -> it.failures.add(error) }
                 }
             } catch (error: Exception) {
                 SlotLog.w(TAG, "Slot folder sync failed", error)
@@ -636,16 +665,19 @@ internal class SlotFolder(private val activity: MainActivity) {
                     report.failures.add("slot.json: ${SlotStorageProblem.describe(error)}")
                 }
             }
-            if (report.failures.isNotEmpty()) {
+            if (report.yielded && report.failures.isEmpty()) {
+                SlotLog.i(TAG, "Slot folder (${scope.name}) yielded after ${report.toFolder} out, ${report.toPrivate} in")
+                onYield()
+            } else if (report.failures.isNotEmpty()) {
                 syncFailed(tree, report.failures)
                 if (announce) confirmAfterSync.set(true)
             } else {
                 retryAt = 0L
-                if (pull && scope == FolderSync.Scope.ALL && (announce || confirmNextPull)) TaskPill.confirm("FOLDER UP TO DATE")
+                if (pull && (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.REST) && (announce || confirmNextPull)) TaskPill.confirm("FOLDER UP TO DATE")
                 // A push while paused/playing may defer incoming changes.
                 // Confirm the whole folder only after a two-way pass.
                 if (!pull && announce) confirmAfterSync.set(true)
-                if (pull && scope == FolderSync.Scope.ALL) confirmNextPull = false
+                if (pull && (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.REST)) confirmNextPull = false
             }
             if (report.changedShelf) ui { whenFree { if (activity.nativeCanRefreshLibrary()) activity.nativeReloadAll() } }
             SlotLog.i(TAG, "Slot folder (${scope.name}): ${report.toFolder} out, ${report.toPrivate} in, " +
@@ -927,7 +959,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         }
         private var listed = false
         /** Pictures, written straight when new (see write). */
-        private val DIRECT = listOf("Labels/", "ArtNames/", "Studio/", "Wallpapers/", "home-real-labels/")
+        private val DIRECT = listOf("Labels/", "ArtNames/", "Studio/", "Wallpapers/", "home-real-labels/", "ArtworkHistory/")
 
         private fun dirOf(path: String): String = folderFor(path, root, dirs) { above, name ->
             val key = above to name

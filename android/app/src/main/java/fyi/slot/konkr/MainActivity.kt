@@ -386,6 +386,8 @@ class MainActivity : Activity() {
     private val manualCatalogueFailed = AtomicBoolean(false)
     private val manualOfflineNotice = AtomicBoolean(false)
     private val autoLabelsNeedSync = AtomicBoolean(false)
+    private val artworkCheckpointRunning = AtomicBoolean(false)
+    private var labelsSinceCheckpoint = 0
     /** Labels saved before this run of passes, for its "N LABELS ADDED". */
     @Volatile private var autoLabelsChainBase = -1
     private var autoLabelsOwnPassDone = false
@@ -3387,6 +3389,16 @@ class MainActivity : Activity() {
                     val savedLabel: (String) -> Unit = { uri ->
                         autoLabelUpdates.add(uri)
                         autoLabelsNeedSync.set(true)
+                        labelsSinceCheckpoint++
+                        // Overlap the first copy with scraping, not with game
+                        // launch. At most one intermediate copy in flight.
+                        if (labelsSinceCheckpoint >= 128 && artworkCheckpointRunning.compareAndSet(false, true)) {
+                            labelsSinceCheckpoint = 0
+                            slotFolder.syncArtwork(pull = false) { ok ->
+                                if (!ok) autoLabelsNeedSync.set(true)
+                                artworkCheckpointRunning.set(false)
+                            }
+                        }
                     }
                     HomeCartLabels.announce(applicationContext)
                     if (!autoLabelsOwnPassDone) {
@@ -4679,7 +4691,8 @@ class MainActivity : Activity() {
         scanner.execute {
             try {
                 val previous = cachedLibraryGames(uri)
-                val result = RomLibrary.scan(this, uri, previous, progress)
+                val result = RomLibrary.scan(this, uri, previous, progress,
+                    shouldContinue = { !isDestroyed && scanSerial.get() == serial })
                 if (scanSerial.get() != serial) return@execute
                 // A bounded/incomplete SAF scan is not evidence that a ROM
                 // was removed: RomLibrary kept every earlier cart. What it
@@ -4708,6 +4721,8 @@ class MainActivity : Activity() {
                 // games came by a scan rather than an add).
                 giveRommLabels(result.json)
                 if (previous != null && RomLibrary.sameIndex(previous, result.json)) {
+                    // Persist metadata-only migrations even without a shelf rebuild.
+                    if (previous != result.json) storeCachedLibrary(uri, result.json)
                     SlotLog.i(TAG, "ROM library unchanged: " + result.count +
                         " carts; no renderer rebuild")
                     if (refreshArtwork) requestArtworkRefresh()
@@ -4730,6 +4745,8 @@ class MainActivity : Activity() {
                         uri, result.json, prepared, serial, quiet, partial = partial, refreshArtwork = refreshArtwork)
                     publishPendingLibraryIfIdle()
                 }
+            } catch (_: java.util.concurrent.CancellationException) {
+                SlotLog.i(TAG, "ROM scan superseded")
             } catch (error: OutOfMemoryError) {
                 // Last resort (issue #122's bigger bound): the scan's copies
                 // are dropped with its frames; the shelf stays as it was

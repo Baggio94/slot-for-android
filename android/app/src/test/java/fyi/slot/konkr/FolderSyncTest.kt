@@ -336,4 +336,45 @@ class FolderSyncTest {
         // Not for labels: the newer one, as before.
         assertEquals(2, report.conflicts)
     }
+
+    @Test fun secondaryCopyYieldsAndResumesWithoutLosingTheBase() {
+        val (mine, card) = dirs()
+        try {
+            put(mine, "Labels/GBA/a.png", "a")
+            put(mine, "Labels/GBA/b.png", "b")
+            put(card, "Saves/mGBA/Emerald.srm", "new save")
+            val base = FolderSync.Base()
+            var checks = 0
+            val first = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base,
+                scope = FolderSync.Scope.ARTWORK, shouldYield = { checks++ >= 1 })
+            assertTrue(first.yielded)
+            assertEquals(1, first.toFolder)
+            assertEquals(1, base.entries.size)
+            assertFalse(File(mine, "Saves/mGBA/Emerald.srm").exists())
+            val launch = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base,
+                scope = FolderSync.Scope.LAUNCH)
+            assertEquals(1, launch.toPrivate)
+            assertEquals("new save", File(mine, "Saves/mGBA/Emerald.srm").readText())
+            val rest = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base,
+                scope = FolderSync.Scope.REST)
+            assertFalse(rest.yielded)
+            assertEquals(1, rest.toFolder)
+            assertEquals(3, base.entries.size)
+            assertEquals("a", File(card, "Labels/GBA/a.png").readText())
+            assertEquals("b", File(card, "Labels/GBA/b.png").readText())
+        } finally { mine.deleteRecursively(); card.deleteRecursively() }
+    }
+
+    @Test fun launchAndRestCoverTheSamePathsAsAll() {
+        for (path in listOf("Saves/mGBA/game.srm", "States/mGBA/game.state",
+            "Cheats/game.cht", "CustomCheats/game.cht", "GameEmulation/game.json",
+            "Labels/GBA/game.png", "Studio/game.shell", "slot-konkr-settings.json",
+            "Config/romm.json", "Saves/RetroAchievements/auth.json")) {
+            val launch = FolderSync.Scope.LAUNCH.includes(path)
+            val rest = FolderSync.Scope.REST.includes(path)
+            assertFalse(launch && rest)
+            assertEquals(FolderSync.Scope.ALL.includes(path), launch || rest)
+        }
+        assertEquals("a9993e364706816aba3e25717850c26c9cd0d89d", FolderSync.sha1("abc".toByteArray()))
+    }
 }
