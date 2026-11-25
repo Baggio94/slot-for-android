@@ -35,6 +35,52 @@ class FolderSyncTest {
         val f = File(root, path); f.parentFile?.mkdirs(); f.writeText(text); f.setLastModified(modified)
     }
 
+    @Test fun syncingCountsOnlyWhatComesIn() {
+        val (mine, card) = dirs()
+        // Two saves come in; three of this handheld's go out.
+        put(card, "Saves/mGBA/Zelda.srm", "z")
+        put(card, "Saves/mGBA/Metroid.srm", "m")
+        put(mine, "Saves/mGBA/Golden Sun.srm", "g")
+        put(mine, "Saves/mGBA/Advance Wars.srm", "a")
+        put(mine, "Saves/mGBA/Mario Kart.srm", "k")
+        val seen = ArrayList<Pair<Int, Int>>()
+        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), FolderSync.Base(), FolderSync.Start.MERGE,
+            progress = { done, total -> seen.add(done to total) })
+        assertEquals(0 to 2, seen.first())
+        assertEquals(2 to 2, seen.last())
+        // A push brings nothing in: nothing to count, nothing to show.
+        put(mine, "Saves/mGBA/Zelda.srm", "z2", 2_000_000L)
+        val pushed = ArrayList<Pair<Int, Int>>()
+        FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), FolderSync.Base(), pull = false,
+            progress = { done, total -> pushed.add(done to total) })
+        assertTrue(pushed.all { it.second == 0 })
+    }
+
+    @Test fun aLaunchedGamesOwnFilesComeInFirst() {
+        val (mine, card) = dirs()
+        // The folder brings three games' saves in; Zelda is launched.
+        put(card, "Saves/mGBA/Advance Wars.srm", "a")
+        put(card, "Saves/mGBA/Mario Kart.srm", "m")
+        put(card, "Saves/mGBA/Zelda.srm", "z")
+        put(card, "Saves/abc123.mgba.state", "zs")
+        put(card, "GameEmulation/f00d.json", "{}")
+        val order = ArrayList<String>()
+        val private = object : FolderSync.PrivateSide(mine) {
+            override fun write(path: String, bytes: ByteArray): FolderSync.Meta {
+                order.add(path); return super.write(path, bytes)
+            }
+        }
+        val want = FolderSync.Priority(setOf("Zelda", "abc123", "f00d", ""))
+        val report = FolderSync.sync(private, Card(card), FolderSync.Base(), FolderSync.Start.MERGE,
+            scope = FolderSync.Scope.LAUNCH, priority = { want })
+        assertEquals(0L, want.served.count)
+        assertEquals(setOf("Saves/mGBA/Zelda.srm", "Saves/abc123.mgba.state", "GameEmulation/f00d.json"),
+            order.take(3).toSet())
+        assertEquals("every file still comes in, once", 5, report.toPrivate)
+        assertFalse("a name is whole: Mario isn't Mario Kart", FolderSync.Priority(setOf("Mario"))
+            .wants("Saves/mGBA/Mario Kart.srm"))
+    }
+
     @Test fun theFirstCopyTakesWhatTravelsAndNoSecrets() {
         val (mine, card) = dirs()
         put(mine, "Saves/mGBA/Emerald.srm", "save")
@@ -56,6 +102,27 @@ class FolderSyncTest {
         assertFalse("this handheld's own", FolderSync.travels("Saves/abc.mgba.retroarch-import.state.auto"))
         assertFalse(FolderSync.travels("Saves/abc.mgba.state-export-protected"))
         assertTrue(FolderSync.travels("Saves/abc.mgba.state"))
+    }
+
+    @Test fun artworkSyncPreservesUnrelatedBaseAndDoesNotTouchSaves() {
+        val (mine, card) = dirs()
+        put(mine, "Saves/mGBA/Emerald.srm", "first")
+        put(mine, "Labels/a.png", "old")
+        val base = FolderSync.Base()
+        val private = FolderSync.PrivateSide(mine)
+        FolderSync.sync(private, Card(card), base)
+        val saved = base.entries.getValue("Saves/mGBA/Emerald.srm")
+        put(mine, "Saves/mGBA/Emerald.srm", "local new", 3_000_000L)
+        put(card, "Saves/mGBA/Emerald.srm", "remote new", 2_000_000L)
+        put(mine, "Labels/b.png", "new")
+        val report = FolderSync.sync(private, Card(card), base, scope = FolderSync.Scope.ARTWORK)
+        assertEquals(1, report.toFolder)
+        assertEquals(saved, base.entries["Saves/mGBA/Emerald.srm"])
+        assertEquals("remote new", File(card, "Saves/mGBA/Emerald.srm").readText())
+        assertEquals("local new", File(mine, "Saves/mGBA/Emerald.srm").readText())
+        assertFalse(private.list(FolderSync.Scope.ARTWORK).containsKey("Saves/mGBA/Emerald.srm"))
+        assertTrue(File(card, "Labels/b.png").isFile)
+        assertEquals(1, FolderSync.sync(private, Card(card), base, scope = FolderSync.Scope.SAVES).conflicts)
     }
 
     @Test fun whatAnotherHandheldChangedComesBack() {
@@ -314,5 +381,46 @@ class FolderSyncTest {
         assertEquals("handheld", String(two.other))
         // Not for labels: the newer one, as before.
         assertEquals(2, report.conflicts)
+    }
+
+    @Test fun secondaryCopyYieldsAndResumesWithoutLosingTheBase() {
+        val (mine, card) = dirs()
+        try {
+            put(mine, "Labels/GBA/a.png", "a")
+            put(mine, "Labels/GBA/b.png", "b")
+            put(card, "Saves/mGBA/Emerald.srm", "new save")
+            val base = FolderSync.Base()
+            var checks = 0
+            val first = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base,
+                scope = FolderSync.Scope.ARTWORK, shouldYield = { checks++ >= 1 })
+            assertTrue(first.yielded)
+            assertEquals(1, first.toFolder)
+            assertEquals(1, base.entries.size)
+            assertFalse(File(mine, "Saves/mGBA/Emerald.srm").exists())
+            val launch = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base,
+                scope = FolderSync.Scope.LAUNCH)
+            assertEquals(1, launch.toPrivate)
+            assertEquals("new save", File(mine, "Saves/mGBA/Emerald.srm").readText())
+            val rest = FolderSync.sync(FolderSync.PrivateSide(mine), Card(card), base,
+                scope = FolderSync.Scope.REST)
+            assertFalse(rest.yielded)
+            assertEquals(1, rest.toFolder)
+            assertEquals(3, base.entries.size)
+            assertEquals("a", File(card, "Labels/GBA/a.png").readText())
+            assertEquals("b", File(card, "Labels/GBA/b.png").readText())
+        } finally { mine.deleteRecursively(); card.deleteRecursively() }
+    }
+
+    @Test fun launchAndRestCoverTheSamePathsAsAll() {
+        for (path in listOf("Saves/mGBA/game.srm", "States/mGBA/game.state",
+            "Cheats/game.cht", "CustomCheats/game.cht", "GameEmulation/game.json",
+            "Labels/GBA/game.png", "Studio/game.shell", "slot-konkr-settings.json",
+            "Config/romm.json", "Saves/RetroAchievements/auth.json")) {
+            val launch = FolderSync.Scope.LAUNCH.includes(path)
+            val rest = FolderSync.Scope.REST.includes(path)
+            assertFalse(launch && rest)
+            assertEquals(FolderSync.Scope.ALL.includes(path), launch || rest)
+        }
+        assertEquals("a9993e364706816aba3e25717850c26c9cd0d89d", FolderSync.sha1("abc".toByteArray()))
     }
 }

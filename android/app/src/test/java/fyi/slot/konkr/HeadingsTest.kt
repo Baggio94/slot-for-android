@@ -10,6 +10,7 @@ class HeadingsTest {
         assertEquals("heading-ra.png", Headings.asset("RETROACHIEVEMENTS"))
         assertEquals("heading-save-conflict.png", Headings.asset("SAVE CONFLICT"))
         assertEquals("heading-slot-folder.png", Headings.asset("SLOT. FOLDER"))
+        assertEquals("heading-bios-folder.png", Headings.asset("BIOS FOLDER"))
         assertEquals("heading-states-already-in-this-folder.png",
             Headings.asset("STATES ALREADY IN THIS FOLDER"))
         // Each title the sources give a window is among the pictures

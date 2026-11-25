@@ -170,6 +170,102 @@ struct Server {
 }
 
 #[test]
+fn exhausted_smart_cache_does_not_delay_foreground_awards_or_badges() {
+    let root = configured();
+    // Use a ROM outside the legacy directory; exercise the Android hash queue.
+    let rom = root.path().join("active.gba");
+    std::fs::write(&rom, b"active ROM").unwrap();
+    let store = Store::open(root.path(), "Player").unwrap();
+    storage::write(&store.dir.join("smart-prefetch-budget.json"),
+        &json!({"attempts": vec![network::now(); 100]})).unwrap();
+    let (calls, requests) = mpsc::channel();
+    let service = Service::start_with(root.path().into(), Server { calls });
+    assert!(service.prefetch_rom_hash("0123456789abcdef0123456789abcdef"));
+    wait_for(|| service.sync_pending() && service.sync_detail() == SyncDetail::Games);
+    let mut core = service.wrap(Box::<TestCore>::default());
+    core.load(&rom).unwrap();
+    wait_for(|| service.take_notice().is_some_and(|n| n.title == "Test game"));
+    // rcheevos needs a false -> true transition. Keep driving real
+    // frames until the evaluator has finished its initial queue drain and
+    // recorded the award, without ejecting or reconnecting the game.
+    wait_for(|| {
+        core.run_frame(ButtonMask(0));
+        core.run_frame(ButtonMask(1));
+        Store::open(root.path(), "Player").is_ok_and(|s| s.unlocks.contains_key(&7))
+    });
+    // The old scheduler slept for up to 30 minutes after setting up the
+    // session. The award must reach the server with the game still active.
+    wait_for(|| Store::open(root.path(), "Player").is_ok_and(|s|
+        s.unlocks.get(&7).is_some_and(|u| u.synced)));
+    wait_for(|| badges::path(&store.dir, "12345").unwrap().is_file());
+    let calls: Vec<_> = requests.try_iter().collect();
+    assert!(calls.iter().any(|r| r == "startsession"));
+    assert!(calls.iter().any(|r| r == "awardachievement"));
+    assert!(!calls.iter().any(|r| r == "unlocks"), "bulk quota must still be enforced");
+    let budget: Value = storage::read(&store.dir.join("smart-prefetch-budget.json")).unwrap();
+    assert_eq!(budget["attempts"].as_array().unwrap().len(), 100);
+}
+
+#[test]
+fn an_expired_account_stops_smart_cache_after_one_game() {
+    // The first login works; then the token is refused everywhere.
+    struct Expired {
+        calls: mpsc::Sender<String>,
+        logins: usize,
+    }
+    impl network::Transport for Expired {
+        fn call(&mut self, fields: &[(&str, String)]) -> Result<Value, network::Failure> {
+            let request = fields.iter().find(|(k, _)| *k == "r").unwrap().1.as_str();
+            let _ = self.calls.send(request.into());
+            Ok(match request {
+                "login2" => {
+                    self.logins += 1;
+                    if self.logins == 1 {
+                        json!({"Success":true,"User":"Player","Token":"fixture-token"})
+                    } else {
+                        json!({"Success":false,"Error":"Invalid user/token combination."})
+                    }
+                }
+                _ => json!({"Success":false,"Error":"Invalid user/token combination."}),
+            })
+        }
+    }
+    let root = configured();
+    let store = Store::open(root.path(), "Player").unwrap();
+    let (calls, requests) = mpsc::channel();
+    let service = Service::start_with(root.path().into(), Expired { calls, logins: 0 });
+    for i in 0..5u32 {
+        assert!(service.prefetch_rom_hash(&format!("{i:032x}")));
+    }
+    wait_for(|| service.sync_detail() == SyncDetail::Login);
+    std::thread::sleep(Duration::from_millis(300));
+    let calls: Vec<String> = requests.try_iter().collect();
+    // One refused game, then a fresh login that fails: the rest wait.
+    assert_eq!(calls.iter().filter(|r| *r == "gameid").count(), 1, "{calls:?}");
+    assert_eq!(calls.iter().filter(|r| *r == "login2").count(), 2, "{calls:?}");
+    let budget: Value = storage::read(&store.dir.join("smart-prefetch-budget.json")).unwrap();
+    assert_eq!(budget["attempts"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn active_game_badges_jump_ahead_of_the_existing_backlog() {
+    let root = configured();
+    let store = Store::open(root.path(), "Player").unwrap();
+    let mut queue = badges::Queue::new(&store.dir);
+    let mut background = game();
+    background.achievements[0].badge = "11111".into();
+    queue.enqueue(&background);
+    queue.enqueue(&game());
+    queue.prioritize(&game());
+    let (calls, requests) = mpsc::channel();
+    let mut server = Server { calls };
+    queue.step(&mut server);
+    assert_eq!(requests.try_recv().unwrap(), "badge:12345");
+    queue.step(&mut server);
+    assert_eq!(requests.try_recv().unwrap(), "badge:11111");
+}
+
+#[test]
 fn wifi_reconnect_wakes_offline_sync_without_restarting_or_opening_a_game() {
     struct Reconnect {
         online: Arc<AtomicBool>,

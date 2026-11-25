@@ -81,6 +81,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             "GBA/Golden Sun (USA).cht. slot. shows them first in the game's Cheats, as My Cheats.\n")
         private const val FORMAT = 1
         private const val EXTERNAL = "com.android.externalstorage.documents"
+        private const val WRITE_RETRY_MS = 30_000L
     }
 
     private val prefs get() = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -116,31 +117,68 @@ internal class SlotFolder(private val activity: MainActivity) {
      *  only (beta39), never for labels and pictures behind them. */
     private val launchPending = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile private var pullRunning = false
+    @Volatile private var syncRunning = false
+    @Volatile private var syncHasChanges = false
+    private val saveCopyQueued = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val confirmAfterSync = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var retryTree: String? = null
+    @Volatile private var retryAt = 0L
     /** The next copy follows the card's return: it says so when done (beta41). */
     @Volatile private var confirmNextPull = false
     /** The whole copy into a folder just chosen, in percent; -1 when none. */
     @Volatile private var copyAt = -1
 
     fun pulling(): Boolean = queued.get() == 2 || pullRunning
+
+    /** The folder's labels are on their way in (3.0.1-beta11): a new handheld
+     *  doesn't look for them on the Internet while they're coming. Settled
+     *  by the first copy, by the first two-way pass (done or failed), or
+     *  after two minutes at most. */
+    @Volatile private var artworkIn = false
+    private val createdAt = SystemClock.elapsedRealtime()
+    fun artworkSettled(): Boolean = copyAt < 0 &&
+        (tree() == null || artworkIn || SystemClock.elapsedRealtime() - createdAt > 120_000L)
+    private fun artworkArrived() {
+        if (artworkIn) return
+        artworkIn = true
+        ui { activity.folderArtworkIn() }
+    }
     fun copyPercent(): Int? = copyAt.takeIf { it >= 0 }
 
-    /** Waits, at most [millis], until what a game reads at its launch has
-     *  come in. True when it has. */
-    fun awaitLaunchFiles(millis: Long): Boolean {
-        val until = SystemClock.elapsedRealtime() + millis
-        while (launchPending.get() > 0) {
-            if (SystemClock.elapsedRealtime() >= until) return false
-            Thread.sleep(50)
-        }
-        return true
-    }
     fun launchFilesPending(): Boolean = launchPending.get() > 0
 
-    /** A copy bringing files in, as the task pill shows it: files done, of
-     *  all; null when none runs (beta39). */
+    /** The launch's own files, asked for first by the copy bringing files in. */
+    private val priority = java.util.concurrent.atomic.AtomicReference<FolderSync.Priority?>(null)
+
+    /** Waits, at most [millis], until this game's own files ([tokens]: see
+     *  FolderSync.Priority) have come in: the copy takes them first, the
+     *  rest goes on after the launch. True when they have, or when nothing
+     *  comes in (3.0.1-beta11: no more launching anyway after 15 s). */
+    fun awaitGameFiles(tokens: Set<String>, millis: Long): Boolean {
+        if (launchPending.get() == 0) return true
+        val want = FolderSync.Priority(tokens)
+        priority.set(want)
+        try {
+            val until = SystemClock.elapsedRealtime() + millis
+            while (launchPending.get() > 0 && want.served.count > 0L) {
+                if (SystemClock.elapsedRealtime() >= until) return false
+                want.served.await(20L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
+            return true
+        } finally { priority.compareAndSet(want, null) }
+    }
+
+    /** A copy bringing files in, as the task pill shows it: of the files
+     *  the folder brings, how many are in; null when none runs or nothing
+     *  comes in (3.0.1-beta12: a push, saves after a game or labels found,
+     *  blocks nothing and shows nothing). */
     @Volatile private var syncDone = 0
     @Volatile private var syncTotal = 0
-    fun syncProgress(): IntArray? = if (pullRunning) intArrayOf(syncDone, syncTotal) else null
+    /** The pass under way was asked for by the player (Refresh Library):
+     *  it shows even when nothing comes in, as he waits for it. */
+    @Volatile private var syncAsked = false
+    fun syncProgress(): IntArray? =
+        if (syncRunning && (syncTotal > 0 || syncAsked)) intArrayOf(syncDone, syncTotal) else null
 
     /** Runs [block] once no game is on (a window, the ROM picker, a reload
      *  never land on a game, beta38). */
@@ -170,6 +208,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         val now = mounted()
         if (wasMounted == false && now) {
             SlotLog.i(TAG, "Slot folder's card is back")
+            retryAt = 0L
             pullWhenFree = true
         }
         wasMounted = now
@@ -207,8 +246,9 @@ internal class SlotFolder(private val activity: MainActivity) {
     /** The SD card's volume id, if one is in. */
     private fun removableVolume(): String? = try {
         val storage = activity.getSystemService(StorageManager::class.java)
-        storage.storageVolumes.firstOrNull { it.isRemovable && it.state == android.os.Environment.MEDIA_MOUNTED }
-            ?.uuid
+        storage.storageVolumes.firstOrNull { it.isRemovable &&
+            (it.state == android.os.Environment.MEDIA_MOUNTED ||
+                it.state == android.os.Environment.MEDIA_MOUNTED_READ_ONLY) }?.uuid
     } catch (_: Exception) { null }
 
     private fun pick(volume: String) {
@@ -252,6 +292,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         } catch (error: SecurityException) {
             SlotLog.w(TAG, "No lasting access to the slot folder", error)
+            TaskPill.problem(storageProblem(uri, listOf(SlotStorageProblem.describe(error))))
             activity.nativeExternalReturn()
             SlotToast.makeText(activity, "Android didn't give slot. access to this folder.", Toast.LENGTH_LONG).show()
             return
@@ -272,7 +313,9 @@ internal class SlotFolder(private val activity: MainActivity) {
         val side = SafSide(activity, tree, doc)
         val children = try { side.children(doc) } catch (error: Exception) {
             SlotLog.w(TAG, "Slot folder unreadable", error)
-            ui { activity.nativeExternalReturn(); toast("Couldn't read this folder.") }
+            ui { activity.nativeExternalReturn()
+                TaskPill.problem(storageProblem(tree, listOf(SlotStorageProblem.describe(error))))
+                toast("Couldn't read this folder.") }
             return
         }
         val json = children.firstOrNull { it.name == JSON }?.let { side.readDoc(it.id) }
@@ -330,7 +373,9 @@ internal class SlotFolder(private val activity: MainActivity) {
                             look(tree, child)
                         } catch (error: Exception) {
                             SlotLog.w(TAG, "Couldn't create the slot folder", error)
-                            ui { activity.nativeExternalReturn(); toast("Couldn't create the slot. folder.") }
+                            ui { activity.nativeExternalReturn()
+                                TaskPill.problem(storageProblem(tree, listOf(SlotStorageProblem.describe(error))))
+                                toast("Couldn't create the slot. folder.") }
                         }
                     }
                 }
@@ -352,9 +397,21 @@ internal class SlotFolder(private val activity: MainActivity) {
     private fun use(tree: Uri, doc: String, json: JSONObject?, start: FolderSync.Start, backup: Boolean) {
         val old = tree() to rootDoc()
         val first = old.second != doc
+        val side = SafSide(activity, tree, doc)
+        // Before touching the private copy or making a backup, test the
+        // actual SAF write path rather than trusting a writable-looking URI.
+        try {
+            checkStorageWritable(tree)
+            side.probeWrite()
+        } catch (error: Exception) {
+            val problem = storageProblem(tree, listOf(SlotStorageProblem.describe(error)))
+            SlotLog.w(TAG, "Slot folder write test failed: $problem", error)
+            ui { activity.nativeExternalReturn(); TaskPill.problem(problem)
+                toast("Couldn't write to this slot. folder. Check its storage and try again.") }
+            return
+        }
         if (backup) backupPrivate()
         val base = if (first) FolderSync.Base() else FolderSync.Base.parse(baseFile.takeIf { it.isFile }?.readText())
-        val side = SafSide(activity, tree, doc)
         // The copy can take minutes (labels): Library shows how far it is,
         // and the menus are free meanwhile (beta38: A did nothing until the
         // copy ended).
@@ -364,13 +421,14 @@ internal class SlotFolder(private val activity: MainActivity) {
             val tombs = readTombs(side)
             FolderSync.sync(privateSide(), side, base, if (first) start else FolderSync.Start.SYNC,
                 tombs = tombs, restore = paths(restoreFile), progress = progress()).also {
-                if (it.tombsChanged) writeTombs(side, tombs)
+                if (it.tombsChanged) writeTombs(side, tombs)?.let { error -> it.failures.add(error) }
                 keepGone(it)
                 keepTwoSaves(it)
-                side.makeCheatFolders()
+                if (it.failures.isEmpty()) side.makeCheatFolders()?.let { error -> it.failures.add(error) }
             }
         } catch (error: Exception) {
             SlotLog.w(TAG, "First copy into the slot folder failed", error)
+            ui { TaskPill.problem(storageProblem(tree, listOf(SlotStorageProblem.describe(error)))) }
             ui { activity.nativeSetSlotFolderCopy(-1); activity.nativeExternalReturn()
                 toast("Couldn't copy into this folder: ${error.message}") }
             return
@@ -382,15 +440,24 @@ internal class SlotFolder(private val activity: MainActivity) {
         // Scenario A13: the folder only counts once the copy is complete.
         if (report.failures.isNotEmpty()) {
             SlotLog.w(TAG, "Slot folder copy: " + report.failures.joinToString(" | "))
-            ui { TaskPill.problem(if (report.failures.any { full(it) }) "CARD FULL" else "COPY FAILED") }
-            ui { activity.nativeExternalReturn(); toast("Some files couldn't be copied. Check the card's space and try again.") }
+            ui { TaskPill.problem(storageProblem(tree, report.failures)) }
+            ui { activity.nativeExternalReturn(); toast("Some files couldn't be copied. Check the storage and try again.") }
             return
         }
         val env = json?.optString("env")?.takeIf { it.isNotBlank() }
             ?: prefs.getString(ENV, null) ?: UUID.randomUUID().toString()
-        writeJson(SafSide(activity, tree, doc), doc, env, json)
-        saveBase(base)
+        try {
+            writeJson(SafSide(activity, tree, doc), doc, env, json)
+            saveBase(base)
+        } catch (error: Exception) {
+            SlotLog.w(TAG, "Slot folder metadata not written", error)
+            ui { activity.nativeExternalReturn()
+                TaskPill.problem(storageProblem(tree, listOf(SlotStorageProblem.describe(error)))) }
+            return
+        }
+        retryAt = 0L
         prefs.edit().putString(TREE, tree.toString()).putString(ROOT, doc).putString(ENV, env).apply()
+        artworkArrived()
         ui {
             activity.nativeSetSlotFolder(place())
             // Files came in (labels, favourites, settings): the shelf shows
@@ -402,8 +469,11 @@ internal class SlotFolder(private val activity: MainActivity) {
             // left Library during the copy.
             whenFree {
                 if (report.changedPrivate) activity.nativeReloadAll()
-                // Scenario D1: the ROM folder next to it, if this handheld has none.
-                json?.optString("roms")?.takeIf { it.isNotBlank() }?.let { activity.suggestRomFolder(it) }
+                // Scenario D1: the ROM folder next to it, if this handheld has
+                // none, then its BIOS folder (3.0.1-beta12).
+                val roms = json?.optString("roms")?.takeIf { it.isNotBlank() }
+                val bios = json?.optString("bios")?.takeIf { it.isNotBlank() }
+                if (roms != null || bios != null) activity.suggestRomFolder(roms, bios)
                 // Scenario A10: the old folder, once the new one is complete.
                 val (oldTree, oldDoc) = old
                 if (first && oldTree != null && oldDoc != null && oldDoc != doc) offerToClear(oldTree, oldDoc)
@@ -432,6 +502,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             .put("device", Build.MANUFACTURER + " " + Build.MODEL)
             .put("written", System.currentTimeMillis())
         activity.romFolderPath()?.let { json.put("roms", it) }
+        activity.biosFolderPath()?.let { json.put("bios", it) }
         side.write(JSON, json.toString(2).toByteArray(Charsets.UTF_8))
     }
 
@@ -468,8 +539,9 @@ internal class SlotFolder(private val activity: MainActivity) {
      * what another handheld changed comes in, then the shelf is built again.
      * [pull] false (during a game, at pause) only sends this one's changes.
      */
-    fun sync(pull: Boolean) {
+    fun sync(pull: Boolean, confirm: Boolean = false) {
         if (tree() == null) return
+        if (confirm) confirmAfterSync.set(true)
         val want = if (pull) 2 else 1
         while (true) {
             val was = queued.get()
@@ -483,11 +555,21 @@ internal class SlotFolder(private val activity: MainActivity) {
         try {
             worker.execute {
                 val asPull = queued.getAndSet(0) == 2
+                val announce = confirmAfterSync.getAndSet(false)
+                syncDone = 0; syncTotal = 0; syncHasChanges = false
+                syncRunning = true
                 if (asPull) pullRunning = true
                 val settled = java.util.concurrent.atomic.AtomicBoolean(!asPull)
                 val settle = { if (settled.compareAndSet(false, true)) launchPending.decrementAndGet() }
-                syncDone = 0; syncTotal = 0
-                try { runSync(asPull, settle) } finally { pullRunning = false; settle() }
+                // Persist launch data and conflict choices before release.
+                val ok = try { runSync(asPull, scope = FolderSync.Scope.LAUNCH) }
+                finally { syncRunning = false; pullRunning = false; settle() }
+                // Labels come in with the rest: then the Internet's turn.
+                if (ok) queueSecondary(FolderSync.Scope.REST, asPull, announce) { if (asPull) artworkArrived() }
+                else {
+                    if (announce) confirmAfterSync.set(true)
+                    if (asPull) artworkArrived()
+                }
             }
         } catch (error: Exception) {
             if (queued.getAndSet(0) == 2) launchPending.decrementAndGet()
@@ -495,63 +577,161 @@ internal class SlotFolder(private val activity: MainActivity) {
         }
     }
 
-    private fun runSync(pull: Boolean, launchFilesDone: () -> Unit = {}) {
+    /** Artwork never needs to wait for, enumerate or modify saves and states.
+     *  [asked]: Refresh Library's own pass, shown as SYNCING throughout. */
+    fun syncArtwork(pull: Boolean, asked: Boolean = false, finished: (Boolean) -> Unit = {}) {
+        if (tree() == null) { finished(true); return }
+        queueSecondary(FolderSync.Scope.ARTWORK, pull, false, asked, finished)
+    }
+
+    /** Single writer, with checkpoints before handing over to urgent work. */
+    private fun queueSecondary(scope: FolderSync.Scope, pull: Boolean, announce: Boolean,
+                               asked: Boolean = false, finished: (Boolean) -> Unit) {
+        val expectedTree = tree()
+        if (expectedTree == null) { finished(false); return }
+        fun enqueue() {
+            if (activity.isDestroyed || tree() != expectedTree) { finished(false); return }
+            try {
+                worker.execute {
+                    if (activity.isDestroyed || tree() != expectedTree) { finished(false); return@execute }
+                    var yielded = false
+                    syncDone = 0; syncTotal = 0; syncHasChanges = false; syncAsked = asked; syncRunning = true
+                    val ok = try {
+                        runSync(pull && activity.nativeCanRefreshLibrary(), announce = announce, scope = scope,
+                            shouldYield = { queued.get() != 0 || launchPending.get() > 0 ||
+                                saveCopyQueued.get() || activity.nativeIsPlaying() },
+                            onYield = { yielded = true })
+                    } catch (error: Exception) {
+                        SlotLog.w(TAG, "Secondary folder copy failed", error); false
+                    } finally { syncRunning = false; syncAsked = false }
+                    if (yielded && ok) {
+                        ui {
+                            fun resumeCopy() {
+                                if (activity.isDestroyed || tree() != expectedTree) { finished(false); return }
+                                if (activity.nativeIsPlaying()) activity.window.decorView.postDelayed({ resumeCopy() }, 500L)
+                                else enqueue()
+                            }
+                            resumeCopy()
+                        }
+                    } else finished(ok)
+                }
+            } catch (error: Exception) { finished(false) }
+        }
+        enqueue()
+    }
+
+    /** A normal in-game save never needs to walk the artwork folders. */
+    fun syncSaves() {
+        if (tree() == null || !saveCopyQueued.compareAndSet(false, true)) return
+        try {
+            worker.execute {
+                saveCopyQueued.set(false)
+                syncDone = 0; syncTotal = 0; syncHasChanges = false; syncRunning = true
+                try { runSync(false, scope = FolderSync.Scope.SAVES) }
+                catch (error: Exception) { SlotLog.w(TAG, "Save folder copy failed", error) }
+                finally { syncRunning = false }
+            }
+        } catch (error: Exception) { saveCopyQueued.set(false) }
+    }
+
+    private fun runSync(pull: Boolean, launchFilesDone: () -> Unit = {}, announce: Boolean = false,
+                        scope: FolderSync.Scope = FolderSync.Scope.ALL,
+                        shouldYield: () -> Boolean = { false }, onYield: () -> Unit = {}): Boolean =
         run {
             // Which folder, read when the copy runs: one asked for just
             // before the player chose another went to the old one with the
             // new one's base (2.5.0-beta35: 540 files copied back for nothing).
-            val tree = tree() ?: return@run
-            val doc = rootDoc() ?: return@run
+            val tree = tree() ?: return@run false
+            val doc = rootDoc() ?: return@run false
+            if (retryTree == tree.toString() && SystemClock.elapsedRealtime() < retryAt) {
+                // A later normal sync or card reinsert retries; don't hammer
+                // the provider while the same storage error persists.
+                if (announce) confirmAfterSync.set(true)
+                return@run false
+            }
+            val base = FolderSync.Base.parse(baseFile.takeIf { it.isFile }?.readText())
+            // A pause with no local changes needs no expensive SAF listing.
+            // A two-way pass on resume/card insertion still checks external edits.
+            if (!pull && scope == FolderSync.Scope.ALL && baseFile.isFile && paths(restoreFile).isEmpty()) {
+                val local = privateSide().list()
+                if (local.keys == base.entries.keys && local.all { (path, meta) ->
+                        base.entries[path]?.let { it.privateSize == meta.size && it.privateModified == meta.modified } == true
+                    }) return@run true
+            }
             val side = SafSide(activity, tree, doc)
+            try { checkStorageWritable(tree) } catch (error: Exception) {
+                syncFailed(tree, listOf(SlotStorageProblem.describe(error)))
+                if (announce) confirmAfterSync.set(true)
+                return@run false
+            }
             if (!side.reachable()) {
                 // Scenario E1/E2: the card is away; slot. plays on its copy.
                 if (!warnedMissing) {
                     warnedMissing = true
                     ui { toast("slot. folder unavailable: playing from this handheld's copy.") }
                 }
-                return@run
+                if (announce) confirmAfterSync.set(true)
+                return@run false
             }
             warnedMissing = false
             val stranger = side.readJsonEnv()
             if (stranger != null && stranger != prefs.getString(ENV, null)) {
                 // Scenario E3: another card's slot folder in the same place.
                 SlotLog.w(TAG, "Another slot folder is in place: nothing written")
-                return@run
+                return@run false
             }
             val started = SystemClock.elapsedRealtime()
-            val base = FolderSync.Base.parse(baseFile.takeIf { it.isFile }?.readText())
             val report = try {
                 val tombs = readTombs(side)
                 FolderSync.sync(privateSide(), side, base, pull = pull, tombs = tombs,
                     restore = paths(restoreFile), launchFilesDone = launchFilesDone,
-                    progress = { done, total -> if (pull) { syncDone = done; syncTotal = total } }).also {
-                    if (it.tombsChanged) writeTombs(side, tombs)
-                    keepGone(it)
-                    keepTwoSaves(it)
-                    if (pull) side.makeCheatFolders()
+                    progress = { done, total -> syncDone = done; syncTotal = total },
+                    scope = scope, changed = { syncHasChanges = true }, shouldYield = shouldYield,
+                    // Only a copy bringing the launch files in answers a
+                    // launch: a push alone would let it start before them.
+                    priority = if (pull && scope == FolderSync.Scope.LAUNCH) { { priority.get() } } else { { null } }).also {
+                    if (it.tombsChanged) writeTombs(side, tombs)?.let { error -> it.failures.add(error) }
+                    if (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.LAUNCH || scope == FolderSync.Scope.SAVES) { keepGone(it); keepTwoSaves(it) }
+                    if (pull && (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.REST) && !it.yielded && it.failures.isEmpty()) side.makeCheatFolders()?.let { error -> it.failures.add(error) }
                 }
             } catch (error: Exception) {
                 SlotLog.w(TAG, "Slot folder sync failed", error)
-                return@run
+                syncFailed(tree, listOf(SlotStorageProblem.describe(error)))
+                if (announce) confirmAfterSync.set(true)
+                return@run false
             }
-            if (report.failures.isNotEmpty()) {
-                SlotLog.w(TAG, "Slot folder: " + report.failures.joinToString(" | "))
-                ui { TaskPill.problem(if (report.failures.any { full(it) }) "CARD FULL" else "COPY FAILED") }
-            } else if (pull && confirmNextPull) TaskPill.confirm("FOLDER UP TO DATE")
-            if (pull) confirmNextPull = false
+            // Keep completed entries, but never confirm a partial or failed copy.
             saveBase(base)
             if (report.toFolder > 0 || report.toPrivate > 0) {
-                try { writeJson(side, doc, prefs.getString(ENV, null) ?: return@run, side.readJson()) }
-                catch (error: Exception) { SlotLog.w(TAG, "slot.json not updated", error) }
+                try { writeJson(side, doc, prefs.getString(ENV, null) ?: return@run false, side.readJson()) }
+                catch (error: Exception) {
+                    SlotLog.w(TAG, "slot.json not updated", error)
+                    report.failures.add("slot.json: ${SlotStorageProblem.describe(error)}")
+                }
+            }
+            if (report.yielded && report.failures.isEmpty()) {
+                SlotLog.i(TAG, "Slot folder (${scope.name}) yielded after ${report.toFolder} out, ${report.toPrivate} in")
+                onYield()
+            } else if (report.failures.isNotEmpty()) {
+                syncFailed(tree, report.failures)
+                if (announce) confirmAfterSync.set(true)
+            } else {
+                retryAt = 0L
+                shownProblem = null
+                if (pull && (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.REST) && (announce || confirmNextPull)) TaskPill.confirm("FOLDER UP TO DATE")
+                // A push while paused/playing may defer incoming changes.
+                // Confirm the whole folder only after a two-way pass.
+                if (!pull && announce) confirmAfterSync.set(true)
+                if (pull && (scope == FolderSync.Scope.ALL || scope == FolderSync.Scope.REST)) confirmNextPull = false
             }
             if (report.changedShelf) ui { whenFree { if (activity.nativeCanRefreshLibrary()) activity.nativeReloadAll() } }
-            SlotLog.i(TAG, "Slot folder: ${report.toFolder} out, ${report.toPrivate} in, " +
+            SlotLog.i(TAG, "Slot folder (${scope.name}): ${report.toFolder} out, ${report.toPrivate} in, " +
                 "${report.conflicts} conflicts, ${report.removed} removed, " +
                 "${report.deletedHere.size} deleted here, ${report.gone.size} held back" +
                 (if (report.stale > 0) ", ${report.stale} old files cleared" else "") +
                 " in ${SystemClock.elapsedRealtime() - started} ms")
+            report.failures.isEmpty()
         }
-    }
 
     // -----------------------------------------------------------------
     // Deletions (SaveDeletes)
@@ -576,12 +756,12 @@ internal class SlotFolder(private val activity: MainActivity) {
     private fun readTombs(side: SafSide): MutableMap<String, FolderSync.Tomb> =
         FolderSync.tombsFromJson(side.readRootText(TOMBS))
 
-    private fun writeTombs(side: SafSide, tombs: Map<String, FolderSync.Tomb>) {
-        try {
-            side.write(TOMBS, FolderSync.tombsToJson(tombs).toByteArray(Charsets.UTF_8))
-        } catch (error: Exception) {
-            SlotLog.w(TAG, "Deletions not noted in the slot folder", error)
-        }
+    private fun writeTombs(side: SafSide, tombs: Map<String, FolderSync.Tomb>): String? = try {
+        side.write(TOMBS, FolderSync.tombsToJson(tombs).toByteArray(Charsets.UTF_8))
+        null
+    } catch (error: Exception) {
+        SlotLog.w(TAG, "Deletions not noted in the slot folder", error)
+        "$TOMBS: ${SlotStorageProblem.describe(error)}"
     }
 
     private fun paths(file: File): Set<String> = try {
@@ -694,9 +874,51 @@ internal class SlotFolder(private val activity: MainActivity) {
 
     private fun ui(block: () -> Unit) = activity.runOnUiThread { if (!activity.isDestroyed) block() }
 
-    /** A copy that failed for want of room on the card. */
-    private fun full(failure: String): Boolean =
-        failure.contains("ENOSPC") || failure.contains("No space", ignoreCase = true)
+    /** Android's volume state can lag a filesystem that remounts itself
+     *  read-only. Inspect mountinfo when available, but never guess from a
+     *  generic provider mkdir failure alone. */
+    private fun readOnly(tree: Uri): Boolean {
+        val volume = volumeOf(tree)?.takeIf { it != "primary" && it.isNotEmpty() } ?: return false
+        val reported = try {
+            activity.getSystemService(StorageManager::class.java).storageVolumes.any {
+                it.uuid.equals(volume, ignoreCase = true) &&
+                    it.state == android.os.Environment.MEDIA_MOUNTED_READ_ONLY
+            }
+        } catch (_: Exception) { false }
+        if (reported) return true
+        return try {
+            File("/proc/self/mountinfo").useLines { lines ->
+                lines.any { SlotStorageProblem.readOnlyMount(it, volume) }
+            }
+        } catch (_: Exception) { false }
+    }
+
+    private fun checkStorageWritable(tree: Uri) {
+        if (readOnly(tree)) throw IOException("EROFS: Read-only file system")
+        if (!activity.contentResolver.persistedUriPermissions.any {
+                it.uri == tree && it.isReadPermission && it.isWritePermission
+            }) throw SecurityException("No persistent write access to slot folder")
+    }
+
+    private fun storageProblem(tree: Uri, failures: List<String>): String =
+        SlotStorageProblem.message(failures, readOnly(tree))
+
+    /** The problem last shown and the files it was about: the same one
+     *  again, retried every 30 s, is logged but not shown again until a copy
+     *  goes through (3.1.0: "COPY FAILED" kept coming back). */
+    @Volatile private var shownProblem: String? = null
+
+    private fun syncFailed(tree: Uri, failures: List<String>) {
+        val problem = storageProblem(tree, failures)
+        retryTree = tree.toString()
+        retryAt = SystemClock.elapsedRealtime() + WRITE_RETRY_MS
+        SlotLog.w(TAG, "Slot folder: $problem (${failures.size} failures): " +
+            failures.take(8).joinToString(" | "))
+        val key = problem + "|" + failures.map { it.substringBefore(": ") }.sorted().joinToString("|")
+        if (key == shownProblem) return
+        shownProblem = key
+        ui { TaskPill.problem(problem) }
+    }
     private fun toast(text: String) = SlotToast.makeText(activity, text, Toast.LENGTH_LONG).show()
 
     // -----------------------------------------------------------------
@@ -707,6 +929,7 @@ internal class SlotFolder(private val activity: MainActivity) {
     class SafSide(private val context: Context, private val tree: Uri, private val root: String) : FolderSync.Side {
         private val resolver = context.contentResolver
         private val dirs = HashMap<String, String>()
+        private val failedDirs = HashMap<Pair<String, String>, Exception>()
 
         fun children(doc: String): List<Child> {
             val uri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, doc)
@@ -748,24 +971,25 @@ internal class SlotFolder(private val activity: MainActivity) {
             return DocumentsContract.getDocumentId(uri)
         }
 
-        override fun list(): Map<String, FolderSync.Meta> {
+        override fun list(): Map<String, FolderSync.Meta> = list(FolderSync.Scope.ALL)
+        override fun list(scope: FolderSync.Scope): Map<String, FolderSync.Meta> {
             val out = HashMap<String, FolderSync.Meta>()
             fun walk(doc: String, prefix: String) {
                 for (child in children(doc)) {
                     val path = prefix + child.name
                     if (child.dir && path in FolderSync.UNWALKED_DIRS) { staleIds.add(child.id); continue }
-                    if (child.dir) { dirs[path] = child.id; walk(child.id, "$path/") }
+                    if (child.dir) { dirs[path] = child.id; if (scope == FolderSync.Scope.ALL || scope.descends(path)) walk(child.id, "$path/") }
                     else if (FolderSync.stale(path)) staleIds.add(child.id)
                     else if (!child.name.endsWith(".slot-tmp")) {
                         // Every file's id, slot.json's too: written again,
                         // it replaces the old one rather than making
                         // "slot (1).json" beside it (2.5.0-beta35).
                         files[path] = child.id
-                        if (path != JSON) out[path] = FolderSync.Meta(child.size, child.modified)
+                        if (path != JSON && scope.includes(path)) out[path] = FolderSync.Meta(child.size, child.modified)
                     }
                 }
             }
-            dirs.clear(); files.clear(); staleIds.clear()
+            dirs.clear(); files.clear(); staleIds.clear(); failedDirs.clear()
             walk(root, "")
             listed = true
             return out
@@ -788,10 +1012,33 @@ internal class SlotFolder(private val activity: MainActivity) {
         }
         private var listed = false
         /** Pictures, written straight when new (see write). */
-        private val DIRECT = listOf("Labels/", "ArtNames/", "Studio/", "Wallpapers/")
+        private val DIRECT = listOf("Labels/", "ArtNames/", "Studio/", "Wallpapers/", "home-real-labels/", "ArtworkHistory/")
 
         private fun dirOf(path: String): String = folderFor(path, root, dirs) { above, name ->
-            children(above).firstOrNull { it.dir && it.name == name }?.id ?: createDir(above, name)
+            val key = above to name
+            failedDirs[key]?.let { throw it }
+            try {
+                children(above).firstOrNull { it.dir && it.name == name }?.id ?: createDir(above, name)
+            } catch (error: Exception) {
+                failedDirs[key] = error
+                throw error
+            }
+        }
+
+        /** One disposable byte, through the exact provider used by sync. */
+        fun probeWrite() {
+            val parent = DocumentsContract.buildDocumentUriUsingTree(tree, root)
+            val name = ".write-${UUID.randomUUID()}.slot-tmp"
+            val probe = DocumentsContract.createDocument(resolver, parent,
+                "application/octet-stream", name) ?: throw IOException("Cannot create write probe")
+            try {
+                resolver.openOutputStream(probe, "wt")?.use { it.write(0) }
+                    ?: throw IOException("Cannot write probe")
+            } catch (error: Exception) {
+                try { DocumentsContract.deleteDocument(resolver, probe) } catch (_: Exception) {}
+                throw error
+            }
+            check(DocumentsContract.deleteDocument(resolver, probe)) { "Cannot remove write probe" }
         }
 
         /** A file at the folder's top, as text; null if absent. */
@@ -804,15 +1051,17 @@ internal class SlotFolder(private val activity: MainActivity) {
 
         /** CustomCheats/ and a folder per system, ready for the player's
          *  .cht files, with a word on how to name them. */
-        fun makeCheatFolders() {
+        fun makeCheatFolders(): String? {
             try {
                 for (system in CHEAT_SYSTEMS) dirOf("CustomCheats/$system/x")
                 val readme = dirOf(CHEAT_README)
                 if (children(readme).none { it.name == "README.txt" }) {
                     write(CHEAT_README, CHEAT_HELP.toByteArray(Charsets.UTF_8))
                 }
+                return null
             } catch (error: Exception) {
                 SlotLog.w(TAG, "CustomCheats folders not made", error)
+                return "CustomCheats: ${SlotStorageProblem.describe(error)}"
             }
         }
 
@@ -826,7 +1075,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             val name = path.substringAfterLast('/')
             val parentUri = DocumentsContract.buildDocumentUriUsingTree(tree, parent)
             val existing = files[path]
-                ?: if (!listed) children(parent).firstOrNull { !it.dir && it.name == name }?.id else null
+                ?: if (!listed || path.startsWith("Conflicts/")) children(parent).firstOrNull { !it.dir && it.name == name }?.id else null
             // A new label or picture straight under its name: three calls to
             // Android instead of six, the first copy of hundreds of labels
             // took minutes (beta38). Saves, states and settings still go
@@ -854,8 +1103,25 @@ internal class SlotFolder(private val activity: MainActivity) {
                 if (existing != null) {
                     DocumentsContract.deleteDocument(resolver, DocumentsContract.buildDocumentUriUsingTree(tree, existing))
                 }
-                val renamed = DocumentsContract.renameDocument(resolver, temp, name) ?: temp
-                val id = DocumentsContract.getDocumentId(renamed)
+                // Some SD cards' providers refuse the rename: the file is then
+                // written under its own name from the bytes in hand, and the
+                // temporary one goes (3.1.0). A refused rename used to leave
+                // "<name>.slot-tmp" in the folder.
+                val renamed = try { DocumentsContract.renameDocument(resolver, temp, name) } catch (_: Exception) { null }
+                val placed = renamed ?: run {
+                    SlotLog.w(TAG, "Slot folder: rename refused for $path, written under its name instead")
+                    val made = DocumentsContract.createDocument(resolver, parentUri, "application/octet-stream", name)
+                        ?: throw IOException("couldn't write $path")
+                    try {
+                        resolver.openOutputStream(made, "wt")?.use { it.write(bytes) } ?: throw IOException("couldn't write $path")
+                    } catch (error: Exception) {
+                        try { DocumentsContract.deleteDocument(resolver, made) } catch (_: Exception) {}
+                        throw error
+                    }
+                    try { DocumentsContract.deleteDocument(resolver, temp) } catch (_: Exception) {}
+                    made
+                }
+                val id = DocumentsContract.getDocumentId(placed)
                 files[path] = id
                 return meta(id) ?: FolderSync.Meta(bytes.size.toLong(), System.currentTimeMillis())
             } catch (error: Exception) {

@@ -74,6 +74,19 @@ const COAST_MAX: f32 = 90.0;
 /// A one-cart shelf only gives a little under the finger.
 const LONE_GIVE: f32 = 0.25;
 
+/// The carousel's feel, for a page that scrolls as it does (the shelves
+/// page sideways, 3.0.1-beta13): the same spring, held-key pace and fling.
+pub mod feel {
+    pub const OMEGA: f32 = super::OMEGA;
+    pub const REPEAT_DELAY_MS: super::Millis = super::REPEAT_DELAY_MS;
+    pub const REPEAT_MS: [super::Millis; 4] = super::REPEAT_MS;
+    pub const COAST_FRICTION: f32 = super::COAST_FRICTION;
+    pub const FLING_GAIN: f32 = super::FLING_GAIN;
+    /// In carts (here, columns) a second.
+    pub const COAST_END: f32 = super::COAST_END;
+    pub const COAST_MAX: f32 = super::COAST_MAX;
+}
+
 /// What moves the shelf: the spring (D-pad, and after touch), the finger,
 /// or a fling coasting on.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -240,6 +253,17 @@ impl Shelf {
 
     pub fn face(&self, i: usize) -> Option<TexId> {
         self.faces.get(i).copied().flatten()
+    }
+
+    /// Cart `i`'s silhouette, drawn while its face isn't ready.
+    pub fn silhouette(&self, i: usize) -> Option<TexId> {
+        let cart = self.carts.get(i)?;
+        match self.shells.get(i).copied().unwrap_or_else(|| body_of(cart)) {
+            Body::Gba => self.shadow,
+            Body::Gb(GbShell::Notched) => self.gb_shadow,
+            Body::Gb(GbShell::Rounded) => self.gbc_shadow,
+            Body::Home(m) => self.home_shadows[m.index()],
+        }
     }
 
     pub fn set_face(&mut self, i: usize, tex: TexId) -> Option<TexId> {

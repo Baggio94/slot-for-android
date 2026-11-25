@@ -268,7 +268,8 @@ class MainActivity : Activity() {
          *  batch's end (it flashed 29 times: Siham 2026-11-16). */
         val silent: Boolean = false,
         /** The ROM folder was over slot.'s bounds: some games were skipped. */
-        val partial: Boolean = false
+        val partial: Boolean = false,
+        val refreshArtwork: Boolean = false
     )
     private var pendingLibraryIndex: PendingLibraryIndex? = null
     /** The index last handed to the shelf, and when RomM's last one went:
@@ -322,7 +323,8 @@ class MainActivity : Activity() {
         val tasks = ArrayList<TaskPill.Task>()
         slotFolder.copyPercent()?.let { tasks.add(TaskPill.Task(TaskPill.COPY, "COPYING $it%", it / 100f)) }
         slotFolder.syncProgress()?.let { (done, total) ->
-            // From the card's arrival, counted once its listing is read.
+            // Files coming in from the folder, counted as they arrive; a
+            // Refresh Library's check shows even when none come in.
             tasks.add(if (total > 0) TaskPill.Task(TaskPill.SYNC, "SYNCING $done/$total", done.toFloat() / total)
                 else TaskPill.Task(TaskPill.SYNC, "SYNCING", -1f))
         }
@@ -333,8 +335,10 @@ class MainActivity : Activity() {
         taskIndicators.library.pillWords?.let {
             tasks.add(TaskPill.Task(TaskPill.SCAN, it, taskIndicators.library.pillProgress))
         }
-        taskIndicators.labels.pillWords?.let {
-            tasks.add(TaskPill.Task(TaskPill.LABELS, it, taskIndicators.labels.pillProgress))
+        val labelWords = taskIndicators.labels.pillWords
+        if (labelWords != null) tasks.add(TaskPill.Task(TaskPill.LABELS, labelWords, taskIndicators.labels.pillProgress))
+        else if (manualArtworkRefresh.get() && autoLabelsRunning.get()) {
+            tasks.add(TaskPill.Task(TaskPill.LABELS, "LABELS", -1f))
         }
         TaskPill.spec(tasks, nativeIsPlaying())?.let { nativeSetTaskPill(it) }
     }
@@ -376,8 +380,18 @@ class MainActivity : Activity() {
     }
     private val autoLabelsRunning = AtomicBoolean(false)
     private val autoLabelsRestartRequested = AtomicBoolean(false)
+    private val artworkRefreshRequested = AtomicBoolean(false)
+    private val manualArtworkRefresh = AtomicBoolean(false)
+    private val manualRefreshSerial = AtomicInteger(0)
+    private val manualBiosFailed = AtomicBoolean(false)
+    private val manualCatalogueFailed = AtomicBoolean(false)
+    private val manualOfflineNotice = AtomicBoolean(false)
+    private val autoLabelsNeedSync = AtomicBoolean(false)
+    private val artworkCheckpointRunning = AtomicBoolean(false)
+    private var labelsSinceCheckpoint = 0
     /** Labels saved before this run of passes, for its "N LABELS ADDED". */
     @Volatile private var autoLabelsChainBase = -1
+    private var autoLabelsOwnPassDone = false
     /** Only retries left (a server that timed out): the visible pass ends,
      *  they go on unseen (it stayed on LABELS 12/13: Siham 2026-11-17). */
     @Volatile private var autoLabelsQuiet = false
@@ -456,7 +470,7 @@ class MainActivity : Activity() {
             // The shelf waiting to be shown is replaced by this one: shown even unchanged.
             if (waiting == null && RomLibrary.sameIndex(previous, json)) return@execute
             giveRommLabels(json)
-            val prepared = CartStudioCatalog.withOverrides(this, json)
+            val prepared = json
             SlotLog.i(TAG, "RomM: ${files.size} game(s) added without a folder scan")
             runOnUiThread {
                 if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
@@ -581,7 +595,7 @@ class MainActivity : Activity() {
     internal val slotFolder: SlotFolder by lazy { SlotFolder(this) }
     /** Copies this handheld's saves to the slot. folder a little after
      *  the last save, not after each one. */
-    private val slotFolderPush = Runnable { slotFolder.sync(pull = false) }
+    private val slotFolderPush = Runnable { slotFolder.syncSaves() }
 
     /** Folders slot. already uses for something else (scenario A7). */
     internal fun otherFolders(): Set<String> {
@@ -611,13 +625,44 @@ class MainActivity : Activity() {
         }
     } catch (_: Exception) { null }
 
+    /** The BIOS folder's path on its storage, for slot.json (3.0.1-beta12). */
+    internal fun biosFolderPath(): String? = try {
+        getSharedPreferences(PREFS, MODE_PRIVATE).getString(BIOS_ROOT, null)?.let {
+            android.provider.DocumentsContract.getTreeDocumentId(Uri.parse(it)).substringAfter(':', "")
+                .takeIf { path -> path.isNotEmpty() }
+        }
+    } catch (_: Exception) { null }
+
+    /** A slot folder's BIOS folder, asked for once its ROM folder is chosen. */
+    private var biosAfterRoms: String? = null
+
     /** Scenario D1: a slot folder from another handheld names its ROM
-     *  folder; with none chosen here, the picker opens right on it. */
-    internal fun suggestRomFolder(path: String) {
-        if (getSharedPreferences(PREFS, MODE_PRIVATE).getString(ROM_ROOT, null) != null) return
+     *  folder; with none chosen here, the picker opens right on it, then on
+     *  its BIOS folder when it names one too (3.0.1-beta12). */
+    internal fun suggestRomFolder(path: String?, bios: String?) {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val volume = slotFolder.volume() ?: return
+        biosAfterRoms = bios?.takeIf { !prefs.contains(BIOS_ROOT) }
+        if (path == null || prefs.getString(ROM_ROOT, null) != null) {
+            suggestBiosFolder()
+            return
+        }
         SlotToast.makeText(this, "Now choose your ROM folder.", Toast.LENGTH_LONG).show()
         openRomFolderPicker(android.provider.DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents", "$volume:$path"))
+    }
+
+    /** The slot folder's BIOS folder, the picker opened right on it. A new
+     *  installation is never asked: BIOS are added in Library when wanted
+     *  (Siham 2026-11-25). */
+    private fun suggestBiosFolder() {
+        val path = biosAfterRoms ?: return
+        biosAfterRoms = null
+        if (getSharedPreferences(PREFS, MODE_PRIVATE).contains(BIOS_ROOT) || isDestroyed || nativeIsPlaying()) return
+        val volume = slotFolder.volume() ?: return
+        SlotToast.makeText(this, "Now choose your BIOS folder.", Toast.LENGTH_LONG).show()
+        nativeExternalBegin()
+        openBiosFolderPicker(android.provider.DocumentsContract.buildDocumentUri(
             "com.android.externalstorage.documents", "$volume:$path"))
     }
 
@@ -686,6 +731,15 @@ class MainActivity : Activity() {
     }
     private val vibrator by lazy { getSystemService(VIBRATOR_SERVICE) as? Vibrator }
     private var lastRumbleAt = 0L
+    private var lastRumbleAmplitude = 0
+    private var rumbleUntil = 0L
+    private val rumblePulse = object : Runnable {
+        override fun run() {
+            if (!resumed || isDestroyed) { stopRumble(); return }
+            pollRumble()
+            uiHandler.postDelayed(this, if (nativeGameUnpaused()) 16L else 100L)
+        }
+    }
     // Tilt, gyro and solar cartridges: the core switches sensors on and
     // Android listens only while it wants them, like RetroArch.
     private val sensorManager by lazy { getSystemService(SENSOR_SERVICE) as? SensorManager }
@@ -1094,7 +1148,6 @@ class MainActivity : Activity() {
                 // Library feedback and START are rendered inside Slot's
                 // GL carousel, not overlaid by an Android TextView.
             }
-            pollRumble()
             updateSensors()
             updateDisplaySyncMode()
             updateCarouselPacing()
@@ -1716,6 +1769,8 @@ class MainActivity : Activity() {
         setContentView(frame)
         immersive()
         uiHandler.post(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        uiHandler.post(rumblePulse)
         if (!cleanSignOut) {
             uiHandler.postDelayed({
                 SlotToast.makeText(this,
@@ -2638,10 +2693,19 @@ class MainActivity : Activity() {
                     return@execute
                 }
                 val folderWaitAt = SystemClock.elapsedRealtime()
-                // Only saves, states, cheats and game settings are waited for
-                // (beta39): a long copy of labels never holds up a game.
-                if (slotFolder.launchFilesPending() && !slotFolder.awaitLaunchFiles(15_000L))
-                    SlotLog.w(TAG, "Slot folder copy still running; launching anyway")
+                // Only this game's saves, states, cheats and settings are
+                // waited for (3.0.1-beta11): the copy takes them first, the
+                // other games' follow after the launch. A game whose own
+                // files haven't come in doesn't start without them.
+                if (slotFolder.launchFilesPending()) {
+                    val own = setOf(shared.stem, GameKeys.digest(rawUri), GameKeys.legacyDigest(rawUri),
+                        GameKeys.key(rawUri), GameKeys.legacyKey(rawUri))
+                    if (!slotFolder.awaitGameFiles(own, 15_000L)) {
+                        SlotLog.w(TAG, "Slot folder still bringing ${shared.stem}'s files: not launched")
+                        nativeGameError(rawUri, "say:Still copying this game's saves from your slot. folder. Try again in a moment.")
+                        return@execute
+                    }
+                }
                 (SystemClock.elapsedRealtime() - folderWaitAt).takeIf { it > 20 }?.let {
                     SlotLog.i(TAG, "Slot launch waited ${it}ms for the slot. folder")
                 }
@@ -2873,19 +2937,43 @@ class MainActivity : Activity() {
         sensorsListening = 0
     }
 
+    private fun stopRumble() {
+        if (lastRumbleAmplitude != 0) {
+            try { vibrator?.cancel() } catch (_: RuntimeException) { }
+        }
+        lastRumbleAmplitude = 0
+        lastRumbleAt = 0L
+        rumbleUntil = 0L
+    }
+
     private fun pollRumble() {
-        if (!resumed || !nativeIsPlaying()) return
-        val strength = nativePollRumbleStrength()
-        if (strength <= 4096) return
+        if (!resumed || !nativeGameUnpaused()) { stopRumble(); return }
+        val packet = nativePollRumbleStrength()
+        val current = packet and 0xffff
+        val peak = packet ushr 16
+        val strength = maxOf(current, peak)
         val now = SystemClock.elapsedRealtime()
-        if (now - lastRumbleAt < 100L) return
-        lastRumbleAt = now
+        if (strength == 0) {
+            if (now >= rumbleUntil) stopRumble()
+            return
+        }
         val device = vibrator ?: return
         if (!device.hasVibrator()) return
         try {
-            val intensity = (strength / 257).coerceIn(10, 255)
-            device.vibrate(VibrationEffect.createOneShot(45L, intensity))
+            val intensity = if (device.hasAmplitudeControl())
+                ((strength + 256) / 257).coerceIn(1, 255)
+            else VibrationEffect.DEFAULT_AMPLITUDE
+            // A transient gets a brief physical pulse. Renew a sustained
+            // signal before expiry, without restarting it on every frame.
+            if (peak > current) rumbleUntil = maxOf(rumbleUntil, now + 32L)
+            if (intensity != lastRumbleAmplitude || now - lastRumbleAt >= 32L) {
+                device.vibrate(VibrationEffect.createOneShot(48L, intensity))
+                lastRumbleAt = now
+                lastRumbleAmplitude = intensity
+            }
+            if (current != 0) rumbleUntil = maxOf(rumbleUntil, now + 16L)
         } catch (error: RuntimeException) {
+            stopRumble()
             SlotLog.w(TAG, "KONKR rumble unavailable", error)
         }
     }
@@ -3283,8 +3371,29 @@ class MainActivity : Activity() {
     private fun autoLabelsMayRun(): Boolean =
         resumed && !isDestroyed && !nativeIsPlaying()
 
+    private fun requestArtworkRefresh() {
+        manualArtworkRefresh.set(true)
+        artworkRefreshRequested.set(true)
+        startAutoCartLabels()
+    }
+
+    /** The slot. folder's labels are in: those still missing are looked for. */
+    internal fun folderArtworkIn() {
+        uiHandler.removeCallbacks(labelsAfterFolder)
+        startAutoCartLabels()
+    }
+    private val labelsAfterFolder = Runnable { startAutoCartLabels() }
+
     private fun startAutoCartLabels() {
         if (!autoLabelsMayRun()) return
+        // A new handheld's labels come from its slot. folder first; only
+        // those it hasn't are searched for (3.0.1-beta11).
+        if (!slotFolder.artworkSettled()) {
+            Log.i("SlotAutoLabels", "Deferred: the slot. folder's labels are still coming in")
+            uiHandler.removeCallbacks(labelsAfterFolder)
+            uiHandler.postDelayed(labelsAfterFolder, 30_000L)
+            return
+        }
         if (!autoLabelsRunning.compareAndSet(false, true)) {
             // A short Studio visit may return before the previous worker exits.
             autoLabelsRestartRequested.set(true)
@@ -3294,6 +3403,8 @@ class MainActivity : Activity() {
         try {
             autoLabelsWorker.execute {
                 var anotherBatch = false
+                var passesFinished = false
+                val artworkRevision = PortableArtwork.revision()
                 // Only a pass that has carts to look at shows or reports
                 // anything: one that finds nothing to do stays silent, not
                 // "LABELS 2/2" again from the last pass's count (beta41).
@@ -3306,20 +3417,64 @@ class MainActivity : Activity() {
                     val caps = manager?.getNetworkCapabilities(manager.activeNetwork)
                     if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) {
                         Log.i("SlotAutoLabels", "Deferred: Android default Internet network is not validated")
+                        if (manualArtworkRefresh.get() && manualOfflineNotice.compareAndSet(false, true)) uiHandler.post {
+                            if (!isDestroyed && resumed) SlotToast.makeText(this,
+                                "ROM library scanned. Labels will resume when online.", Toast.LENGTH_SHORT).show()
+                        }
                         return@execute
                     }
                     // Exactly the production 1.2.0 callback: enqueue a
                     // successful saved label for an idle carousel repaint.
                     // Status/UI snapshots are completely separate.
                     val keepGoing = { autoLabelsMayRun() }
+                    if (artworkRefreshRequested.getAndSet(false)) {
+                        PortableArtwork.beginRefresh(applicationContext)
+                        AutoCartLabels.resetForRefresh()
+                        HomeCartLabels.resetForRefresh()
+                        autoLabelsOwnPassDone = false
+                        val shelves = CartStudioCatalog.games(applicationContext).map { it.platform }.toSet()
+                        if (!SlotArtSet.refreshLibrary(applicationContext, shelves, keepGoing)) {
+                            artworkRefreshRequested.set(true)
+                            return@execute
+                        }
+                        ArtNames.forget()
+                        val required = shelves.toMutableSet()
+                        if (Systems.GB in required || Systems.GBC in required) { required.add(Systems.GB); required.add(Systems.GBC) }
+                        manualCatalogueFailed.set(!SlotArtSet.hasFreshIndexes(applicationContext, required.toList()))
+                    }
+                    val savedLabel: (String) -> Unit = { uri ->
+                        autoLabelUpdates.add(uri)
+                        autoLabelsNeedSync.set(true)
+                        labelsSinceCheckpoint++
+                        // Overlap the first copy with scraping, not with game
+                        // launch. At most one intermediate copy in flight.
+                        if (labelsSinceCheckpoint >= 128 && artworkCheckpointRunning.compareAndSet(false, true)) {
+                            labelsSinceCheckpoint = 0
+                            slotFolder.syncArtwork(pull = false) { ok ->
+                                if (!ok) autoLabelsNeedSync.set(true)
+                                artworkCheckpointRunning.set(false)
+                            }
+                        }
+                    }
                     HomeCartLabels.announce(applicationContext)
-                    anotherBatch = AutoCartLabels.fill(applicationContext,
-                        shouldContinue = keepGoing,
-                        onSaved = { uri -> autoLabelUpdates.add(uri) })
-                    // NES, Super Nintendo and Mega Drive labels from ScreenScraper.
-                    anotherBatch = HomeCartLabels.fill(applicationContext,
-                        shouldContinue = keepGoing,
-                        onSaved = { uri -> autoLabelUpdates.add(uri) }) || anotherBatch
+                    if (!autoLabelsOwnPassDone) {
+                        // Both catalogue families precede slow external fallback.
+                        val focus = ArtworkPriority.focus(applicationContext)
+                        val platform = CartStudioCatalog.games(applicationContext)
+                            .firstOrNull { it.uri == focus }?.platform
+                        if (platform != null && platform in Systems.HOME_PLATFORMS) {
+                            HomeCartLabels.fill(applicationContext, keepGoing, savedLabel, ownOnly = true)
+                            AutoCartLabels.fill(applicationContext, keepGoing, savedLabel, ownOnly = true)
+                        } else {
+                            AutoCartLabels.fill(applicationContext, keepGoing, savedLabel, ownOnly = true)
+                            HomeCartLabels.fill(applicationContext, keepGoing, savedLabel, ownOnly = true)
+                        }
+                        autoLabelsOwnPassDone = keepGoing()
+                    }
+                    // Existing permissive matching and paced sources.
+                    anotherBatch = AutoCartLabels.fill(applicationContext, keepGoing, savedLabel)
+                    anotherBatch = HomeCartLabels.fill(applicationContext, keepGoing, savedLabel) || anotherBatch
+                    passesFinished = keepGoing()
                 } catch (error: Exception) {
                     Log.w("SlotAutoLabels", "Automatic artwork deferred", error)
                 } finally {
@@ -3328,6 +3483,7 @@ class MainActivity : Activity() {
                     val report = AutoCartLabelDiagnostics.snapshot()
                     val added = (report.saved - autoLabelsChainBase.coerceAtLeast(0)).coerceAtLeast(0)
                     if (!anotherBatch && !recheck) autoLabelsChainBase = -1
+                    if (!anotherBatch || recheck || !autoLabelsMayRun()) autoLabelsOwnPassDone = false
                     val progressKey = (report.checked.toLong() shl 32) or report.saved.toLong()
                     if (anotherBatch && !recheck) {
                         // A batch that moved nothing on: only retries wait.
@@ -3367,6 +3523,44 @@ class MainActivity : Activity() {
                         uiHandler.post {
                             if (::autoLabelIndicator.isInitialized) autoLabelIndicator.hide()
                         }
+                    }
+                    if (PortableArtwork.revision() != artworkRevision) autoLabelsNeedSync.set(true)
+                    // Keep changes together through the retry chain; a pause
+                    // already has its normal outgoing sync. Only the artwork
+                    // directories are walked after a completed search.
+                    val finished = passesFinished && !anotherBatch && !recheck &&
+                        !artworkRefreshRequested.get()
+                    if (finished) {
+                        AutoCartLabels.clearOwnPass()
+                        HomeCartLabels.clearOwnPass()
+                    }
+                    if (finished && !isDestroyed) {
+                        val manual = manualArtworkRefresh.getAndSet(false)
+                        val serial = manualRefreshSerial.get()
+                        val dirty = autoLabelsNeedSync.getAndSet(false)
+                        val complete: (Boolean) -> Unit = { ok ->
+                            if (!ok) autoLabelsNeedSync.set(true)
+                            if (manual && !isDestroyed) try {
+                                // BIOS reconciliation was queued before the scan.
+                                gameLoader.execute {
+                                    uiHandler.post {
+                                        if (!isDestroyed && resumed && !manualArtworkRefresh.get() &&
+                                            manualRefreshSerial.get() == serial) {
+                                            val errors = report.networkError + report.otherError
+                                            val message = when {
+                                                !ok -> "Library scanned. Folder sync pending."
+                                                manualBiosFailed.get() -> "Library scanned. BIOS folder unavailable."
+                                                manualCatalogueFailed.get() || errors > 0 -> "Library scanned. Some labels could not be checked."
+                                                else -> "Library is up to date."
+                                            }
+                                            SlotToast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            } catch (_: java.util.concurrent.RejectedExecutionException) { }
+                        }
+                        if (dirty) slotFolder.syncArtwork(pull = autoLabelsMayRun(), asked = manual, finished = complete)
+                        else complete(true)
                     }
                     if ((anotherBatch || recheck) && autoLabelsMayRun()) {
                         // A pause between bounded batches prevents continuous
@@ -3726,7 +3920,20 @@ class MainActivity : Activity() {
             openRomFolderPicker()
             return
         }
-        scanFolder(uri)
+        manualRefreshSerial.incrementAndGet()
+        manualBiosFailed.set(false)
+        manualCatalogueFailed.set(false)
+        manualOfflineNotice.set(false)
+        getSharedPreferences(PREFS, MODE_PRIVATE).getString(BIOS_ROOT, null)?.let { savedBios ->
+            val bios = Uri.parse(savedBios)
+            if (contentResolver.persistedUriPermissions.any { it.uri == bios && it.isReadPermission }) {
+                importBiosFolder(bios, persistSelection = false, quietRetries = 0, manualRefresh = true)
+            } else {
+                manualBiosFailed.set(true)
+                SlotLog.w(TAG, "BIOS folder access expired; previous BIOS kept")
+            }
+        }
+        scanFolder(uri, refreshArtwork = true)
     }
 
     private fun openSharedFolderPicker(requestCode: Int) {
@@ -3750,12 +3957,14 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun openBiosFolderPicker() {
+    private fun openBiosFolderPicker(initial: Uri? = null) {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
             addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
             )
+            if (initial != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initial)
         }
         try {
             @Suppress("DEPRECATION")
@@ -3767,35 +3976,38 @@ class MainActivity : Activity() {
     }
 
     /** Runs sequentially with ROM materialization, never on the UI/GL thread. */
-    private fun importBiosFolder(uri: Uri, persistSelection: Boolean, quietRetries: Int = 3) {
+    private fun importBiosFolder(uri: Uri, persistSelection: Boolean, quietRetries: Int = 3, manualRefresh: Boolean = false) {
         // The BIOS folder's card is out (beta41): the staged copy is used,
         // nothing is read, no retries filling the log.
         if (!persistSelection && !SlotFolder.volumeMounted(this, SlotFolder.volumeOf(uri))) {
             SlotLog.i(TAG, "BIOS folder's card is out: the copy already in slot. is used")
+            if (manualRefresh) manualBiosFailed.set(true)
             return
         }
         gameLoader.execute {
             try {
-                BiosLibrary.importFrom(this, uri)
-                // Restoring the already selected BIOS at startup is silent.
-                // Only the first explicit selection ever shows 'BIOS ready'.
+                val imported = BiosLibrary.importFrom(this, uri, allowEmpty = !persistSelection)
+                SlotLog.i(TAG, "BIOS imported (${imported.size}): ${imported.joinToString()}")
+                // Restoring the already selected BIOS at startup stays silent.
                 val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-                val firstExplicitImport = persistSelection &&
-                    !prefs.contains(BIOS_ROOT)
                 if (persistSelection) {
                     prefs.edit().putString(BIOS_ROOT, uri.toString()).apply()
                 }
-                if (firstExplicitImport) runOnUiThread {
+                if (persistSelection) runOnUiThread {
                     if (!isDestroyed) {
+                        TaskPill.confirm("BIOS READY")
                         SlotToast.makeText(this, "BIOS ready. Used from your next game.",
                             Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (error: Exception) {
                 SlotLog.e(TAG, "BIOS folder import failed", error)
+                if (manualRefresh) manualBiosFailed.set(true)
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
-                    if (!persistSelection) {
+                    if (manualRefresh) {
+                        SlotToast.makeText(this, "BIOS folder unavailable. Existing BIOS kept.", Toast.LENGTH_LONG).show()
+                    } else if (!persistSelection) {
                         // Silent startup restore: right after a reboot (slot.
                         // as home app) the storage provider may not be ready
                         // yet. The previously staged BIOS copy is kept, so
@@ -4104,7 +4316,7 @@ class MainActivity : Activity() {
     }
 
     private fun setStudioOverrides(json: String): Int =
-        nativeSetLibrary(CartStudioCatalog.withOverrides(this, json)).also {
+        nativeSetLibrary(json).also {
             if (it >= 0) shelfCarts = it
         }
 
@@ -4251,6 +4463,7 @@ class MainActivity : Activity() {
             when (requestCode) {
                 FOLDER_REQUEST -> {
                     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                    val firstRomFolder = !prefs.contains(ROM_ROOT)
                     val same = prefs.getString(ROM_ROOT, null) == uri.toString()
                     prefs.edit().putString(ROM_ROOT, uri.toString()).apply()
                     // The same folder chosen again for RomM: only the right
@@ -4259,6 +4472,10 @@ class MainActivity : Activity() {
                     // From RomM the folder is often still empty: its own
                     // "games added" message speaks once the downloads land.
                     if (!(same && forRomm)) scanFolder(uri, quiet = forRomm, shown = true)
+                    // A slot folder's BIOS folder follows; a new installation
+                    // is never asked (3.0.1-beta12).
+                    if (firstRomFolder && !forRomm && !prefs.contains(BIOS_ROOT))
+                        uiHandler.post { suggestBiosFolder() }
                 }
                 BIOS_REQUEST -> importBiosFolder(uri, persistSelection = true)
                 SAVE_REQUEST, STATE_REQUEST -> {
@@ -4454,7 +4671,7 @@ class MainActivity : Activity() {
                 // RomM's games still coming: one search once they're all in.
                 if (!(next.silent && romm.downloading())) {
                     startRaSmartCache()
-                    startAutoCartLabels()
+                    if (next.refreshArtwork) requestArtworkRefresh() else startAutoCartLabels()
                 }
             } catch (error: Exception) {
                 SlotLog.w(TAG, "ROM cache write failed; displayed shelf is intact", error)
@@ -4467,7 +4684,7 @@ class MainActivity : Activity() {
             SlotToast.makeText(this,
                 "ROM folder too big: $count cartridges ready, some games skipped.",
                 Toast.LENGTH_LONG).show()
-        } else if (!next.quiet && count > 0) {
+        } else if (!next.quiet && !next.refreshArtwork && count > 0) {
             SlotToast.makeText(this,
                 if (count == 1) "1 cartridge ready." else "$count cartridges ready.",
                 Toast.LENGTH_SHORT).show()
@@ -4483,7 +4700,7 @@ class MainActivity : Activity() {
     /** `quiet`: no toast at the end. `shown`: its progress shows (top right
      *  over carts, centred on an empty shelf); only the scan behind the
      *  boot's cached shelf is hidden (RomM's show: Siham 2026-11-16). */
-    private fun scanFolder(uri: Uri, quiet: Boolean = false, shown: Boolean = !quiet) {
+    private fun scanFolder(uri: Uri, quiet: Boolean = false, shown: Boolean = !quiet, refreshArtwork: Boolean = false) {
         val serial = scanSerial.incrementAndGet()
         pendingLibraryIndex = null
         if (::libraryRefreshIndicator.isInitialized) libraryRefreshIndicator.hide()
@@ -4509,7 +4726,8 @@ class MainActivity : Activity() {
         scanner.execute {
             try {
                 val previous = cachedLibraryGames(uri)
-                val result = RomLibrary.scan(this, uri, previous, progress)
+                val result = RomLibrary.scan(this, uri, previous, progress,
+                    shouldContinue = { !isDestroyed && scanSerial.get() == serial })
                 if (scanSerial.get() != serial) return@execute
                 // A bounded/incomplete SAF scan is not evidence that a ROM
                 // was removed: RomLibrary kept every earlier cart. What it
@@ -4538,13 +4756,16 @@ class MainActivity : Activity() {
                 // games came by a scan rather than an add).
                 giveRommLabels(result.json)
                 if (previous != null && RomLibrary.sameIndex(previous, result.json)) {
+                    // Persist metadata-only migrations even without a shelf rebuild.
+                    if (previous != result.json) storeCachedLibrary(uri, result.json)
                     SlotLog.i(TAG, "ROM library unchanged: " + result.count +
                         " carts; no renderer rebuild")
+                    if (refreshArtwork) requestArtworkRefresh()
                     runOnUiThread {
                         if (!isDestroyed && scanSerial.get() == serial && shown) {
                             libraryRefreshIndicator.hide()
                             nativeSetShelfStatus(if (result.count == 0) shelfEmpty else shelfNone)
-                            if (!quiet) SlotToast.makeText(this, "Library is up to date.",
+                            if (!quiet && !refreshArtwork) SlotToast.makeText(this, "Library is up to date.",
                                 Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -4552,13 +4773,15 @@ class MainActivity : Activity() {
                 }
                 // Process artwork metadata before handing a changed index
                 // to the UI. No game/ROM bytes or state files are touched.
-                val prepared = CartStudioCatalog.withOverrides(this, result.json)
+                val prepared = result.json
                 runOnUiThread {
                     if (isDestroyed || scanSerial.get() != serial) return@runOnUiThread
                     pendingLibraryIndex = PendingLibraryIndex(
-                        uri, result.json, prepared, serial, quiet, partial = partial)
+                        uri, result.json, prepared, serial, quiet, partial = partial, refreshArtwork = refreshArtwork)
                     publishPendingLibraryIfIdle()
                 }
+            } catch (_: java.util.concurrent.CancellationException) {
+                SlotLog.i(TAG, "ROM scan superseded")
             } catch (error: OutOfMemoryError) {
                 // Last resort (issue #122's bigger bound): the scan's copies
                 // are dropped with its frames; the shelf stays as it was
@@ -4659,6 +4882,8 @@ class MainActivity : Activity() {
         romWarmWorker.shutdownNow()
         autoLabelsWorker.shutdownNow()
         uiHandler.removeCallbacks(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        stopRumble()
         synchronized(raSmartForeground) { raSmartForeground.notifyAll() }
         if (::raAchievementOverlay.isInitialized) raAchievementOverlay.destroy()
         if (::shelfStatus.isInitialized) shelfStatus.close()
@@ -4674,6 +4899,7 @@ class MainActivity : Activity() {
     private var homeHoldPause = false
 
     override fun onPause() {
+        stopRumble()
         if (RgRotate.device && rotateMiddleDown) {
             homeHoldPause = true
             SlotLog.i(TAG, "Rotate: middle button Home; light pause")
@@ -4699,6 +4925,8 @@ class MainActivity : Activity() {
         resumed = false
         warmedCandidate.set(null)
         uiHandler.removeCallbacks(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        stopRumble()
         stopSensors()
         carouselDozing = false
         // Rust nativeSuspend aborts discovery/linked play; never keep a
@@ -4763,7 +4991,11 @@ class MainActivity : Activity() {
         carouselDozing = false
         view.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         uiHandler.removeCallbacks(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        stopRumble()
         uiHandler.post(pulse)
+        uiHandler.removeCallbacks(rumblePulse)
+        uiHandler.post(rumblePulse)
         if (::shelfStatus.isInitialized) shelfStatus.onResume()
         if (::lidCover.isInitialized) lidCover.onResume()
         // Android's quick settings may return without a fresh onAvailable().

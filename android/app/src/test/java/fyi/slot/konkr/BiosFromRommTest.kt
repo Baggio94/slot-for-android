@@ -21,21 +21,24 @@ class BiosFromRommTest {
         assertTrue(BiosLibrary.namesFor(Systems.WS).isEmpty())
     }
 
-    @Test fun onlyFourSystemsAreEligibleForAutomaticRommBios() {
-        assertEquals(setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX),
-            BiosLibrary.ROMM_AUTO_PLATFORMS)
-        assertEquals(listOf("gb_bios.bin"), BiosLibrary.automaticNamesFor(Systems.GB))
-        assertEquals(listOf("gbc_bios.bin"), BiosLibrary.automaticNamesFor(Systems.GBC))
-        assertEquals(listOf("gba_bios.bin"), BiosLibrary.automaticNamesFor(Systems.GBA))
-        assertEquals(listOf("lynxboot.img"), BiosLibrary.automaticNamesFor(Systems.LYNX))
-        for (system in listOf(Systems.GG, Systems.SMS, Systems.MD, Systems.POKEMINI,
-            Systems.NGP, Systems.WS, Systems.SNES)) {
-            assertTrue("No automatic BIOS for $system",
-                BiosLibrary.automaticNamesFor(system).isEmpty())
+    @Test fun allRecognizedSystemsAreEligibleForAutomaticRommBios() {
+        val supported = setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX,
+            Systems.GG, Systems.SMS, Systems.MD, Systems.POKEMINI)
+        assertEquals(supported, BiosLibrary.ROMM_AUTO_PLATFORMS)
+        for (system in supported) {
+            assertEquals(BiosLibrary.namesFor(system), BiosLibrary.automaticNamesFor(system))
         }
-        // This is only a download policy: BIOS chosen manually are still supported.
-        assertEquals(listOf("bios.gg"), BiosLibrary.namesFor(Systems.GG))
-        assertEquals(listOf("bios.min"), BiosLibrary.namesFor(Systems.POKEMINI))
+        for (system in listOf(Systems.NGP, Systems.WS, Systems.NES, Systems.SNES)) {
+            assertTrue(BiosLibrary.automaticNamesFor(system).isEmpty())
+        }
+    }
+
+    @Test fun regionalBiosAreRequestedIndependentlyAndExistingFilesStay() {
+        val platforms = setOf(Systems.SMS, Systems.GG, Systems.GBA, Systems.NES)
+        val installed = setOf("bios_U.sms", "gba_bios.bin")
+        assertEquals(setOf("bios_e.sms", "bios_j.sms", "bios.gg"),
+            BiosLibrary.missingNames(platforms) { it in installed })
+        assertTrue(BiosLibrary.missingNames(platforms) { true }.isEmpty())
     }
 
     @Test fun theNewSystemsBiosAreCheckedToo() {

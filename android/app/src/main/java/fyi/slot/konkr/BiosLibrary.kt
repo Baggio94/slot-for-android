@@ -3,6 +3,8 @@ package fyi.slot.konkr
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.util.AtomicFile
+import java.security.MessageDigest
 import java.io.File
 
 /**
@@ -47,9 +49,8 @@ internal object BiosLibrary {
     fun namesFor(platform: String): List<String> =
         KINDS.filter { it.platform == platform }.map { it.name }
 
-    /** Only these four systems receive BIOS automatically from a RomM game download.
-     * Others stay available through Choose BIOS Folder without changing core boot behaviour. */
-    internal val ROMM_AUTO_PLATFORMS = setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX)
+    /** Download policy only: activation is independently decided by each core. */
+    internal val ROMM_AUTO_PLATFORMS = KINDS.map { it.platform }.toSet()
 
     internal fun automaticNamesFor(platform: String): List<String> =
         if (platform in ROMM_AUTO_PLATFORMS) namesFor(platform) else emptyList()
@@ -67,14 +68,15 @@ internal object BiosLibrary {
         else -> name
     }
 
-    /** BIOS missing locally for RomM's four automatic-download systems only.
-     *  Explicit imports and pre-existing BIOS for other systems are untouched. */
+    /** Check each regional firmware independently. */
+    internal fun missingNames(platforms: Set<String>, exists: (String) -> Boolean): Set<String> =
+        platforms.flatMapTo(linkedSetOf()) { platform ->
+            automaticNamesFor(platform).filterNot(exists).map { it.lowercase(java.util.Locale.ROOT) }
+        }
+
     fun missing(context: Context, platforms: Set<String>): Set<String> {
         val dest = File(context.filesDir, "BIOS")
-        return platforms.flatMapTo(linkedSetOf()) { platform ->
-            val names = automaticNamesFor(platform)
-            if (names.any { File(dest, it).isFile }) emptyList() else names.map { it.lowercase() }
-        }
+        return missingNames(platforms) { File(dest, it).isFile }
     }
 
     internal fun valid(name: String, bytes: ByteArray): Boolean =
@@ -83,6 +85,7 @@ internal object BiosLibrary {
     /** A BIOS from the player's RomM server, kept only where slot. has none:
      *  one already there, from the BIOS folder or anywhere, is never
      *  replaced (Siham 2026-11-17). */
+    @Synchronized
     fun addIfMissing(context: Context, name: String, bytes: ByteArray): Boolean {
         val kind = kindOf(name) ?: return false
         if (!kind.valid(bytes)) return false
@@ -99,18 +102,33 @@ internal object BiosLibrary {
         return true
     }
 
-    fun importFrom(context: Context, folder: Uri): List<String> {
+    private fun fingerprint(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
+
+    // Only copies known to have been installed from a local folder are
+    // removable. An old untracked copy might be a RomM download.
+    internal fun canRemove(owned: String?, current: String?, listed: Boolean): Boolean =
+        !listed && owned != null && owned == current
+
+    @Synchronized
+    fun importFrom(context: Context, folder: Uri, allowEmpty: Boolean = false): List<String> {
         val resolver = context.contentResolver
         val found = linkedMapOf<String, ByteArray>()
+        val listed = hashSetOf<String>()
+        check(SlotFolder.volumeMounted(context, SlotFolder.volumeOf(folder))) { "BIOS volume unavailable" }
         val columns = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE,
             DocumentsContract.Document.COLUMN_SIZE
         )
-        val children = DocumentsContract.buildChildDocumentsUriUsingTree(
-            folder, DocumentsContract.getTreeDocumentId(folder)
-        )
+        val rootId = DocumentsContract.getTreeDocumentId(folder)
+        val root = DocumentsContract.buildDocumentUriUsingTree(folder, rootId)
+        // An unavailable/deleted tree is not a valid empty BIOS folder.
+        val rootReadable = resolver.query(root, arrayOf(DocumentsContract.Document.COLUMN_MIME_TYPE),
+            null, null, null)?.use { it.moveToFirst() && it.getString(0) == DocumentsContract.Document.MIME_TYPE_DIR } == true
+        check(rootReadable) { "Cannot read selected BIOS folder" }
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(folder, rootId)
         resolver.query(children, columns, null, null, null)?.use { cursor ->
             val idCol = cursor.getColumnIndexOrThrow(columns[0])
             val nameCol = cursor.getColumnIndexOrThrow(columns[1])
@@ -121,6 +139,7 @@ internal object BiosLibrary {
                     DocumentsContract.Document.MIME_TYPE_DIR) continue
                 val kind = kindOf(cursor.getString(nameCol) ?: continue) ?: continue
                 val name = kind.name
+                listed.add(name)
                 val expected = kind.max
                 if (cursor.isNull(sizeCol).not() &&
                     cursor.getLong(sizeCol) > expected.toLong()) {
@@ -141,39 +160,53 @@ internal object BiosLibrary {
                         count += n
                     }
                     data.copyOf(count)
-                } ?: continue
+                } ?: error("Cannot read BIOS $name")
                 if (bytes.size > expected || !kind.valid(bytes)) continue
                 found[name] = bytes
             }
         } ?: error("Cannot read selected BIOS folder")
 
-        require(found.isNotEmpty()) {
+        require(allowEmpty || found.isNotEmpty()) {
             "No BIOS slot. knows found (gba_bios.bin, gb_bios.bin, gbc_bios.bin, " +
                 "lynxboot.img, bios.gg, bios_U.sms, bios_E.sms, bios_J.sms, bios_MD.bin, bios.min)"
         }
         val dest = File(context.filesDir, "BIOS").apply { mkdirs() }
         check(dest.isDirectory) { "BIOS destination unavailable" }
 
-        // Stage every available BIOS first; only publish complete validated
-        // files. Never write to the user-owned folder or erase the ROM library.
-        val pending = linkedMapOf<String, File>()
-        try {
-            for ((name, bytes) in found) {
-                val temp = File(dest, ".$name.tmp")
-                temp.outputStream().use { out -> out.write(bytes) }
-                pending[name] = temp
+        val owners = context.getSharedPreferences("local-bios-provenance", Context.MODE_PRIVATE)
+        // Never delete when the volume has vanished or the listing failed.
+        check(SlotFolder.volumeMounted(context, SlotFolder.volumeOf(folder))) { "BIOS volume unavailable" }
+        for ((name, bytes) in found) {
+            val target = File(dest, name)
+            val incoming = fingerprint(bytes)
+            val existing = target.takeIf { it.isFile }?.readBytes()?.let(::fingerprint)
+            if (existing != incoming) {
+                val atomic = AtomicFile(target)
+                val stream = atomic.startWrite()
+                try {
+                    stream.write(bytes)
+                    atomic.finishWrite(stream)
+                } catch (error: Exception) {
+                    atomic.failWrite(stream)
+                    throw error
+                }
+                check(owners.edit().putString(name, incoming).commit()) { "Could not record BIOS provenance" }
             }
-            for ((name, temp) in pending) {
-                val target = File(dest, name)
-                check(temp.renameTo(target)) { "Could not install $name" }
+            // Same bytes with no provenance: preserve the legacy/RomM copy
+            // rather than silently declaring it folder-owned.
+        }
+        check(SlotFolder.volumeMounted(context, SlotFolder.volumeOf(folder))) { "BIOS volume unavailable" }
+        for (kind in KINDS) {
+            val name = kind.name
+            val owned = owners.getString(name, null) ?: continue
+            val target = File(dest, name)
+            val current = target.takeIf { it.isFile }?.readBytes()?.let(::fingerprint)
+            if (canRemove(owned, current, name in listed)) {
+                check(target.delete()) { "Could not remove BIOS $name" }
+                owners.edit().remove(name).commit()
+            } else if (owned != current) {
+                owners.edit().remove(name).commit()
             }
-            // Switching folders should not silently retain a BIOS that no
-            // longer exists in the newly selected folder.
-            for (name in KINDS.map { it.name } - found.keys) {
-                File(dest, name).delete()
-            }
-        } finally {
-            pending.values.forEach { it.delete() }
         }
         return found.keys.toList()
     }

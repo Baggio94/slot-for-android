@@ -45,6 +45,19 @@ pub(crate) fn log_warn(message: &str) {
     #[cfg(not(target_os = "android"))]
     eprintln!("SlotKONKR: {message}");
 }
+/// What slot. decided, for the exported logs (an Info line in Android's).
+#[allow(dead_code)]
+pub(crate) fn log_info(message: &str) {
+    journal('I', message);
+    #[cfg(target_os = "android")]
+    if let Ok(text) = std::ffi::CString::new(message) {
+        unsafe {
+            __android_log_write(4, c"SlotKONKR".as_ptr(), text.as_ptr());
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("SlotKONKR: {message}");
+}
 mod library;
 mod cart_disk_cache;
 mod settings;

@@ -33,6 +33,54 @@ internal object TaskPill {
 
     class Task(val kind: Int, val words: String, val progress: Float)
 
+    /**
+     * SYNCING across a copy's passes (LAUNCH, REST, ARTWORK; 3.0.1-beta12,
+     * Siham 2026-11-25): it shows once the passes have run a second in all,
+     * the short gaps between them neither restart that second nor hide it,
+     * and once shown it stays at least [LEAST_MS] (no flash, never twice).
+     */
+    internal class Passes {
+        private var last: Task? = null
+        private var ran = 0L
+        private var tick = -1L
+        private var seen = 0L
+        private var shownAt = -1L
+        private var wasRunning = false
+
+        /** What to show at [now] for [running] (null: nothing). */
+        fun step(now: Long, running: Task?): Task? {
+            val dt = if (tick < 0) 0L else (now - tick).coerceIn(0L, 500L)
+            tick = now
+            if (running != null) {
+                last = running
+                seen = now
+                // Only time the copy ran counts, not the gap before it.
+                if (wasRunning) ran += dt
+            }
+            wasRunning = running != null
+            val shown = shownAt >= 0
+            val keep = shown && (now - seen < GAP_MS || now - shownAt < LEAST_MS)
+            val show = (running != null && (shown || ran >= SHOW_AFTER_MS)) || keep
+            if (show) {
+                if (!shown) shownAt = now
+                return running ?: last
+            }
+            if (running == null && now - seen >= GAP_MS) {
+                last = null
+                ran = 0L
+                shownAt = -1L
+            }
+            return null
+        }
+
+        companion object {
+            /** A pause between passes shorter than this is the same copy. */
+            const val GAP_MS = 1_500L
+            const val LEAST_MS = 1_500L
+        }
+    }
+    private val passes = Passes()
+
     /** One confirmation after the save and state upload attempts finish.
      *  Never claim a transfer happened when it was unchanged or deferred. */
     internal fun rommSyncWords(saveUploaded: Boolean, stateUploaded: Boolean): String? = when {
@@ -84,7 +132,9 @@ internal object TaskPill {
         }
         val kinds = running.map { it.kind }.toSet()
         since.keys.retainAll(kinds)
-        for (task in running.sortedBy { it.kind }) {
+        val sync = passes.step(now, running.firstOrNull { it.kind == SYNC })
+        for (task in (running.filter { it.kind != SYNC } + listOfNotNull(sync)).sortedBy { it.kind }) {
+            if (task.kind == SYNC) { shown.add(task); continue }
             val first = since.getOrPut(task.kind) { now }
             if (now - first >= SHOW_AFTER_MS) shown.add(task)
         }

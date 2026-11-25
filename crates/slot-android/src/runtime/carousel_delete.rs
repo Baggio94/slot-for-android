@@ -65,6 +65,18 @@ fn eject_at(rect: (f32, f32, f32, f32), t: f32) -> (f32, f32, f32, f32, f32) {
 }
 
 impl Engine {
+    /// A trigger held across the shelf selector must never flip the video
+    /// shelf or arm the delete gesture when released.
+    pub(super) fn cancel_shelves_triggers(&mut self) {
+        self.triggers.hold = None;
+        self.triggers.both = self.triggers.down.iter().any(|&down| down);
+    }
+
+    pub(super) fn shelves_trigger(&mut self, code: i32, pressed: bool) {
+        self.triggers.down[usize::from(code == 105)] = pressed;
+        self.cancel_shelves_triggers();
+    }
+
     /// L2 (104) or R2 (105) on the carousel.
     pub(super) fn carousel_trigger(&mut self, code: i32, pressed: bool) {
         let side = usize::from(code == 105);

@@ -85,7 +85,12 @@ internal object RomLibrary {
      * found, total 0), then each cart is read (progress reports done/total).
      */
     fun scan(context: Context, treeUri: Uri, oldGamesJson: String? = null,
-             progress: ((done: Int, total: Int) -> Unit)? = null): ScanResult {
+             progress: ((done: Int, total: Int) -> Unit)? = null,
+             shouldContinue: () -> Boolean = { true }): ScanResult {
+        val started = android.os.SystemClock.elapsedRealtime()
+        fun checkActive() {
+            if (!shouldContinue()) throw java.util.concurrent.CancellationException("ROM scan superseded")
+        }
         val previous = previousEntries(context, treeUri, oldGamesJson)
         var headersRead = 0
         var headersReused = 0
@@ -110,6 +115,7 @@ internal object RomLibrary {
 
         val found = ArrayList<Candidate>()
         while (pending.isNotEmpty()) {
+            checkActive()
             if (directories >= MAX_DIRECTORIES || found.size >= MAX_CANDIDATES) {
                 truncated = true
                 break
@@ -155,19 +161,45 @@ internal object RomLibrary {
             }
             progress?.invoke(found.size, 0)
         }
-        for ((index, candidate) in found.withIndex()) {
-            progress?.invoke(index, found.size)
-            if (games.length() >= MAX_ROMS) {
-                truncated = true
-                break
-            }
-            val (id, name, extension, size, modified, dir) = candidate
-            val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
-            val read = readEntry(context, fileUri, name, extension, size, modified,
-                dir.folder, previous[fileUri.toString()]) ?: continue
-            if (read.reused) headersReused++ else headersRead++
-            games.put(read.game)
+        val listedAt = android.os.SystemClock.elapsedRealtime()
+        // Bound both open SAF streams and in-flight results. Keep listing
+        // order deterministic, even when workers finish out of order.
+        val readers = java.util.concurrent.Executors.newFixedThreadPool(RomReads.headerReaders(treeUri.toString())) { task ->
+            Thread(task, "slot-rom-header").apply { isDaemon = true }
         }
+        try {
+            var index = 0
+            while (index < found.size) {
+                checkActive()
+                if (games.length() >= MAX_ROMS) { truncated = true; break }
+                val end = minOf(found.size, index + 8)
+                val jobs = (index until end).map { i ->
+                    readers.submit<ReadEntry?> {
+                        checkActive()
+                        val (id, name, extension, size, modified, dir) = found[i]
+                        val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+                        readEntry(context, uri, name, extension, size, modified,
+                            dir.folder, previous[uri.toString()])
+                    }
+                }
+                for (job in jobs) {
+                    checkActive()
+                    if (games.length() >= MAX_ROMS) { truncated = true; break }
+                    // A worker that saw the scan superseded reports it as a
+                    // superseded scan, not as a failed one.
+                    val read = try { job.get() } catch (error: java.util.concurrent.ExecutionException) {
+                        throw (error.cause as? java.util.concurrent.CancellationException) ?: error
+                    }
+                    index++
+                    progress?.invoke(index, found.size)
+                    if (read != null) {
+                        if (read.reused) headersReused++ else headersRead++
+                        games.put(read.game)
+                    }
+                }
+            }
+        } finally { readers.shutdownNow() }
+        val readAt = android.os.SystemClock.elapsedRealtime()
         progress?.invoke(found.size, found.size)
         // A partial read never removes a cart: the carts of the last index
         // this scan didn't reach stay, after the ones it found (issue #122:
@@ -186,7 +218,9 @@ internal object RomLibrary {
         android.util.Log.i("SlotKonkr", "ROM scan: $directories folders, ${games.length()} carts, " +
             "headers read=$headersRead, reused=$headersReused" +
             (if (truncated) ", partial (limit reached; $kept earlier carts kept)" else ""))
-        return ScanResult(games.toString(), games.length(), truncated)
+        val json = games.toString()
+        android.util.Log.i("SlotKonkr", "ROM scan timings: listing/cache=${listedAt-started}ms, headers=${readAt-listedAt}ms, index=${android.os.SystemClock.elapsedRealtime()-readAt}ms")
+        return ScanResult(json, games.length(), truncated)
     }
 
     /** The last index's carts by URI, in its order. In its own function so
@@ -243,7 +277,9 @@ internal object RomLibrary {
                 old.has("gb_cgb_flag") || old.has("home_maker"))) &&
             // 3.0.0-rc3 learns the WonderSwan's, Master System's and Game
             // Gear's batteries: their older entries are read once more.
-            (old.optString("platform") !in BATTERY_V3 || old.has("battery_v3"))
+            (old.optString("platform") !in BATTERY_V3 || old.has("battery_v3")) &&
+            (!Systems.isHome(if (extension == "zip") old.optString("rom_ext") else extension) ||
+                old.optBoolean("header_v2"))
         // ZIP archives remain a single shelf cartridge identified
         // by the ZIP's SAF URI and filename. Resolve the embedded
         // ROM header/extension only on cache misses.
@@ -251,7 +287,7 @@ internal object RomLibrary {
         val zipHeader = if (zipped && !reuse) {
             try {
                 resolver.openInputStream(fileUri)?.use { input ->
-                    RomSource.inspect(input, name)
+                    RomSource.inspectWithBattery(input, name)
                 }
             } catch (error: Exception) {
                 android.util.Log.w("SlotKonkr",
@@ -297,18 +333,14 @@ internal object RomLibrary {
             if (home) homeHeader = Systems.homeHeader(embeddedExtension, header, name)
             // The WonderSwan's save type is in the footer, at the ROM's end.
             if (Systems.platformFor(embeddedExtension) == Systems.WS) {
-                homeHeader = homeHeader.copy(battery = try {
+                homeHeader = homeHeader.copy(battery = zipHeader?.battery ?: wsBattery(context, fileUri, name))
+            } else if (gba) {
+                homeHeader = Systems.HomeHeader("", "", zipHeader?.battery ?: try {
                     resolver.openInputStream(fileUri)?.use { input ->
-                        RomSource.useRom(input, name) { rom, _ -> Systems.wsBattery(rom) }
+                        RomSource.useRom(input, name) { rom, _ -> Systems.gbaBattery(rom) }
                     } ?: false
                 } catch (_: Exception) { false })
-            }
-            else if (!gba) homeHeader = Systems.HomeHeader("", "", Systems.gbBattery(header))
-            else homeHeader = Systems.HomeHeader("", "", try {
-                resolver.openInputStream(fileUri)?.use { input ->
-                    RomSource.useRom(input, name) { rom, _ -> Systems.gbaBattery(rom) }
-                } ?: false
-            } catch (_: Exception) { false })
+            } else if (!home) homeHeader = Systems.HomeHeader("", "", Systems.gbBattery(header))
             // Use the exact Nintendo GB header fields read by
             // Cart Studio's automatic shell selector. Never infer
             // colours from the ROM filename or download artwork.
@@ -356,6 +388,7 @@ internal object RomLibrary {
                 .put("home_battery", homeHeader.battery)
                 .put("home_maker", homeHeader.maker)
                 .put("battery_v3", true)
+                .put("header_v2", true)
         } else {
             // GB/GBC/GBA: the board shows a battery only for a
             // cart that keeps its save on one.
@@ -488,6 +521,27 @@ internal object RomLibrary {
         "x1", "x68000", "xbox", "xbox360", "zmachine", "zx81", "zxnext",
         "zxspectrum"
     )
+
+    private fun wsBattery(context: Context, fileUri: Uri, name: String): Boolean {
+        // Local SAF documents are usually seekable. A pipe/cloud provider
+        // may not be: retain the bounded stream fallback.
+        try {
+            context.contentResolver.openFileDescriptor(fileUri, "r")?.use { fd ->
+                val length = fd.statSize
+                if (length in 10..RomSource.MAX_ROM_BYTES) {
+                    java.io.FileInputStream(fd.fileDescriptor).use { input ->
+                        input.channel.position(length - 10)
+                        return Systems.wsBattery(input)
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return try {
+            context.contentResolver.openInputStream(fileUri)?.use { input ->
+                RomSource.useRom(input, name) { rom, _ -> Systems.wsBattery(rom) }
+            } ?: false
+        } catch (_: Exception) { false }
+    }
 
     private fun cartridgeHeader(context: Context, fileUri: Uri, length: Int): ByteArray {
         return try {

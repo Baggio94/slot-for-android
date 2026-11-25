@@ -146,6 +146,18 @@ impl Compositor {
         !self.context_lost
     }
 
+    /// Stable fingerprint of all retained recovery pixels and sprite layout.
+    /// Physical memory usage may shrink while lossless compression completes.
+    #[cfg(feature = "test-support")]
+    pub fn recovery_fingerprint(&self) -> Result<u64, String> {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.sprites.hash_recovery(&mut hash)?;
+        self.game.hash_recovery(&mut hash);
+        self.bezel_pixels.hash(&mut hash);
+        Ok(hash.finish())
+    }
+
     pub fn recovery_bytes(&self) -> usize {
         self.sprites.recovery_bytes() + self.game.recovery_bytes() + self.bezel_pixels.as_ref().map_or(0, |p| p.2.len())
     }
@@ -231,6 +243,11 @@ impl Compositor {
 
     pub fn update_texture(&mut self, id: TexId, w: u32, h: u32, rgba: &[u8]) {
         self.sprites.update_texture(id, w, h, rgba);
+    }
+
+    /// Compress the CPU recovery copy of a static sprite asynchronously.
+    pub fn pack_static_recovery(&self, id: TexId) {
+        self.sprites.pack_static_recovery(id);
     }
 
     pub fn set_blue_light(&mut self, step: u8) {

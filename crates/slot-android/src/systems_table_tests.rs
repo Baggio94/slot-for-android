@@ -148,8 +148,21 @@ fn every_system_starts_with_a_picture_on_every_screen() {
             for m in [mode, VideoMode::Actual, VideoMode::Aspect, VideoMode::Stretch] {
                 let [x, y, w, h] = picture_rect(system.platform, m, panel);
                 assert!(w > 0.0 && h > 0.0, "{:?} {m:?} on {name}", system.platform);
-                assert!(x >= -0.5 && y >= -0.5 && x + w <= panel.0 as f32 + 0.5
-                    && y + h <= panel.1 as f32 + 0.5, "{:?} {m:?} on {name} leaves the screen", system.platform);
+                let (native_w, native_h) = system.picture;
+                let cx = (-x).max(x + w - panel.0 as f32).max(0.0);
+                let cy = (-y).max(y + h - panel.1 as f32).max(0.0);
+                if m == VideoMode::Actual {
+                    // Integer may deliberately crop at most its limit of native
+                    // dots per edge (8 home, 4 handheld; one output pixel of
+                    // placement rounding).
+                    let limit = crate::video_mode::crop_limit(system.platform);
+                    assert!(cx <= limit * w / native_w as f32 + 1.0
+                        && cy <= limit * h / native_h as f32 + 1.0,
+                        "{:?} {m:?} on {name} crops too much: {cx}, {cy}", system.platform);
+                } else {
+                    assert!(cx <= 0.5 && cy <= 0.5,
+                        "{:?} {m:?} on {name} leaves the screen", system.platform);
+                }
             }
         }
     }

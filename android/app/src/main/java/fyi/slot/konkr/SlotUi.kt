@@ -149,7 +149,7 @@ internal object SlotUi {
             // Where the window opens from, as the native pages' paths.
             val path = when (title.uppercase(Locale.ROOT)) {
                 "APPS", "RETROACHIEVEMENTS" -> "MENU"
-                "ROMM", "SLOT. FOLDER", "OLD SLOT FOLDER" -> "MENU › LIBRARY"
+                "ROMM", "SLOT. FOLDER", "OLD SLOT FOLDER", "BIOS FOLDER" -> "MENU › LIBRARY"
                 "FILTER" -> "LIBRARY › ROMM"
                 "SIGN OUT" -> "MENU › RETROACHIEVEMENTS"
                 "SAVES ALREADY IN THIS FOLDER", "STATES ALREADY IN THIS FOLDER" ->

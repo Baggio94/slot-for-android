@@ -44,8 +44,27 @@ internal object FolderSync {
 
     /** One side: the private files or the folder. Paths are relative,
      *  with '/' (`Saves/mGBA/Pokemon.srm`). */
+    enum class Scope {
+        ALL, ARTWORK, SAVES, LAUNCH, REST;
+        fun includes(path: String): Boolean = travels(path) && when (this) {
+            ALL -> true
+            ARTWORK -> path.startsWith("Labels/") || path.startsWith("ArtNames/") || PortableArtwork.travels(path)
+            SAVES -> path.startsWith("Saves/") || path.startsWith("States/")
+            LAUNCH -> forLaunch(path)
+            REST -> !forLaunch(path)
+        }
+        fun descends(path: String): Boolean = when (this) {
+            ALL -> path.substringBefore('/') in WALKED_DIRS
+            ARTWORK -> path.substringBefore('/') in ARTWORK_DIRS
+            SAVES -> path.substringBefore('/') in SAVE_DIRS
+            LAUNCH -> path.substringBefore('/') in LAUNCH_DIRS
+            REST -> path.substringBefore('/') in WALKED_DIRS && path.substringBefore('/') !in LAUNCH_DIRS
+        }
+    }
+
     interface Side {
         fun list(): Map<String, Meta>
+        fun list(scope: Scope): Map<String, Meta> = list().filterKeys(scope::includes)
         fun read(path: String): ByteArray
         /** Writes through a temporary file; returns the file's new meta. */
         fun write(path: String, bytes: ByteArray): Meta
@@ -133,6 +152,7 @@ internal object FolderSync {
         /** Removed here because another handheld deleted them on purpose. */
         val deletedHere = ArrayList<String>()
         var tombsChanged = false
+        var yielded = false
         /** What came in from the folder. */
         val pulled = ArrayList<String>()
         /** Old leftovers removed from the folder ([Side.dropStale]). */
@@ -149,55 +169,104 @@ internal object FolderSync {
         }
     }
 
+    /** A game's own files (save, states, settings, cheats), asked for first
+     *  by its launch while a copy brings files in (3.0.1-beta11): a path
+     *  is the game's when one of its parts is a [tokens] name, or starts
+     *  with one and a dot (`Pokemon Emerald.srm`, `<digest>.mgba.state`). */
+    class Priority(tokens: Set<String>) {
+        private val tokens = tokens.filter { it.isNotBlank() }.toSet()
+        val served = java.util.concurrent.CountDownLatch(1)
+        fun wants(path: String): Boolean = path.split('/').any { part ->
+            tokens.any { part == it || part.startsWith("$it.") }
+        }
+    }
+
     /**
      * [pull]: false copies to the folder only (during a game, at pause).
      * [tombs]: the folder's deletions, read and updated ([Report.tombsChanged]).
      * [restore]: held-back paths the player chose to put back.
-     * [progress]: files done, of all, as the copy goes.
+     * [progress]: of the files the folder brings in (new or changed there
+     *  since the last copy), how many are done (3.0.1-beta12: SYNCING
+     *  counts these, not every file compared). None for a push.
      */
     fun sync(private: Side, folder: Side, base: Base, start: Start = Start.SYNC,
              pull: Boolean = true, now: Long = System.currentTimeMillis(),
              tombs: MutableMap<String, Tomb> = HashMap(), restore: Set<String> = emptySet(),
              progress: (Int, Int) -> Unit = { _, _ -> },
-             launchFilesDone: () -> Unit = {}): Report {
+             launchFilesDone: () -> Unit = {}, scope: Scope = Scope.ALL,
+             changed: () -> Unit = {}, shouldYield: () -> Boolean = { false },
+             priority: () -> Priority? = { null }): Report {
         val report = Report()
         // What no longer travels is forgotten, never taken for a deletion
         // (beta39: the RetroAchievements cache left the folder).
         base.entries.keys.removeAll { !travels(it) }
         if (tombs.keys.removeAll { !travels(it) }) report.tombsChanged = true
-        val mine = private.list()
-        val theirs = folder.list().filterKeys { travels(it) }
+        val mine = private.list(scope).filterKeys(scope::includes)
+        val theirs = folder.list(scope).filterKeys(scope::includes)
         // What a game reads at its launch first (beta39): a launch waits for
         // those only, never for the labels behind them.
         val paths = (mine.keys + theirs.keys).sortedWith(compareBy({ !forLaunch(it) }, { it }))
-        var launchDone = false
-        for ((done, path) in paths.withIndex()) {
-            if (!launchDone && !forLaunch(path)) { launchDone = true; launchFilesDone() }
-            progress(done, paths.size)
-            if (path.startsWith("Conflicts/")) continue
-            try {
-                step(path, mine[path], theirs[path], base, private, folder, start, pull, now, report,
-                    tombs, restore)
-            } catch (error: Exception) {
-                report.failures.add("$path: ${error.message}")
+        val inbound = if (!pull) emptySet() else paths.filterTo(HashSet()) { path ->
+            val f = theirs[path] ?: return@filterTo false
+            val b = if (start == Start.SYNC) base.entries[path] else null
+            !path.startsWith("Conflicts/") && when {
+                b != null -> f.size != b.folderSize || f.modified != b.folderModified
+                else -> mine[path]?.let { it.size != f.size } ?: true
             }
         }
+        var inboundDone = 0
+        progress(0, inbound.size)
+        var launchDone = false
+        fun copy(path: String) {
+            if (path in inbound) {
+                inboundDone++
+                progress(inboundDone, inbound.size)
+            }
+            if (path.startsWith("Conflicts/")) return
+            try {
+                val before = report.toFolder + report.toPrivate + report.removed + report.deletedHere.size
+                step(path, mine[path], theirs[path], base, private, folder, start, pull, now, report,
+                    tombs, restore)
+                if (report.toFolder + report.toPrivate + report.removed + report.deletedHere.size > before) changed()
+            } catch (error: Exception) {
+                report.failures.add("$path: ${SlotStorageProblem.describe(error)}")
+            }
+        }
+        // A launch's own files go first, by the same steps (conflicts,
+        // deletions, the one writer): the rest follows in its order.
+        val early = HashSet<String>()
+        var asked: Priority? = null
+        for ((done, path) in paths.withIndex()) {
+            priority()?.takeIf { it !== asked }?.let { want ->
+                asked = want
+                for (next in paths.subList(done, paths.size)) {
+                    if (next !in early && want.wants(next)) { early.add(next); copy(next) }
+                }
+                want.served.countDown()
+            }
+            if (!launchDone && !forLaunch(path)) { launchDone = true; launchFilesDone() }
+            if (!forLaunch(path) && shouldYield()) {
+                report.yielded = true
+                return report
+            }
+            if (path in early) continue
+            copy(path)
+        }
         if (!launchDone) launchFilesDone()
-        progress(paths.size, paths.size)
         // Old leftovers go last (beta40): removing thousands of badges from
         // a card takes minutes, and held up a launch when it came first.
-        if (pull) report.stale = folder.dropStale()
+        if (pull && (scope == Scope.ALL || scope == Scope.REST)) report.stale = folder.dropStale()
         // Gone from both since the last copy: deleted here on purpose (DELETE
         // IT, at a game's launch). Other handhelds follow it.
         for ((path, entry) in base.entries) {
-            if (path !in mine && path !in theirs && tombs[path]?.sha1 != entry.sha1) {
+            if (scope.includes(path) && path !in mine && path !in theirs && tombs[path]?.sha1 != entry.sha1) {
                 tombs[path] = Tomb(entry.sha1, now)
                 report.tombsChanged = true
             }
         }
         // Forget what neither side holds any more, and old tombs.
-        base.entries.keys.retainAll(mine.keys + theirs.keys)
-        if (tombs.values.removeAll { now - it.at > TOMB_MS }) report.tombsChanged = true
+        base.entries.keys.removeAll { scope.includes(it) && it !in mine && it !in theirs }
+        if (tombs.entries.removeAll { scope.includes(it.key) && now - it.value.at > TOMB_MS }) report.tombsChanged = true
         return report
     }
 
@@ -339,8 +408,16 @@ internal object FolderSync {
     private fun stamp(now: Long): String = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT)
         .apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(now))
 
-    fun sha1(bytes: ByteArray): String = MessageDigest.getInstance("SHA-1").digest(bytes)
-        .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 0xff) }
+    fun sha1(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-1").digest(bytes)
+        val hex = "0123456789abcdef"
+        return buildString(digest.size * 2) {
+            for (byte in digest) {
+                val n = byte.toInt() and 0xff
+                append(hex[n ushr 4]); append(hex[n and 15])
+            }
+        }
+    }
 
     // -----------------------------------------------------------------
     // What travels in the slot. folder (scenarios §2), from slot.'s files.
@@ -348,6 +425,10 @@ internal object FolderSync {
     /** Folders that travel whole. */
     private val TRAVELLING_DIRS = listOf("Saves", "States", "Labels", "Studio", "GameEmulation",
         "Cheats", "CustomCheats", "Wallpapers", "ArtNames")
+    private val ARTWORK_DIRS = setOf("Labels", "ArtNames", "ArtworkHistory", "home-real-labels")
+    private val SAVE_DIRS = setOf("Saves", "States")
+    private val LAUNCH_DIRS = LAUNCH_ONLY.map { it.trimEnd('/') }.toSet()
+    private val WALKED_DIRS = TRAVELLING_DIRS.toSet() + ARTWORK_DIRS + setOf("Config")
     /** Single files that travel. */
     private val TRAVELLING_FILES = setOf("slot-konkr-settings.json", "slot-konkr-controls.json",
         "konkr-favorites.json", "konkr-recents.json", "Config/cart_shell.ini",
@@ -372,6 +453,9 @@ internal object FolderSync {
      *  device links, caches, nor slot.'s own one-shot markers and copies. */
     fun travels(path: String): Boolean {
         if (path in TRAVELLING_FILES) return true
+        // Only portable per-game records and CRC-keyed Studio images; never
+        // the legacy URI-keyed databases or other private caches.
+        if (PortableArtwork.travels(path)) return true
         if (UNWALKED_DIRS.any { path.startsWith("$it/") }) return false
         val top = path.substringBefore('/')
         if (top !in TRAVELLING_DIRS || !path.contains('/')) return false
@@ -394,13 +478,14 @@ internal object FolderSync {
 
     /** slot.'s private files as a [Side], only those that travel. */
     open class PrivateSide(private val root: File) : Side {
-        override fun list(): Map<String, Meta> {
+        override fun list(): Map<String, Meta> = list(Scope.ALL)
+        override fun list(scope: Scope): Map<String, Meta> {
             val out = HashMap<String, Meta>()
             fun walk(dir: File, prefix: String) {
                 for (file in dir.listFiles() ?: return) {
                     val path = prefix + file.name
-                    if (file.isDirectory) { if (path !in UNWALKED_DIRS) walk(file, "$path/") }
-                    else if (travels(path)) out[path] = Meta(file.length(), file.lastModified())
+                    if (file.isDirectory) { if (path !in UNWALKED_DIRS && scope.descends(path)) walk(file, "$path/") }
+                    else if (scope.includes(path)) out[path] = Meta(file.length(), file.lastModified())
                 }
             }
             walk(root, "")

@@ -55,24 +55,47 @@ impl VideoMode {
     /// One size up on this panel: Original Ratio is left out where it is
     /// the Integer picture itself (Siham 2026-11-22: Integer is kept).
     pub fn bigger_on(self, platform: Platform, panel: (u32, u32)) -> VideoMode {
-        let next = self.on(platform, panel).bigger();
-        if next == VideoMode::Aspect && integer_is_ratio(platform, panel) { VideoMode::Stretch } else { next }
+        self.bigger_when(integer_is_ratio(platform, panel))
     }
     /// One size down on this panel, as bigger_on.
     pub fn smaller_on(self, platform: Platform, panel: (u32, u32)) -> VideoMode {
-        let next = self.on(platform, panel).smaller();
-        if next == VideoMode::Aspect && integer_is_ratio(platform, panel) { VideoMode::Actual } else { next }
+        self.smaller_when(integer_is_ratio(platform, panel))
     }
     /// This size on this panel: Original Ratio is Integer where the two
     /// are the same picture.
     pub fn on(self, platform: Platform, panel: (u32, u32)) -> VideoMode {
-        if self == VideoMode::Aspect && integer_is_ratio(platform, panel) { VideoMode::Actual } else { self }
+        self.on_when(integer_is_ratio(platform, panel))
+    }
+    /// One size up, Original Ratio left out when `same` (it is the Integer
+    /// picture): in a game, `same` is the running game's own picture.
+    pub fn bigger_when(self, same: bool) -> VideoMode {
+        let next = self.on_when(same).bigger();
+        if next == VideoMode::Aspect && same { VideoMode::Stretch } else { next }
+    }
+    pub fn smaller_when(self, same: bool) -> VideoMode {
+        let next = self.on_when(same).smaller();
+        if next == VideoMode::Aspect && same { VideoMode::Actual } else { next }
+    }
+    pub fn on_when(self, same: bool) -> VideoMode {
+        if self == VideoMode::Aspect && same { VideoMode::Actual } else { self }
+    }
+    /// The size a game starts at: a home console keeps its mode as it is
+    /// (its game may change resolution after its first frame, where the
+    /// two would differ); the menus still merge them while they match.
+    pub fn at_launch(self, platform: Platform, panel: (u32, u32)) -> VideoMode {
+        if home_console(platform) { self } else { self.on(platform, panel) }
     }
 }
 
 /// Whether Integer and Original Ratio show the very same picture on this
-/// panel (the Lynx's 160x102 six times on the KPA's 960x640).
+/// panel (the Lynx's 160x102 six times on the KPA's 960x640). A home
+/// console by its usual gameplay picture (Settings > Systems); in a game,
+/// home_same_picture with the game's own.
 pub fn integer_is_ratio(platform: Platform, panel: (u32, u32)) -> bool {
+    if home_console(platform) {
+        let square = square_pixels(platform, panel);
+        return home_same_picture(platform, 4.0 / 3.0, default_frame(platform, square), square, panel);
+    }
     let a = picture_rect(platform, VideoMode::Actual, panel);
     let b = picture_rect(platform, VideoMode::Aspect, panel);
     (a[2] - b[2]).abs() < 0.5 && (a[3] - b[3]).abs() < 0.5
@@ -119,17 +142,16 @@ pub fn screen_effect(shader: Shader, platform: Platform, mode: VideoMode) -> Scr
     }
 }
 
-/// A game's size: its own, else its system's as Settings > Systems set it,
-/// else the default; Integer for a game in square pixels (`square`: a
-/// 256x224 Master System or Mega Drive game on a narrow screen).
-pub fn video_mode_for(root: &Path, stem: &str, platform: Platform, panel: (u32, u32), square: bool)
-    -> VideoMode
+/// A game's size: its own, else its system's setting, else the automatic
+/// default for the actual launch geometry. No automatic choice is persisted.
+pub fn video_mode_for(root: &Path, stem: &str, platform: Platform, panel: (u32, u32), square: bool,
+    frame: (u32, u32)) -> VideoMode
 {
     let read = |key: &str| ini::value(root, VIDEO_MODE_FILE, key).as_deref().and_then(VideoMode::parse);
     read(stem)
         .or_else(|| read(&system_key(platform)))
-        .unwrap_or_else(|| if square { VideoMode::Actual } else { default_mode(platform, panel) })
-        .on(platform, panel)
+        .unwrap_or_else(|| game_default_mode(platform, panel, square, frame))
+        .at_launch(platform, panel)
 }
 
 /// Settings > Systems' Screen Size: the size a system's games start at
@@ -179,12 +201,88 @@ pub fn pokemini_scale(panel: (u32, u32)) -> u32 {
     (1..=6).rev().find(|s| fit % s == 0).unwrap_or(4)
 }
 
-/// Every system starts at Original Ratio, full height (Siham's per-ratio
-/// plan, 2026-11-04: GB, GBC and GBA on every screen; GBA already fills a
-/// 3:2 panel), except NES and SNES on screens narrower than 4:3: Integer
-/// overscale there, in square pixels.
+/// Whether a home console game's picture (`frame` at `aspect`, as
+/// home_fit draws it) is the same size in Integer and Original Ratio.
+pub fn home_same_picture(platform: Platform, aspect: f32, frame: (u32, u32), square: bool,
+    panel: (u32, u32)) -> bool
+{
+    let out = (panel.0.max(1) as f32, panel.1.max(1) as f32);
+    let size = |fit: slot_gfx::Fit| match fit {
+        slot_gfx::Fit::SmartInteger(a, logical, crop) => slot_gfx::smart_integer_size(logical, a, out, crop),
+        slot_gfx::Fit::Aspect(a) => if out.1 * a <= out.0 { (out.1 * a, out.1) } else { (out.0, out.0 / a) },
+        _ => out,
+    };
+    let a = size(home_fit(platform, VideoMode::Actual, aspect, frame, square));
+    let b = size(home_fit(platform, VideoMode::Aspect, aspect, frame, square));
+    (a.0 - b.0).abs() < 0.5 && (a.1 - b.1).abs() < 0.5
+}
+
+pub fn home_console(platform: Platform) -> bool {
+    matches!(platform, Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms)
+}
+
+/// Representative gameplay geometry for the system settings, before a core
+/// is loaded. At launch use the core's dimensions instead.
+fn default_frame(platform: Platform, square: bool) -> (u32, u32) {
+    match platform {
+        Platform::Nes if square => (256, 224),
+        Platform::Md if square => (256, 224),
+        _ => platform.picture(),
+    }
+}
+
+/// The frame a game's automatic Screen Size is chosen for, from what its
+/// core reports at launch. The Mega Drive's is its VDP's reset (Genesis
+/// Plus GX: 256x192), not the game's: on the RG Rotate that chose Integer,
+/// then every game played 320x224 at 2x (Siham 2026-11-25). Its width comes
+/// from the list of 256-wide games, its height from its region. The Super
+/// Nintendo's height too comes from its region, its width is always 256
+/// (hi-res games start at 256 and logical_frame halves 512).
+pub fn launch_frame(platform: Platform, frame: (u32, u32), square: bool, pal: bool) -> (u32, u32) {
+    match platform {
+        Platform::Md => (if square { 256 } else { 320 }, if pal { 240 } else { 224 }),
+        Platform::Snes => (256, if pal { 239 } else { 224 }),
+        _ => frame,
+    }
+}
+
+/// Where a game's Screen Size comes from, for the launch's log line.
+pub fn video_mode_source(root: &Path, stem: &str, platform: Platform) -> &'static str {
+    let has = |key: &str| ini::value(root, VIDEO_MODE_FILE, key).as_deref().and_then(VideoMode::parse).is_some();
+    if has(stem) { "game" } else if has(&system_key(platform)) { "system" } else { "auto" }
+}
+
 pub fn default_mode(platform: Platform, panel: (u32, u32)) -> VideoMode {
-    if square_pixels(platform, panel) { VideoMode::Actual } else { VideoMode::Aspect }
+    let square = square_pixels(platform, panel);
+    game_default_mode(platform, panel, square, default_frame(platform, square))
+}
+
+/// Home consoles prefer Integer only if the existing crop policy admits
+/// the next whole scale (or the picture fits exactly). A smaller Integer
+/// picture is not a good automatic default: use Original Ratio instead.
+/// Portable systems keep their existing Original Ratio default.
+pub fn game_default_mode(platform: Platform, panel: (u32, u32), square: bool,
+    frame: (u32, u32)) -> VideoMode
+{
+    if !home_console(platform) { return VideoMode::Aspect; }
+    let mut frame = if frame.0 == 0 || frame.1 == 0 {
+        default_frame(platform, square)
+    } else { frame };
+    // Listed Mega Drive games can boot in a 320-wide title/menu before
+    // entering H32 gameplay. Choose for the intended 256-wide gameplay;
+    // home_fit still draws those wide screens at 4:3 without crop.
+    if square && matches!(platform, Platform::Md | Platform::Sms) && !narrow_frame(frame) {
+        frame.0 = 256;
+    }
+    let slot_gfx::Fit::SmartInteger(aspect, logical, crop) =
+        home_fit(platform, VideoMode::Actual, 4.0 / 3.0, frame, square)
+    else { return VideoMode::Aspect; };
+    let (ow, oh) = (panel.0.max(1) as f32, panel.1.max(1) as f32);
+    let h = logical.1.max(1) as f32;
+    let fit = (oh / h).min(ow / (h * aspect));
+    if fit < 1.0 { return VideoMode::Aspect; }
+    let (_, integer_h) = slot_gfx::smart_integer_size(logical, aspect, (ow, oh), crop);
+    if integer_h + 1e-4 >= h * fit { VideoMode::Actual } else { VideoMode::Aspect }
 }
 
 fn narrow(panel: (u32, u32)) -> bool {
@@ -261,6 +359,29 @@ pub fn home_aspect(platform: Platform, core: f32, frame: (u32, u32), square: boo
     }
 }
 
+/// Integer's cut, in the frame's own pixels per edge (Siham 2026-11-25):
+/// up to 8 on home consoles, the overscan a TV hid (the RG Rotate shows
+/// 240 of the SNES's 256 columns at 3x, as before 3.0.1); up to 4 on
+/// handhelds, whose screens showed every pixel (issue #132: an upright
+/// WonderSwan game at 5x on the Retroid Pocket Classic, 4 lines cut).
+pub fn crop_limit(platform: Platform) -> f32 {
+    match platform {
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms => 8.0,
+        _ => 4.0,
+    }
+}
+
+/// Logical pixels for the crop limit: SNES high-res/interlaced samples
+/// and PokeMini's internal LCD multiplier must not count as native dots.
+pub fn logical_frame(platform: Platform, frame: (u32, u32)) -> (u32, u32) {
+    match platform {
+        Platform::Pokemini => platform.picture(),
+        Platform::Snes => (if frame.0 >= 400 { frame.0 / 2 } else { frame.0 },
+            if frame.1 >= 400 { frame.1 / 2 } else { frame.1 }),
+        _ => frame,
+    }
+}
+
 /// How a home console frame fills the screen in `mode` (`square`: see
 /// `square_game`).
 pub fn home_fit(platform: Platform, mode: VideoMode, aspect: f32, frame: (u32, u32),
@@ -273,14 +394,14 @@ pub fn home_fit(platform: Platform, mode: VideoMode, aspect: f32, frame: (u32, u
     if square {
         let a = square_shape(platform, frame);
         return match mode {
-            VideoMode::Actual => slot_gfx::Fit::Overscale(a),
+            VideoMode::Actual => slot_gfx::Fit::SmartInteger(a, logical_frame(platform, frame), crop_limit(platform)),
             VideoMode::Aspect => slot_gfx::Fit::Aspect(a),
             VideoMode::Stretch => slot_gfx::Fit::Stretch,
         };
     }
     let aspect = home_aspect(platform, aspect, frame, false);
     match mode {
-        VideoMode::Actual => slot_gfx::Fit::Integer(aspect),
+        VideoMode::Actual => slot_gfx::Fit::SmartInteger(aspect, logical_frame(platform, frame), crop_limit(platform)),
         VideoMode::Aspect => slot_gfx::Fit::Aspect(aspect),
         VideoMode::Stretch => slot_gfx::Fit::Stretch,
     }
@@ -300,10 +421,7 @@ pub fn picture_rect(platform: Platform, mode: VideoMode, panel: (u32, u32)) -> [
     let (w, h) = (w as f32, h as f32);
     let fit = (pw / w).min(ph / h);
     let (dw, dh) = match mode {
-        VideoMode::Actual => {
-            let k = fit.floor().max(1.0);
-            (w * k, h * k)
-        }
+        VideoMode::Actual => slot_gfx::smart_integer_size((w as u32, h as u32), w / h, (pw, ph), crop_limit(platform)),
         VideoMode::Aspect => (w * fit, h * fit),
         VideoMode::Stretch => (pw, ph),
     };
@@ -347,24 +465,20 @@ fn panel_aspect(panel: (u32, u32)) -> f32 {
 }
 
 /// A home console picture on `panel`, as slot_gfx::fit_window draws it
-/// (`top`: at the top of the screen instead of centred).
-pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u32), top: bool)
-    -> [f32; 4]
+/// (`top`: at the top of the screen instead of centred; `crop`: Integer's,
+/// crop_limit).
+pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u32), top: bool,
+    crop: f32) -> [f32; 4]
 {
     let (ow, oh) = (panel.0.max(1) as f32, panel.1.max(1) as f32);
     let (tw, th) = (frame.0.max(1) as f32, frame.1.max(1) as f32);
     let a = if aspect > 0.0 { aspect } else { tw / th };
     let (pw, ph) = match mode {
         VideoMode::Aspect => if oh * a <= ow { (oh * a, oh) } else { (ow, ow / a) },
-        VideoMode::Actual => {
-            let mut k = (oh / th).floor().max(1.0);
-            while k > 1.0 && th * k * a > ow { k -= 1.0; }
-            let ph = th * k;
-            ((ph * a).min(ow), ph)
-        }
+        VideoMode::Actual => slot_gfx::smart_integer_size(frame, a, (ow, oh), crop),
         VideoMode::Stretch => (ow, oh),
     };
-    let y = if top { 0.0 } else { (oh - ph) / 2.0 };
+    let y = if top && ph <= oh { 0.0 } else { (oh - ph) / 2.0 };
     [(ow - pw) / 2.0, y, pw, ph]
 }
 
@@ -373,17 +487,19 @@ pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u
 /// of the screen's height, else in a band of at least as much under the
 /// picture moved to the top, else nowhere. Never in Stretch. The window is
 /// the picture of `mode` itself.
-pub fn own_place(aspect: f32, frame: (u32, u32), mode: VideoMode, panel: (u32, u32))
+pub fn own_place(aspect: f32, frame: (u32, u32), mode: VideoMode, panel: (u32, u32), crop: f32)
     -> Option<(Place, [f32; 4])>
 {
     if mode == VideoMode::Stretch { return None; }
     let (pw, ph) = (panel.0.max(1) as f32, panel.1.max(1) as f32);
-    let full = home_rect(VideoMode::Aspect, aspect, frame, panel, false);
+    let full = home_rect(VideoMode::Aspect, aspect, frame, panel, false, crop);
     let min = own_overlay::MIN_BAR * ph;
     if full[3] >= ph - 0.5 && full[0] >= min {
-        Some((Place::Side, home_rect(mode, aspect, frame, panel, false)))
+        let pic = home_rect(mode, aspect, frame, panel, false, crop);
+        (pic[0] >= min).then_some((Place::Side, pic))
     } else if full[2] >= pw - 0.5 && ph - full[3] >= min {
-        Some((Place::Band, home_rect(mode, aspect, frame, panel, true)))
+        let pic = home_rect(mode, aspect, frame, panel, true, crop);
+        (ph - pic[3] >= min).then_some((Place::Band, pic))
     } else {
         None
     }
@@ -409,7 +525,8 @@ fn own_aspects(platform: Platform) -> &'static [f32] {
 pub fn own_room(platform: Platform, panel: (u32, u32)) -> f32 {
     let (pw, ph) = (panel.0.max(1) as f32, panel.1.max(1) as f32);
     own_aspects(platform).iter().filter_map(|&aspect| {
-        let (place, pic) = own_place(aspect, platform.picture(), VideoMode::Aspect, panel)?;
+        let (place, pic) = own_place(aspect, platform.picture(), VideoMode::Aspect, panel,
+            crop_limit(platform))?;
         Some(match place {
             Place::Side => pic[0] / ph,
             Place::Band => (ph - pic[3]) / ph,
@@ -434,7 +551,7 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
 {
     if !bezel_fits(bezel, mode) || !Bezel::list(platform).contains(&bezel) { return None; }
     if bezel.own(false).is_some() {
-        let (place, pic) = own_place(home.0, home.1, mode, panel)?;
+        let (place, pic) = own_place(home.0, home.1, mode, panel, crop_limit(platform))?;
         return Some(WatomskFit::Own(place, pic));
     }
     let design = bezel.watomsk()?;
@@ -458,11 +575,17 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
         }
         Platform::Nes | Platform::Snes | Platform::Md => {
             if a > 4.0 / 3.0 * 1.01 {
-                side(home_rect(VideoMode::Aspect, 4.0 / 3.0, home.1, panel, false))
+                // Around the picture of the mode played: in Integer, the
+                // overscaled picture's own (no frame over the game), or none
+                // when it leaves too little room (Siham 2026-11-25).
+                let pic = home_rect(if mode == VideoMode::Actual { mode } else { VideoMode::Aspect },
+                    4.0 / 3.0, home.1, panel, false, crop_limit(platform));
+                if pic[1] < -0.5 || pic[3] > ph + 0.5 { return None; }
+                side(pic)
             } else if a < 4.0 / 3.0 * 0.99 && watomsk::has_band(design)
                 && (home.0 - 4.0 / 3.0).abs() < 0.01 {
                 // Not over a 256x224 game's 8:7 picture, which fills the screen.
-                band(home_rect(mode, home.0, home.1, panel, true))
+                band(home_rect(mode, home.0, home.1, panel, true, crop_limit(platform)))
             } else {
                 None
             }
@@ -483,7 +606,7 @@ pub fn bezel_offered(platform: Platform, panel: (u32, u32)) -> bool {
         Platform::Nes | Platform::Snes => a > 4.0 / 3.0 * 1.01,
         Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
         | Platform::Lynx | Platform::Pokemini => own_aspects(platform).iter().any(|&aspect|
-            own_place(aspect, platform.picture(), VideoMode::Aspect, panel).is_some()),
+            own_place(aspect, platform.picture(), VideoMode::Aspect, panel, crop_limit(platform)).is_some()),
     }
 }
 
@@ -561,7 +684,7 @@ mod tests {
         assert!(!bezel_has_room(Bezel::Default, Platform::Gb, rpc));
         assert!(!bezel_has_room(Bezel::Gb, Platform::Gbc, rpc));
         let wide = (1920, 1080);
-        assert_eq!(picture_rect(Platform::Gba, VideoMode::Actual, wide), [240.0, 60.0, 1440.0, 960.0]);
+        assert_eq!(picture_rect(Platform::Gba, VideoMode::Actual, wide), [120.0, -20.0, 1680.0, 1120.0]);
         assert!(bezel_has_room(Bezel::Gb, Platform::Gb, wide));
         let four_three = (1440, 1080);
         assert!(bezel_has_room(Bezel::Pocket, Platform::Gb, four_three));
@@ -588,7 +711,8 @@ mod tests {
         let gba = Bezel::GbaClassic;
         assert_eq!(gb(gba, Platform::Gba, Actual, (960, 640)), None);
         assert!(matches!(gb(gba, Platform::Gba, Aspect, (1920, 1080)), Some(Side(Shape::SixteenNine, _))));
-        assert_eq!(gb(gba, Platform::Gba, Actual, (1920, 1080)), Some(Band([240.0, 0.0, 1440.0, 960.0])));
+        // Smart 7x clips fewer than four native lines; the old band no longer fits.
+        assert_eq!(gb(gba, Platform::Gba, Actual, (1920, 1080)), None);
         assert_eq!(gb(gba, Platform::Gba, Aspect, (1024, 768)), Some(Band([0.0, 0.0, 1024.0, 682.6667])));
         assert_eq!(gb(gba, Platform::Gba, Actual, (1240, 1080)), Some(Band([20.0, 0.0, 1200.0, 800.0])));
         assert_eq!(gb(gba, Platform::Gba, Actual, (720, 720)), Some(Band([0.0, 0.0, 720.0, 480.0])));
@@ -609,6 +733,40 @@ mod tests {
     }
 
     #[test]
+    fn integer_cuts_up_to_eight_columns_on_home_consoles_four_on_handhelds() {
+        let rotate = (720, 720);
+        for platform in [Platform::Nes, Platform::Snes, Platform::Md, Platform::Sms] {
+            assert_eq!(crop_limit(platform), 8.0);
+        }
+        // The RG Rotate: NES and SNES at 3x again, 8 columns cut each side.
+        for platform in [Platform::Nes, Platform::Snes] {
+            assert!(square_pixels(platform, rotate));
+            let fit = home_fit(platform, VideoMode::Actual, 4.0 / 3.0, (256, 224), true);
+            assert_eq!(fit, slot_gfx::Fit::SmartInteger(8.0 / 7.0, (256, 224), 8.0));
+            let pic = home_rect(VideoMode::Actual, 8.0 / 7.0, (256, 224), rotate, false, crop_limit(platform));
+            assert!((pic[2] - 768.0).abs() < 0.01 && pic[3] == 672.0, "{platform:?}: {pic:?}");
+        }
+        for platform in [Platform::Gb, Platform::Gba, Platform::Ws, Platform::Gg, Platform::Pokemini] {
+            assert_eq!(crop_limit(platform), 4.0);
+        }
+    }
+
+    #[test]
+    fn smart_integer_uses_the_live_frame_and_overlay_geometry() {
+        let panel = (1240, 1080);
+        let frame = (144, 224);
+        let aspect = 9.0 / 14.0;
+        let fit = home_fit(Platform::Ws, VideoMode::Actual, aspect, frame, false);
+        assert_eq!(fit, slot_gfx::Fit::SmartInteger(aspect, frame, 4.0));
+        let (_, picture) = own_place(aspect, frame, VideoMode::Actual, panel, 4.0).unwrap();
+        assert!((picture[0] - 260.0).abs() < 0.001);
+        assert!((picture[1] + 20.0).abs() < 0.001);
+        assert!((picture[3] - 1120.0).abs() < 0.001);
+        assert_eq!(logical_frame(Platform::Snes, (512, 448)), (256, 224));
+        assert_eq!(logical_frame(Platform::Pokemini, (480, 320)), (96, 64));
+    }
+
+    #[test]
     fn game_boys_start_at_original_ratio_on_every_screen() {
         for panel in [(1240, 1080), (960, 640), (1440, 1080), (1920, 1080), (720, 720)] {
             for platform in [Platform::Gb, Platform::Gbc, Platform::Gba] {
@@ -618,19 +776,130 @@ mod tests {
     }
 
     #[test]
+    fn home_defaults_follow_the_real_panel_and_existing_crop_policy() {
+        use VideoMode::{Actual as I, Aspect as A};
+        let systems = [Platform::Nes, Platform::Snes, Platform::Md, Platform::Sms];
+        for (panel, expected) in [
+            ((640, 480), [I, A, A, A]),
+            ((720, 720), [I, I, A, I]),
+            ((960, 640), [A, I, I, A]),
+            ((1024, 768), [A, A, A, I]),
+            ((1152, 768), [A, A, A, I]),
+            ((1280, 720), [I, A, A, I]),
+            ((1280, 800), [A, A, A, A]),
+            ((1280, 960), [I, A, A, I]),
+            ((1240, 1080), [I, I, A, I]),
+            ((1440, 1080), [A, I, I, I]),
+            ((1620, 1080), [A, I, I, I]),
+            ((1920, 1080), [A, I, I, I]),
+            ((1920, 1200), [I, A, A, A]),
+            ((2560, 1440), [I, A, A, I]),
+            ((1080, 1080), [A, A, A, A]),
+        ] {
+            assert_eq!(systems.map(|p| default_mode(p, panel)), expected, "{panel:?}");
+            for p in Platform::ALL {
+                if !home_console(p) {
+                    assert_eq!(default_mode(p, panel), A, "{p:?} {panel:?}");
+                }
+            }
+        }
+        // PAL 240-line games on KPA should not inherit the 224-line default.
+        for p in [Platform::Snes, Platform::Md] {
+            assert_eq!(game_default_mode(p, (960, 640), false, (256, 240)), A);
+        }
+        // Hi-res SNES samples are logical 256x224, and listed MD title
+        // screens do not override the intended H32 gameplay default.
+        assert_eq!(game_default_mode(Platform::Snes, (960, 640), false, (512, 448)), I);
+        for panel in [(720, 720), (1240, 1080)] {
+            assert_eq!(game_default_mode(Platform::Md, panel, true, (320, 224)), I);
+            assert_eq!(game_default_mode(Platform::Md, panel, true, (256, 224)), I);
+            assert_eq!(game_default_mode(Platform::Md, panel, false, (320, 224)), A);
+            assert_eq!(home_fit(Platform::Md, I, 4.0 / 3.0, (320, 224), true),
+                slot_gfx::Fit::Aspect(4.0 / 3.0));
+            assert_eq!(game_default_mode(Platform::Sms, panel, true, (248, 192)), I);
+        }
+        assert_eq!(game_default_mode(Platform::Nes, (720, 720), true, (256, 224)), I);
+        assert_eq!(game_default_mode(Platform::Snes, (1080, 1080), true, (256, 224)), A);
+        assert_eq!(game_default_mode(Platform::Snes, (100, 100), true, (256, 224)), A);
+    }
+
+    #[test]
+    fn a_side_overlay_frames_the_integer_picture_or_steps_aside() {
+        use crate::settings::Bezel;
+        let home = (4.0 / 3.0, (256, 224));
+        let bezel = Bezel::list(Platform::Snes).iter().copied()
+            .find(|b| b.watomsk().is_some()).expect("a Watomsk overlay for the Super Nintendo");
+        // KPA, Integer x3: 672 lines on 640, the bars too thin: no overlay.
+        assert_eq!(watomsk_fit(bezel, Platform::Snes, VideoMode::Actual, (960, 640), home), None);
+        assert!(watomsk_fit(bezel, Platform::Snes, VideoMode::Aspect, (960, 640), home).is_some());
+        // 1920x1200, Integer x5: the overlay's window is the Integer picture.
+        match watomsk_fit(bezel, Platform::Snes, VideoMode::Actual, (1920, 1200), home) {
+            Some(WatomskFit::Side(_, window)) => {
+                let pic = home_rect(VideoMode::Actual, 4.0 / 3.0, (256, 224), (1920, 1200), false, 8.0);
+                assert_eq!(window, pic);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_mega_drive_game_starts_for_its_own_picture_not_the_reset_frame() {
+        use VideoMode::{Actual as I, Aspect as A};
+        let rotate = (720, 720);
+        // The reset frame alone would choose Integer on the Rotate.
+        assert_eq!(game_default_mode(Platform::Md, rotate, false, (256, 192)), I);
+        let frame = launch_frame(Platform::Md, (256, 192), false, false);
+        assert_eq!(frame, (320, 224));
+        assert_eq!(game_default_mode(Platform::Md, rotate, false, frame), A);
+        assert_eq!(game_default_mode(Platform::Md, rotate, false, frame), default_mode(Platform::Md, rotate));
+        // A listed 256-wide game, and a PAL one.
+        assert_eq!(launch_frame(Platform::Md, (256, 192), true, false), (256, 224));
+        assert_eq!(launch_frame(Platform::Md, (256, 192), false, true), (320, 240));
+        // The Super Nintendo by its region; other systems keep what their
+        // core reports.
+        assert_eq!(launch_frame(Platform::Snes, (512, 448), false, false), (256, 224));
+        assert_eq!(launch_frame(Platform::Snes, (256, 224), false, true), (256, 239));
+        assert_eq!(game_default_mode(Platform::Snes, (960, 640), false, (256, 239)), A);
+        assert_eq!(launch_frame(Platform::Sms, (256, 192), false, false), (256, 192));
+    }
+
+    #[test]
+    fn saved_screen_modes_take_precedence_over_smart_defaults() {
+        use VideoMode::{Actual as I, Aspect as A, Stretch as S};
+        let root = tempfile::tempdir().unwrap();
+        let p = Platform::Snes;
+        let panel = (960, 640);
+        let mode = |name| video_mode_for(root.path(), name, p, panel, false, (256, 224));
+        assert_eq!(mode("game"), I);
+        write_system_mode(root.path(), p, A).unwrap();
+        assert_eq!(mode("game"), A);
+        assert_eq!(system_mode(root.path(), p, panel), A);
+        write_video_mode(root.path(), "game", S).unwrap();
+        assert_eq!(mode("game"), S);
+        assert_eq!(mode("other"), A);
+        // Integer and Original Ratio merge in the menus while they are the
+        // same picture, but a game starts in its own mode (it may differ).
+        assert!(integer_is_ratio(Platform::Nes, (640, 480)));
+        assert_eq!(VideoMode::Actual.bigger_on(Platform::Nes, (640, 480)), S);
+        assert_eq!(A.at_launch(Platform::Nes, (640, 480)), A);
+        assert_eq!(VideoMode::Actual.bigger_when(false), A);
+        assert!(!integer_is_ratio(Platform::Snes, (960, 640)));
+    }
+
+    #[test]
     fn nes_and_snes_use_square_pixels_on_narrow_screens() {
         use slot_gfx::Fit;
         let rpc = (1240, 1080);
         assert_eq!(default_mode(Platform::Snes, rpc), VideoMode::Actual);
         assert_eq!(default_mode(Platform::Nes, (720, 720)), VideoMode::Actual);
         assert_eq!(default_mode(Platform::Md, rpc), VideoMode::Aspect);
-        assert_eq!(default_mode(Platform::Snes, (960, 640)), VideoMode::Aspect);
+        assert_eq!(default_mode(Platform::Snes, (960, 640)), VideoMode::Actual);
         assert_eq!(home_fit(Platform::Snes, VideoMode::Actual, 4.0 / 3.0, (512, 448), square_pixels(Platform::Snes, rpc)),
-            Fit::Overscale(256.0 / 224.0));
+            Fit::SmartInteger(256.0 / 224.0, (256, 224), 8.0));
         assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, 4.0 / 3.0, (256, 240), square_pixels(Platform::Nes, rpc)),
             Fit::Aspect(256.0 / 240.0));
         assert_eq!(home_fit(Platform::Nes, VideoMode::Actual, 4.0 / 3.0, (256, 240), square_pixels(Platform::Nes, (960, 640))),
-            Fit::Integer(4.0 / 3.0));
+            Fit::SmartInteger(4.0 / 3.0, (256, 240), 8.0));
     }
 
     #[test]
@@ -642,7 +911,7 @@ mod tests {
                 assert_eq!(home_fit(platform, VideoMode::Aspect, par, (256, 240), square_pixels(platform, panel)),
                     Fit::Aspect(4.0 / 3.0), "{platform:?} {panel:?}");
                 assert_eq!(home_fit(platform, VideoMode::Actual, 1.5238, (320, 224), square_pixels(platform, panel)),
-                    Fit::Integer(4.0 / 3.0), "{platform:?} {panel:?}");
+                    Fit::SmartInteger(4.0 / 3.0, (320, 224), 8.0), "{platform:?} {panel:?}");
             }
         }
         // Narrow screens: NES and SNES keep square pixels, the Mega Drive 4:3.
@@ -663,18 +932,18 @@ mod tests {
             assert!(!square_game(platform, rpc, false), "{platform:?}: other games keep 4:3");
             assert!(!square_game(platform, (960, 640), true), "{platform:?}: wider screens keep 4:3");
             assert_eq!(home_fit(platform, VideoMode::Actual, 4.0 / 3.0, (256, 224), true),
-                Fit::Overscale(8.0 / 7.0));
+                Fit::SmartInteger(8.0 / 7.0, (256, 224), 8.0));
         }
         // The cropped left bar: the Integer picture is the 248 columns shown.
         assert_eq!(home_fit(Platform::Sms, VideoMode::Actual, 4.0 / 3.0, (248, 224), true),
-            Fit::Overscale(248.0 / 224.0));
+            Fit::SmartInteger(248.0 / 224.0, (248, 224), 8.0));
         // A listed game's 320-wide screens (logos, menus): 4:3, the whole picture.
         assert_eq!(home_fit(Platform::Md, VideoMode::Actual, 1.5238, (320, 224), true),
             Fit::Aspect(4.0 / 3.0));
         assert_eq!(home_fit(Platform::Md, VideoMode::Stretch, 1.5238, (320, 224), true), Fit::Stretch);
         // A European game's 240 lines: square too.
         assert_eq!(home_fit(Platform::Md, VideoMode::Actual, 1.0, (256, 240), true),
-            Fit::Overscale(256.0 / 240.0));
+            Fit::SmartInteger(256.0 / 240.0, (256, 240), 8.0));
         assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), true), 8.0 / 7.0);
         assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), false), 4.0 / 3.0);
         // Hidden bars on a wider screen: the columns keep their width.
@@ -683,7 +952,7 @@ mod tests {
         // A 320-wide frame isn't a 256-wide game's.
         assert!(!narrow_frame((320, 224)) && narrow_frame((248, 192)));
         // No room beside an 8:7 picture on the Retroid Pocket Classic: no overlay.
-        assert!(own_place(8.0 / 7.0, (256, 224), VideoMode::Aspect, rpc).is_none());
+        assert!(own_place(8.0 / 7.0, (256, 224), VideoMode::Aspect, rpc, 8.0).is_none());
     }
 
     #[test]
@@ -765,7 +1034,7 @@ mod tests {
     fn the_new_systems_overlays_go_where_there_is_room() {
         use VideoMode::*;
         let panels = [(1620, 1080), (1800, 1080), (1920, 1080), (1440, 1080), (1240, 1080), (1080, 1080)];
-        let place = |aspect: f32, frame, panel| own_place(aspect, frame, Aspect, panel).map(|(p, _)| p);
+        let place = |aspect: f32, frame, panel| own_place(aspect, frame, Aspect, panel, 4.0).map(|(p, _)| p);
         let row = |aspect: f32, frame: (u32, u32)| panels.map(|panel| place(aspect, frame, panel));
         let (s, b, n) = (Some(Place::Side), Some(Place::Band), None);
         assert_eq!(row(4.0 / 3.0, (256, 192)), [s, s, s, n, b, b], "Master System");
@@ -776,10 +1045,10 @@ mod tests {
         assert_eq!(row(160.0 / 102.0, (160, 102)), [n, n, s, b, b, b], "Lynx");
         assert_eq!(row(1.5, (96, 64)), [n, s, s, b, b, b], "Pokemon mini");
         // Never in Stretch; the window is the picture of the size shown.
-        assert_eq!(own_place(4.0 / 3.0, (256, 192), Stretch, (1620, 1080)), None);
-        let (_, pic) = own_place(160.0 / 152.0, (160, 152), Actual, (1620, 1080)).unwrap();
+        assert_eq!(own_place(4.0 / 3.0, (256, 192), Stretch, (1620, 1080), 8.0), None);
+        let (_, pic) = own_place(160.0 / 152.0, (160, 152), Actual, (1620, 1080), 4.0).unwrap();
         assert_eq!(pic[3], 152.0 * 7.0);
-        let (_, pic) = own_place(224.0 / 144.0, (224, 144), Aspect, (1440, 1080)).unwrap();
+        let (_, pic) = own_place(224.0 / 144.0, (224, 144), Aspect, (1440, 1080), 4.0).unwrap();
         assert_eq!(pic[1], 0.0, "picture at the top over a band");
     }
 

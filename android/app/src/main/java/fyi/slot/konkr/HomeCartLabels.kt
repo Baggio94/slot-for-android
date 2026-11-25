@@ -50,6 +50,9 @@ internal object HomeCartLabels {
     private const val LABEL_MAX = 960
 
     private val retry = AutoLabelRetryPolicy()
+    private val ownMisses = java.util.concurrent.ConcurrentHashMap.newKeySet<Rom>()
+    fun resetForRefresh() { retry.resetAll(); ownMisses.clear() }
+    fun clearOwnPass() { ownMisses.clear() }
     /** Set when ScreenScraper refuses slot.'s credentials or closes its API. */
     @Volatile private var closedUntil = 0L
 
@@ -384,12 +387,20 @@ internal object HomeCartLabels {
     internal fun recut(real: JSONObject, rom: Rom): Boolean =
         real.has(rom.uri) && cutFor(real, rom).let { it != null && it != shell(rom) }
 
-    private fun known(state: JSONObject, rom: Rom): Boolean {
+    private fun portableCut(context: Context, real: JSONObject, rom: Rom): String? =
+        PortableArtwork.read(context, "home-cut", rom.uri) ?: cutFor(real, rom)
+
+    private fun needsRecut(context: Context, real: JSONObject, rom: Rom): Boolean =
+        portableCut(context, real, rom)?.let { it != shell(rom) } == true
+
+    private fun known(context: Context, state: JSONObject, rom: Rom, now: Long, since: Long): Boolean {
+        val portable = PortableArtwork.read(context, "home-miss", rom.uri)
+        if (PortableArtwork.validHomeMiss(portable, rom.size, rom.modified, shell(rom), now, since)) return true
         val old = state.optJSONObject(rom.uri) ?: return false
-        // A previous 3.0 lookup may have rejected support-2D before its
-        // label window existed. Retry once with the current mould rules.
-        if (rom.platform in NEW_LABEL_PLATFORMS && old.optString("mould") != shell(rom)) return false
-        return old.optLong("size") == rom.size && old.optLong("modified") == rom.modified
+        val at = old.optLong("at", 0L)
+        return old.optLong("size") == rom.size && old.optLong("modified") == rom.modified &&
+            old.optString("mould") == shell(rom) && at > 0 && at >= since && at <= now &&
+            now - at < PortableArtwork.MISS_TTL_MS
     }
 
     // ------------------------------------------------------------- fetch ---
@@ -506,10 +517,8 @@ internal object HomeCartLabels {
     internal fun studioArt(context: Context, uri: String): Pair<ByteArray?, ByteArray?> {
         loadShells(context)
         val rom = games(context).firstOrNull { it.uri == uri } ?: return null to null
-        val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri)) ?: return null to null
-        val (whole, bare) = RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
-            checksums(input)
-        }
+        val (whole, bare) = try { fingerprints(context, rom) } catch (_: Exception) { return null to null }
+        try { HomeFingerprintCache.flush(context) } catch (_: Exception) { }
         val crcs = listOfNotNull(whole, bare).distinct()
         var real: ByteArray? = try {
             ownLabel(context, rom, crcs)?.let { (media, bytes) -> labelPng(bytes, media, rom) }
@@ -604,27 +613,37 @@ internal object HomeCartLabels {
     /** A cart's checksums and its label from our own set, worked out ahead. */
     private class Prefetched(val whole: String, val bare: String?, val own: Pair<Media, ByteArray>?)
 
-    /** Three low-priority threads: our own set has no quota, and the carousel
+    /** Four low-priority threads: our own set has no quota, and the carousel
      *  keeps the device's attention. */
-    private val workers = java.util.concurrent.Executors.newFixedThreadPool(3) { task ->
+    private val workers = java.util.concurrent.Executors.newFixedThreadPool(4) { task ->
         Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             task.run()
         }, "slot-home-labels").apply { isDaemon = true }
     }
 
+    private fun fingerprints(context: Context, rom: Rom): Pair<String, String?> =
+        HomeFingerprintCache.get(context, rom.uri, rom.size, rom.modified) {
+            RomReads.read(rom.uri) {
+                val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
+                    ?: throw IllegalStateException("ROM unreadable")
+                RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ -> checksums(input) }
+            }
+        }
+
     private fun prefetch(context: Context, roms: List<Rom>,
-                         shouldContinue: () -> Boolean): Map<String, Prefetched> {
-        val jobs = roms.map { rom ->
+                         shouldContinue: () -> Boolean, ownOnly: Boolean): Map<String, java.util.concurrent.Future<Prefetched?>> {
+        return roms.associate { rom ->
             rom.uri to workers.submit<Prefetched?> {
                 if (!shouldContinue()) return@submit null
                 try {
-                    val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
-                        ?: return@submit null
-                    val (whole, bare) = RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
-                        checksums(input)
+                    val (whole, bare) = fingerprints(context, rom)
+                    val own = try {
+                        if (!ownOnly && rom in ownMisses && SlotArtSet.hasFreshIndexes(context, listOf(rom.platform))) null
+                        else ownLabel(context, rom, listOfNotNull(whole, bare).distinct()).also {
+                            if (ownOnly && it == null && shouldContinue() && SlotArtSet.hasFreshIndexes(context, listOf(rom.platform))) ownMisses.add(rom)
+                        }
                     }
-                    val own = try { ownLabel(context, rom, listOfNotNull(whole, bare).distinct()) }
                         catch (error: Exception) { Log.w(TAG, "Own art set lookup failed", error); null }
                     Prefetched(whole, bare, own)
                 } catch (error: Exception) {
@@ -632,19 +651,32 @@ internal object HomeCartLabels {
                 }
             }
         }
-        return jobs.mapNotNull { (uri, job) ->
-            try { job.get()?.let { uri to it } } catch (_: Exception) { null }
-        }.toMap()
     }
 
     /** The home carts still to label, out of all of them. */
     private fun missingOf(context: Context, state: JSONObject, real: JSONObject): Pair<List<Rom>, List<Rom>> {
-        val all = games(context)
-        // A cart is missing its label, or (scraped before Studio offered it)
-        // the copy Cart Studio shows as its real label.
+        val all = ArtworkPriority.order(games(context), ArtworkPriority.focus(context),
+            { it.uri }, { it.platform }, { it.title })
+        val now = System.currentTimeMillis()
+        val since = PortableArtwork.refreshEpoch(context)
+        retry.expireMisses(now, PortableArtwork.MISS_TTL_MS)
+        // Convert only records whose old URI belongs to this library. A
+        // transferred shelf label does not need a Studio cache backfill.
+        for (rom in all) {
+            if (PortableArtwork.read(context, "home-cut", rom.uri) == null) {
+                cutFor(real, rom)?.let { PortableArtwork.write(context, "home-cut", rom.uri, it) }
+            }
+            if (PortableArtwork.read(context, "home-miss", rom.uri) == null &&
+                known(context, state, rom, now, since)) {
+                val at = state.optJSONObject(rom.uri)?.optLong("at", 0L) ?: 0L
+                if (at > 0) PortableArtwork.write(context, "home-miss", rom.uri,
+                    PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom), at))
+            }
+        }
         val missing = all.filter {
-            (!CartLabelPaths.file(context.filesDir, it.uri).exists() || !real.has(it.uri) || recut(real, it)) &&
-                !known(state, it) && retry.pending(it.uri)
+            val exists = CartLabelPaths.file(context.filesDir, it.uri).exists()
+            PortableArtwork.needsLookup(exists, portableCut(context, real, it), shell(it)) &&
+                !known(context, state, it, now, since) && retry.pending(it.uri)
         }
         return all to missing
     }
@@ -668,11 +700,12 @@ internal object HomeCartLabels {
         }
     }
 
-    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit): Boolean {
+    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit,
+             ownOnly: Boolean = false): Boolean {
         loadShells(context)
-        val creds = credentials() ?: return false
+        val creds = credentials()
         val now = android.os.SystemClock.elapsedRealtime()
-        if (now < closedUntil || !shouldContinue()) return false
+        if ((!ownOnly && (creds == null || now < closedUntil)) || !shouldContinue()) return false
         val state = state(context)
         val real = realDone(context)
         val (all, missing) = missingOf(context, state, real)
@@ -686,28 +719,22 @@ internal object HomeCartLabels {
         var asks = 0
         var dirty = false
         val ready = missing.filter { retry.ready(it.uri, now) }
-        val pre = HashMap<String, Prefetched>()
+        val pre = HashMap<String, java.util.concurrent.Future<Prefetched?>>()
         var prefetchedUntil = 0
+        try {
         for ((i, rom) in ready.withIndex()) {
-            if (!shouldContinue() || asks >= MAX_ATTEMPTS) break
-            if (i >= prefetchedUntil) {
-                // The next few carts' checksums and own labels, side by side.
-                prefetchedUntil = minOf(ready.size, i + PREFETCH)
-                pre.clear()
-                pre.putAll(prefetch(context, ready.subList(i, prefetchedUntil), shouldContinue))
-                if (!shouldContinue()) break
+            if (!shouldContinue() || (!ownOnly && asks >= MAX_ATTEMPTS)) break
+            val end = minOf(ready.size, i + 8)
+            if (end > prefetchedUntil) {
+                pre.putAll(prefetch(context, ready.subList(prefetchedUntil, end), shouldContinue, ownOnly))
+                prefetchedUntil = end
             }
+            val early = try { pre.remove(rom.uri)?.get() } catch (_: Exception) { null }
+            if (!shouldContinue()) break
             var asked = false
             var outcome = "NOT_FOUND"
             try {
-                val early = pre[rom.uri]
-                val (whole, bare) = early?.let { it.whole to it.bare } ?: run {
-                    val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
-                        ?: throw IllegalStateException("ROM unreadable")
-                    RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ ->
-                        checksums(input)
-                    }
-                }
+                 val (whole, bare) = early?.let { it.whole to it.bare } ?: fingerprints(context, rom)
                 // slot. for Android's own art set first (art.slot-android.app),
                 // then ScreenScraper for the dumps it doesn't hold.
                 val own = if (early != null) early.own
@@ -716,12 +743,14 @@ internal object HomeCartLabels {
                 var media: Media? = own?.first
                 var imageBytes: ByteArray? = own?.second
                 if (own == null) {
+                    if (ownOnly) { outcome = "DEFERRED"; continue }
+                    val auth = creds ?: continue
                     asks++
                     asked = true
                     var reply: Http? = null
                     for (crc in listOfNotNull(whole, bare).distinct()) {
                         if (!shouldContinue()) break
-                        reply = lookup(rom, crc, creds, shouldContinue)
+                        reply = lookup(rom, crc, auth, shouldContinue)
                         if (reply.code != 404) break
                         Thread.sleep(150L)
                     }
@@ -749,7 +778,8 @@ internal object HomeCartLabels {
                 }
                 val chosen = media ?: continue
                 val png = labelPng(imageBytes ?: continue, chosen, rom) ?: continue
-                val stale = recut(real, rom)
+                if (!shouldContinue()) { outcome = "INTERRUPTED"; break }
+                val stale = needsRecut(context, real, rom)
                 val crcFiles = listOfNotNull(whole, bare).distinct().map { File(File(context.filesDir, REAL_DIR), "$it.png") }
                 val before = if (stale) crcFiles.firstOrNull { it.isFile }?.readBytes() else null
                 for (file in crcFiles) writeAtomic(file, png)
@@ -759,7 +789,10 @@ internal object HomeCartLabels {
                 // A label cut for the cart's old shell is replaced, unless it
                 // is no longer the automatic one (a Cart Studio choice).
                 val replace = stale && before != null && target.isFile && target.readBytes().contentEquals(before)
-                if (target.exists() && !replace) { outcome = "EXISTS"; saved++; continue }
+                if (target.exists() && !replace) {
+                    PortableArtwork.write(context, "home-cut", rom.uri, shell(rom))
+                    outcome = "EXISTS"; saved++; continue
+                }
                 target.parentFile?.mkdirs()
                 val atomic = AtomicFile(target)
                 val out = atomic.startWrite()
@@ -773,20 +806,27 @@ internal object HomeCartLabels {
                 saved++
                 savedTotal++
                 outcome = "SAVED"
+                PortableArtwork.write(context, "home-cut", rom.uri, shell(rom))
                 onSaved(rom.uri)
             } catch (error: Exception) {
                 outcome = "NETWORK_ERROR"
                 Log.w(TAG, "Label deferred for ${rom.title.take(80)}", error)
             } finally {
+                if (ownOnly && outcome != "SAVED" && outcome != "EXISTS") outcome = "DEFERRED"
                 when (outcome) {
                     "SAVED", "EXISTS" -> retry.finished(rom.uri)
                     "NOT_FOUND" -> {
-                        // ScreenScraper has no label for this file: don't ask
-                        // again until the file changes.
-                        retry.finished(rom.uri)
-                        state.put(rom.uri, JSONObject().put("size", rom.size)
-                            .put("modified", rom.modified).put("mould", shell(rom)))
-                        dirty = true
+                        // Only a current catalogue may establish a negative.
+                        // An offline or stale own index is not a verified miss.
+                        if (shouldContinue() && SlotArtSet.hasFreshIndexes(context, listOf(rom.platform))) {
+                            val at = System.currentTimeMillis()
+                            retry.missed(rom.uri, at)
+                            state.put(rom.uri, JSONObject().put("size", rom.size)
+                                .put("modified", rom.modified).put("mould", shell(rom)).put("at", at))
+                            PortableArtwork.write(context, "home-miss", rom.uri,
+                                PortableArtwork.homeMiss(rom.size, rom.modified, shell(rom), at))
+                            dirty = true
+                        } else if (shouldContinue()) retry.transient(rom.uri, android.os.SystemClock.elapsedRealtime())
                     }
                     "NETWORK_ERROR" -> retry.transient(rom.uri, android.os.SystemClock.elapsedRealtime())
                 }
@@ -797,13 +837,16 @@ internal object HomeCartLabels {
             }
             if (asked) Thread.sleep(250L)
         }
+        } finally { pre.values.forEach { it.cancel(true) } }
         if (dirty) try {
             saveState(context, state)
             writeAtomic(File(context.filesDir, REAL_DONE), real.toString().toByteArray(Charsets.UTF_8))
         } catch (error: Exception) {
             Log.w(TAG, "Could not remember label misses", error)
         }
+        try { HomeFingerprintCache.flush(context) }
+        catch (error: Exception) { Log.w(TAG, "Could not persist cartridge checksums", error) }
         val left = missing.any { retry.pending(it.uri) }
-        return left && shouldContinue() && android.os.SystemClock.elapsedRealtime() >= closedUntil
+        return !ownOnly && left && shouldContinue() && android.os.SystemClock.elapsedRealtime() >= closedUntil
     }
 }

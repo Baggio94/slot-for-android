@@ -215,16 +215,14 @@ internal object Systems {
             total += n
             if (total > 64L * 1024 * 1024) return false
             val end = carried + n
-            for (mark in marks) {
-                var i = 0
-                val last = end - mark.size
-                while (i <= last) {
-                    if (buffer[i] == mark[0]) {
-                        var k = 1
-                        while (k < mark.size && buffer[i + k] == mark[k]) k++
-                        if (k == mark.size) return true
-                    }
-                    i++
+            // All three signatures start with S. Scan each byte once.
+            for (i in 0 until end) {
+                if (buffer[i] != 'S'.code.toByte()) continue
+                for (mark in marks) {
+                    if (i + mark.size > end) continue
+                    var k = 1
+                    while (k < mark.size && buffer[i + k] == mark[k]) k++
+                    if (k == mark.size) return true
                 }
             }
             carried = minOf(keep, end)

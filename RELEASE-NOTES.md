@@ -1,12 +1,26 @@
-# slot. for Android v3.0.0
+# slot. for Android v3.1.0
 
-**Six new systems, new cartridges, and RomM save state syncing!**
+**A new way to browse your shelves, smarter scaling, faster setup, and more!**
 
-Version 3.0 expands slot. for Android to **12 supported systems**, with new cartridge designs, tailored emulation settings, and improvements throughout the experience.
+### New in 3.1.0
 
-- **Six new systems!** Master System, Game Gear, Neo Geo Pocket/Color, WonderSwan/Color, Atari Lynx and Pokémon mini. Each comes with its own cartridges, overlays, shaders, controls and emulation settings, plus multiple cores where available. RomM, RetroAchievements, cheats and multiplayer are supported where compatible.
-- **RomM save state syncing.** Pick up right where you left off on another handheld, with automatic save state syncing and conflict protection.
-- **Cleaner visuals.** New **Hide Left Bar** option for Master System and **Hide Side Bars** for NES to remove unwanted edge pixels.
-- **More polish.** New audio options, improved display handling, and plenty of fixes and refinements under the hood.
+- **Shelves** — With all the new systems, jumping from shelf to shelf with L1/R1 isn't always easy when you have many of them. Press **B** from the cartridge carousel to open a new visual shelf selector, featuring your cartridges, game counts, Favorites and Recents. Navigate with your controller or touchscreen, and choose between Scroll and Grid layouts in **Settings → Interface → Shelves**. I'd love to hear your feedback on this one!
+- **Smart Integer Scaling** — slot. automatically chooses between integer overscale and underscale, allowing up to 8 native pixels of cropping per edge for home consoles and 4 for handhelds. Get a larger picture without losing too much of the original image (#132). I'm less sure about the cropping on handheld systems, so let me know what you think too.
+- **Smarter default screen sizes** — Home consoles now start in Integer whenever it provides a good fit for your screen, while preserving the existing aspect ratio rules and your custom settings.
+- **More LCD Effects** — Pixel Transparency and Sunlight Shimmer are now available for Game Gear, Neo Geo Pocket/Color, WonderSwan/Color and Atari Lynx, with per-system and per-game settings (#128).
+- **Rumble strength** — Choose between OFF, LOW, MEDIUM, HIGH and MAX. Short vibration pulses are also handled more reliably (#131).
+- **Swap Menu A/B** — Swap A and B throughout slot.'s interface without changing your in-game controls. Available in **Settings → Controls** (#127).
+- **Faster and lighter** — Faster library scans and label scraping, slot.'s own artwork first, artwork restored from your slot. folder before searching online, game launches that only wait for their own files, more efficient slot. folder syncing, lower memory use, and a SYNCING indicator that counts incoming files without flashing.
+
+### Fixed in 3.1.0
+
+- **Cart Studio** — Custom colors, transparency and shell edits are no longer reset after updates, library refreshes or moving your slot. folder to another handheld.
+- **Beetle WonderSwan** — Games no longer fail to launch because of the protected save state check. Other affected cores are fixed too (#133).
+- **Refresh Library** — Now checks for newly available labels even when your ROM library hasn't changed. Your custom labels are kept.
+- **RetroAchievements** — Smart Cache's library preparation no longer holds back in-game achievements, and the current game's badges come first.
+- **Sega BIOS** — Boot issues fixed by keeping the cores' default boot behavior.
+- **RomM** — BIOS downloads fixed for supported systems.
+- **Storage** — Better handling of unavailable, read-only or inaccessible storage.
+- More refinements, fixes and improvements under the hood.
 
 As always, thanks for playing slot.!

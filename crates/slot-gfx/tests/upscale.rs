@@ -89,3 +89,26 @@ fn the_lcd_effect_caches_draw_with_and_without_an_upscaler() {
         }
     }
 }
+
+
+// These handhelds do not share the GBA source size. In particular the
+// WonderSwan can change orientation without creating a new compositor.
+#[test]
+fn lcd_effects_draw_new_handheld_sizes_and_wonderswan_rotation() {
+    let surface = TestEgl::new_es();
+    let mut gpu = Compositor::new(&surface).unwrap();
+    gpu.fit((960, 640));
+    gpu.set_screen_effect(ScreenEffect::Lcd3x);
+    for size in [(160, 144), (160, 152), (224, 144), (144, 224), (160, 102)] {
+        let pixels = [30, 100, 220, 0].repeat((size.0 * size.1) as usize);
+        for effect in [LcdEffect::Off, LcdEffect::PixelTransparency, LcdEffect::SunlightShimmer, LcdEffect::Off] {
+            gpu.set_lcd_effect(effect);
+            gpu.upload_game_sized(&pixels, size);
+            gpu.begin_frame();
+            gpu.draw_list(&[Draw::Game]);
+            let shot = gpu.read_frame();
+            assert!(shot.chunks_exact(4).any(|p| p[0] > p[2].saturating_add(20)), "{size:?} {effect:?}");
+            assert_eq!(gpu.gl_error(), 0, "{size:?} {effect:?}");
+        }
+    }
+}

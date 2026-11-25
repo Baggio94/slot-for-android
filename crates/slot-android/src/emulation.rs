@@ -26,6 +26,7 @@ pub struct EmulationProfile {
     pub rewind_speed_override: Option<u8>,
     pub turbo_override: Option<bool>, // original KONKR "X/Y Buttons"
     pub rumble_override: Option<bool>,
+    pub rumble_level_override: Option<u8>,
     pub eject_save_override: Option<bool>,
     // Boktai's sun: 0..=10, SUN_AUTO for the time of day, or SUN_SENSOR
     // for the light sensor. None follows the handheld (sensor if it has
@@ -142,7 +143,7 @@ impl EmulationProfile {
             gb_palettes_override: None, ff_speed_override: None,
             ff_sound_override: None, rewind_override: None,
             rewind_speed_override: None,
-            turbo_override: None, rumble_override: None,
+            turbo_override: None, rumble_override: None, rumble_level_override: None,
             eject_save_override: None, sun: None, motion: None,
             blending_override: None, lcd_effect_override: None, dither_override: None,
             upscaler_override: None,
@@ -172,6 +173,7 @@ impl EmulationProfile {
         if let Some(speed)=self.rewind_speed_override { settings.rewind_speed=speed; }
         if let Some(value)=self.turbo_override { settings.turbo=value; }
         if let Some(value)=self.rumble_override { settings.rumble=value; }
+        if let Some(level)=self.rumble_level_override { settings.rumble_level=level.clamp(1,4); }
         if let Some(value)=self.eject_save_override { settings.eject_save=value; }
         if let Some(value)=self.blending_override { *settings.blending_mut(platform)=value; }
         if let Some(value)=self.lcd_effect_override { settings.set_lcd_effect_for(platform,value); }
@@ -225,6 +227,9 @@ impl EmulationProfile {
             (_,47..=49)=>Settings::home_shader_key(platform).unwrap_or(key),
             _=>key,
         };
+        if let Some(owner) = Settings::lcd_effect_platform(actual_key) {
+            if owner != platform { return false; }
+        }
         if !view.change(actual_key,right) { return false; }
         match key {
             0 if platform==Platform::Gba =>
@@ -247,13 +252,17 @@ impl EmulationProfile {
                 self.rewind_speed_override=Some(view.rewind_speed);
             },
             7 => self.turbo_override=Some(view.turbo),
-            8 => self.rumble_override=Some(view.rumble),
+            8 => {
+                self.rumble_override=Some(view.rumble);
+                self.rumble_level_override=Some(view.rumble_level);
+            },
             9 => self.eject_save_override=Some(view.eject_save),
             60..=65|settings::BLENDING_SMS_KEY|settings::BLENDING_GG_KEY
             |settings::BLENDING_NGP_KEY|settings::BLENDING_WS_KEY
             |settings::BLENDING_LYNX_KEY|settings::BLENDING_POKEMINI_KEY =>
                 self.blending_override=Some(view.blending_for(platform)),
-            66..=68 => self.lcd_effect_override=Some(view.lcd_effect_for(platform)),
+            k if Settings::lcd_effect_platform(k) == Some(platform) =>
+                self.lcd_effect_override=Some(view.lcd_effect_for(platform)),
             69 if platform==Platform::Md => self.dither_override=Some(view.dither_blend_md),
             70 if platform==Platform::Gba => self.upscaler_override=Some(view.upscaler_gbav),
             settings::SPRITE_LIMIT_SMS_KEY|settings::SPRITE_LIMIT_GG_KEY
@@ -650,6 +659,21 @@ mod tests {
         assert!(profile.change(11, false) && !profile.responsive_loop);
     }
 
+    #[test]
+    fn new_handheld_lcd_effect_overrides_are_per_game() {
+        let globals = Settings::first_install_defaults();
+        for platform in [Platform::Gg, Platform::Ngp, Platform::Ws, Platform::Lynx] {
+            let key = Settings::lcd_effect_key(platform).unwrap();
+            let mut profile = EmulationProfile::from_settings(&globals);
+            assert!(profile.change_visual_and_gameplay(&globals, platform, key, true));
+            let mut view = globals.clone();
+            profile.apply_visual_and_gameplay(&mut view, platform);
+            assert_eq!(view.lcd_effect_for(platform), settings::LcdEffect::Transparency);
+            assert_eq!(globals.lcd_effect_for(platform), settings::LcdEffect::Off);
+            assert!(!profile.change_visual_and_gameplay(&globals, Platform::Pokemini, key, true));
+            assert_eq!(serde_json::from_str::<EmulationProfile>(&serde_json::to_string(&profile).unwrap()).unwrap(), profile);
+        }
+    }
     #[test]
     fn in_game_lcd_effect_blending_and_dither_stay_the_games() {
         let globals = Settings::first_install_defaults();

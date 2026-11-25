@@ -53,6 +53,21 @@ class AutoLabelRetryPolicyTest {
         assertEquals(0, p.failedAttempts("@official-art-index"))
     }
 
+    @Test fun weeklyMissesAndManualRefresh() {
+        val p = AutoLabelRetryPolicy()
+        p.missed("missing", 1000)
+        p.finished("saved")
+        p.transient("network", 0)
+        p.expireMisses(1199, 200)
+        assertFalse(p.pending("missing"))
+        p.expireMisses(1200, 200)
+        assertTrue(p.pending("missing"))
+        assertFalse(p.pending("saved"))
+        assertFalse(p.ready("network", 1))
+        p.resetAll()
+        assertTrue(p.ready("saved", 1))
+        assertTrue(p.ready("network", 1))
+    }
     @Test fun interruptionsDoNotConsumeRetries() {
         val p = AutoLabelRetryPolicy()
         // No transient() on interrupted I/O or foreground loss.

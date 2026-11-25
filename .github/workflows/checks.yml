@@ -5,6 +5,7 @@ on:
     paths:
       - 'android/**'
       - 'crates/slot-android/**'
+      - 'crates/slot-achievements/**'
       - 'crates/slot-gfx/**'
       - '.github/workflows/checks.yml'
       - 'tools/**'
@@ -27,6 +28,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.96'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: checks-regression
       - name: Install EGL linker library for native runtime tests
         run: bash .github/scripts/apt-install.sh libegl-dev libgl1-mesa-dri
       - name: Test real EGL context destruction and graphics recovery
@@ -81,6 +85,9 @@ jobs:
         with:
           toolchain: '1.96'
           targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: checks-jni
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.7'

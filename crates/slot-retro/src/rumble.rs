@@ -11,6 +11,7 @@ pub struct Rumble(Arc<Motors>);
 struct Motors {
     strong: AtomicU16,
     weak: AtomicU16,
+    peak: AtomicU16,
 }
 
 impl Rumble {
@@ -24,7 +25,13 @@ impl Rumble {
             _ => return false,
         };
         motor.store(strength, Ordering::Relaxed);
+        self.0.peak.fetch_max(strength, Ordering::Relaxed);
         true
+    }
+
+    /// A short ON/OFF pulse between two host frames still reaches Android.
+    pub fn take_peak(&self) -> u16 {
+        self.0.peak.swap(0, Ordering::AcqRel)
     }
 
     pub fn strength(&self) -> u16 {

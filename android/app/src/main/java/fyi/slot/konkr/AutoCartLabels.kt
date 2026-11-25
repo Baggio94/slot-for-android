@@ -95,9 +95,9 @@ internal object AutoCartLabels {
         return index
     }
 
-    /** Three low-priority threads: our own set has no quota, and the carousel
+    /** Four low-priority threads: our own set has no quota, and the carousel
      *  keeps the device's attention. */
-    private val workers = java.util.concurrent.Executors.newFixedThreadPool(3) { task ->
+    private val workers = java.util.concurrent.Executors.newFixedThreadPool(4) { task ->
         Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             task.run()
@@ -106,88 +106,162 @@ internal object AutoCartLabels {
 
     /** A cart's label scan from our own set: by its CRC, else by its name
      *  (ArtNames: a hack, a translation, another region's dump). */
-    private fun ownScan(context: Context, rom: CartStudioCatalog.Rom, crc: String): ByteArray? =
-        SlotArtSet.scanPng(context, rom.platform, crc)
-            ?: ArtNames.crcFor(context, rom.platform, rom.filename.ifBlank { rom.title })
-                ?.takeIf { !it.equals(crc, ignoreCase = true) }
-                ?.let { SlotArtSet.scanPng(context, rom.platform, it) }
+    private data class ArtIdentity(val platform: String, val crc: String)
+    private data class OwnArtwork(val identity: ArtIdentity, val bytes: ByteArray)
+
+    private fun artworkTitle(rom: CartStudioCatalog.Rom): String =
+        ArtNames.stem(rom.filename.ifBlank { rom.title })
+
+    private fun ownArtwork(context: Context, rom: CartStudioCatalog.Rom, crc: String,
+                           shouldContinue: () -> Boolean): OwnArtwork? {
+        val tried = HashSet<ArtIdentity>()
+        fun scan(platform: String, dump: String): OwnArtwork? {
+            if (!shouldContinue()) return null
+            val identity = ArtIdentity(platform, dump)
+            if (!tried.add(identity)) return null
+            return SlotArtSet.scanPng(context, platform, dump)?.let { OwnArtwork(identity, it) }
+        }
+        scan(rom.platform, crc)?.let { return it }
+        val alternate = GbFamilyArtwork.other(rom.platform)
+        if (alternate != null) {
+            scan(alternate, crc)?.let { return it }
+            val title = artworkTitle(rom)
+            for ((platform, name) in GbFamilyArtwork.names(rom.platform, title)) {
+                if (!shouldContinue()) return null
+                ArtNames.exactCrcFor(context, platform, name)?.let { named ->
+                    scan(platform, named)?.let { return it }
+                }
+            }
+            // For colour hacks a broad prefix could turn Land 2 into Land 1.
+            if (GbFamilyArtwork.originalTitle(title) != null) return null
+        }
+        if (!shouldContinue()) return null
+        return ArtNames.crcFor(context, rom.platform, rom.filename.ifBlank { rom.title })
+            ?.let { scan(rom.platform, it) }
+    }
+
+    private fun ownScan(context: Context, rom: CartStudioCatalog.Rom, crc: String,
+                        shouldContinue: () -> Boolean): ByteArray? =
+        ownArtwork(context, rom, crc, shouldContinue)?.bytes
+
+    /** The older art set has one index but separate DATs. Preserve its strict
+     *  matching, and only try the other Game Boy family catalogue on a miss. */
+    private fun officialMatch(rom: CartStudioCatalog.Rom, crc: CartStudioCatalog.Fingerprint,
+                              index: JSONObject, catalog: (String) -> OfficialArtMatcher.Catalog?,
+                              shouldContinue: () -> Boolean): Pair<ArtIdentity?, Boolean> {
+        val platforms = listOfNotNull(rom.platform, GbFamilyArtwork.other(rom.platform))
+        for (platform in platforms) {
+            if (!shouldContinue()) return null to false
+            if (OfficialArtResolver.artPath(index, platform, crc.hex) != null)
+                return ArtIdentity(platform, crc.hex) to false
+        }
+        var unavailable = false
+        val titles = if (platforms.size == 1) listOf(rom.platform to rom.title)
+            else GbFamilyArtwork.names(rom.platform, artworkTitle(rom))
+        for ((platform, name) in titles) {
+            if (!shouldContinue()) return null to unavailable
+            val dat = catalog(platform)
+            if (dat == null) { unavailable = true; continue }
+            val dump = OfficialArtMatcher.fromCatalog(platform, name, crc.head, dat) {
+                OfficialArtResolver.artPath(index, platform, it)
+            }
+            if (dump != null) return ArtIdentity(platform, dump) to false
+        }
+        return null to unavailable
+    }
 
     /** The carts' label scans from our own set, as PNG: a cart is left out
      *  when it couldn't be asked (the pass asks again), null when the set
      *  doesn't hold one. */
     private fun prefetch(context: Context, roms: List<CartStudioCatalog.Rom>,
-                         shouldContinue: () -> Boolean): Map<String, ByteArray?> {
-        val jobs = roms.map { rom ->
+                         shouldContinue: () -> Boolean, ownOnly: Boolean): Map<String, java.util.concurrent.Future<Pair<Boolean, ByteArray?>>> {
+        return roms.associate { rom ->
             rom.uri to workers.submit<Pair<Boolean, ByteArray?>> {
                 if (!shouldContinue()) return@submit false to null
                 try {
                     val crc = CartStudioCatalog.cached(context, rom)
                         ?: CartStudioCatalog.identify(context, rom)
-                    true to ownScan(context, rom, crc.hex)
+                    val shelves = listOfNotNull(rom.platform, GbFamilyArtwork.other(rom.platform))
+                    val bytes = if (!ownOnly && rom in ownMisses && SlotArtSet.hasFreshIndexes(context, shelves)) null
+                    else ownScan(context, rom, crc.hex, shouldContinue).also {
+                        if (ownOnly && it == null && shouldContinue() && SlotArtSet.hasFreshIndexes(context, shelves)) ownMisses.add(rom)
+                    }
+                    true to bytes
                 } catch (error: Exception) {
                     false to null
                 }
             }
         }
-        val out = HashMap<String, ByteArray?>()
-        for ((uri, job) in jobs) {
-            val (asked, bytes) = try { job.get() } catch (_: Exception) { false to null }
-            if (asked) out[uri] = bytes
-        }
-        return out
     }
 
     /** Games with no official label (hacks, homebrew), remembered between
      *  runs for a week: "2/2 labels, 0 saved" no longer showed at every
      *  start (beta38). After a week, a newer art set may have them. */
-    private const val MISS_DAYS = 7L
+    private const val MISS_TTL_MS = PortableArtwork.MISS_TTL_MS
+    private val ownMisses = java.util.concurrent.ConcurrentHashMap.newKeySet<CartStudioCatalog.Rom>()
+    fun resetForRefresh() { retry.resetAll(); ownMisses.clear() }
+    fun clearOwnPass() { ownMisses.clear() }
     private var missesLoaded = false
 
     private fun missFile(context: Context) = java.io.File(context.filesDir, "AutoLabels/no-official-label.txt")
 
-    private fun rememberedMisses(context: Context) {
+    private fun rememberedMisses(context: Context, games: List<CartStudioCatalog.Rom>) {
         if (missesLoaded) return
         missesLoaded = true
-        val oldest = System.currentTimeMillis() - MISS_DAYS * 24 * 3600 * 1000
+        val oldest = System.currentTimeMillis() - MISS_TTL_MS
         try {
+            val byUri = games.associateBy { it.uri }
             missFile(context).takeIf { it.isFile }?.readLines()?.forEach { line ->
                 val at = line.substringBefore('\t').toLongOrNull() ?: return@forEach
-                if (at >= oldest) retry.finished(line.substringAfter('\t'))
+                val rom = byUri[line.substringAfter('\t')] ?: return@forEach
+                if (GbFamilyArtwork.other(rom.platform) == null && at >= oldest &&
+                    PortableArtwork.read(context, "gb-miss", rom.uri) == null) {
+                    PortableArtwork.write(context, "gb-miss", rom.uri,
+                        PortableArtwork.gbMiss(rom.size, rom.modified, at))
+                }
             }
         } catch (_: Exception) {}
     }
 
-    private fun rememberMiss(context: Context, uri: String) {
-        try {
-            missFile(context).apply { parentFile?.mkdirs() }
-                .appendText("${System.currentTimeMillis()}\t$uri\n")
-        } catch (_: Exception) {}
+    private fun rememberMiss(context: Context, rom: CartStudioCatalog.Rom) {
+        PortableArtwork.write(context, GbFamilyArtwork.missKind(rom.platform), rom.uri,
+            PortableArtwork.gbMiss(rom.size, rom.modified, System.currentTimeMillis()))
     }
 
     /** Returns true if more bounded foreground work is pending, including retries. */
-    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit): Boolean {
+    fun fill(context: Context, shouldContinue: () -> Boolean, onSaved: (String) -> Unit,
+             ownOnly: Boolean = false): Boolean {
         if (!shouldContinue()) return false
         batchDelayMs = NEXT_BATCH_MS
         // The official GB/GBC/GBA art only: HomeCartLabels fetches the NES,
         // Super Nintendo and Mega Drive labels from ScreenScraper.
-        val games = CartStudioCatalog.games(context).filter { it.platform !in Systems.HOME_PLATFORMS }
+        val games = ArtworkPriority.order(CartStudioCatalog.games(context)
+            .filter { it.platform !in Systems.HOME_PLATFORMS }, ArtworkPriority.focus(context),
+            { it.uri }, { it.platform }, { it.title })
         if (games.isEmpty()) {
             SlotLog.i(TAG, "Deferred: cached ROM library not ready (zero indexed games)")
             return false
         }
-        rememberedMisses(context)
-        val missing = games.filter { !CartLabelPaths.file(context.filesDir, it.uri).exists() }
+        rememberedMisses(context, games)
+        val nowWall = System.currentTimeMillis()
+        val since = PortableArtwork.refreshEpoch(context)
+        retry.expireMisses(nowWall, MISS_TTL_MS)
+        val missing = games.filter {
+            !CartLabelPaths.file(context.filesDir, it.uri).exists() &&
+                !PortableArtwork.validGbMiss(PortableArtwork.read(context, GbFamilyArtwork.missKind(it.platform), it.uri),
+                    it.size, it.modified, nowWall, MISS_TTL_MS, since)
+        }
         val pending = missing.filter { retry.pending(it.uri) }
         if (pending.isEmpty()) {
             SlotLog.i(TAG, "No pending official art: games=${games.size}, missing=${missing.size}, savedTotal=$savedTotal")
             return false
         }
-        var checked = games.count { !retry.pending(it.uri) }
+        var checked = games.size - pending.size
         AutoCartLabelDiagnostics.start(checked, checked + pending.size, savedTotal)
 
         val now = android.os.SystemClock.elapsedRealtime()
         val due = pending.filter { retry.ready(it.uri, now) }
-        if (due.isEmpty()) return reschedule(pending, shouldContinue)
+        if (due.isEmpty()) return !ownOnly && reschedule(pending, shouldContinue)
 
         // Our own art set (art.slot-android.app) answers first. slot.'s older
         // set is a fallback: its index is fetched the first time a cart isn't
@@ -218,22 +292,27 @@ internal object AutoCartLabels {
         var errors = 0
         // Only the carts our own set doesn't hold are bounded per pass: it has
         // no quota, so every label it holds comes in one pass.
-        val pre = HashMap<String, ByteArray?>()
+        val pre = HashMap<String, java.util.concurrent.Future<Pair<Boolean, ByteArray?>>>()
         var prefetchedUntil = 0
+        try {
         for ((i, rom) in due.withIndex()) {
-            if (!shouldContinue() || attempted >= MAX_ATTEMPTS) break
+            if (!shouldContinue() || (!ownOnly && attempted >= MAX_ATTEMPTS)) break
+            // Sliding bounded window: submit the next cart as a result is
+            // consumed, without waiting for every worker in a batch.
+            val end = minOf(due.size, i + 8)
+            if (end > prefetchedUntil) {
+                pre.putAll(prefetch(context, due.subList(prefetchedUntil, end), shouldContinue, ownOnly))
+                prefetchedUntil = end
+            }
+            val job = pre.remove(rom.uri)
             val target = CartLabelPaths.file(context.filesDir, rom.uri)
             if (target.exists()) {
+                job?.cancel(true)
                 retry.finished(rom.uri)
                 continue
             }
-            if (i >= prefetchedUntil) {
-                // The next few carts' labels from our own set, side by side.
-                prefetchedUntil = minOf(due.size, i + PREFETCH)
-                pre.clear()
-                pre.putAll(prefetch(context, due.subList(i, prefetchedUntil), shouldContinue))
-                if (!shouldContinue()) break
-            }
+            val early = try { job?.get() } catch (_: Exception) { null }
+            if (!shouldContinue()) break
             var outcome = "NOT_FOUND"
             try {
                 val crc = CartStudioCatalog.cached(context, rom)
@@ -244,40 +323,38 @@ internal object AutoCartLabels {
                 }
                 // slot. for Android's own art set first (art.slot-android.app),
                 // then slot.'s, matched as before.
-                var bytes: ByteArray? = if (pre.containsKey(rom.uri)) pre[rom.uri] else try {
-                    ownScan(context, rom, crc.hex)
+                var bytes: ByteArray? = if (early?.first == true) early.second else try {
+                    ownScan(context, rom, crc.hex, shouldContinue)
                 } catch (error: Exception) {
                     SlotLog.w(TAG, "Own art set lookup failed; trying slot.'s", error)
                     null
                 }
                 if (bytes == null) {
+                    if (ownOnly) { outcome = "DEFERRED"; continue }
                     attempted++
                     val index = officialIndex()
                     if (index == null) {
                         outcome = if (shouldContinue()) "NETWORK_ERROR" else "INTERRUPTED"
                         continue
                     }
-                    val direct = OfficialArtResolver.artPath(index, rom.platform, crc.hex)
-                    // Kotlin getOrPut() re-invokes the initializer when it returns
-                    // null. Preserve null failures within THIS pass explicitly,
-                    // to avoid repeated 9s+12s DAT timeouts on each of 16 carts.
-                    if (direct == null && !dats.containsKey(rom.platform)) {
-                        dats[rom.platform] = OfficialDatSource.load(
-                            context, rom.platform, shouldContinue)
-                    }
+                    // Remember null DAT failures too, avoiding repeated timeouts
+                    // across this batch even when both GB and GBC are needed.
+                    val (resolved, unavailable) = officialMatch(rom, crc, index, { platform ->
+                        if (!dats.containsKey(platform))
+                            dats[platform] = OfficialDatSource.load(context, platform, shouldContinue)
+                        dats[platform]
+                    }, shouldContinue)
                     if (!shouldContinue()) {
                         outcome = "INTERRUPTED"
                         break
                     }
-                    val dat = if (direct != null) null else dats[rom.platform]
-                    if (direct == null && dat == null) {
+                    if (resolved == null && unavailable) {
                         outcome = "DAT_UNAVAILABLE"
                         continue
                     }
-                    val resolved = OfficialArtResolver.match(rom, crc, index, dat)
                     val path = resolved?.let {
-                        OfficialArtResolver.artPath(index, rom.platform, it)
-                    } ?: continue // Verified official no-match: session-terminal.
+                        OfficialArtResolver.artPath(index, it.platform, it.crc)
+                    } ?: continue
                     val response = art.intercept(path)
                     if (response.statusCode != 200) {
                         outcome = when (response.statusCode) {
@@ -355,12 +432,15 @@ internal object AutoCartLabels {
                 // A real stored label always wins, including when the user
                 // navigated away just after a successful atomic write.
                 if (target.exists()) retry.finished(rom.uri)
-                else if (shouldContinue()) {
+                else if (!ownOnly && shouldContinue()) {
                     when (outcome) {
-                        "NOT_FOUND", "INVALID_ARTWORK", "EXISTS" -> {
-                            retry.finished(rom.uri)
-                            if (outcome != "EXISTS") rememberMiss(context, rom.uri)
+                        "NOT_FOUND", "INVALID_ARTWORK" -> {
+                            if (SlotArtSet.hasFreshIndexes(context, listOfNotNull(rom.platform, GbFamilyArtwork.other(rom.platform)))) {
+                                retry.missed(rom.uri, System.currentTimeMillis())
+                                rememberMiss(context, rom)
+                            } else retry.transient(rom.uri, android.os.SystemClock.elapsedRealtime())
                         }
+                        "EXISTS" -> retry.finished(rom.uri)
                         "DAT_UNAVAILABLE", "NETWORK_ERROR", "ERROR" -> {
                             val scheduled = retry.transient(
                                 rom.uri, android.os.SystemClock.elapsedRealtime())
@@ -373,17 +453,19 @@ internal object AutoCartLabels {
                     }
                 }
                 if (wasPending && !retry.pending(rom.uri)) checked++
-                AutoCartLabelDiagnostics.result(checked, savedTotal, outcome)
+                AutoCartLabelDiagnostics.result(checked, savedTotal,
+                    if (ownOnly && outcome != "SAVED" && outcome != "EXISTS") "DEFERRED" else outcome)
                 if (outcome == "NOT_FOUND") notFound++
                 SlotLog.i(TAG, "ART_RESULT $outcome [${rom.platform}] ${rom.title.take(96)}")
             }
         }
+        } finally { pre.values.forEach { it.cancel(true) } }
         try { CartStudioCatalog.flush(context) }
         catch (error: Exception) { SlotLog.w(TAG, "Could not persist cartridge checksums", error) }
 
         SlotLog.i(TAG, "Art pass: attempted=$attempted, saved=$saved, fetched=$fetched, " +
             "no_official_match=$notFound, retryable_errors=$errors")
-        return reschedule(pending, shouldContinue)
+        return !ownOnly && reschedule(pending, shouldContinue)
     }
 
     /** Cart Studio's pictures for a Game Boy family cart: the real label as
@@ -402,6 +484,43 @@ internal object AutoCartLabels {
                 JSONObject(String(indexed.data.use { it.readBytes() }, Charsets.UTF_8)) else null
         } catch (error: Exception) {
             SlotLog.w(TAG, "slot.'s art set index unavailable for Cart Studio", error); null
+        }
+        if (GbFamilyArtwork.other(rom.platform) != null) {
+            val own = try { ownArtwork(context, rom, crc.hex) { true } }
+                catch (error: Exception) {
+                    SlotLog.w(TAG, "Own artwork lookup failed for Cart Studio", error); null
+                }
+            var identity = own?.identity
+            var bytes = own?.bytes
+            if (bytes == null && index != null) {
+                try {
+                    val dats = HashMap<String, OfficialArtMatcher.Catalog?>()
+                    identity = officialMatch(rom, crc, index, { platform ->
+                        if (!dats.containsKey(platform))
+                            dats[platform] = OfficialDatSource.load(context, platform) { true }
+                        dats[platform]
+                    }, { true }).first
+                    bytes = identity?.let { hit ->
+                        OfficialArtResolver.artPath(index, hit.platform, hit.crc)?.let { path ->
+                            val response = proxy.intercept(path)
+                            if (response.statusCode == 200) response.data.use { it.readBytes() } else null
+                        }
+                    }
+                } catch (error: Exception) {
+                    SlotLog.w(TAG, "GB family artwork deferred for Cart Studio", error)
+                }
+            }
+            val real = bytes?.takeIf { it.size >= 8 && it.copyOfRange(0, 8).contentEquals(pngSignature) }
+                ?.let { cropPhysicalCartLabel(it, rom.platform) }
+            val logo = try {
+                listOfNotNull(identity, ArtIdentity(rom.platform, crc.hex)).distinct()
+                    .firstNotNullOfOrNull { hit ->
+                        SlotArtSet.entries(context, hit.platform, hit.crc)?.firstOrNull { it.type == "wheel" }
+                    }?.let { SlotArtSet.file(context, it) }?.let(SlotArtSet::toPng)
+            } catch (error: Exception) {
+                SlotLog.w(TAG, "GB family logo lookup failed", error); null
+            }
+            return real to logo
         }
         fun ownScan(dump: String): ByteArray? = try {
             SlotArtSet.scanPng(context, rom.platform, dump)

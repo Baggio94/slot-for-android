@@ -36,7 +36,15 @@ internal object SlotArtSet {
     }
 
     private class Loaded(val at: Long, val index: JSONObject)
-    private val loaded = HashMap<String, Loaded>()
+    private val loaded = java.util.concurrent.ConcurrentHashMap<String, Loaded>()
+    private val failedIndexes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val failedNames = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val indexLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
+    private val namesLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
+    private val refreshWorkers = java.util.concurrent.Executors.newFixedThreadPool(4) { task ->
+        Thread(task, "slot-art-catalogue").apply { isDaemon = true }
+    }
+    private const val FAILURE_BACKOFF_MS = 60_000L
 
     private fun dir(context: Context) = File(context.cacheDir, "slot-art").apply { mkdirs() }
 
@@ -69,49 +77,101 @@ internal object SlotArtSet {
         for (platform in Systems.PLATFORMS) writeNames(context, platform, maxAgeMs)
     }
 
-    private fun index(context: Context, platform: String, fresh: Long = INDEX_FRESH_MS): JSONObject? {
+    /** The explicit refresh is scoped to systems present on the shelf. */
+    fun refreshLibrary(context: Context, shelves: Set<String>, shouldContinue: () -> Boolean): Boolean {
+        val relevant = shelves.toMutableSet()
+        if (Systems.GB in relevant || Systems.GBC in relevant) {
+            relevant.add(Systems.GB)
+            relevant.add(Systems.GBC)
+        }
+        fun batch(keys: List<String>, fetch: (String) -> Unit): Boolean {
+            for (chunk in keys.chunked(4)) {
+                if (!shouldContinue()) return false
+                val jobs = chunk.map { key -> refreshWorkers.submit { if (shouldContinue()) fetch(key) } }
+                for (job in jobs) job.get()
+            }
+            return shouldContinue()
+        }
+        if (!batch(relevant.flatMap { Systems.artKeys(it) }.distinct()) { index(context, it, 0L) }) return false
+        return batch(relevant.toList()) { writeNames(context, it, 0L) }
+    }
+
+    @Synchronized
+    fun hasFreshIndexes(context: Context, shelves: List<String>): Boolean {
+        val now = System.currentTimeMillis()
+        return shelves.none { failedNames.containsKey(it) } && shelves.flatMap { Systems.artKeys(it) }.distinct().all { key ->
+            !failedIndexes.containsKey(key) && loaded[key]?.let { now - it.at in 0 until INDEX_FRESH_MS } == true
+        }
+    }
+
+    private fun index(context: Context, platform: String, fresh: Long = INDEX_FRESH_MS): JSONObject? =
+        synchronized(indexLocks.computeIfAbsent(platform) { Any() }) { readIndex(context, platform, fresh) }
+
+    private fun readIndex(context: Context, platform: String, fresh: Long): JSONObject? {
         if (platform !in platforms) return null
         val now = System.currentTimeMillis()
-        loaded[platform]?.takeIf { now - it.at < fresh }?.let { return it.index }
+        if (!failedIndexes.containsKey(platform)) loaded[platform]?.takeIf { now - it.at < fresh }?.let { return it.index }
         val cache = File(dir(context), "$platform.json")
         fun cached(): JSONObject? = try {
             if (cache.isFile && cache.length() in 2L..MAX_INDEX.toLong()) JSONObject(cache.readText()) else null
         } catch (_: Exception) { null }
-        if (cache.isFile && now - cache.lastModified() < fresh) {
+        if (fresh > 0 && failedIndexes[platform]?.let { now - it < FAILURE_BACKOFF_MS } == true) {
+            return loaded[platform]?.index ?: cached()
+        }
+        if (!failedIndexes.containsKey(platform) && cache.isFile && now - cache.lastModified() < fresh) {
             cached()?.let { loaded[platform] = Loaded(cache.lastModified(), it); return it }
         }
         return try {
-            val bytes = get("$platform.json", MAX_INDEX) ?: return cached()
+            val bytes = get("$platform.json", MAX_INDEX) ?: run {
+                failedIndexes[platform] = now
+                return cached()
+            }
             val json = JSONObject(String(bytes, Charsets.UTF_8))
             write(cache, bytes)
             loaded[platform] = Loaded(now, json)
+            failedIndexes.remove(platform)
             json
         } catch (error: Exception) {
             Log.w(TAG, "Art set index unavailable: $platform", error)
             // A stale index still names files that exist: they never change.
-            cached()?.also { loaded[platform] = Loaded(now, it) }
+            failedIndexes[platform] = now
+            loaded[platform]?.index ?: cached()?.also { loaded[platform] = Loaded(cache.lastModified(), it) }
         }
     }
 
     /** The names Cart Studio searches for a platform, written for slot. as
      *  ArtNames/<PLATFORM>.tsv (CRC, tab, name), refreshed every few hours. */
-    fun writeNames(context: Context, platform: String, fresh: Long = INDEX_FRESH_MS) {
+    fun writeNames(context: Context, platform: String, fresh: Long = INDEX_FRESH_MS) =
+        synchronized(namesLocks.computeIfAbsent(platform) { Any() }) { refreshNames(context, platform, fresh) }
+
+    private fun refreshNames(context: Context, platform: String, fresh: Long) {
         if (platform !in platforms) return
         val out = File(File(context.filesDir, "ArtNames").apply { mkdirs() }, "$platform.tsv")
-        if (out.isFile && System.currentTimeMillis() - out.lastModified() < fresh) return
+        val now = System.currentTimeMillis()
+        if (fresh > 0 && failedNames[platform]?.let { now - it < FAILURE_BACKOFF_MS } == true) return
+        if (!failedNames.containsKey(platform) && out.isFile && now - out.lastModified() < fresh) return
         try {
             // A shelf's names: its own index's, then its Color carts'.
             val text = StringBuilder()
             for (key in Systems.artKeys(platform)) {
-                val bytes = get("$key.names.json", MAX_INDEX) ?: if (key == platform) return else continue
+                val bytes = get("$key.names.json", MAX_INDEX) ?: run {
+                    failedNames[platform] = now
+                    return // Keep the previous complete name catalogue.
+                }
                 val json = JSONObject(String(bytes, Charsets.UTF_8))
                 for (crc in json.keys()) {
                     val name = json.optString(crc).replace('\t', ' ').replace('\n', ' ')
                     if (name.isNotBlank()) text.append(crc).append('\t').append(name).append('\n')
                 }
             }
-            write(out, text.toString().toByteArray(Charsets.UTF_8))
+            val bytes = text.toString().toByteArray(Charsets.UTF_8)
+            if (!out.isFile || !out.readBytes().contentEquals(bytes)) {
+                write(out, bytes)
+                PortableArtwork.noteChange()
+            } else out.setLastModified(System.currentTimeMillis())
+            failedNames.remove(platform)
         } catch (error: Exception) {
+            failedNames[platform] = now
             Log.w(TAG, "Art set names unavailable: $platform", error)
         }
     }
@@ -167,6 +227,10 @@ internal object SlotArtSet {
             readTimeout = 12_000
             instanceFollowRedirects = false
             setRequestProperty("User-Agent", "slot. for Android")
+            if (path.endsWith(".json")) {
+                useCaches = false
+                setRequestProperty("Cache-Control", "no-cache")
+            }
         }
         try {
             val status = connection.responseCode

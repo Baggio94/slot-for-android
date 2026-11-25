@@ -157,6 +157,7 @@ pub struct Controls {
     /// The in-game Controls, by game (its ROM's library key).
     pub games: BTreeMap<String, Layout>,
     pub hotkeys: Hotkeys,
+    pub menu_swap_ab: bool,
     /// The handheld's own controls sent L3 or R3 once: they exist.
     pub builtin_sticks: bool,
 }
@@ -166,9 +167,16 @@ impl Default for Controls {
         Self {
             ports: [BUILTIN.to_owned(), String::new()], pads: BTreeMap::new(),
             systems: BTreeMap::new(), games: BTreeMap::new(), hotkeys: Hotkeys::default(),
-            builtin_sticks: false,
+            builtin_sticks: false, menu_swap_ab: false,
         }
     }
+}
+
+pub fn menu_action(code: i32, swap: bool) -> i32 {
+    match (swap, code) { (true, 96) => 97, (true, 97) => 96, _ => code }
+}
+pub fn menu_keycap(key: &str, swap: bool) -> &str {
+    match (swap, key) { (true, "A") => "B", (true, "B") => "A", _ => key }
 }
 
 impl Controls {
@@ -285,6 +293,7 @@ impl Controls {
     /// Settings > Controls > Reset to Default: every controller's keys back
     /// to the defaults, and the hotkeys too. Who is on which port stays.
     pub fn reset_all(&mut self) {
+        self.menu_swap_ab = false;
         for pad in self.pads.values_mut() { pad.reset(); }
         self.hotkeys = Hotkeys::default();
     }

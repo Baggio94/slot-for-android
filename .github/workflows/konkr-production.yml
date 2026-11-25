@@ -53,6 +53,11 @@ jobs:
           # cargo reads the project's 1.96 override.
           toolchain: '1.96'
           targets: aarch64-linux-android
+      # Faster builds (3.0.1-beta13): Rust's compiled crates, cargo-ndk and
+      # Gradle's caches come back from the last run of the same lock file.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: arm64-apk
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.7'
@@ -66,16 +71,6 @@ jobs:
           echo "VERSION_CODE=$code" >> "$GITHUB_ENV"
           echo "VERSION_NAME=$name" >> "$GITHUB_ENV"
           echo "slot. $name ($code)"
-      - name: Test capture tools
-        run: python3 -m unittest discover -s tools/emulation-lab -p 'test_*.py' -v
-      - name: Test RetroAchievements
-        run: cargo test -p slot-achievements -p slot-retro
-      - name: Test KONKR 3:2 scaling
-        run: cargo test -p slot-gfx --no-default-features --test konkr
-      - name: Test interface graphics
-        run: |
-          cargo test -p slot-ui --lib onboarding_tests
-          cargo test -p slot-ui --test cart_material --test new_cart_material --test upstream_v17_assets --test native_resolution --test insert_neighbour_motion --test mixed_shelf_parity --test chrome_crt_parity --test native_density --test link_hardware
       - name: Export cartridge material checks
         run: cargo run --locked -p slot-ui --example material_preview -- "$RUNNER_TEMP/material-preview" 1.3333333
       - uses: actions/upload-artifact@v6
@@ -97,40 +92,47 @@ jobs:
               assert width > 45 and height == 72, (name, width, height)
               print(f'Verified Slot legend {name}: {width}x{height}')
           PY
-      - name: Test Android library
-        run: cargo test -p slot-android --lib
-      - name: Test every menu row shows its value (runtime menus)
-        run: |
-          set -euo pipefail
-          bash .github/scripts/apt-install.sh libegl-dev
-          cargo test -p slot-android --features runtime-tests --lib runtime:: 2>&1 | tee "$RUNNER_TEMP/menu-tests.log"
-          grep -F 'test runtime::settings_value_tests::every_settings_row_shows_its_value ... ok' "$RUNNER_TEMP/menu-tests.log"
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
+      # The libretro cores only change with their build scripts, patches and
+      # pinned revisions (all in these files): built again only then.
+      - name: Cores built before
+        id: cores
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/app/src/main/jniLibs/arm64-v8a/*_libretro.so
+            android/app/src/main/assets/core-build-*.json
+            android/app/src/main/assets/licenses
+          key: cores-v1-${{ hashFiles('scripts/build-mgba-android.sh', 'scripts/build-gpsp-android.sh', 'scripts/build-gambatte-android.sh', 'scripts/build-home-core-android.sh', 'scripts/patch-*.py', 'cores/**') }}
       - name: Validate core patch scripts
+        if: steps.cores.outputs.cache-hit != 'true'
         run: python3 -m py_compile scripts/patch-mgba-speculative-audio.py scripts/patch-gpsp-speculative-audio.py scripts/patch-mgba-active-sram.py scripts/patch-mgba-sun.py scripts/patch-mgba-twb64.py scripts/patch-mgba-gb-direct-cable.py scripts/patch-mgba-link-peer-bios.py scripts/patch-gpsp-backend-diagnostic.py
       - name: Build mGBA arm64 libretro core
+        if: steps.cores.outputs.cache-hit != 'true'
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-mgba-android.sh
       - name: Test the Game Boy Link cable (host build of the same mGBA source)
+        if: steps.cores.outputs.cache-hit != 'true'
         run: bash tools/gb-link-test/test.sh
       - name: Build gpSP arm64 libretro core
+        if: steps.cores.outputs.cache-hit != 'true'
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-gpsp-android.sh
       - name: Build Gambatte arm64 libretro core
+        if: steps.cores.outputs.cache-hit != 'true'
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-gambatte-android.sh
       - name: Build NES, SNES, Mega Drive, Master System, Game Gear, Neo Geo Pocket and WonderSwan arm64 libretro cores
+        if: steps.cores.outputs.cache-hit != 'true'
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini; do
             bash scripts/build-home-core-android.sh "$core"
           done
-      - name: Test Android debug and release policies on JVM
-        run: gradle --no-daemon -p android :app:testDebugUnitTest :app:testReleaseUnitTest
       - name: Assemble signed ARM64 release
         env:
           SLOT_KEYSTORE_BASE64: ${{ secrets.SLOT_KEYSTORE_BASE64 }}
@@ -278,6 +280,62 @@ jobs:
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
+
+  # The tests run beside the APK (3.0.1-beta13): a beta's APK no longer
+  # waits for them; a release still does (publish needs both).
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK packages
+        run: |
+          MANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -maxdepth 3 -type f -name sdkmanager | sort -V | tail -1)"
+          if [ -z "$MANAGER" ]; then echo "Android sdkmanager not installed" >&2; exit 1; fi
+          for attempt in 1 2 3 4; do
+            if "$MANAGER" --sdk_root="$ANDROID_SDK_ROOT" --install "platforms;android-35" "build-tools;35.0.0"; then break; fi
+            if [ "$attempt" -eq 4 ]; then echo "::error::Android SDK download failed"; exit 1; fi
+            sleep $((attempt * 5))
+          done
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.96'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: host-tests
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '8.7'
+      - name: Test capture tools
+        run: python3 -m unittest discover -s tools/emulation-lab -p 'test_*.py' -v
+      - name: Test RetroAchievements
+        run: cargo test -p slot-achievements -p slot-retro
+      - name: Test KONKR 3:2 scaling
+        run: cargo test -p slot-gfx --no-default-features --test konkr
+      - name: Test interface graphics
+        run: |
+          cargo test -p slot-ui --lib onboarding_tests
+          cargo test -p slot-ui --test cart_material --test new_cart_material --test upstream_v17_assets --test native_resolution --test insert_neighbour_motion --test mixed_shelf_parity --test chrome_crt_parity --test native_density --test link_hardware
+      - name: Test Android library
+        run: cargo test -p slot-android --lib
+      - name: Test every menu row shows its value (runtime menus)
+        run: |
+          set -euo pipefail
+          bash .github/scripts/apt-install.sh libegl-dev
+          cargo test -p slot-android --features runtime-tests --lib runtime:: 2>&1 | tee "$RUNNER_TEMP/menu-tests.log"
+          grep -F 'test runtime::settings_value_tests::every_settings_row_shows_its_value ... ok' "$RUNNER_TEMP/menu-tests.log"
+      - name: Test Android debug and release policies on JVM
+        run: gradle --no-daemon -p android :app:testDebugUnitTest :app:testReleaseUnitTest
+
   publish:
     # Only the explicit release merge into main publishes a stable release:
     # its commit title must be "release: slot. for Android vX.Y.Z" (or the
@@ -289,7 +347,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (startsWith(github.event.head_commit.message, 'release: slot. for Android v') ||
        startsWith(github.event.head_commit.message, 'release: slot. for KONKR Pocket Advance v'))
-    needs: arm64-apk
+    needs: [arm64-apk, tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write

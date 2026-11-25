@@ -21,7 +21,7 @@ internal object RomSource {
     private const val MAX_ENTRIES = 256
     private val supported = Systems.ROM_EXTENSIONS
 
-    data class Header(val extension: String, val bytes: ByteArray)
+    data class Header(val extension: String, val bytes: ByteArray, val battery: Boolean? = null)
 
     fun isContainer(filename: String): Boolean =
         filename.substringAfterLast('.', "").lowercase(Locale.ROOT) == "zip"
@@ -76,7 +76,11 @@ internal object RomSource {
         }
     }
 
-    fun inspect(source: InputStream, filename: String): Header =
+    fun inspect(source: InputStream, filename: String): Header = inspectInternal(source, filename, false)
+
+    fun inspectWithBattery(source: InputStream, filename: String): Header = inspectInternal(source, filename, true)
+
+    private fun inspectInternal(source: InputStream, filename: String, battery: Boolean): Header =
         useRom(source, filename) { stream, ext ->
             // Home console headers sit further in (SNES up to 64 KiB).
             val head = ByteArray(Systems.headerBytes(ext))
@@ -88,7 +92,16 @@ internal object RomSource {
                 filled += n
             }
             require(filled >= MIN_ROM_BYTES) { "Cartridge ROM header is too small" }
-            Header(ext, head.copyOf(filled))
+            val header = head.copyOf(filled)
+            val hasBattery = if (!battery) null else when (Systems.platformFor(ext)) {
+                Systems.WS, "GBA" -> {
+                    val whole = java.io.SequenceInputStream(java.io.ByteArrayInputStream(header), stream)
+                    if (Systems.platformFor(ext) == Systems.WS) Systems.wsBattery(whole)
+                    else Systems.gbaBattery(whole)
+                }
+                else -> null
+            }
+            Header(ext, header, hasBattery)
         }
 
     private class Limited(source: InputStream): FilterInputStream(source) {

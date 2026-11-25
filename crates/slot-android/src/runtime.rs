@@ -355,6 +355,17 @@ const FF_MAX_BUDGET_US: u64 = 11_000;
 static FF_AUDIO_SUPPORTED: AtomicBool = AtomicBool::new(true);
 static FF_AUDIO_ENABLED: AtomicBool = AtomicBool::new(true);
 static RUMBLE_STRENGTH: AtomicI32 = AtomicI32::new(0);
+static RUMBLE_PEAK: AtomicI32 = AtomicI32::new(0);
+
+fn clear_rumble() {
+    RUMBLE_STRENGTH.store(0, Ordering::Release);
+    RUMBLE_PEAK.store(0, Ordering::Release);
+}
+fn scale_rumble(strength: u16, level: u8) -> i32 {
+    // Preserve nonzero signals, even at Low. Four levels are 25/50/75/100%.
+    if strength == 0 || level == 0 { return 0; }
+    (i32::from(strength) * i32::from(level.min(4)) / 4).max(1)
+}
 // Updated once per second by the GL thread; read-only and optional on Android.
 static PERF_STATUS: Mutex<Option<String>> = Mutex::new(None);
 static PERF_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -560,6 +571,7 @@ impl LinkEntry {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ShelfOverlay {
     None,
+    Shelves { rack: usize },
     Menu { row: usize },
     Library { row: usize },
     /// Library > Saves & States.
@@ -605,7 +617,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 177] = [
+const MENU_TEXT: [&str; 178] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -788,6 +800,7 @@ const MENU_TEXT: [&str; 177] = [
     "Sync States with RomM",              // 174, Library > Saves & States (3.0, beta)
     "Hide Side Bars",                     // 175, NES: left and right (Siham 2026-11-23)
     "Audio Filter",                       // 176, NES + WonderSwan optional analogue audio
+    "Shelves",                            // 177, Interface: Scroll or Grid (3.0.1-beta12)
 ];
 
 /// Settings > Systems, top to bottom.
@@ -812,7 +825,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 190] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 192] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -874,6 +887,8 @@ const SETTING_VALUE_NAMES: [&str; 190] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                // 164-168: optional audio coloration; these must stay
                                // before Rotate's 21 terminal values.
                                "RF", "Soft", "MAME", "Nuked", "Analog",
+                               // 169-170 (SHELVES_LAYOUT_VALUES): Interface > Shelves.
+                               "SCROLL", "GRID",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -887,6 +902,8 @@ const OWN_BEZEL_VALUES: usize = 140;
 const EXTRA_VALUES: usize = 150;
 /// NES/WonderSwan filter and Mega Drive FM values (before Rotate values).
 const AUDIO_OPTION_VALUES: usize = EXTRA_VALUES + 14;
+/// Interface > Shelves' Scroll and Grid in SETTING_VALUE_NAMES.
+const SHELVES_LAYOUT_VALUES: usize = AUDIO_OPTION_VALUES + 5;
 /// The first RG Rotate value in SETTING_VALUE_NAMES.
 const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
 /// Library's values (2.5): where the slot. folder is, and RomM's sync
@@ -1059,7 +1076,9 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             match scoped.rewind_speed { 1 => 38, 2 => 39, 3 => 40, _ => 41 }
         },
         7 => if scoped.turbo { 15 } else { 16 },
-        8 => if scoped.rumble { 4 } else { 5 },
+        8 => if !scoped.rumble { 5 } else {
+            match scoped.rumble_level.clamp(1,4) { 1 => 23, 2 => 24, 3 => 25, _ => 118 }
+        },
         9 => if scoped.eject_save { 4 } else { 5 },
         10 => if profile.show_fps { 4 } else { 5 },
         11 => if profile.responsive_loop { 11 } else { 45 },
@@ -1098,6 +1117,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         },
         19 => if settings.show_recents {4}else{5},
         20 => if settings.show_titles {4}else{5},
+        SHELVES_LAYOUT_KEY => SHELVES_LAYOUT_VALUES + usize::from(settings.shelves_grid),
         TEST_SHELF_KEY => if settings.test_shelf {4}else{5},
         21 => shader(scoped.shader_gbc),
         47 => shader(scoped.shader_nes),
@@ -1168,9 +1188,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
                 crate::settings::Blending::Ghosting => 97,
             }
         }
-        66..=68 => {
-            use slot_store::Platform::*;
-            match scoped.lcd_effect_for([Gba, Gbc, Gb][key - 66]) {
+        k if Settings::lcd_effect_platform(k).is_some() => {
+            match scoped.lcd_effect_for(Settings::lcd_effect_platform(k)?) {
                 crate::settings::LcdEffect::Off => 5,
                 crate::settings::LcdEffect::Transparency => 111,
                 crate::settings::LcdEffect::Sunlight => 112,
@@ -1205,8 +1224,11 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
 fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
     -> (Vec<Vec<slot_store::Cart>>, Vec<slot_store::Cart>)
 {
-    let mut grouped = library.map(carts_by_platform)
-        .unwrap_or_else(|| std::array::from_fn(|_| Vec::new()));
+    let mut grouped = library.map(|entries| {
+        if let Some(root) = root {
+            carts_by_platform(&crate::library::load_shell_profiles(root, entries))
+        } else { carts_by_platform(entries) }
+    }).unwrap_or_else(|| std::array::from_fn(|_| Vec::new()));
     let (video, gba): (Vec<slot_store::Cart>, Vec<slot_store::Cart>) =
         std::mem::take(&mut grouped[Platform::Gba as usize]).into_iter()
             .partition(carousel_delete::is_gba_video);
@@ -1361,14 +1383,16 @@ fn settings_rows() -> &'static [usize] {
 }
 
 /// Settings > Interface: Theme, Wallpaper (its page), Recents, Game Titles,
-/// Status Bar (its page).
+/// Shelves (Scroll or Grid), Status Bar (its page).
 /// 3.0 Test Shelf (156) left it in 3.0.0-lynxmini1: no test cart is left.
-const INTERFACE_PAGE_ROWS: [usize; 5] = [85, 83, 86, 87, 58];
-const INTERFACE_PAGE_KEYS: [usize; 5] = [18, usize::MAX, 19, 20, usize::MAX];
+const INTERFACE_PAGE_ROWS: [usize; 6] = [85, 83, 86, 87, 177, 58];
+const INTERFACE_PAGE_KEYS: [usize; 6] = [18, usize::MAX, 19, 20, SHELVES_LAYOUT_KEY, usize::MAX];
+/// Interface > Shelves' value.
+const SHELVES_LAYOUT_KEY: usize = 160;
 /// Interface > 3.0 Test Shelf's value (3.0.0-cartes1).
 const TEST_SHELF_KEY: usize = 107;
 const INTERFACE_WALLPAPER_ROW: usize = 1;
-const INTERFACE_STATUS_ROW: usize = 4;
+const INTERFACE_STATUS_ROW: usize = 5;
 /// Settings > Interface > Wallpaper (Engine::wallpaper_rows): Shelf
 /// (General or a shelf), its Wallpaper, Blur, then Halo with Default or
 /// Tint (idle but for an image), Import, Delete.
@@ -1417,6 +1441,7 @@ struct LiveGameOptions {
     rewind_speed: u8,
     turbo: bool, // KONKR X/Y Buttons
     rumble: bool,
+    rumble_level: u8,
     eject_save: bool,
 }
 impl LiveGameOptions {
@@ -1429,6 +1454,7 @@ impl LiveGameOptions {
             rewind_speed:p.and_then(|v|v.rewind_speed_override).unwrap_or(global.rewind_speed),
             turbo:p.and_then(|v|v.turbo_override).unwrap_or(global.turbo),
             rumble:p.and_then(|v|v.rumble_override).unwrap_or(global.rumble),
+            rumble_level:p.and_then(|v|v.rumble_level_override).unwrap_or(global.rumble_level).clamp(1,4),
             eject_save:p.and_then(|v|v.eject_save_override).unwrap_or(global.eject_save),
         }
     }
@@ -1518,6 +1544,7 @@ struct Engine {
     ink_hints: Vec<menu_look::InkHint>,
     /// The ink those twins are written in (None: the white of Dark).
     hint_ink: Option<[u8; 3]>,
+    hint_swap_ab: bool,
     controls_view: controls_ui::ControlsView,
     /// Game menu > Cheats: the game's cheat files, and the one shown.
     cheat_sources: Vec<crate::cheats::Source>,
@@ -1597,6 +1624,7 @@ struct Engine {
     /// L2 / R2 on the carousel: delete held, GBA Video tapped.
     triggers: carousel_delete::Triggers,
     touch: Option<touch::Touch>,
+    shelves_grid: shelves_grid::GridState,
     /// The cart flying between the shelf and Cart Studio (cart_studio.rs).
     studio_flight: Option<cart_studio::StudioFlight>,
     /// A long press on a side cart: Cart Studio once it reaches the middle.
@@ -1782,6 +1810,7 @@ struct Engine {
     lid_shelf_index: Option<(usize, usize)>,
     /// 0 open .. 1 closed: the close and open animations' progress.
     lid_t: f32,
+    lid_title_started: Option<Instant>,
     /// LidStep ticks (6 s) since the last Random Cart.
     lid_ticks: u32,
     /// The clock and battery percentage drawn three times finer, so they
@@ -1979,6 +2008,9 @@ impl Engine {
         // Upstream Slot delegates colour correction to libretro core options.
         // Disable the dev13 approximate GPU grade to avoid double correction.
         gpu.enable_context_recovery();
+        // Bind the palette to this renderer's thread before the first draw.
+        // A matching global fallback must not leave the local palette unset.
+        menu_style::set_palette(None);
         menu_style::set_oled(settings.appearance == crate::settings::Appearance::Oled);
         gpu.set_colour_correction(false);
         FF_AUDIO_ENABLED.store(settings.ff_sound, Ordering::Release);
@@ -2360,6 +2392,15 @@ impl Engine {
         let has_multiple_systems = shelves.iter().filter(|s| !s.carts.is_empty()).count() > 1;
         steps.mark("rest");
         crate::game::log_launch_timing(&steps.line());
+        // All themes stay preloaded. Pack only the static CPU recovery copies
+        // after startup uploads, not on the GL thread or for live cart faces.
+        if let Some(tex) = wallpaper_texture { gpu.pack_static_recovery(tex); }
+        for (back, front) in std::iter::once(slot_dark_faces)
+            .chain(std::iter::once(slot_light_faces))
+            .chain(home_slot_themes.iter().flatten().copied()) {
+            gpu.pack_static_recovery(back);
+            gpu.pack_static_recovery(front);
+        }
         Ok(Self {
             gpu,
             size,
@@ -2418,6 +2459,7 @@ impl Engine {
             controls_hint_faces: Default::default(),
             ink_hints: Vec::new(),
             hint_ink: None,
+            hint_swap_ab: false,
             controls_view: Default::default(),
             cheat_sources: Vec::new(),
             cheat_source: 0,
@@ -2473,6 +2515,7 @@ impl Engine {
             romm: None,
             triggers: Default::default(),
             touch: None,
+            shelves_grid: Default::default(),
             studio_flight: None,
             studio_when_settled: false,
             gba_video: false,
@@ -2594,6 +2637,7 @@ impl Engine {
             lid_ticks: 0,
             lid_faces: Default::default(),
             lid_clock_faces: Default::default(),
+            lid_title_started: None,
             play_time: 0.0,
             select_physical: false,
             combo_releases: 0,
@@ -2680,7 +2724,9 @@ impl Engine {
         if jobs.is_empty() { return; }
         let root = root.map(Path::to_path_buf);
         let theme = self.settings.appearance.mosaic_theme();
-        let (tx, rx) = std::sync::mpsc::channel();
+        // Only a few native-sized RGBA images may wait for the GL uploader.
+        // The producer alone waits; the GL thread still polls without blocking.
+        let (tx, rx) = std::sync::mpsc::sync_channel(3);
         let spawned = std::thread::Builder::new().name("slot-wallpaper".into()).spawn(move || {
             for (index, pick, look) in jobs {
                 let (rgba, personal) = shelf_wallpaper_pixels(root.as_deref(), &pick, look, index, theme);
@@ -2723,6 +2769,7 @@ impl Engine {
         } else {
             self.gpu.create_texture(w, h, &rgba)
         });
+        if let Some(tex) = *slot { self.gpu.pack_static_recovery(tex); }
         self.shelf_wallpaper_ready[index] = true;
         if let Some(slot) = self.shelf_wallpaper_luma.get_mut(index) { *slot = Some(luma); }
         if let Some(slot) = self.shelf_wallpaper_personal.get_mut(index) { *slot = personal; }
@@ -2868,7 +2915,9 @@ impl Engine {
     /// Over a menu page: at the top right, in the page's colours.
     fn draw_menu_task_pill(&mut self, out: &mut Vec<Draw>) {
         if self.game.is_some() || self.progress > 0.0
-            || matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::CartStudio) { return; }
+            // About: it would cover the version's label (Siham 2026-11-25).
+            || matches!(self.overlay, ShelfOverlay::None | ShelfOverlay::CartStudio | ShelfOverlay::Shelves { .. }
+                | ShelfOverlay::About { .. }) { return; }
         let Some((kind, tex, w, h)) = self.task_pill_tex() else { return };
         let margin = if out_w() < 640 { 12.0 } else { 24.0 };
         let ink = self.menu_ink();
@@ -3048,7 +3097,7 @@ impl Engine {
         self.hud.set_ff(FfState::Off);
         self.hud.release_rewind();
         AUDIO_SPEED_PERMILLE.store(1000, Ordering::Release);
-        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        clear_rumble();
     }
 
 
@@ -3066,7 +3115,7 @@ impl Engine {
             self.game_accum=0.0;
             AUDIO.lock().unwrap_or_else(|e|e.into_inner()).clear();
             self.reset_time_controls();
-            RUMBLE_STRENGTH.store(0, Ordering::Release);
+            clear_rumble();
             if is_double {
                 self.menu_reveal_at=None;
                 self.states_from_menu=false;
@@ -3158,7 +3207,7 @@ impl Engine {
         self.game_accum = 0.0;
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.reset_time_controls();
-        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        clear_rumble();
         self.menu_reveal_at = None;
         self.mode_last_tap = None;
         self.footer = 0.0;
@@ -3667,7 +3716,7 @@ impl Engine {
         };
         SAMPLE_RATE.store(replacement.sample_rate, Ordering::Release);
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        clear_rumble();
         self.game_accum = 0.0;
         self.buttons = 0;
         self.game = Some(replacement);
@@ -3798,7 +3847,7 @@ impl Engine {
             }
             SAMPLE_RATE.store(private.sample_rate, Ordering::Release);
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
-            RUMBLE_STRENGTH.store(0, Ordering::Release);
+            clear_rumble();
             self.game_accum = 0.0;
             self.buttons = 0;
             self.game = Some(private);
@@ -3899,7 +3948,7 @@ impl Engine {
             which.text(), stem, backup.display()));
         SAMPLE_RATE.store(solo.sample_rate, Ordering::Release);
         AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        RUMBLE_STRENGTH.store(0, Ordering::Release);
+        clear_rumble();
         self.game_accum = 0.0;
         self.buttons = 0;
         self.reset_time_controls();
@@ -4273,6 +4322,7 @@ impl Engine {
             }
             Input::Reset => {
                 self.reset_time_controls();
+                self.shelves_grid.reset();
                 self.menu_held = None;
                 self.buttons = 0;
                 // Android won't tell the releases of keys held while away.
@@ -4361,6 +4411,7 @@ impl Engine {
             Input::LidCover(closed, now) => {
                 if closed == self.lid_covered { return; }
                 self.lid_covered = closed;
+                self.lid_title_started = None;
                 // Animations are always on (Siham 2026-11-15).
                 if now { self.lid_t = if closed { 1.0 } else { 0.0 }; }
                 if self.game.is_some() { return; }
@@ -5067,9 +5118,18 @@ impl Engine {
                     }
                     return;
                 }
+                if matches!(self.overlay, ShelfOverlay::Shelves { .. }) && matches!(code, 104 | 105) {
+                    self.shelves_trigger(code, pressed);
+                    return;
+                }
+                if matches!(self.overlay, ShelfOverlay::Shelves { .. }) && !pressed && matches!(code, 21 | 22) {
+                    self.shelves_release(code);
+                    return;
+                }
                 if self.overlay != ShelfOverlay::None {
                     if pressed {
                         match self.overlay {
+                            ShelfOverlay::Shelves { .. } => self.shelves_key(code),
                             ShelfOverlay::Menu { row } => match code {
                                 19 | 20 | 102 | 103 => {
                                     self.overlay = ShelfOverlay::Menu { row: move_menu_row(row, code, 6, self.menu_repeat_dispatch) };
@@ -5423,6 +5483,12 @@ impl Engine {
                             }
                             return;
                         }
+                        97 if !self.inserted && self.progress <= 0.0
+                            && self.triggers.hold.is_none() && self.triggers.ejecting.is_none()
+                            && !self.lid_covered && self.lid_t <= 0.0 => {
+                            self.open_shelves();
+                            return;
+                        }
                         97 => {
                             if self.inserted && self.progress > 0.0 {
                                 self.eject_sound_armed = true;
@@ -5724,6 +5790,26 @@ impl Engine {
                 priority.push((sid,shelf.index));
             }
         }
+        // The shelves page shows each system's chosen cart (above) with the
+        // one before and after it, and the first three of Recents and
+        // Favorites, fanned.
+        if matches!(self.overlay, ShelfOverlay::Shelves { .. }) {
+            // GBA Video too: its rack follows Recents and Favorites.
+            for (sid,shelf) in self.shelves.iter().enumerate() {
+                if sid == RECENTS_RACK || sid == FAVORITES_RACK { continue; }
+                let len=shelf.carts.len();
+                if len < 2 { continue; }
+                for index in [(shelf.index+len-1)%len,(shelf.index+1)%len] {
+                    if !priority.contains(&(sid,index)) { priority.push((sid,index)); }
+                }
+            }
+            for sid in [RECENTS_RACK,FAVORITES_RACK] {
+                let len=self.shelves.get(sid).map_or(0,|shelf| shelf.carts.len());
+                for index in 0..len.min(3) {
+                    if !priority.contains(&(sid,index)) { priority.push((sid,index)); }
+                }
+            }
+        }
         if quiet {
             // Fill the 160-entry LRU while idle, not while the D-pad is
             // moving. Active system first; other systems around their focus.
@@ -5939,6 +6025,19 @@ impl Engine {
             .map_or(Platform::Gba, |cart| cart.platform)
     }
 
+    /// Whether Integer and Original Ratio are the same picture for the
+    /// game as it is now: a home console by its own frame and shape (a
+    /// title screen, a PAL game or a 320-wide one can differ from its
+    /// system's usual picture), a handheld by its system's.
+    fn game_integer_is_ratio(&self) -> bool {
+        let (platform, panel) = (self.current_cart_platform(), panel_size());
+        match self.game.as_ref() {
+            Some(session) if video_mode::home_console(platform) => video_mode::home_same_picture(platform,
+                session.display_aspect(), session.frame_size(), self.game_square(), panel),
+            _ => video_mode::integer_is_ratio(platform, panel),
+        }
+    }
+
     fn apply_video_geometry(&mut self) {
         let platform = self.current_cart_platform();
         if !platform.handheld() {
@@ -6016,7 +6115,7 @@ impl Engine {
             .unwrap_or_else(|| self.settings.blending_for(platform))
     }
     fn game_lcd_effect(&self, platform: Platform) -> crate::settings::LcdEffect {
-        if !matches!(platform, Platform::Gba | Platform::Gbc | Platform::Gb) || self.playing_video() {
+        if Settings::lcd_effect_key(platform).is_none() || self.playing_video() {
             return crate::settings::LcdEffect::Off;
         }
         self.game_emulation.and_then(|p| p.lcd_effect_override)
@@ -6086,9 +6185,9 @@ impl Engine {
     /// One screen size up (Integer -> Original Ratio -> Stretch) or down,
     /// with its banner. GBA on the KONKR has a single size.
     fn step_screen_size(&mut self, bigger: bool) {
-        let (platform, panel) = (self.current_cart_platform(), panel_size());
-        let mode = if bigger { self.video_mode.bigger_on(platform, panel) }
-            else { self.video_mode.smaller_on(platform, panel) };
+        let same = self.game_integer_is_ratio();
+        let mode = if bigger { self.video_mode.bigger_when(same) }
+            else { self.video_mode.smaller_when(same) };
         if mode == self.video_mode { return; }
         self.set_video_mode(mode);
         if self.video_mode != mode { return; }
@@ -6120,7 +6219,7 @@ impl Engine {
         self.game.as_ref().map_or((4.0 / 3.0, (256, 224)), |session| (
             video_mode::home_aspect(platform, session.display_aspect(), session.frame_size(),
                 self.game_square()),
-            session.frame_size()))
+            video_mode::logical_frame(platform, session.frame_size())))
     }
 
     /// Native 3:2 KONKR: GBA fills the panel and has no overlay. GB/GBC
@@ -6361,6 +6460,7 @@ impl Engine {
         // Bezel, even where the WonderSwan's overlay fits only its upright
         // games (Siham 2026-11-22).
         Self::palette_after_shader(&mut rows, &mut keys);
+        Self::lcd_after_shader(platform, &mut rows, &mut keys);
         Self::blending_before_shake(&mut rows, &mut keys);
         rows.push(125);
         keys.push(usize::MAX);
@@ -6399,6 +6499,7 @@ impl Engine {
                 }
             }
             Self::palette_after_shader(&mut rows, &mut keys);
+            Self::lcd_after_shader(platform, &mut rows, &mut keys);
             Self::blending_before_shake(&mut rows, &mut keys);
         }
         (rows, keys)
@@ -6418,7 +6519,8 @@ impl Engine {
     /// overlay (its own shape: a WonderSwan game is wide or upright).
     fn game_has_bezel_room(&self) -> bool {
         let (aspect, frame) = self.home_shape();
-        video_mode::own_place(aspect, frame, VideoMode::Aspect, panel_size()).is_some()
+        video_mode::own_place(aspect, frame, VideoMode::Aspect, panel_size(),
+            video_mode::crop_limit(self.current_cart_platform())).is_some()
     }
     /// WS Palette straight after the Shader row (Siham 2026-11-22); the
     /// Pokemon mini's PK Palette already follows its LCD Filter.
@@ -6427,6 +6529,22 @@ impl Engine {
         let Some(shader) = keys.iter().position(|&k| k == SHADER_WS_KEY) else { return };
         let (row, key) = (rows.remove(from), keys.remove(from));
         let to = if from < shader { shader } else { shader + 1 };
+        rows.insert(to, row); keys.insert(to, key);
+    }
+    /// The new LCD handhelds put LCD Effect directly after Shader, before
+    /// the optional bezel and (on WonderSwan) the palette. Keep the original
+    /// Game Boy and Mega Drive layouts unchanged.
+    fn lcd_after_shader(platform: Platform, rows: &mut Vec<usize>, keys: &mut Vec<usize>) {
+        let shader = match platform {
+            Platform::Gg => SHADER_GG_KEY, Platform::Ngp => SHADER_NGP_KEY,
+            Platform::Ws => SHADER_WS_KEY, Platform::Lynx => SHADER_LYNX_KEY,
+            _ => return,
+        };
+        let Some(lcd) = Settings::lcd_effect_key(platform) else { return };
+        let Some(from) = keys.iter().position(|&k| k == lcd) else { return };
+        let Some(at) = keys.iter().position(|&k| k == shader) else { return };
+        let (row, key) = (rows.remove(from), keys.remove(from));
+        let to = if from < at { at } else { at + 1 };
         rows.insert(to, row); keys.insert(to, key);
     }
     fn system_rows(platform: Platform)-> &'static [usize] {
@@ -6709,9 +6827,9 @@ impl Engine {
 
     fn change_game_screen_or_gameplay(&mut self, key: usize, right: bool) {
         if key == SCREEN_SIZE_KEY {
-            let (platform, panel) = (self.current_cart_platform(), panel_size());
-            let mode = if right { self.video_mode.bigger_on(platform, panel) }
-                else { self.video_mode.smaller_on(platform, panel) };
+            let same = self.game_integer_is_ratio();
+            let mode = if right { self.video_mode.bigger_when(same) }
+                else { self.video_mode.smaller_when(same) };
             if mode != self.video_mode {
                 self.set_video_mode(mode);
                 self.hud.toast(self.video_mode_toast(), self.born.elapsed().as_millis() as u64);
@@ -6732,7 +6850,8 @@ impl Engine {
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
         if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70
-            |crate::settings::SHADER_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY)) {
+            |crate::settings::SHADER_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY)
+            && Settings::lcd_effect_platform(key) != Some(platform)) {
             set_message("Not available during Multiplayer.".into());
             return;
         }
@@ -6771,7 +6890,7 @@ impl Engine {
         }
         if matches!(key,26|27) {self.tell_hidden_bezel();}
         let view=self.game_settings();
-        if matches!(key,0|1|3|21|47|48|49|66..=68|70) || matches!(key,
+        if Settings::lcd_effect_platform(key).is_some() || matches!(key,0|1|3|21|47|48|49|70) || matches!(key,
             crate::settings::SHADER_SMS_KEY|crate::settings::SHADER_GG_KEY
             |crate::settings::SHADER_NGP_KEY|crate::settings::SHADER_WS_KEY
             |crate::settings::SHADER_LYNX_KEY|crate::settings::SHADER_POKEMINI_KEY) {
@@ -7001,6 +7120,7 @@ impl Engine {
             } else {
                 self.gpu.create_texture(slot_ui::native_w(), slot_ui::native_h(), &rgba)
             });
+            if let Some(tex) = self.wallpaper_texture { self.gpu.pack_static_recovery(tex); }
         }
         // None deliberately leaves the texture allocated for quick reactivation
         // but never draws it, avoiding repeated GL allocations on toggling.
@@ -7349,6 +7469,10 @@ impl Engine {
                 }
                 self.persist_settings();
             }
+            177 => {
+                self.settings.shelves_grid=!self.settings.shelves_grid;
+                self.persist_settings();
+            }
             87 => {
                 self.settings.show_titles=!self.settings.show_titles;
                 self.selected_title_name.clear();
@@ -7641,6 +7765,9 @@ impl Engine {
         let line = |engine: &mut Self, slot: usize, text: String, y: f32, scale: f32,
                         lit: bool, a: f32, commands: &mut Vec<Draw>| -> f32 {
             let key = format!("{text}/{lit}");
+            if slot == 4 && engine.lid_clock_faces[slot].0 != key {
+                engine.lid_title_started = None;
+            }
             let Some((tex, w, h)) = engine.lid_clock_face(slot, &key,
                 || slot_ui::quick_value_face_within(&text, lit, 1400)) else { return 0.0 };
             let (w, h) = (w * scale, h * scale);
@@ -7648,9 +7775,16 @@ impl Engine {
             if w <= room {
                 commands.push(Draw::Tex { x: cx - w / 2.0, y, w, h, tex, alpha: a });
             } else {
+                let travel = w - room;
+                let shift = if slot == 4 && engine.lid_covered && a >= 1.0 {
+                    let since = engine.lid_title_started.get_or_insert_with(Instant::now);
+                    finite_title_scroll(travel, since.elapsed().as_secs_f32()).0
+                } else { 0.0 };
                 commands.push(Draw::Span(Some(slot_gfx::Span {
-                    left: 24.0, right: width - 24.0, feather_left: 0.01, feather_right: 24.0 })));
-                commands.push(Draw::Tex { x: 24.0, y, w, h, tex, alpha: a });
+                    left: 24.0, right: width - 24.0,
+                    feather_left: if shift > 0.5 { 24.0 } else { 0.01 },
+                    feather_right: if travel - shift > 0.5 { 24.0 } else { 0.01 } })));
+                commands.push(Draw::Tex { x: 24.0 - shift, y, w, h, tex, alpha: a });
                 commands.push(Draw::Span(None));
             }
             h
@@ -7903,7 +8037,7 @@ impl Engine {
         // Clock formatting can change independently of Android's next
         // status event. Force one re-render of the existing clock value.
         if key == 28 { self.last_system_status_rev = 0; }
-        if (66..=68).contains(&key) && self.game.is_some() { self.apply_game_look(); }
+        if Settings::lcd_effect_platform(key).is_some() && self.game.is_some() { self.apply_game_look(); }
         if key == 5 {
             FF_AUDIO_ENABLED.store(self.settings.ff_sound, Ordering::Release);
             AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -7940,7 +8074,8 @@ impl Engine {
         let video = match self.overlay {
             ShelfOverlay::ScreenSystemSettings { platform, .. } =>
                 self.system_video_modes[platform as usize],
-            _ => self.video_mode,
+            // Original Ratio shown as Integer while they are the same picture.
+            _ => self.video_mode.on_when(self.game_integer_is_ratio()),
         };
         setting_face(key, &self.settings, &scoped, &profile,
             self.current_cart_platform(), video, &self.default_cores)
@@ -8153,15 +8288,31 @@ impl Engine {
             _ => now,
         };
         self.title_marquee.set(Some((key, since, now)));
-        const HOLD: f32 = 1.2;
-        const PACE: f32 = 40.0;
-        const PASSES: f32 = 3.0;
-        let run = travel / PACE;
-        let pass = HOLD + run + HOLD;
-        let t = now.duration_since(since).as_secs_f32();
-        if t >= PASSES * pass { return (0.0, false); }
-        (((t % pass - HOLD) / run).clamp(0.0, 1.0) * travel, true)
+        finite_title_scroll(travel, now.duration_since(since).as_secs_f32())
     }
+}
+
+/// Same finite marquee for the carousel and the closed Rotate cover.
+fn finite_title_scroll(travel: f32, t: f32) -> (f32, bool) {
+    if travel <= 0.5 { return (0.0, false); }
+    const HOLD: f32 = 1.2;
+    const PACE: f32 = 40.0;
+    const PASSES: f32 = 3.0;
+    let run = travel / PACE;
+    let pass = HOLD + run + HOLD;
+    if t >= PASSES * pass { return (0.0, false); }
+    (((t % pass - HOLD) / run).clamp(0.0, 1.0) * travel, true)
+}
+
+#[cfg(test)]
+#[test]
+fn finite_title_scroll_holds_moves_and_stops_after_three_passes() {
+    assert_eq!(finite_title_scroll(0.0, 2.0), (0.0, false));
+    assert_eq!(finite_title_scroll(80.0, 1.0), (0.0, true));
+    assert!((finite_title_scroll(80.0, 2.2).0 - 40.0).abs() < 0.01);
+    assert_eq!(finite_title_scroll(80.0, 3.5), (80.0, true));
+    assert_eq!(finite_title_scroll(80.0, 4.5), (0.0, true));
+    assert_eq!(finite_title_scroll(80.0, 13.3), (0.0, false));
 }
 
 /// How far a long text has scrolled, kept in `cell` (see marquee_offset).
@@ -8300,7 +8451,8 @@ impl Engine {
     /// A 3.0 system's option the paused game shows at once, redrawn.
     fn previewed_extra(key: usize) -> bool {
         use crate::settings::*;
-        matches!(key, SPRITE_LIMIT_SMS_KEY | SPRITE_LIMIT_GG_KEY | LEFT_BAR_SMS_KEY | LEFT_BAR_NES_KEY
+        Settings::lcd_effect_platform(key).is_some()
+            || matches!(key, SPRITE_LIMIT_SMS_KEY | SPRITE_LIMIT_GG_KEY | LEFT_BAR_SMS_KEY | LEFT_BAR_NES_KEY
             | WS_PALETTE_KEY
             | POKEMINI_PALETTE_KEY | POKEMINI_FILTER_KEY | POKEMINI_LCD_MODE_KEY)
             || (SHADER_SMS_KEY..=SHADER_GG_KEY).contains(&key)
@@ -8651,6 +8803,7 @@ impl Engine {
     }
 
     fn draw_overlay(&self, out: &mut Vec<Draw>) {
+        if self.draw_shelves_overlay(out) { return; }
         // Light and Original: the pages' text turns dark on their light grounds.
         let ink = self.menu_ink();
         if ink.is_some() { out.push(Draw::Ink(ink)); }
@@ -8687,7 +8840,7 @@ impl Engine {
 
     fn draw_overlay_page(&self, out: &mut Vec<Draw>) {
         match self.overlay {
-            ShelfOverlay::None => {}
+            ShelfOverlay::None | ShelfOverlay::Shelves { .. } => {}
             ShelfOverlay::Menu { row } => {
                 let items = [1, 2, 3, 48, 25, 31];
                 self.draw_original_style_menu(0, &items, row, out);
@@ -9096,12 +9249,12 @@ impl Engine {
         polaroids.set_faces(faces);
         let hints=[("B","Back"),("Y","Delete"),("A","Load"),("X","Undo")];
         let hint_faces=hints.map(|(key,label)| {
-            let face=hint_face(key,label);
+            let face=hint_face(crate::controls::menu_keycap(key, self.controls.menu_swap_ab),label);
             self.gpu.create_face(&face)
         });
         polaroids.set_hint_faces(hint_faces.to_vec());
         let confirm_faces=slot_ui::CONFIRM_LEGEND.map(|(key,label)| {
-            let face=hint_face(key,label);
+            let face=hint_face(crate::controls::menu_keycap(key, self.controls.menu_swap_ab),label);
             self.gpu.create_face(&face)
         });
         polaroids.set_confirm_faces(confirm_faces.to_vec());
@@ -9138,8 +9291,10 @@ impl Engine {
         self.tick_menu_repeat();
         // A game on screen, no menu or polaroid over it: Android keeps the
         // screen on (MainActivity.keepScreenOn).
-        GAME_UNPAUSED.store(self.game.is_some() && matches!(self.overlay, ShelfOverlay::None)
-            && self.polaroids.is_none() && !self.exiting_screen, Ordering::Release);
+        let unpaused = self.game.is_some() && matches!(self.overlay, ShelfOverlay::None)
+            && self.polaroids.is_none() && !self.exiting_screen && !self.lid_covered;
+        GAME_UNPAUSED.store(unpaused, Ordering::Release);
+        if !unpaused || self.rewind_held { clear_rumble(); }
         let (dim, sleep) = self.settings.rotate_delays();
         ROTATE_DELAYS.store(u32::from(dim) << 16 | u32::from(sleep)
             | u32::from(self.settings.rotate_shelf_cover == 3) << 30
@@ -9307,6 +9462,7 @@ impl Engine {
         }
         self.settle_studio_flight();
         self.touch_tick();
+        self.shelves_glide();
         if let Some(at) = self.picker_auto_seat {
             let now = self.born.elapsed().as_millis() as u64;
             if !matches!(self.overlay, ShelfOverlay::Core) || self.picker.is_none_or(|p| p.closing()) {
@@ -9535,9 +9691,20 @@ impl Engine {
                         .map_or("", |cart| cart.stem.as_str());
                     let platform = self.current_cart_platform();
                     let square = self.game_square();
+                    // Resolve the automatic mode once from the core's initial
+                    // geometry. Later frame changes update fit, not the mode.
+                    let frame = self.game.as_ref().map_or(platform.picture(), |session|
+                        video_mode::launch_frame(platform, session.frame_size(), square, session.fps < 55.0));
                     self.video_mode = PATHS.lock().unwrap_or_else(|e| e.into_inner())
-                        .as_ref().map_or(video_mode::default_mode(platform, panel_size()),
-                            |(root, _)| video_mode::video_mode_for(root, name, platform, panel_size(), square));
+                        .as_ref().map_or_else(
+                            || video_mode::game_default_mode(platform, panel_size(), square, frame)
+                                .at_launch(platform, panel_size()),
+                            |(root, _)| video_mode::video_mode_for(root, name, platform, panel_size(), square, frame));
+                    let source = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+                        .map_or("auto", |(root, _)| video_mode::video_mode_source(root, name, platform));
+                    let reported = self.game.as_ref().map_or((0, 0), GameSession::frame_size);
+                    crate::log_info(&format!("Screen size {:?} ({source}) for {platform:?}: core {}x{}, chosen for {}x{}, square {square}, panel {}x{}",
+                        self.video_mode, reported.0, reported.1, frame.0, frame.1, panel_size().0, panel_size().1));
                     self.apply_video_geometry();
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
@@ -9907,7 +10074,7 @@ impl Engine {
                 self.rewind_held = false;
                 self.ff_held = false;
                 self.ff_latched = false;
-                RUMBLE_STRENGTH.store(0, Ordering::Release);
+                clear_rumble();
                 PLAYING.store(false, Ordering::Release);
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
                 self.overlay = ShelfOverlay::GameMenu { row: 0 };
@@ -9945,12 +10112,11 @@ impl Engine {
                         session.display_aspect(), session.frame_size(), square));
                 }
                 frame_phases.gpu_upload_us = upload_started.elapsed().as_micros() as u64;
-                RUMBLE_STRENGTH.store(
-                    if live.rumble && !self.rewind_held {
-                        i32::from(session.rumble_strength())
-                    } else { 0 },
-                    Ordering::Release,
-                );
+                let peak = session.take_rumble_peak();
+                if live.rumble && !self.rewind_held && GAME_UNPAUSED.load(Ordering::Acquire) {
+                    RUMBLE_PEAK.fetch_max(scale_rumble(peak, live.rumble_level), Ordering::AcqRel);
+                    RUMBLE_STRENGTH.store(scale_rumble(session.rumble_strength(), live.rumble_level), Ordering::Release);
+                } else { clear_rumble(); }
             }
             // CPU wall time issuing the GL draw work. This is NOT asynchronous
             // GPU execution and excludes Android's later eglSwapBuffers.
@@ -10046,6 +10212,7 @@ impl Engine {
         let upload_at = Instant::now();
         self.relabel_one();
         self.prepare_visible();
+        self.prepare_shelves_grid();
         crate::frame_watch::part(crate::frame_watch::PART_UPLOAD, upload_at.elapsed());
         self.start_waiting_picker();
         // Only warm a settled carousel selection. Actual ROM I/O takes place
@@ -10343,6 +10510,7 @@ impl Engine {
         // A first run shows its sentence alone: no clock, battery or icons
         // until the first scan starts (Siham 2026-11-09).
         let first_run = self.shelf_status == 0 && self.shelves.iter().all(|s| s.carts.is_empty());
+        // Not over the shelves page: its tiles take the screen (3.0.1-beta12).
         let chrome = self.progress == 0.0 && matches!(self.overlay, ShelfOverlay::None) && !first_run;
         let mut indicator_flags = 0;
         if chrome {
@@ -11010,6 +11178,7 @@ mod cart_library;
 mod romm;
 mod carousel_delete;
 mod touch;
+mod shelves_grid;
 use carousel_delete::VIDEO_RACK;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) use jni_exports::exercise_session_graphics_recovery;
@@ -11036,6 +11205,41 @@ mod texture_pool_tests {
 #[cfg(test)]
 mod settings_value_tests {
     use super::*;
+
+    #[test]
+    fn lcd_effect_follows_shader_on_every_new_lcd_handheld_and_panel() {
+        for (platform, shader) in [(Platform::Gg, SHADER_GG_KEY), (Platform::Ngp, SHADER_NGP_KEY),
+            (Platform::Ws, SHADER_WS_KEY), (Platform::Lynx, SHADER_LYNX_KEY)] {
+            for panel in PANELS {
+                for in_game in [false, true] {
+                    let (base_rows, base_keys) = if in_game {
+                        (Engine::screen_rows_on(platform, panel), Engine::screen_keys_on(platform, panel))
+                    } else {
+                        (Engine::system_rows_on(platform, panel), Engine::system_keys_on(platform, panel))
+                    };
+                    let (mut rows, mut keys) = (base_rows.to_vec(), base_keys.to_vec());
+                    let (look_rows, look_keys) = Engine::look_rows(platform);
+                    rows.extend(look_rows); keys.extend(look_keys);
+                    let (extra_rows, extra_keys) = Engine::extra_rows(platform, in_game);
+                    rows.extend(extra_rows); keys.extend(extra_keys);
+                    Engine::palette_after_shader(&mut rows, &mut keys);
+                    Engine::lcd_after_shader(platform, &mut rows, &mut keys);
+                    assert_eq!(rows.len(), keys.len());
+                    let at = keys.iter().position(|&k| k == shader).unwrap() + 1;
+                    let lcd = Settings::lcd_effect_key(platform).unwrap();
+                    assert_eq!(keys[at], lcd, "{platform:?} {panel:?}");
+                    assert_eq!(MENU_TEXT[rows[at]], "LCD Effect");
+                    assert_eq!(keys.iter().filter(|&&k| k == lcd).count(), 1);
+                    if platform == Platform::Ws {
+                        assert_eq!(keys[at + 1], crate::settings::WS_PALETTE_KEY);
+                    }
+                }
+            }
+        }
+        for platform in [Platform::Sms, Platform::Nes, Platform::Snes, Platform::Md, Platform::Pokemini] {
+            assert!(!Engine::look_rows(platform).1.iter().any(|&k| Settings::lcd_effect_platform(k).is_some()));
+        }
+    }
 
     #[test]
     fn pokemini_frame_blending_comes_second_to_last() {
@@ -11168,6 +11372,11 @@ mod settings_value_tests {
                 for key in screen.1 {
                     keys.push((format!("{platform:?} game menu > Screen on {panel:?}"), *key, platform));
                 }
+            }
+            let (look_rows, look_keys) = Engine::look_rows(platform);
+            assert_eq!(look_rows.len(), look_keys.len());
+            for key in look_keys {
+                keys.push((format!("{platform:?} LCD Effect / Frame Blending"), key, platform));
             }
             // The 3.0 systems' own options, each with a label and a value.
             for in_game in [false, true] {
