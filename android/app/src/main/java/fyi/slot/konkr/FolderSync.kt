@@ -52,9 +52,9 @@ internal object FolderSync {
             SAVES -> path.startsWith("Saves/") || path.startsWith("States/")
         }
         fun descends(path: String): Boolean = when (this) {
-            ALL -> true
-            ARTWORK -> path.substringBefore('/') in setOf("Labels", "ArtNames", "ArtworkHistory", "home-real-labels")
-            SAVES -> path.substringBefore('/') in setOf("Saves", "States")
+            ALL -> path.substringBefore('/') in WALKED_DIRS
+            ARTWORK -> path.substringBefore('/') in ARTWORK_DIRS
+            SAVES -> path.substringBefore('/') in SAVE_DIRS
         }
     }
 
@@ -366,6 +366,9 @@ internal object FolderSync {
     /** Folders that travel whole. */
     private val TRAVELLING_DIRS = listOf("Saves", "States", "Labels", "Studio", "GameEmulation",
         "Cheats", "CustomCheats", "Wallpapers", "ArtNames")
+    private val ARTWORK_DIRS = setOf("Labels", "ArtNames", "ArtworkHistory", "home-real-labels")
+    private val SAVE_DIRS = setOf("Saves", "States")
+    private val WALKED_DIRS = TRAVELLING_DIRS.toSet() + ARTWORK_DIRS + setOf("Config")
     /** Single files that travel. */
     private val TRAVELLING_FILES = setOf("slot-konkr-settings.json", "slot-konkr-controls.json",
         "konkr-favorites.json", "konkr-recents.json", "Config/cart_shell.ini",

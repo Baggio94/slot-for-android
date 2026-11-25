@@ -334,8 +334,10 @@ class MainActivity : Activity() {
         taskIndicators.library.pillWords?.let {
             tasks.add(TaskPill.Task(TaskPill.SCAN, it, taskIndicators.library.pillProgress))
         }
-        taskIndicators.labels.pillWords?.let {
-            tasks.add(TaskPill.Task(TaskPill.LABELS, it, taskIndicators.labels.pillProgress))
+        val labelWords = taskIndicators.labels.pillWords
+        if (labelWords != null) tasks.add(TaskPill.Task(TaskPill.LABELS, labelWords, taskIndicators.labels.pillProgress))
+        else if (manualArtworkRefresh.get() && autoLabelsRunning.get()) {
+            tasks.add(TaskPill.Task(TaskPill.LABELS, "LABELS", -1f))
         }
         TaskPill.spec(tasks, nativeIsPlaying())?.let { nativeSetTaskPill(it) }
     }
@@ -379,6 +381,10 @@ class MainActivity : Activity() {
     private val autoLabelsRestartRequested = AtomicBoolean(false)
     private val artworkRefreshRequested = AtomicBoolean(false)
     private val manualArtworkRefresh = AtomicBoolean(false)
+    private val manualRefreshSerial = AtomicInteger(0)
+    private val manualBiosFailed = AtomicBoolean(false)
+    private val manualCatalogueFailed = AtomicBoolean(false)
+    private val manualOfflineNotice = AtomicBoolean(false)
     private val autoLabelsNeedSync = AtomicBoolean(false)
     /** Labels saved before this run of passes, for its "N LABELS ADDED". */
     @Volatile private var autoLabelsChainBase = -1
@@ -3319,6 +3325,10 @@ class MainActivity : Activity() {
                     val caps = manager?.getNetworkCapabilities(manager.activeNetwork)
                     if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) {
                         Log.i("SlotAutoLabels", "Deferred: Android default Internet network is not validated")
+                        if (manualArtworkRefresh.get() && manualOfflineNotice.compareAndSet(false, true)) uiHandler.post {
+                            if (!isDestroyed && resumed) SlotToast.makeText(this,
+                                "ROM library scanned. Labels will resume when online.", Toast.LENGTH_SHORT).show()
+                        }
                         return@execute
                     }
                     // Exactly the production 1.2.0 callback: enqueue a
@@ -3336,6 +3346,9 @@ class MainActivity : Activity() {
                             return@execute
                         }
                         ArtNames.forget()
+                        val required = shelves.toMutableSet()
+                        if (Systems.GB in required || Systems.GBC in required) { required.add(Systems.GB); required.add(Systems.GBC) }
+                        manualCatalogueFailed.set(!SlotArtSet.hasFreshIndexes(applicationContext, required.toList()))
                     }
                     val savedLabel: (String) -> Unit = { uri ->
                         autoLabelUpdates.add(uri)
@@ -3421,18 +3434,28 @@ class MainActivity : Activity() {
                     }
                     if (finished && !isDestroyed) {
                         val manual = manualArtworkRefresh.getAndSet(false)
+                        val serial = manualRefreshSerial.get()
                         val dirty = autoLabelsNeedSync.getAndSet(false)
                         val complete: (Boolean) -> Unit = { ok ->
                             if (!ok) autoLabelsNeedSync.set(true)
-                            if (manual) uiHandler.post {
-                                if (!isDestroyed && resumed && !manualArtworkRefresh.get()) {
-                                    val errors = report.networkError + report.otherError
-                                    val message = if (!ok) "Library scanned. Folder sync pending."
-                                        else if (errors > 0) "Library scanned. Some labels could not be checked."
-                                        else "Library is up to date."
-                                    SlotToast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                            if (manual && !isDestroyed) try {
+                                // BIOS reconciliation was queued before the scan.
+                                gameLoader.execute {
+                                    uiHandler.post {
+                                        if (!isDestroyed && resumed && !manualArtworkRefresh.get() &&
+                                            manualRefreshSerial.get() == serial) {
+                                            val errors = report.networkError + report.otherError
+                                            val message = when {
+                                                !ok -> "Library scanned. Folder sync pending."
+                                                manualBiosFailed.get() -> "Library scanned. BIOS folder unavailable."
+                                                manualCatalogueFailed.get() || errors > 0 -> "Library scanned. Some labels could not be checked."
+                                                else -> "Library is up to date."
+                                            }
+                                            SlotToast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
                                 }
-                            }
+                            } catch (_: java.util.concurrent.RejectedExecutionException) { }
                         }
                         if (dirty) slotFolder.syncArtwork(pull = autoLabelsMayRun(), finished = complete)
                         else complete(true)
@@ -3795,11 +3818,18 @@ class MainActivity : Activity() {
             openRomFolderPicker()
             return
         }
+        manualRefreshSerial.incrementAndGet()
+        manualBiosFailed.set(false)
+        manualCatalogueFailed.set(false)
+        manualOfflineNotice.set(false)
         getSharedPreferences(PREFS, MODE_PRIVATE).getString(BIOS_ROOT, null)?.let { savedBios ->
             val bios = Uri.parse(savedBios)
             if (contentResolver.persistedUriPermissions.any { it.uri == bios && it.isReadPermission }) {
                 importBiosFolder(bios, persistSelection = false, quietRetries = 0, manualRefresh = true)
-            } else SlotLog.w(TAG, "BIOS folder access expired; previous BIOS kept")
+            } else {
+                manualBiosFailed.set(true)
+                SlotLog.w(TAG, "BIOS folder access expired; previous BIOS kept")
+            }
         }
         scanFolder(uri, refreshArtwork = true)
     }
@@ -3872,6 +3902,7 @@ class MainActivity : Activity() {
         // nothing is read, no retries filling the log.
         if (!persistSelection && !SlotFolder.volumeMounted(this, SlotFolder.volumeOf(uri))) {
             SlotLog.i(TAG, "BIOS folder's card is out: the copy already in slot. is used")
+            if (manualRefresh) manualBiosFailed.set(true)
             return
         }
         gameLoader.execute {
@@ -3892,6 +3923,7 @@ class MainActivity : Activity() {
                 }
             } catch (error: Exception) {
                 SlotLog.e(TAG, "BIOS folder import failed", error)
+                if (manualRefresh) manualBiosFailed.set(true)
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     if (manualRefresh) {

@@ -518,6 +518,7 @@ internal object HomeCartLabels {
         loadShells(context)
         val rom = games(context).firstOrNull { it.uri == uri } ?: return null to null
         val (whole, bare) = try { fingerprints(context, rom) } catch (_: Exception) { return null to null }
+        try { HomeFingerprintCache.flush(context) } catch (_: Exception) { }
         val crcs = listOfNotNull(whole, bare).distinct()
         var real: ByteArray? = try {
             ownLabel(context, rom, crcs)?.let { (media, bytes) -> labelPng(bytes, media, rom) }

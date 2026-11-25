@@ -893,7 +893,7 @@ internal class SlotFolder(private val activity: MainActivity) {
                 for (child in children(doc)) {
                     val path = prefix + child.name
                     if (child.dir && path in FolderSync.UNWALKED_DIRS) { staleIds.add(child.id); continue }
-                    if (child.dir) { dirs[path] = child.id; if (scope.descends(path)) walk(child.id, "$path/") }
+                    if (child.dir) { dirs[path] = child.id; if (scope == FolderSync.Scope.ALL || scope.descends(path)) walk(child.id, "$path/") }
                     else if (FolderSync.stale(path)) staleIds.add(child.id)
                     else if (!child.name.endsWith(".slot-tmp")) {
                         // Every file's id, slot.json's too: written again,
