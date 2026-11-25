@@ -142,6 +142,26 @@ impl Queue {
         }
     }
 
+    /// Move the active game's queued images ahead of the library backlog,
+    /// including images that were already queued by Smart Cache. Keep retries
+    /// and deduplication intact; never reset the network backoff.
+    pub fn prioritize(&mut self, game: &Game) {
+        self.enqueue(game);
+        let mut wanted: BTreeSet<String> = game.achievements.iter()
+            .filter(|a| a.flags == 3).map(|a| a.badge.clone()).collect();
+        let icon = game_icon_name(&game.image_icon);
+        if let Some(name) = &icon { wanted.insert(name.clone()); }
+        let mut front = VecDeque::new();
+        let mut rest = VecDeque::new();
+        while let Some(name) = self.pending.pop_front() {
+            if icon.as_ref() == Some(&name) { front.push_front(name); }
+            else if wanted.contains(&name) { front.push_back(name); }
+            else { rest.push_back(name); }
+        }
+        front.append(&mut rest);
+        self.pending = front;
+    }
+
     pub fn scan(&mut self) {
         for entry in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
             let path = entry.path();

@@ -5,6 +5,7 @@ on:
     paths:
       - 'android/**'
       - 'crates/slot-android/**'
+      - 'crates/slot-achievements/**'
       - 'crates/slot-gfx/**'
       - '.github/workflows/checks.yml'
       - 'tools/**'

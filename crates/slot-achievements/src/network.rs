@@ -332,8 +332,9 @@ impl PrefetchBudget {
         Ok(true)
     }
 
-    fn delay_seconds(&self, at: u64) -> u64 {
-        self.attempts.first().map_or(30, |t| t.saturating_add(Self::WINDOW).saturating_sub(at).max(1))
+    fn exhausted(&self, at: u64) -> bool {
+        self.attempts.iter().filter(|&&t| t <= at && at.saturating_sub(t) < Self::WINDOW)
+            .count() >= Self::LIMIT
     }
 }
 
@@ -440,6 +441,8 @@ pub(crate) fn run(
     let mut badges = crate::badges::Queue::new(&dir);
     let mut smart_queue: VecDeque<(String, u32)> = VecDeque::new();
     let mut queued_hashes: BTreeSet<String> = BTreeSet::new();
+    let mut smart_total = 0usize;
+    let mut quota_logged = false;
     let mut icon_refresh = IconRefreshJournal::load(&dir);
     let quota_file = dir.join("smart-prefetch-budget.json");
     let mut budget: PrefetchBudget = if quota_file.exists() {
@@ -469,8 +472,10 @@ pub(crate) fn run(
             {
                 continue;
             }
+            if smart_queue.is_empty() && !badges.pending() { smart_total = 0; }
             queued_hashes.insert(hash.clone());
             smart_queue.push_back((hash, console));
+            smart_total += 1;
         }
         match loads.recv_timeout(Duration::from_millis(200)) {
             Ok(mut load) => {
@@ -493,7 +498,7 @@ pub(crate) fn run(
                         let cache = dir.join(format!("{}.json", game.hash));
                         if let Ok((data, ids)) = storage::read::<(Game, BTreeSet<u32>)>(&cache) {
                             if same_console(game.console, data.console) {
-                                badges.enqueue(&data);
+                                badges.prioritize(&data);
                                 signal_prepared(&prepared, &wake, Prepared {
                                     generation: game.generation,
                                     hash: game.hash.clone(),
@@ -525,8 +530,8 @@ pub(crate) fn run(
         );
         status.progress.store(
             cache_progress(
-                library_total,
-                library.len(),
+                library_total.saturating_add(smart_total),
+                library.len().saturating_add(smart_queue.len()),
                 badges.pending(),
                 badges.percent(),
             )
@@ -640,8 +645,9 @@ pub(crate) fn run(
                         let ids = unlocked(&session)?;
                         storage::write(&dir.join(format!("{}.json", game.hash)), &(&data, &ids))
                             .map_err(|_| Failure::Invalid)?;
-                        badges.enqueue(&data);
-                        ping(&mut http, auth, &status, game, &data)?;
+                        badges.prioritize(&data);
+                        // A failed presence ping must not prevent a game
+                        // whose definitions and unlocks are ready from activating.
                         signal_prepared(&prepared, &wake, Prepared {
                             generation: game.generation,
                             hash: game.hash.clone(),
@@ -651,6 +657,10 @@ pub(crate) fn run(
                         game.ready = true;
                         game.online = true;
                         game.last_ping = Instant::now();
+                        let cached: (Game, BTreeSet<u32>) =
+                            storage::read(&dir.join(format!("{}.json", game.hash)))
+                                .map_err(|_| Failure::Invalid)?;
+                        ping(&mut http, auth, &status, game, &cached.0)?;
                     }
                 } else if game.ready && game.last_ping.elapsed() >= Duration::from_secs(120) {
                     let cached: (Game, BTreeSet<u32>) =
@@ -662,7 +672,16 @@ pub(crate) fn run(
             }
             // Prefer gameplay and pending unlocks over Smart Cache background work.
             // Preparing a hash uses gameid/patch/unlocks, never starts a session.
-            if active.is_none() {
+            // Only bulk metadata reservations obey the rolling quota. Do not
+            // turn that quota into a sleep for the whole network worker.
+            let quota_wait = !smart_queue.is_empty() && budget.exhausted(now());
+            if quota_wait != quota_logged {
+                crate::log(if quota_wait {
+                    "Smart Cache: 100-game/30-minute quota reached; gameplay and badges continue"
+                } else { "Smart Cache: bulk preparation resumed" });
+                quota_logged = quota_wait;
+            }
+            if active.is_none() && !quota_wait {
                 if let Some(hash) = smart_queue.front() {
                     let repair = icon_refresh.needs_refresh(&dir, &hash.0, hash.1, now());
                     if already_prepared(&dir, &hash.0, hash.1) && !repair {
@@ -692,8 +711,9 @@ pub(crate) fn run(
                                 // The next SAF pass may offer it again, rate limited.
                                 let failed = smart_queue.pop_front().unwrap();
                                 queued_hashes.remove(&failed.0);
-                                item_failed |= deferred_error.is_none();
-                                deferred_error = Some(error);
+                                // A single bad background ROM must not force
+                                // reauthentication or delay foreground requests.
+                                crate::log(&format!("Smart Cache: game preparation deferred ({error:?})"));
                             }
                         }
                     }
@@ -701,7 +721,7 @@ pub(crate) fn run(
             }
             // One ROM per pass, with a one-second gap. Prefetch uses `unlocks`, not
             // `startsession`, so preparing a library doesn't claim the user played it.
-            if let Some(path) = library.front() {
+            if let Some(path) = library.front().filter(|_| active.is_none()) {
                 if let Ok(hash) = crate::library::hash(&dir, path) {
                     match prefetch(&mut http, auth, &dir, &hash, 5) {
                         Ok(game) => {
@@ -738,8 +758,8 @@ pub(crate) fn run(
         );
         status.progress.store(
             cache_progress(
-                library_total,
-                library.len(),
+                library_total.saturating_add(smart_total),
+                library.len().saturating_add(smart_queue.len()),
                 badges.pending(),
                 badges.percent(),
             )
@@ -764,15 +784,9 @@ pub(crate) fn run(
                 }
                 delay = 30;
                 warned = false;
-                // Respect the persisted rolling 100-game/30-minute budget.
-                let limit_reached = !smart_queue.is_empty()
-                    && budget.attempts.iter()
-                        .filter(|at| now().saturating_sub(**at) < PrefetchBudget::WINDOW)
-                        .count() >= PrefetchBudget::LIMIT;
-                next_attempt = Instant::now()
-                    + Duration::from_secs(if limit_reached {
-                        budget.delay_seconds(now())
-                    } else { 1 });
+                // Keep the normal paced loop for awards, presence and badges.
+                // The quota is checked only at the bulk-preparation call site.
+                next_attempt = Instant::now() + Duration::from_secs(1);
             }
             Err(error) => {
                 match error {
