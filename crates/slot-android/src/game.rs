@@ -230,9 +230,11 @@ fn active_state_generation(root: &Path, id: &str, which: Core) -> Result<Option<
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Cannot read protected state generation: {e}")),
     };
-    if key.len() > 180 || !key.starts_with(&format!("{id}.{}.gen-", which.as_str()))
-        || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
-        || !key.ends_with(|c: char| c.is_ascii_digit()) {
+    let prefix = format!("{id}.{}.gen-", which.as_str());
+    let valid_nonce = key.strip_prefix(&prefix).is_some_and(|nonce|
+        !nonce.is_empty() && nonce.bytes().all(|b| b.is_ascii_digit()));
+    if key.len() > 180 || !valid_nonce
+        || !key.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')) {
         return Err("Protected state-generation journal is corrupt; refusing stale auto-state".into());
     }
     Ok(Some(key))
@@ -2661,6 +2663,29 @@ mod a13r3_generation_rejoin_tests {
             (b"slot-made".to_vec(), b"slot-png".to_vec()));
         assert!(staged.join("2026-10-31_09-30-00.rastate").is_file(), "kept for a later try");
         assert!(!staged.join("2026-10-31_09-00-00.rastate").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn protected_generations_round_trip_for_every_core() {
+        let root = fixture();
+        let id = "a371cbb437f277426a3303a7e7cd83e6f38f0f426ff3b1f827ecc11fa3e25742";
+        for core in Core::ALL {
+            let record = root.join(format!("{id}.{}.state-generation.active", core.as_str()));
+            let key = format!("{id}.{}.gen-1792007598729624196", core.as_str());
+            fs::write(&record, &key).unwrap();
+            assert_eq!(active_state_generation(&root, id, core).unwrap(), Some(key));
+            for invalid in [
+                format!("{id}.{}.gen-", core.as_str()),
+                format!("{id}.{}.gen-a1", core.as_str()),
+                format!("{id}.{}.gen-../1", core.as_str()),
+                format!("{id}.{}.gen-1\n", core.as_str()),
+                "another-game.mgba.gen-1".to_owned(),
+            ] {
+                fs::write(&record, invalid).unwrap();
+                assert!(active_state_generation(&root, id, core).is_err());
+            }
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

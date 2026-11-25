@@ -131,8 +131,36 @@ pub enum Fit {
     /// picture doesn't fit exactly, its edges cut. Hi-res frames (448
     /// lines and up) count lines double.
     Overscale(f32),
+    /// Select the next integer only when at most four logical pixels are
+    /// clipped per edge. The logical frame is independent of core upscaling.
+    SmartInteger(f32, (u32, u32)),
     /// The whole screen.
     Stretch,
+}
+
+/// Shared game/overlay geometry in output pixels. The aspect is the
+/// chosen display shape, while the logical frame measures crop in native dots.
+pub fn smart_integer_size(frame: (u32, u32), aspect: f32, out: (f32, f32)) -> (f32, f32) {
+    let (w, h) = (frame.0.max(1) as f32, frame.1.max(1) as f32);
+    let a = if aspect.is_finite() && aspect > 0.0 { aspect } else { w / h };
+    let (ow, oh) = (out.0.max(1.0), out.1.max(1.0));
+    let fit = (oh / h).min(ow / (h * a));
+    if fit < 1.0 {
+        // No positive integer fits; preserve the full frame rather than crop
+        // an arbitrarily large part of it.
+        return (h * fit * a, h * fit);
+    }
+    let lower = fit.floor();
+    let upper = fit.ceil();
+    let size = |k: f32| (h * k * a, h * k);
+    let (pw, ph) = size(upper);
+    let crop_x = (pw - ow).max(0.0) * w / (2.0 * pw);
+    let crop_y = (ph - oh).max(0.0) * h / (2.0 * ph);
+    if crop_x <= 4.0 + 1e-4 && crop_y <= 4.0 + 1e-4 {
+        (pw, ph)
+    } else {
+        size(lower)
+    }
 }
 
 /// The texture window that shows a `tex`-sized frame at `fit` on an
@@ -147,6 +175,7 @@ pub fn fit_window(fit: Fit, tex: (u32, u32), out: (f32, f32)) -> [f32; 4] {
             let a = picture(aspect);
             if oh * a <= ow { (oh * a, oh) } else { (ow, ow / a) }
         }
+        Fit::SmartInteger(aspect, frame) => smart_integer_size(frame, aspect, out),
         Fit::Overscale(aspect) => {
             let a = picture(aspect);
             let unit = if th >= 400.0 { th / 2.0 } else { th };
@@ -845,6 +874,20 @@ mod tests {
         // NES on a 720x720 square: x3, 768x720.
         let [_, _, w, h] = fit_window(Fit::Overscale(256.0 / 240.0), (256, 240), (720.0, 720.0));
         assert!((720.0 / w - 768.0).abs() < 1e-2 && (720.0 / h - 720.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn smart_integer_limits_native_crop_on_both_axes() {
+        let rpc = (1240.0, 1080.0);
+        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, rpc), (1280.0, 1120.0));
+        assert_eq!(smart_integer_size((144, 224), 9.0 / 14.0, rpc), (720.0, 1120.0));
+        assert_eq!(smart_integer_size((248, 224), 248.0 / 224.0, rpc), (1240.0, 1120.0));
+        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, (720.0, 720.0)), (512.0, 448.0));
+        assert_eq!(smart_integer_size((240, 160), 1.5, (960.0, 640.0)), (960.0, 640.0));
+        assert_eq!(smart_integer_size((160, 144), 10.0 / 9.0, rpc), (1120.0, 1008.0));
+        assert_eq!(smart_integer_size((256, 224), 8.0 / 7.0, (1239.0, 1080.0)), (1024.0, 896.0));
+        let fit = Fit::SmartInteger(8.0 / 7.0, (256, 224));
+        assert_eq!(fit_window(fit, (256, 224), rpc), fit_window(fit, (512, 448), rpc));
     }
 
     #[test]

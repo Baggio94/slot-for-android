@@ -1984,6 +1984,9 @@ impl Engine {
         // Upstream Slot delegates colour correction to libretro core options.
         // Disable the dev13 approximate GPU grade to avoid double correction.
         gpu.enable_context_recovery();
+        // Bind the palette to this renderer's thread before the first draw.
+        // A matching global fallback must not leave the local palette unset.
+        menu_style::set_palette(None);
         menu_style::set_oled(settings.appearance == crate::settings::Appearance::Oled);
         gpu.set_colour_correction(false);
         FF_AUDIO_ENABLED.store(settings.ff_sound, Ordering::Release);
@@ -6152,7 +6155,7 @@ impl Engine {
         self.game.as_ref().map_or((4.0 / 3.0, (256, 224)), |session| (
             video_mode::home_aspect(platform, session.display_aspect(), session.frame_size(),
                 self.game_square()),
-            session.frame_size()))
+            video_mode::logical_frame(platform, session.frame_size())))
     }
 
     /// Native 3:2 KONKR: GBA fills the panel and has no overlay. GB/GBC

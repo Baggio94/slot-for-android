@@ -261,6 +261,17 @@ pub fn home_aspect(platform: Platform, core: f32, frame: (u32, u32), square: boo
     }
 }
 
+/// Logical pixels for the crop limit: SNES high-res/interlaced samples
+/// and PokeMini's internal LCD multiplier must not count as native dots.
+pub fn logical_frame(platform: Platform, frame: (u32, u32)) -> (u32, u32) {
+    match platform {
+        Platform::Pokemini => platform.picture(),
+        Platform::Snes => (if frame.0 >= 400 { frame.0 / 2 } else { frame.0 },
+            if frame.1 >= 400 { frame.1 / 2 } else { frame.1 }),
+        _ => frame,
+    }
+}
+
 /// How a home console frame fills the screen in `mode` (`square`: see
 /// `square_game`).
 pub fn home_fit(platform: Platform, mode: VideoMode, aspect: f32, frame: (u32, u32),
@@ -273,14 +284,14 @@ pub fn home_fit(platform: Platform, mode: VideoMode, aspect: f32, frame: (u32, u
     if square {
         let a = square_shape(platform, frame);
         return match mode {
-            VideoMode::Actual => slot_gfx::Fit::Overscale(a),
+            VideoMode::Actual => slot_gfx::Fit::SmartInteger(a, logical_frame(platform, frame)),
             VideoMode::Aspect => slot_gfx::Fit::Aspect(a),
             VideoMode::Stretch => slot_gfx::Fit::Stretch,
         };
     }
     let aspect = home_aspect(platform, aspect, frame, false);
     match mode {
-        VideoMode::Actual => slot_gfx::Fit::Integer(aspect),
+        VideoMode::Actual => slot_gfx::Fit::SmartInteger(aspect, logical_frame(platform, frame)),
         VideoMode::Aspect => slot_gfx::Fit::Aspect(aspect),
         VideoMode::Stretch => slot_gfx::Fit::Stretch,
     }
@@ -300,10 +311,7 @@ pub fn picture_rect(platform: Platform, mode: VideoMode, panel: (u32, u32)) -> [
     let (w, h) = (w as f32, h as f32);
     let fit = (pw / w).min(ph / h);
     let (dw, dh) = match mode {
-        VideoMode::Actual => {
-            let k = fit.floor().max(1.0);
-            (w * k, h * k)
-        }
+        VideoMode::Actual => slot_gfx::smart_integer_size((w as u32, h as u32), w / h, (pw, ph)),
         VideoMode::Aspect => (w * fit, h * fit),
         VideoMode::Stretch => (pw, ph),
     };
@@ -356,12 +364,7 @@ pub fn home_rect(mode: VideoMode, aspect: f32, frame: (u32, u32), panel: (u32, u
     let a = if aspect > 0.0 { aspect } else { tw / th };
     let (pw, ph) = match mode {
         VideoMode::Aspect => if oh * a <= ow { (oh * a, oh) } else { (ow, ow / a) },
-        VideoMode::Actual => {
-            let mut k = (oh / th).floor().max(1.0);
-            while k > 1.0 && th * k * a > ow { k -= 1.0; }
-            let ph = th * k;
-            ((ph * a).min(ow), ph)
-        }
+        VideoMode::Actual => slot_gfx::smart_integer_size(frame, a, (ow, oh)),
         VideoMode::Stretch => (ow, oh),
     };
     let y = if top { 0.0 } else { (oh - ph) / 2.0 };
@@ -381,9 +384,11 @@ pub fn own_place(aspect: f32, frame: (u32, u32), mode: VideoMode, panel: (u32, u
     let full = home_rect(VideoMode::Aspect, aspect, frame, panel, false);
     let min = own_overlay::MIN_BAR * ph;
     if full[3] >= ph - 0.5 && full[0] >= min {
-        Some((Place::Side, home_rect(mode, aspect, frame, panel, false)))
+        let pic = home_rect(mode, aspect, frame, panel, false);
+        (pic[0] >= min).then_some((Place::Side, pic))
     } else if full[2] >= pw - 0.5 && ph - full[3] >= min {
-        Some((Place::Band, home_rect(mode, aspect, frame, panel, true)))
+        let pic = home_rect(mode, aspect, frame, panel, true);
+        (ph - pic[3] >= min).then_some((Place::Band, pic))
     } else {
         None
     }
@@ -609,6 +614,21 @@ mod tests {
     }
 
     #[test]
+    fn smart_integer_uses_the_live_frame_and_overlay_geometry() {
+        let panel = (1240, 1080);
+        let frame = (144, 224);
+        let aspect = 9.0 / 14.0;
+        let fit = home_fit(Platform::Ws, VideoMode::Actual, aspect, frame, false);
+        assert_eq!(fit, slot_gfx::Fit::SmartInteger(aspect, frame));
+        let (_, picture) = own_place(aspect, frame, VideoMode::Actual, panel).unwrap();
+        assert!((picture[0] - 260.0).abs() < 0.001);
+        assert!((picture[1] + 20.0).abs() < 0.001);
+        assert!((picture[3] - 1120.0).abs() < 0.001);
+        assert_eq!(logical_frame(Platform::Snes, (512, 448)), (256, 224));
+        assert_eq!(logical_frame(Platform::Pokemini, (480, 320)), (96, 64));
+    }
+
+    #[test]
     fn game_boys_start_at_original_ratio_on_every_screen() {
         for panel in [(1240, 1080), (960, 640), (1440, 1080), (1920, 1080), (720, 720)] {
             for platform in [Platform::Gb, Platform::Gbc, Platform::Gba] {
@@ -626,11 +646,11 @@ mod tests {
         assert_eq!(default_mode(Platform::Md, rpc), VideoMode::Aspect);
         assert_eq!(default_mode(Platform::Snes, (960, 640)), VideoMode::Aspect);
         assert_eq!(home_fit(Platform::Snes, VideoMode::Actual, 4.0 / 3.0, (512, 448), square_pixels(Platform::Snes, rpc)),
-            Fit::Overscale(256.0 / 224.0));
+            Fit::SmartInteger(256.0 / 224.0, (256, 224)));
         assert_eq!(home_fit(Platform::Nes, VideoMode::Aspect, 4.0 / 3.0, (256, 240), square_pixels(Platform::Nes, rpc)),
             Fit::Aspect(256.0 / 240.0));
         assert_eq!(home_fit(Platform::Nes, VideoMode::Actual, 4.0 / 3.0, (256, 240), square_pixels(Platform::Nes, (960, 640))),
-            Fit::Integer(4.0 / 3.0));
+            Fit::SmartInteger(4.0 / 3.0, (256, 240)));
     }
 
     #[test]
@@ -642,7 +662,7 @@ mod tests {
                 assert_eq!(home_fit(platform, VideoMode::Aspect, par, (256, 240), square_pixels(platform, panel)),
                     Fit::Aspect(4.0 / 3.0), "{platform:?} {panel:?}");
                 assert_eq!(home_fit(platform, VideoMode::Actual, 1.5238, (320, 224), square_pixels(platform, panel)),
-                    Fit::Integer(4.0 / 3.0), "{platform:?} {panel:?}");
+                    Fit::SmartInteger(4.0 / 3.0, (320, 224)), "{platform:?} {panel:?}");
             }
         }
         // Narrow screens: NES and SNES keep square pixels, the Mega Drive 4:3.
@@ -663,18 +683,18 @@ mod tests {
             assert!(!square_game(platform, rpc, false), "{platform:?}: other games keep 4:3");
             assert!(!square_game(platform, (960, 640), true), "{platform:?}: wider screens keep 4:3");
             assert_eq!(home_fit(platform, VideoMode::Actual, 4.0 / 3.0, (256, 224), true),
-                Fit::Overscale(8.0 / 7.0));
+                Fit::SmartInteger(8.0 / 7.0, (256, 224)));
         }
         // The cropped left bar: the Integer picture is the 248 columns shown.
         assert_eq!(home_fit(Platform::Sms, VideoMode::Actual, 4.0 / 3.0, (248, 224), true),
-            Fit::Overscale(248.0 / 224.0));
+            Fit::SmartInteger(248.0 / 224.0, (248, 224)));
         // A listed game's 320-wide screens (logos, menus): 4:3, the whole picture.
         assert_eq!(home_fit(Platform::Md, VideoMode::Actual, 1.5238, (320, 224), true),
             Fit::Aspect(4.0 / 3.0));
         assert_eq!(home_fit(Platform::Md, VideoMode::Stretch, 1.5238, (320, 224), true), Fit::Stretch);
         // A European game's 240 lines: square too.
         assert_eq!(home_fit(Platform::Md, VideoMode::Actual, 1.0, (256, 240), true),
-            Fit::Overscale(256.0 / 240.0));
+            Fit::SmartInteger(256.0 / 240.0, (256, 240)));
         assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), true), 8.0 / 7.0);
         assert_eq!(home_aspect(Platform::Md, 1.5238, (320, 224), false), 4.0 / 3.0);
         // Hidden bars on a wider screen: the columns keep their width.

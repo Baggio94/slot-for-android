@@ -570,6 +570,10 @@ mod render {
     fn light_and_original_menus_take_their_palette_and_dark_ink() {
         let _surface = slot_gfx::TestEgl::new();
         let mut engine = Engine::new(1, Some(&entries())).unwrap();
+        // Start from a known theme even if another fixture persisted settings.
+        engine.settings.appearance = crate::settings::Appearance::Dark;
+        menu_style::set_palette(None);
+        menu_style::set_oled(false);
         engine.overlay = ShelfOverlay::Menu { row: 1 };
         let pixel = |engine: &mut Engine, x: f32, y: f32| {
             for _ in 0..30 {
