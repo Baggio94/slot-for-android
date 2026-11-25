@@ -128,6 +128,21 @@ impl Sprites {
         Ok(())
     }
 
+    /// Test the logical texture contents, independent of asynchronous packing.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn hash_recovery(&self, hash: &mut impl std::hash::Hasher) -> Result<(), String> {
+        use std::hash::Hash;
+        self.recovery.is_some().hash(hash);
+        if let Some(pixels) = &self.recovery {
+            pixels.len().hash(hash);
+            for p in pixels {
+                (p.w, p.h, p.filter).hash(hash);
+                p.rgba.with_rgba(|rgba| rgba.hash(hash))?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn recovery_bytes(&self) -> usize {
         self.recovery
             .as_ref()

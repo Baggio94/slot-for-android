@@ -264,6 +264,13 @@ impl GamePass {
         self.drop_royale();
     }
 
+    #[cfg(feature = "test-support")]
+    pub(crate) fn hash_recovery(&self, hash: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        self.paper_pixels.hash(hash);
+        self.dot_bg_pixels.hash(hash);
+    }
+
     pub(crate) fn recovery_bytes(&self) -> usize {
         self.paper_pixels.as_ref().map_or(0, |p| p.1.len())
             + self.dot_bg_pixels.as_ref().map_or(0, |p| p.1.len())
