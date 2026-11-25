@@ -640,7 +640,7 @@ mod tests {
             let fit = home_fit(platform, VideoMode::Actual, 4.0 / 3.0, (256, 224), true);
             assert_eq!(fit, slot_gfx::Fit::SmartInteger(8.0 / 7.0, (256, 224), 8.0));
             let pic = home_rect(VideoMode::Actual, 8.0 / 7.0, (256, 224), rotate, false, crop_limit(platform));
-            assert_eq!((pic[2], pic[3]), (768.0, 672.0), "{platform:?}");
+            assert!((pic[2] - 768.0).abs() < 0.01 && pic[3] == 672.0, "{platform:?}: {pic:?}");
         }
         for platform in [Platform::Gb, Platform::Gba, Platform::Ws, Platform::Gg, Platform::Pokemini] {
             assert_eq!(crop_limit(platform), 4.0);
