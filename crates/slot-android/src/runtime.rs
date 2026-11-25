@@ -9638,9 +9638,14 @@ impl Engine {
                         .map_or("", |cart| cart.stem.as_str());
                     let platform = self.current_cart_platform();
                     let square = self.game_square();
+                    // Resolve the automatic mode once from the core's initial
+                    // geometry. Later frame changes update fit, not the mode.
+                    let frame = self.game.as_ref().map_or(platform.picture(), GameSession::frame_size);
                     self.video_mode = PATHS.lock().unwrap_or_else(|e| e.into_inner())
-                        .as_ref().map_or(video_mode::default_mode(platform, panel_size()),
-                            |(root, _)| video_mode::video_mode_for(root, name, platform, panel_size(), square));
+                        .as_ref().map_or_else(
+                            || video_mode::game_default_mode(platform, panel_size(), square, frame)
+                                .on(platform, panel_size()),
+                            |(root, _)| video_mode::video_mode_for(root, name, platform, panel_size(), square, frame));
                     self.apply_video_geometry();
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
