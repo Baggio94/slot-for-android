@@ -507,6 +507,26 @@ impl Engine {
     }
 }
 
+/// The words on a light Shelves page (the menus' dark ink, 28 28 32).
+const SHOWCASE_DARK_INK: [f32; 3] = [28.0 / 255.0, 28.0 / 255.0, 32.0 / 255.0];
+/// The chosen tile's outline on a light page, canvas pixels.
+const RING: f32 = 2.5;
+
+impl Engine {
+    /// Whether the Shelves page's ground is light: the shelf's colour, or
+    /// the wallpaper (its top's brightness, darkened by its tint) under the
+    /// theme's veil, as draw_shelves_overlay lays them.
+    fn showcase_on_light(&self) -> bool {
+        let luma = |c: [f32; 4]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+        let mut light = luma(menu_style::shelf_ground());
+        if let Some((_, tint, top)) = self.active_wallpaper() {
+            let veil = menu_style::scrim(0.62);
+            light = top.unwrap_or(0.5) * (1.0 - tint) * (1.0 - veil[3]) + luma(veil) * veil[3];
+        }
+        light > 0.5
+    }
+}
+
 /// A rounded panel: three bands and four quarter discs, none overlapping.
 fn panel(out: &mut Vec<Draw>, corners: [slot_gfx::TexId; 4], [x, y, w, h]: [f32; 4], r: f32, c: [f32; 4],
          ink: Option<slot_gfx::InkMap>) {
@@ -727,8 +747,16 @@ impl Engine {
         let width = out_w() as f32;
         let order = self.shelf_grid_order();
         let Some(corners) = self.shelves_grid.corners else { return };
-        let ink = menu_style::ink_map();
-        let light = ink.is_some();
+        // The words' colour follows the page's own ground, not the menus':
+        // Original's shelves are light even under a dark bar (the GBA's
+        // lavender under its indigo), and the veil over a wallpaper is
+        // black or the light ground.
+        let light = self.showcase_on_light();
+        let ground = menu_style::shelf_ground();
+        let ink = light.then_some(slot_gfx::InkMap {
+            paper: [ground[0], ground[1], ground[2]],
+            ink: SHOWCASE_DARK_INK,
+        });
         let layout = self.shelves_layout(&order);
         let selected = order.iter().position(|&r| r == rack).unwrap_or(0);
         let scroll = self.shelves_scroll(&layout, selected);
@@ -768,9 +796,21 @@ impl Engine {
             let foot = name_y - pill_h / 2.0 - 4.0;
             let fill = match (light, chosen) {
                 (false, false) => [1.0, 1.0, 1.0, 0.065], (false, true) => [1.0, 1.0, 1.0, 0.15],
-                (true, false) => [1.0, 1.0, 1.0, 0.45], (true, true) => [1.0, 1.0, 1.0, 0.85],
+                (true, false) => [1.0, 1.0, 1.0, 0.38], (true, true) => [1.0, 1.0, 1.0, 0.92],
             };
-            panel(out, corners, [x, y, w, h], 16.0, [fill[0], fill[1], fill[2], fill[3] * alpha], ink);
+            if light && chosen {
+                // On a light ground the chosen tile is outlined in the words'
+                // colour: white on white alone hardly shows.
+                let [r, g, b] = SHOWCASE_DARK_INK;
+                panel(out, corners, [x - RING, y - RING, w + 2.0 * RING, h + 2.0 * RING], 16.0 + RING,
+                    [r, g, b, 0.78 * alpha], ink);
+                // Opaque under the white, so the ring stays a ring.
+                let under = [ground[0] + (1.0 - ground[0]) * 0.92, ground[1] + (1.0 - ground[1]) * 0.92,
+                    ground[2] + (1.0 - ground[2]) * 0.92, alpha];
+                panel(out, corners, [x, y, w, h], 16.0, under, ink);
+            } else {
+                panel(out, corners, [x, y, w, h], 16.0, [fill[0], fill[1], fill[2], fill[3] * alpha], ink);
+            }
             // The carts, lightly fanned, inside their tile even lifted:
             // under the corner pills, over the name's pill, never touching.
             let mut carts = if id == VIDEO_RACK || id < self.shelves.len() { self.showcase_carts(id) } else { Vec::new() };
@@ -970,26 +1010,42 @@ mod tests {
                 engine.shelves[RECENTS_RACK].update_carts(recents);
                 engine.shelves[FAVORITES_RACK].update_carts(favorites);
             }
-            for (theme, steps) in [("dark", 0), ("light", 2)] {
-                for _ in 0..steps { engine.cycle_appearance(true); }
-                engine.reload_wallpaper(None);
-                for (style, grid) in [("scroll", false), ("grid", true)] {
-                    engine.settings.shelves_grid = grid;
-                    engine.active = selected as usize;
-                    engine.overlay = ShelfOverlay::Shelves { rack: selected as usize };
-                    engine.shelves_grid.opened = None;
-                    for _ in 0..140 {
-                        engine.draw(0, || {});
-                        std::thread::sleep(std::time::Duration::from_millis(12));
+            // Every theme on the full set, the Original ones on consoles whose
+            // bar is dark over a light shelf, on the theme's colour and on
+            // the Theme wallpaper.
+            if set != "all" { continue; }
+            use crate::settings::{Appearance, WallpaperPick};
+            let themes: [(&str, Appearance, Platform); 6] = [
+                ("dark", Appearance::Dark, selected), ("light", Appearance::Light, selected),
+                ("original-gba", Appearance::Original, Platform::Gba),
+                ("original-pokemini", Appearance::Original, Platform::Pokemini),
+                ("original-gg", Appearance::Original, Platform::Gg),
+                ("original-gb", Appearance::Original, Platform::Gb),
+            ];
+            for (theme, appearance, on) in themes {
+                for (paper, pick) in [("none", WallpaperPick::None), ("theme", WallpaperPick::Default)] {
+                    engine.settings.appearance = appearance;
+                    engine.settings.wallpaper = pick;
+                    engine.active = on as usize;
+                    engine.reload_wallpaper(None);
+                    for (style, grid) in [("scroll", false), ("grid", true)] {
+                        engine.settings.shelves_grid = grid;
+                        engine.active = on as usize;
+                        engine.overlay = ShelfOverlay::Shelves { rack: on as usize };
+                        engine.shelves_grid.opened = None;
+                        for _ in 0..140 {
+                            engine.draw(0, || {});
+                            std::thread::sleep(std::time::Duration::from_millis(12));
+                        }
+                        let rgba = engine.gpu.read_frame();
+                        let (w, h) = panel_size();
+                        let file = std::io::BufWriter::new(std::fs::File::create(
+                            dir.join(format!("{theme}_{paper}_{style}.png"))).unwrap());
+                        let mut enc = png::Encoder::new(file, w, h);
+                        enc.set_color(png::ColorType::Rgba);
+                        enc.set_depth(png::BitDepth::Eight);
+                        enc.write_header().unwrap().write_image_data(&rgba).unwrap();
                     }
-                    let rgba = engine.gpu.read_frame();
-                    let (w, h) = panel_size();
-                    let file = std::io::BufWriter::new(std::fs::File::create(
-                        dir.join(format!("{set}_{theme}_{style}.png"))).unwrap());
-                    let mut enc = png::Encoder::new(file, w, h);
-                    enc.set_color(png::ColorType::Rgba);
-                    enc.set_depth(png::BitDepth::Eight);
-                    enc.write_header().unwrap().write_image_data(&rgba).unwrap();
                 }
             }
         }

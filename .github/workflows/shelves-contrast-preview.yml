@@ -1,0 +1,52 @@
+name: Shelves contrast preview
+on:
+  push:
+    branches: [preview/shelves-contrast]
+permissions:
+  contents: write
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: '1.96', components: 'rustfmt, clippy' }
+      - uses: Swatinem/rust-cache@v2
+      - name: EGL and Pillow
+        run: |
+          bash .github/scripts/apt-install.sh libegl-dev libgl1-mesa-dri fonts-dejavu-core
+          python3 -m pip install --quiet pillow
+      - name: Real labels from the art set
+        run: python3 .github/shelves-preview/labels.py "$RUNNER_TEMP/labels"
+      - name: After (this branch)
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          SCRATCH_LABELS: ${{ runner.temp }}/labels
+          SCRATCH_PANEL: 960x640
+          SCRATCH_SHELVES: ${{ runner.temp }}/shots/after
+        run: cargo test --locked -p slot-android --features runtime-tests --lib shelves_grid::tests::render_shelves -- --nocapture --test-threads 1
+      - name: Before (3.1.0)
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          SCRATCH_LABELS: ${{ runner.temp }}/labels
+          SCRATCH_PANEL: 960x640
+          SCRATCH_SHELVES: ${{ runner.temp }}/shots/before
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          git worktree add "$RUNNER_TEMP/before" origin/main
+          python3 .github/shelves-preview/splice.py crates/slot-android/src/runtime/shelves_grid.rs \
+            "$RUNNER_TEMP/before/crates/slot-android/src/runtime/shelves_grid.rs"
+          cd "$RUNNER_TEMP/before"
+          cargo test --locked -p slot-android --features runtime-tests --lib shelves_grid::tests::render_shelves -- --nocapture --test-threads 1
+      - name: Sheets
+        run: python3 .github/shelves-preview/sheets.py "$RUNNER_TEMP/shots" "$RUNNER_TEMP/sheets"
+      - name: Shots on their own branch
+        run: |
+          cd "$RUNNER_TEMP"
+          git init -q shots-branch && cd shots-branch
+          cp -r ../sheets ../shots .
+          git add -A
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com commit -q -m "Shelves contrast preview shots"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" HEAD:refs/heads/preview/shelves-contrast-shots
