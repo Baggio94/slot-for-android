@@ -161,7 +161,7 @@ fn auto_shell(entry: &RomEntry, platform: Platform) -> Option<ShellChoice> {
         Platform::Gba => None,
         // The region's mould, a publisher's, and the game's colour.
         Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
-        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini => slot_ui::home_shell(
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini | Platform::Pico8 => slot_ui::home_shell(
             platform, entry.title.trim(), &entry.home_region, &entry.home_maker)
             .map(|shell| colour_swan(shell, entry)),
         Platform::Gb | Platform::Gbc => {

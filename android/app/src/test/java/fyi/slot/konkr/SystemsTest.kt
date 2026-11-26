@@ -83,8 +83,36 @@ class SystemsTest {
         assertEquals("U", Systems.homeHeader("md", rom, "ps.md").region)
     }
 
+    @Test fun aTinyPico8TextCartIsStillACart() {
+        assertEquals(16, Systems.minRomBytes("p8"))
+        assertEquals(RomSource.MIN_ROM_BYTES, Systems.minRomBytes("nes"))
+        assertEquals(RomSource.MIN_ROM_BYTES, Systems.minRomBytes("gba"))
+    }
+
+    @Test fun pico8CartsAreP8FilesAndCartPictures() {
+        assertEquals("PICO8", Systems.platformFor("p8"))
+        assertEquals("PICO8", Systems.platformFor("PNG"))
+        assertEquals("fake-08", Systems.coreFolder("", "png"))
+        fun png(w: Int, h: Int) = ByteArray(0x150).also {
+            byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(),
+                0x0d, 0x0a, 0x1a, 0x0a).copyInto(it)
+            "IHDR".toByteArray().copyInto(it, 12)
+            it[18] = (w shr 8).toByte(); it[19] = w.toByte()
+            it[22] = (h shr 8).toByte(); it[23] = h.toByte()
+        }
+        assertTrue(Systems.acceptsHeader("png", png(160, 205)))
+        assertFalse(Systems.acceptsHeader("png", png(160, 144)))
+        assertFalse(Systems.acceptsHeader("png", ByteArray(0x150)))
+        assertEquals("Celeste Classic 2", Systems.titleOf("Celeste Classic 2.p8.png"))
+        assertTrue(Systems.acceptsName("Celeste.P8.PNG"))
+        assertFalse(Systems.acceptsName("covers/front.png"))
+        assertTrue(Systems.acceptsName("Sonic.md"))
+        assertEquals("Jelpi", Systems.titleOf("Jelpi.p8"))
+        assertEquals("Sonic (USA)", Systems.titleOf("Sonic (USA).md"))
+    }
+
     @Test fun everySystemHasOneCompleteRow() {
-        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI"), Systems.PLATFORMS)
+        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI", "PICO8"), Systems.PLATFORMS)
         for (row in Systems.TABLE) {
             val p = row.platform
             assertTrue(p, row.extensions.isNotEmpty() && row.folders.isNotEmpty() && row.romm.isNotEmpty())
@@ -93,7 +121,8 @@ class SystemsTest {
             for (ext in row.extensions) assertTrue("$p .$ext", ext in Systems.ROM_EXTENSIONS)
             for (slug in row.romm) assertEquals("$p $slug", p, Romm.platformOf(slug))
             assertEquals(p, row.home, p in Systems.HOME_PLATFORMS)
-            assertTrue(p, row.retroAchievements > 0 && row.screenScraper > 0)
+            // PICO-8 has no RetroAchievements set (0).
+            assertTrue(p, (row.retroAchievements > 0 || p == Systems.PICO8) && row.screenScraper > 0)
         }
         assertEquals(Systems.TABLE.size, Systems.TABLE.map { it.retroAchievements }.toSet().size)
         assertEquals(Systems.TABLE.size, Systems.TABLE.map { it.screenScraper }.toSet().size)
@@ -111,8 +140,8 @@ class SystemsTest {
 
     @Test fun theTableKeepsTheSixSystemsAsTheyWere() {
         assertEquals(setOf("gba", "gb", "gbc", "nes", "fc", "unf", "unif", "sfc", "smc", "md", "gen", "smd", "bin",
-            "sms", "gg", "ngp", "ngc", "ngpc", "ws", "wsc", "lnx", "lyx", "min"), Systems.ROM_EXTENSIONS)
-        assertEquals(setOf("NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI"), Systems.HOME_PLATFORMS)
+            "sms", "gg", "ngp", "ngc", "ngpc", "ws", "wsc", "lnx", "lyx", "min", "p8", "png"), Systems.ROM_EXTENSIONS)
+        assertEquals(setOf("NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI", "PICO8"), Systems.HOME_PLATFORMS)
         assertEquals("GBA", Systems.platformFor("GBA"))
         assertEquals("GBC", Systems.platformFor("gbc"))
         assertEquals("MD", Systems.platformFor("bin"))

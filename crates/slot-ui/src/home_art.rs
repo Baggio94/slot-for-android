@@ -22,6 +22,7 @@ pub enum HomeSystem {
     MasterSystem,
     Lynx,
     PokemonMini,
+    Pico8,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -55,6 +56,9 @@ pub enum HomeMould {
     MasterSystemCard,
     /// Codemasters' taller Game Gear cart.
     GameGearCodemasters,
+    /// slot.'s own PICO-8 cart (tools/pico8-mould): the label well holds
+    /// the cart's picture and its title under it.
+    Pico8,
 }
 
 /// A mould's art and where things sit on it, in its logical pixels.
@@ -133,7 +137,7 @@ macro_rules! art {
 }
 
 // Printed by nes-megadrive/export_app.py.
-static ARTS: [MouldArt; 23] = [
+static ARTS: [MouldArt; 24] = [
     art!("nes", 352, (126, 0, 145, 239),
         [(40.6, 234.6, 101.0, 46.5), (170.4, 234.6, 101.0, 46.5)],
         (166.3, 103.6, 121.6, 39.5), [126, 126, 128], None),
@@ -240,11 +244,15 @@ static ARTS: [MouldArt; 23] = [
         None,
         None,
         None, false),
+    // Drawn by tools/pico8-mould/make.py.
+    art!("p8", 400, (36, 66, 240, 296),
+        [(40.0, 196.0, 104.0, 52.0), (168.0, 196.0, 104.0, 52.0)],
+        (100.0, 120.0, 112.0, 31.0), [52, 52, 56], None),
 ];
 
 
 impl HomeMould {
-    pub const ALL: [HomeMould; 23] = [
+    pub const ALL: [HomeMould; 24] = [
         HomeMould::Nes,
         HomeMould::Famicom,
         HomeMould::FamicomNamco,
@@ -268,6 +276,7 @@ impl HomeMould {
         HomeMould::MasterSystemJp,
         HomeMould::MasterSystemCard,
         HomeMould::GameGearCodemasters,
+        HomeMould::Pico8,
     ];
 
     pub fn index(self) -> usize {
@@ -303,6 +312,7 @@ impl HomeMould {
             }
             HomeMould::Lynx => HomeSystem::Lynx,
             HomeMould::PokemonMini => HomeSystem::PokemonMini,
+            HomeMould::Pico8 => HomeSystem::Pico8,
         }
     }
 
@@ -311,7 +321,7 @@ impl HomeMould {
         !matches!(self.system(), HomeSystem::Nes | HomeSystem::Snes | HomeSystem::Md
             | HomeSystem::MasterSystem | HomeSystem::GameGear
             | HomeSystem::NeoGeoPocket | HomeSystem::WonderSwan
-            | HomeSystem::Lynx | HomeSystem::PokemonMini)
+            | HomeSystem::Lynx | HomeSystem::PokemonMini | HomeSystem::Pico8)
     }
 
     /// The shell a system's carts get when nothing picks another.
@@ -326,6 +336,7 @@ impl HomeMould {
             HomeSystem::MasterSystem => HomeMould::MasterSystem,
             HomeSystem::Lynx => HomeMould::Lynx,
             HomeSystem::PokemonMini => HomeMould::PokemonMini,
+            HomeSystem::Pico8 => HomeMould::Pico8,
         }
     }
 
@@ -355,6 +366,7 @@ impl HomeMould {
             HomeMould::MasterSystemJp => "mastersystem-jp",
             HomeMould::MasterSystemCard => "mastersystem-card",
             HomeMould::GameGearCodemasters => "gamegear-codemasters",
+            HomeMould::Pico8 => "pico8",
         }
     }
 

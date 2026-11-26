@@ -24,14 +24,16 @@ pub enum Platform {
     Lynx,
     /// Pokémon mini.
     Pokemini,
+    /// PICO-8 carts (.p8 and .p8.png).
+    Pico8,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 12] = [
+    pub const ALL: [Platform; 13] = [
         Platform::Gba, Platform::Gb, Platform::Gbc,
         Platform::Nes, Platform::Snes, Platform::Md,
         Platform::Sms, Platform::Gg, Platform::Ngp, Platform::Ws,
-        Platform::Lynx, Platform::Pokemini,
+        Platform::Lynx, Platform::Pokemini, Platform::Pico8,
     ];
 
     pub fn name(self) -> &'static str {
@@ -63,6 +65,10 @@ impl Platform {
     }
 
     pub fn accepts(self, path: &Path) -> bool {
+        // A .png is a PICO-8 cart only as NAME.p8.png.
+        if self == Platform::Pico8 && !pico8_name(path) {
+            return false;
+        }
         path.extension()
             .and_then(|e| e.to_str())
             .is_some_and(|ext| {
@@ -71,4 +77,22 @@ impl Platform {
                     .any(|k| ext.eq_ignore_ascii_case(k))
             })
     }
+}
+
+/// PICO-8 carts: NAME.p8, or NAME.p8.png (a picture of the cart).
+fn pico8_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_ascii_lowercase())
+        .is_some_and(|n| n.ends_with(".p8") || n.ends_with(".p8.png"))
+}
+
+/// A cart's name without its extension: "Celeste.p8.png" is "Celeste", as
+/// "Pokemon.gba" is "Pokemon".
+pub fn cart_stem(file_name: &str) -> &str {
+    let lower = file_name.to_ascii_lowercase();
+    if lower.ends_with(".p8.png") {
+        return &file_name[..file_name.len() - ".p8.png".len()];
+    }
+    file_name.rsplit_once('.').map_or(file_name, |(stem, _)| stem)
 }

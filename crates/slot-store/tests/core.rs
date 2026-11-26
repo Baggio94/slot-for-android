@@ -292,3 +292,12 @@ fn pokedaisy_is_a_carts_pick_never_a_systems_default() {
     assert!([Platform::Gb, Platform::Gbc, Platform::Gba].iter().all(|p| Core::PokeDaisy.runs(*p)));
     assert!(!Core::PokeDaisy.runs(Platform::Nes));
 }
+
+#[test]
+fn pico8_has_fake08_alone() {
+    use slot_store::{Core, Platform};
+    assert_eq!(Core::default_for(Platform::Pico8), Core::Fake08);
+    assert_eq!(Core::alternate_for(Platform::Pico8), Core::Fake08);
+    assert!(Core::Fake08.runs(Platform::Pico8) && !Core::Fake08.runs(Platform::Md));
+    assert_eq!(Core::parse("fake08"), Some(Core::Fake08));
+}

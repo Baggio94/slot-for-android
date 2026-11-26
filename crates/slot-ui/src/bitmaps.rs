@@ -329,6 +329,8 @@ pub fn home_slot_family(cart: &slot_store::Cart) -> Option<usize> {
         M::MasterSystem | M::MasterSystemJp | M::MasterSystemCard => 11,
         M::Lynx => 12,
         M::PokemonMini => 13,
+        // PICO-8 carts go into the Mega Drive's black slot.
+        M::Pico8 => 3,
     })
 }
 

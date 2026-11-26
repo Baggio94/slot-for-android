@@ -129,3 +129,16 @@ fn the_same_stem_on_two_platforms_is_two_carts_with_two_labels() {
         "the GBA cart borrowed the Game Boy label"
     );
 }
+
+#[test]
+fn a_pico8_cart_is_named_without_p8_png_and_other_pngs_are_not_carts() {
+    let d = TempDir::new().unwrap();
+    std::fs::create_dir_all(d.path().join("Games/PICO8")).unwrap();
+    std::fs::write(d.path().join("Games/PICO8/Celeste.p8.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+    std::fs::write(d.path().join("Games/PICO8/Jelpi.p8"), b"pico-8 cartridge").unwrap();
+    std::fs::write(d.path().join("Games/PICO8/cover.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+    let carts = scan(d.path()).unwrap();
+    let stems: Vec<_> = carts.iter().map(|c| c.stem.as_str()).collect();
+    assert_eq!(stems, ["Celeste", "Jelpi"]);
+    assert!(carts.iter().all(|c| c.platform == Platform::Pico8));
+}

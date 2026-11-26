@@ -231,6 +231,7 @@ fn preview_mould(core: Core) -> Option<HomeMould> {
         Core::Handy | Core::BeetleLynx => Some(HomeMould::Lynx),
         Core::BeetleCygne => Some(HomeMould::WonderSwan),
         Core::PokeMini => Some(HomeMould::PokemonMini),
+        Core::Fake08 => Some(HomeMould::Pico8),
         _ => None,
     }
 }

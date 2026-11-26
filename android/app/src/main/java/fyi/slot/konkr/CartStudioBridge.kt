@@ -24,6 +24,6 @@ internal object CartStudioBridge {
         Regex("(auto|notched|rounded|nes|famicom|famicom-namco|famicom-konami|snes|snes-us|" +
             "megadrive|megadrive-jp|megadrive-ea|megadrive-accolade|megadrive-codemasters|megadrive-vr|megadrive-sk|" +
             "mastersystem|mastersystem-jp|mastersystem-card|gamegear|gamegear-codemasters|" +
-            "ngp|wonderswan|wonderswan-color|lynx|pokemini) [0-9a-fA-F]{6} (solid|clear|glitter|solid-glitter|clear-glitter)")
+            "ngp|wonderswan|wonderswan-color|lynx|pokemini|pico8) [0-9a-fA-F]{6} (solid|clear|glitter|solid-glitter|clear-glitter)")
             .matches(value)
 }

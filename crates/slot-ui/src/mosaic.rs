@@ -12,11 +12,11 @@ use crate::art;
 use crate::wallpaper_scale::{self, Crop};
 
 /// The shelves' keys, in wallpaper::SHELF_KEYS's order.
-pub const MOSAIC_KEYS: [&str; 15] =
-    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI",
+pub const MOSAIC_KEYS: [&str; 16] =
+    ["GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI", "PICO8",
      "Recents", "Favorites", "GBAV"];
 
-const MASKS: [&[u8]; 15] = [
+const MASKS: [&[u8]; 16] = [
     include_bytes!("../../../assets/wallpapers/GBA.png"),
     include_bytes!("../../../assets/wallpapers/GB.png"),
     include_bytes!("../../../assets/wallpapers/GBC.png"),
@@ -30,6 +30,8 @@ const MASKS: [&[u8]; 15] = [
     include_bytes!("../../../assets/wallpapers/WS.png"),
     include_bytes!("../../../assets/wallpapers/LYNX.png"),
     include_bytes!("../../../assets/wallpapers/POKEMINI.png"),
+    // PICO-8's sprites, drawn by tools/pico8-mould/wallpaper.py.
+    include_bytes!("../../../assets/wallpapers/PICO8.png"),
     include_bytes!("../../../assets/wallpapers/Recents.png"),
     include_bytes!("../../../assets/wallpapers/Favorites.png"),
     include_bytes!("../../../assets/wallpapers/GBAV.png"),
@@ -41,7 +43,7 @@ pub enum MosaicTheme { Original, Light, Dark, Oled }
 
 /// Ground, then line, for Original, Light, Dark and OLED, read off Siham's
 /// PNGs (each is exactly ground + mask x (line - ground)).
-const COLOURS: [[[[u8; 3]; 2]; 4]; 15] = [
+const COLOURS: [[[[u8; 3]; 2]; 4]; 16] = [
     // GBA
     [[[196, 198, 228], [145, 147, 182]], [[238, 233, 222], [181, 172, 158]], [[22, 22, 24], [67, 67, 73]], [[0, 0, 0], [50, 50, 56]]],
     // GB
@@ -66,6 +68,8 @@ const COLOURS: [[[[u8; 3]; 2]; 4]; 15] = [
     [[[232, 214, 182], [183, 161, 125]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // POKEMINI: the Pokémon mini's consoles, carts and balls on lime.
     [[[215, 223, 175], [162, 175, 121]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
+    // PICO8: its sprites on peach.
+    [[[236, 214, 200], [190, 160, 146]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // Recents
     [[[211, 216, 223], [155, 164, 177]], [[238, 233, 222], [183, 174, 160]], [[22, 22, 24], [65, 65, 71]], [[0, 0, 0], [48, 48, 54]]],
     // Favorites

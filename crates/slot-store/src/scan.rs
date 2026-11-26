@@ -64,7 +64,7 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
             if is_hidden(&rom) || !rom.is_file() || !platform.accepts(&rom) {
                 continue;
             }
-            let Some(stem) = rom.file_stem().and_then(|s| s.to_str()) else {
+            let Some(stem) = rom.file_name().and_then(|s| s.to_str()).map(crate::cart_stem) else {
                 continue;
             };
             let label = root
@@ -76,6 +76,8 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
                     header_title(&rom).unwrap_or_default(),
                     header_code(&rom).unwrap_or_default(),
                 ),
+                // A PICO-8 cart has no header to read a title from.
+                Platform::Pico8 => (String::new(), String::new()),
                 _ => (crate::gb::title(&rom).unwrap_or_default(), String::new()),
             };
             carts.push(Cart {

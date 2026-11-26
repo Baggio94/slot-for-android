@@ -174,7 +174,7 @@ const SCREEN_SIZE_KEY: usize = 40;
 use crate::settings::{CORE_SMS_KEY, CORE_GG_KEY, CORE_NGP_KEY, CORE_LYNX_KEY,
     SHADER_SMS_KEY, SHADER_GG_KEY, SHADER_NGP_KEY, SHADER_WS_KEY, SHADER_LYNX_KEY,
     SHADER_POKEMINI_KEY, BEZEL_SMS_KEY, BEZEL_GG_KEY, BEZEL_NGP_KEY, BEZEL_WS_KEY,
-    BEZEL_LYNX_KEY, BEZEL_POKEMINI_KEY, POKEMINI_FILTER_KEY};
+    BEZEL_LYNX_KEY, BEZEL_POKEMINI_KEY, POKEMINI_FILTER_KEY, SHADER_PICO8_KEY};
 /// "INTEGER", "ORIGINAL RATIO", "STRETCH" in the setting value faces.
 const SCREEN_SIZE_VALUE: usize = 67;
 
@@ -617,7 +617,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 180] = [
+const MENU_TEXT: [&str; 181] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -803,16 +803,17 @@ const MENU_TEXT: [&str; 180] = [
     "Shelves",                            // 177, Interface: Scroll or Grid (3.0.1-beta12)
     "Companion",                          // 178, Game Menu: PokeDaisy's companion (X)
     "Quick Menu",                         // 179, Game Menu: PokeDaisy's quick menu (L3)
+    "PICO-8",                             // 180, Systems
 ];
 
 /// Settings > Systems, top to bottom.
-const SYSTEM_ORDER: [Platform; 12] = [
+const SYSTEM_ORDER: [Platform; 13] = [
     Platform::Gba, Platform::Gbc, Platform::Gb,
     Platform::Nes, Platform::Snes, Platform::Md,
     Platform::Sms, Platform::Gg, Platform::Ngp, Platform::Ws,
-    Platform::Lynx, Platform::Pokemini,
+    Platform::Lynx, Platform::Pokemini, Platform::Pico8,
 ];
-const SYSTEM_TITLES: [usize; 12] = [91, 92, 93, 121, 122, 123, 157, 158, 159, 160, 161, 162];
+const SYSTEM_TITLES: [usize; 13] = [91, 92, 93, 121, 122, 123, 157, 158, 159, 160, 161, 162, 180];
 // Special racks follow the supported platforms, not hard-coded GB-era indices.
 const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
@@ -1146,6 +1147,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         crate::settings::SHADER_WS_KEY => shader(scoped.shader_ws),
         crate::settings::SHADER_LYNX_KEY => shader(scoped.shader_lynx),
         crate::settings::SHADER_POKEMINI_KEY => shader(scoped.shader_pokemini),
+        crate::settings::SHADER_PICO8_KEY => shader(scoped.shader_pico8),
         crate::settings::SHADER_GG_KEY => shader(scoped.shader_gg),
         22 => if scoped.shader_gba.includes_gba_color() { 42 }
             else if scoped.colour_correction_gba {4}else{5},
@@ -1199,7 +1201,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         // game, the system's default in Settings > Systems.
         60..=65 | crate::settings::BLENDING_SMS_KEY | crate::settings::BLENDING_GG_KEY
         | crate::settings::BLENDING_NGP_KEY | crate::settings::BLENDING_WS_KEY
-        | crate::settings::BLENDING_LYNX_KEY | crate::settings::BLENDING_POKEMINI_KEY => {
+        | crate::settings::BLENDING_LYNX_KEY | crate::settings::BLENDING_POKEMINI_KEY
+        | crate::settings::BLENDING_PICO8_KEY => {
             match scoped.blending_for(Settings::blending_platform(key)?) {
                 crate::settings::Blending::Off => 5,
                 crate::settings::Blending::Mix => 96,
@@ -1824,7 +1827,7 @@ struct Engine {
     pak_chip_textures: [slot_gfx::TexId; Core::ALL.len()],
     pak_chip_blank: slot_gfx::TexId,
     /// The NES, Super Nintendo and Mega Drive chips with no core name.
-    home_chip_blanks: [slot_gfx::TexId; 9],
+    home_chip_blanks: [slot_gfx::TexId; 10],
     chip_shadow: slot_gfx::TexId,
     core_legend_faces: [(slot_gfx::TexId, u32); 3],
     /// The same, their words in Light's dark ink: over a light shelf
@@ -2357,7 +2360,7 @@ impl Engine {
         let pak_chip_textures = Core::ALL.map(|core| gpu.create_face(&pak_chip_face(Some(core))));
         let pak_chip_blank = gpu.create_face(&pak_chip_face(None));
         let home_chip_blanks = [Platform::Nes, Platform::Snes, Platform::Md, Platform::Sms, Platform::Gg,
-            Platform::Ngp, Platform::Ws, Platform::Lynx, Platform::Pokemini]
+            Platform::Ngp, Platform::Ws, Platform::Lynx, Platform::Pokemini, Platform::Pico8]
             .map(|p| gpu.create_face(&slot_ui::home_chip_face(p, None)));
         let shadow = chip_shadow_face();
         let chip_shadow = gpu.create_face(&shadow);
@@ -6495,6 +6498,9 @@ impl Engine {
             (Platform::Sms|Platform::Gg|Platform::Ngp,true)=>&[124,90],
             (Platform::Ws|Platform::Lynx,false)=>&[120,124],
             (Platform::Ws|Platform::Lynx,true)=>&[120,124,90],
+            // PICO-8: no overlay, so no Bezel row.
+            (Platform::Pico8,_) if fits=>&[124],
+            (Platform::Pico8,_)=>&[120,124],
         }
     }
     fn screen_keys(platform: Platform)-> &'static [usize] {
@@ -6538,6 +6544,8 @@ impl Engine {
             (Platform::Lynx,true)=>&[SCREEN_SIZE_KEY,SHADER_LYNX_KEY,BEZEL_LYNX_KEY],
             (Platform::Pokemini,false)=>&[SCREEN_SIZE_KEY],
             (Platform::Pokemini,true)=>&[SCREEN_SIZE_KEY,BEZEL_POKEMINI_KEY],
+            (Platform::Pico8,_) if fits=>&[SHADER_PICO8_KEY],
+            (Platform::Pico8,_)=>&[SCREEN_SIZE_KEY,SHADER_PICO8_KEY],
         }
     }
     // Settings > Systems opens with the system's default core, then its
@@ -6727,6 +6735,9 @@ impl Engine {
             (Platform::Pokemini,true,_)=>&[],
             (Platform::Pokemini,false,false)=>&[120],
             (Platform::Pokemini,false,true)=>&[120,90],
+            // One core, no overlay.
+            (Platform::Pico8,true,_)=>&[124],
+            (Platform::Pico8,false,_)=>&[120,124],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -6772,6 +6783,8 @@ impl Engine {
             (Platform::Pokemini,true,_)=>&[],
             (Platform::Pokemini,false,false)=>&[SCREEN_SIZE_KEY],
             (Platform::Pokemini,false,true)=>&[SCREEN_SIZE_KEY,BEZEL_POKEMINI_KEY],
+            (Platform::Pico8,true,_)=>&[SHADER_PICO8_KEY],
+            (Platform::Pico8,false,_)=>&[SCREEN_SIZE_KEY,SHADER_PICO8_KEY],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
@@ -7084,7 +7097,8 @@ impl Engine {
         if Settings::lcd_effect_platform(key).is_some() || matches!(key,0|1|3|21|47|48|49|70) || matches!(key,
             crate::settings::SHADER_SMS_KEY|crate::settings::SHADER_GG_KEY
             |crate::settings::SHADER_NGP_KEY|crate::settings::SHADER_WS_KEY
-            |crate::settings::SHADER_LYNX_KEY|crate::settings::SHADER_POKEMINI_KEY) {
+            |crate::settings::SHADER_LYNX_KEY|crate::settings::SHADER_POKEMINI_KEY
+            |crate::settings::SHADER_PICO8_KEY) {
             self.apply_game_look();
         }
         // A shader change can switch to/from a preset with its own GBA Color.
@@ -8651,7 +8665,7 @@ impl Engine {
             | WS_PALETTE_KEY
             | POKEMINI_PALETTE_KEY | POKEMINI_FILTER_KEY | POKEMINI_LCD_MODE_KEY)
             || (SHADER_SMS_KEY..=SHADER_GG_KEY).contains(&key)
-            || matches!(key, SHADER_NGP_KEY | SHADER_WS_KEY | SHADER_LYNX_KEY | SHADER_POKEMINI_KEY)
+            || matches!(key, SHADER_NGP_KEY | SHADER_WS_KEY | SHADER_LYNX_KEY | SHADER_POKEMINI_KEY | SHADER_PICO8_KEY)
     }
     fn screen_page_sizes(&self) -> bool {
         !video_mode::screen_fits(self.current_cart_platform(), panel_size())
@@ -9322,6 +9336,7 @@ impl Engine {
                 Platform::Ws => self.home_chip_blanks[6],
                 Platform::Lynx => self.home_chip_blanks[7],
                 Platform::Pokemini => self.home_chip_blanks[8],
+                Platform::Pico8 => self.home_chip_blanks[9],
                 _ => self.pak_chip_blank,
             };
             (&self.pak_chip_textures, blank)
@@ -10995,7 +11010,8 @@ const SOLO_ONLY_PAUSE_ROWS: &[PauseRow] = &[
     PauseRow::Settings, PauseRow::SaveEject,
 ];
 fn multiplayer_offered(platform: Platform) -> bool {
-    !matches!(platform, Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini)
+    !matches!(platform, Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini
+        | Platform::Pico8)
 }
 fn pause_rows(linked: bool, requires_relaunch: bool, offered: bool) -> &'static [PauseRow] {
     if requires_relaunch { RELAUNCH_PAUSE_ROWS }

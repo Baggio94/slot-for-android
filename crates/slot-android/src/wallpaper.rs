@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 /// the platform shelves (Platform::ALL), then Recents, Favorites and
 /// GBA Video (upstream's GBAV).
 pub const SHELF_KEYS: [&str; slot_store::Platform::ALL.len() + 3] = [
-    "GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI",
+    "GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI", "PICO8",
     "Recents", "Favorites", "GBAV",
 ];
 

@@ -324,6 +324,8 @@ impl Bezel {
     pub const WS: [Bezel; 4] = [Bezel::None, Bezel::WsAuto, Bezel::Ws, Bezel::WsColor];
     pub const LYNX: [Bezel; 3] = [Bezel::None, Bezel::Lynx, Bezel::LynxGold];
     pub const POKEMINI: [Bezel; 2] = [Bezel::None, Bezel::PokemonMini];
+    /// PICO-8 has no overlay: its square picture keeps the screen's middle.
+    pub const PICO8: [Bezel; 1] = [Bezel::None];
     pub fn list(platform: slot_store::Platform) -> &'static [Bezel] {
         use slot_store::Platform;
         match platform {
@@ -339,6 +341,7 @@ impl Bezel {
             Platform::Ws => &Self::WS,
             Platform::Lynx => &Self::LYNX,
             Platform::Pokemini => &Self::POKEMINI,
+            Platform::Pico8 => &Self::PICO8,
         }
     }
     pub fn step_in(self,list:&[Bezel],right:bool)->Self {
@@ -498,13 +501,14 @@ impl Shader {
         Self::Simpletex, Self::Dot, Self::LcdGridV2,
     ];
     /// Pokemon mini: PokeMini draws its own LCD (Dot Matrix), no shader.
+    /// PICO-8 offers the same two: its pixels square, or smoothed between.
     pub const POKEMINI: [Self; 2] = [Self::Off, Self::SharpBilinear];
     /// The 3.0 systems' choices; the Master System keeps the CRT ones.
     pub fn list_3_0(platform: slot_store::Platform) -> &'static [Self] {
         use slot_store::Platform::*;
         match platform {
             Gg | Ngp | Ws | Lynx => &Self::LCD,
-            Pokemini => &Self::POKEMINI,
+            Pokemini | Pico8 => &Self::POKEMINI,
             _ => &Self::HOME,
         }
     }
@@ -668,6 +672,8 @@ pub struct Settings {
     pub shader_lynx: Shader,
     #[serde(default = "shader_off")]
     pub shader_pokemini: Shader,
+    #[serde(default = "shader_off")]
+    pub shader_pico8: Shader,
     // Retain legacy field for old RC1 Settings.json and old desktop Link code;
     // the three platform fields below are authoritative after migration.
     pub colour_correction_gba: bool,
@@ -873,6 +879,8 @@ pub struct Settings {
     pub blending_lynx: Blending,
     #[serde(default)]
     pub blending_pokemini: Blending,
+    #[serde(default)]
+    pub blending_pico8: Blending,
     /// LCD Effect of each supported handheld (Systems > [system] > LCD Effect).
     #[serde(default)]
     pub lcd_effect_gba: LcdEffect,
@@ -930,7 +938,7 @@ impl Default for Settings {
             shader_md: Shader::ZfastCrt,
             shader_sms: Shader::ZfastCrt, shader_gg: Shader::Lcd3x,
             shader_ngp: Shader::Lcd3x, shader_ws: Shader::Lcd3x,
-            shader_lynx: Shader::Lcd3x, shader_pokemini: Shader::Off,
+            shader_lynx: Shader::Lcd3x, shader_pokemini: Shader::Off, shader_pico8: Shader::Off,
             colour_correction_gba: false, colour_correction_gb: false,
             colour_correction_gbc: false,
             bezel_gba: Bezel::None, bezel_gbc: Bezel::Default, bezel_gb: Bezel::Default,
@@ -969,6 +977,7 @@ impl Default for Settings {
             blending_sms: Blending::Off, blending_gg: Blending::Off,
             blending_ngp: Blending::Off, blending_ws: Blending::Mix,
             blending_lynx: Blending::Off, blending_pokemini: Blending::Off,
+            blending_pico8: Blending::Off,
             lcd_effect_gba: LcdEffect::Off, lcd_effect_gbc: LcdEffect::Off, lcd_effect_gb: LcdEffect::Off,
             lcd_effect_gg: LcdEffect::Off, lcd_effect_ngp: LcdEffect::Off,
             lcd_effect_ws: LcdEffect::Off, lcd_effect_lynx: LcdEffect::Off,
@@ -1097,7 +1106,7 @@ impl Settings {
                     if !Shader::HOME.contains(shader) { *shader = Shader::ZfastCrt; }
                 }
                 use slot_store::Platform as P;
-                for platform in [P::Gg, P::Ngp, P::Ws, P::Lynx, P::Pokemini] {
+                for platform in [P::Gg, P::Ngp, P::Ws, P::Lynx, P::Pokemini, P::Pico8] {
                     if !Shader::list_3_0(platform).contains(&s.shader_for(platform)) {
                         s.set_shader_for(platform, Shader::Off);
                     }
@@ -1316,6 +1325,7 @@ impl Settings {
             slot_store::Platform::Ws=>self.shader_ws,
             slot_store::Platform::Lynx=>self.shader_lynx,
             slot_store::Platform::Pokemini=>self.shader_pokemini,
+            slot_store::Platform::Pico8=>self.shader_pico8,
         }
     }
     pub fn set_shader_for(&mut self,platform:slot_store::Platform,shader:Shader) {
@@ -1332,6 +1342,7 @@ impl Settings {
             slot_store::Platform::Ws=>self.shader_ws=shader,
             slot_store::Platform::Lynx=>self.shader_lynx=shader,
             slot_store::Platform::Pokemini=>self.shader_pokemini=shader,
+            slot_store::Platform::Pico8=>self.shader_pico8=shader,
         }
     }
     /// The Shader row's key of a home console (47 NES, 48 SNES, 49 MD,
@@ -1348,6 +1359,7 @@ impl Settings {
             slot_store::Platform::Ws=>Some(SHADER_WS_KEY),
             slot_store::Platform::Lynx=>Some(SHADER_LYNX_KEY),
             slot_store::Platform::Pokemini=>Some(SHADER_POKEMINI_KEY),
+            slot_store::Platform::Pico8=>Some(SHADER_PICO8_KEY),
             _=>None,
         }
     }
@@ -1367,7 +1379,8 @@ impl Settings {
         match platform { Gba => 60, Gbc => 61, Gb => 62, Nes => 63, Snes => 64, Md => 65,
             Sms => BLENDING_SMS_KEY, Gg => BLENDING_GG_KEY,
             Ngp => BLENDING_NGP_KEY, Ws => BLENDING_WS_KEY,
-            Lynx => BLENDING_LYNX_KEY, Pokemini => BLENDING_POKEMINI_KEY }
+            Lynx => BLENDING_LYNX_KEY, Pokemini => BLENDING_POKEMINI_KEY,
+            Pico8 => BLENDING_PICO8_KEY }
     }
 
     /// The system a Frame Blending key belongs to.
@@ -1383,6 +1396,7 @@ impl Settings {
             Sms => &mut self.blending_sms, Gg => &mut self.blending_gg,
             Ngp => &mut self.blending_ngp, Ws => &mut self.blending_ws,
             Lynx => &mut self.blending_lynx, Pokemini => &mut self.blending_pokemini,
+            Pico8 => &mut self.blending_pico8,
         }
     }
 
@@ -1443,6 +1457,7 @@ impl Settings {
             Sms => self.blending_sms, Gg => self.blending_gg,
             Ngp => self.blending_ngp, Ws => self.blending_ws,
             Lynx => self.blending_lynx, Pokemini => self.blending_pokemini,
+            Pico8 => self.blending_pico8,
         }
     }
 
@@ -1484,6 +1499,7 @@ impl Settings {
             slot_store::Platform::Ws=>self.bezel_ws,
             slot_store::Platform::Lynx=>self.bezel_lynx,
             slot_store::Platform::Pokemini=>self.bezel_pokemini,
+            slot_store::Platform::Pico8=>Bezel::None,
         }
     }
     pub fn set_bezel_for(&mut self,platform:slot_store::Platform,value:Bezel) {
@@ -1500,6 +1516,7 @@ impl Settings {
             slot_store::Platform::Ws=>self.bezel_ws=value,
             slot_store::Platform::Lynx=>self.bezel_lynx=value,
             slot_store::Platform::Pokemini=>self.bezel_pokemini=value,
+            slot_store::Platform::Pico8=>{}
         }
     }
     /// The Bezel row's settings key for each system.
@@ -1512,6 +1529,7 @@ impl Settings {
             slot_store::Platform::Ngp=>BEZEL_NGP_KEY, slot_store::Platform::Ws=>BEZEL_WS_KEY,
             slot_store::Platform::Lynx=>BEZEL_LYNX_KEY,
             slot_store::Platform::Pokemini=>BEZEL_POKEMINI_KEY,
+            slot_store::Platform::Pico8=>BEZEL_PICO8_KEY,
         }
     }
     /// Once per handheld: a 3.0 system whose overlay would only have thin
@@ -1552,7 +1570,7 @@ impl Settings {
                 !self.colour_correction_gb),
             21 => self.shader_gbc=self.shader_gbc.step(&Shader::GBC,right),
             60..=65 | BLENDING_SMS_KEY | BLENDING_GG_KEY | BLENDING_NGP_KEY | BLENDING_WS_KEY
-            | BLENDING_LYNX_KEY | BLENDING_POKEMINI_KEY => {
+            | BLENDING_LYNX_KEY | BLENDING_POKEMINI_KEY | BLENDING_PICO8_KEY => {
                 let Some(platform) = Self::blending_platform(key) else { return false };
                 let blending = self.blending_mut(platform);
                 *blending = blending.step(right);
@@ -1607,6 +1625,7 @@ impl Settings {
             SHADER_WS_KEY => self.shader_ws=self.shader_ws.step(&Shader::LCD,right),
             SHADER_LYNX_KEY => self.shader_lynx=self.shader_lynx.step(&Shader::LCD,right),
             SHADER_POKEMINI_KEY => self.shader_pokemini=self.shader_pokemini.step(&Shader::POKEMINI,right),
+            SHADER_PICO8_KEY => self.shader_pico8=self.shader_pico8.step(&Shader::POKEMINI,right),
             3 => step_palette(&mut self.gb_palettes, &mut self.gb_palette, right),
             4 => {
                 let at = SPEEDS.iter().position(|x| *x == self.ff_speed).unwrap_or(0);
@@ -1711,6 +1730,11 @@ pub const LCD_EFFECT_GG_KEY: usize = 145;
 pub const LCD_EFFECT_NGP_KEY: usize = 146;
 pub const LCD_EFFECT_WS_KEY: usize = 147;
 pub const LCD_EFFECT_LYNX_KEY: usize = 148;
+/// PICO-8's Shader and Frame Blending rows; its Bezel key never shows (no
+/// overlay), but every system has one.
+pub const SHADER_PICO8_KEY: usize = 149;
+pub const BLENDING_PICO8_KEY: usize = 150;
+pub const BEZEL_PICO8_KEY: usize = 151;
 
 /// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
 /// grey first, then the three consoles' screens.

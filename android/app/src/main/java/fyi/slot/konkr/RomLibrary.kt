@@ -147,7 +147,7 @@ internal object RomLibrary {
                     }
 
                     val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-                    if (!isSupportedRomExtension(extension)) continue
+                    if (!isSupportedRomExtension(extension) || !Systems.acceptsName(name)) continue
                     if (found.size >= MAX_CANDIDATES) {
                         truncated = true
                         break
@@ -263,7 +263,7 @@ internal object RomLibrary {
                           old: JSONObject?): ReadEntry? {
         val resolver = context.contentResolver
         // Keep the shelf title identical to the RetroArch save basename.
-        val title = name.substringBeforeLast('.').trim().take(200)
+        val title = Systems.titleOf(name).trim().take(200)
         if (title.isEmpty()) return null
         val uriText = fileUri.toString()
         val reuse = old != null && canReuseHeader(
@@ -448,7 +448,7 @@ internal object RomLibrary {
             } ?: return null
             if (name.startsWith(".")) return null
             val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-            if (!isSupportedRomExtension(extension)) return null
+            if (!isSupportedRomExtension(extension) || !Systems.acceptsName(name)) return null
             added += readEntry(context, fileUri, name, extension, size, modified,
                 file.folder, null)?.game ?: return null
         }
@@ -511,7 +511,7 @@ internal object RomLibrary {
         "msx2", "msxturbor", "mugen", "multivision", "n3ds", "n64", "n64dd", "naomi",
         "naomi2", "naomigd", "nds", "neogeo", "neogeocd", "neogeocdjp", "ngage",
         "odyssey2", "openbor", "oric", "palm", "pc", "pc88", "pc98", "pcarcade",
-        "pcengine", "pcenginecd", "pcfx", "pico8", "plus4", "ports", "ps2", "ps3",
+        "pcengine", "pcenginecd", "pcfx", "plus4", "ports", "ps2", "ps3",
         "ps4", "psp", "psvita", "psx", "pv1000", "quake", "samcoupe", "saturn", "saturnjp",
         "scummvm", "scv", "sega32x", "sega32xjp", "sega32xna", "segacd", "sg-1000",
         "solarus", "spectravideo", "steam", "stv", "supergrafx", "supervision", "supracan",

@@ -87,7 +87,7 @@ pub enum Body {
 pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
         Platform::Gba | Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
-        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini => None,
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini | Platform::Pico8 => None,
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
             Some(Outline::Notched) => GbShell::Notched,
             Some(Outline::Rounded) => GbShell::Rounded,
@@ -115,7 +115,7 @@ pub fn platform_body(platform: Platform) -> Body {
         Platform::Gba => Body::Gba,
         Platform::Gb | Platform::Gbc => Body::Gb(GbShell::Notched),
         Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
-        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini => {
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini | Platform::Pico8 => {
             Body::Home(HomeMould::default_for(platform).unwrap_or(HomeMould::Nes))
         }
     }
@@ -212,6 +212,8 @@ pub fn shelf_grow(body: Body) -> f32 {
         Body::Home(m @ (HomeMould::MasterSystemJp | HomeMould::MasterSystemCard | HomeMould::GameGearCodemasters)) => {
             (HomeMould::GameGear.size().1 as f32 / m.size().1 as f32).min(1.0)
         }
+        // The upright PICO-8 cart stands as tall as an NES cart.
+        Body::Home(HomeMould::Pico8) => HomeMould::Nes.size().1 as f32 / HomeMould::Pico8.size().1 as f32,
         _ => seat_grow(body),
     }
 }
@@ -277,12 +279,54 @@ fn mask_of(s: &Spec) -> std::borrow::Cow<'static, [u8]> {
 fn label_art(cart: &Cart, w: u32, h: u32) -> Option<Vec<u8>> {
     let path = cart.label.as_deref()?;
     match body_of(cart) {
+        Body::Home(HomeMould::Pico8) => {
+            let (src, sw, sh) = art::decode(path)?;
+            pico8_label(cart, &src, sw, sh, w, h)
+        }
         Body::Home(m) => {
             let (src, sw, sh) = art::decode(path)?;
             label_fits(m, sw, sh).then(|| art::fit_label_rgba(&src, sw, sh, w, h)).flatten()
         }
         _ => art::cover(path, w, h),
     }
+}
+
+/// A PICO-8 cart's label: its 128x128 picture, pixel for pixel enlarged to
+/// the well's width, over a paper strip with the title.
+fn pico8_label(cart: &Cart, src: &[u8], sw: u32, sh: u32, w: u32, h: u32) -> Option<Vec<u8>> {
+    if sw == 0 || sh == 0 || src.len() < (sw * sh * 4) as usize {
+        return None;
+    }
+    const PAPER: [u8; 3] = [0xec, 0xe8, 0xde];
+    let side = w.min(h);
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for _ in 0..w * h {
+        rgba.extend_from_slice(&[PAPER[0], PAPER[1], PAPER[2], 255]);
+    }
+    // Square crop of the picture, nearest neighbour: pixel art stays sharp.
+    let s = sw.min(sh);
+    let (ox, oy) = ((sw - s) / 2, (sh - s) / 2);
+    for y in 0..side {
+        let sy = oy + y * s / side;
+        for x in 0..side {
+            let sx = ox + x * s / side;
+            let i = ((sy * sw + sx) * 4) as usize;
+            let d = ((y * w + x + (w - side) / 2) * 4) as usize;
+            rgba[d..d + 3].copy_from_slice(&src[i..i + 3]);
+        }
+    }
+    if let Some(font) = text::label_font() {
+        let k = density::scale();
+        let (strip_w, strip_h) = (w as f32 / k, (h - side) as f32 / k);
+        if strip_h >= MIN_PX {
+            let title = label_text(cart).to_uppercase();
+            let layout = text::fit_box(font, &title, strip_w - 2.0 * PAD as f32, strip_h - 8.0, 2,
+                (strip_h * 0.5).min(24.0), MIN_PX);
+            let top = (side * w * 4) as usize;
+            text::draw_centred(&mut rgba[top..], w, h - side, &density::scaled(&layout), [0x20, 0x1e, 0x22]);
+        }
+    }
+    Some(rgba)
 }
 
 /// Whether a label picture has its well's shape near enough: a 3.0 cart
@@ -307,6 +351,7 @@ pub fn label_art_from_rgba(cart: &Cart, src: &[u8], sw: u32, sh: u32) -> Option<
         return None;
     }
     match body_of(cart) {
+        Body::Home(HomeMould::Pico8) => pico8_label(cart, src, sw, sh, w, h),
         Body::Home(_) => art::fit_label_rgba(src, sw, sh, w, h),
         _ => art::cover_rgba(src, sw, sh, w, h),
     }

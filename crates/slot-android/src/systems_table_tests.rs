@@ -112,9 +112,10 @@ fn every_system_has_a_complete_row() {
         assert_eq!(Platform::parse(system.dir), Some(p));
         assert!(!system.name.is_empty() && !system.extensions.is_empty(), "{p:?}");
         assert!(!system.folders.is_empty() && !system.romm.is_empty(), "{p:?}");
-        assert!(system.retroachievements > 0 && system.screenscraper > 0, "{p:?}");
+        // PICO-8 has no RetroAchievements set (0).
+        assert!((system.retroachievements > 0 || p == Platform::Pico8) && system.screenscraper > 0, "{p:?}");
         // The WonderSwan's board has one core: Beetle Cygne in both sockets.
-        assert!(system.cores[0] != system.cores[1] || matches!(p, Platform::Ws | Platform::Pokemini), "{p:?}: two sockets, one core");
+        assert!(system.cores[0] != system.cores[1] || matches!(p, Platform::Ws | Platform::Pokemini | Platform::Pico8), "{p:?}: two sockets, one core");
         for core in system.cores {
             assert!(core.runs(p), "{p:?} {core:?}");
             assert_eq!(Core::parse(core.as_str()), Some(core));

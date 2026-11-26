@@ -24,7 +24,7 @@ pub use core::{
 };
 pub use gb_palette::{GbPalette, TWB64_GAME_COM};
 pub use gba::{header_clean, header_code, header_title};
-pub use platform::Platform;
+pub use platform::{cart_stem, Platform};
 pub use ring::{StateEntry, StateRing, RING_MAX};
 pub use scan::{initial, is_hidden, scan, sort_key, Cart, StoreError};
 pub use slot_state::{

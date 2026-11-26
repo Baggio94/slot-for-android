@@ -32,7 +32,7 @@ pub struct System {
     pub handheld: bool,
 }
 
-pub const SYSTEMS: [System; 12] = [
+pub const SYSTEMS: [System; 13] = [
     System {
         platform: Platform::Gba, name: "Game Boy Advance", dir: "GBA",
         extensions: &["gba"], folders: &["gba"], romm: &["gba"],
@@ -121,6 +121,15 @@ pub const SYSTEMS: [System; 12] = [
         romm: &["pokemon-mini", "pokemini"],
         retroachievements: 24, screenscraper: 211,
         cores: [Core::PokeMini, Core::PokeMini], picture: (96, 64), handheld: false,
+    },
+    // fake-08 is its only core for now: both sockets hold it. No
+    // RetroAchievements set exists for PICO-8 (0).
+    System {
+        platform: Platform::Pico8, name: "PICO-8", dir: "PICO8",
+        extensions: &["p8", "png"], folders: &["pico8", "pico-8"],
+        romm: &["pico-8", "pico"],
+        retroachievements: 0, screenscraper: 234,
+        cores: [Core::Fake08, Core::Fake08], picture: (128, 128), handheld: false,
     },
 ];
 

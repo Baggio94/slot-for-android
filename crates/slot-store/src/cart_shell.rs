@@ -38,10 +38,12 @@ pub enum Outline {
     MasterSystemJp,
     MasterSystemCard,
     GameGearCodemasters,
+    /// slot.'s own PICO-8 cart.
+    Pico8,
 }
 
 impl Outline {
-    pub const NAMES: [(Outline, &'static str); 26] = [
+    pub const NAMES: [(Outline, &'static str); 27] = [
         (Outline::Auto, "auto"),
         (Outline::Notched, "notched"),
         (Outline::Rounded, "rounded"),
@@ -68,6 +70,7 @@ impl Outline {
         (Outline::MasterSystemJp, "mastersystem-jp"),
         (Outline::MasterSystemCard, "mastersystem-card"),
         (Outline::GameGearCodemasters, "gamegear-codemasters"),
+        (Outline::Pico8, "pico8"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -101,6 +104,7 @@ impl Outline {
             Outline::WonderSwan | Outline::WonderSwanColor => Some(Platform::Ws),
             Outline::Lynx => Some(Platform::Lynx),
             Outline::PokemonMini => Some(Platform::Pokemini),
+            Outline::Pico8 => Some(Platform::Pico8),
         }
     }
 }

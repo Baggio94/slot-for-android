@@ -131,6 +131,7 @@ impl Engine {
             Platform::Sms => "sms", Platform::Gg => "gg",
             Platform::Ngp => "ngp", Platform::Ws => "ws",
             Platform::Lynx => "lynx", Platform::Pokemini => "pokemini",
+            Platform::Pico8 => "pico8",
         }
     }
 

@@ -29,15 +29,17 @@ pub enum Core {
     /// PokeDaisy (mGBA with a companion), a third chip on the GB, GBC and
     /// GBA boards of the Pokemon games only (see `pokedaisy::plays`).
     PokeDaisy,
+    /// fake-08, PICO-8's player (jtothebell/fake-08, MIT).
+    Fake08,
 }
 
 impl Core {
-    pub const ALL: [Core; 17] = [
+    pub const ALL: [Core; 18] = [
         Core::Mgba, Core::Gpsp, Core::Gambatte,
         Core::Fceumm, Core::Nestopia, Core::Snes9x, Core::Bsnes,
         Core::GenesisPlusGx, Core::Picodrive,
         Core::Neopop, Core::Race, Core::Gearsystem, Core::Handy, Core::BeetleLynx,
-        Core::BeetleCygne, Core::PokeMini, Core::PokeDaisy,
+        Core::BeetleCygne, Core::PokeMini, Core::PokeDaisy, Core::Fake08,
     ];
 
     /// libretro's own core name: lib{as_str}_libretro.so, and the key
@@ -61,6 +63,7 @@ impl Core {
             Core::BeetleCygne => "mednafen_wswan",
             Core::PokeMini => "pokemini",
             Core::PokeDaisy => "pokedaisy",
+            Core::Fake08 => "fake08",
         }
     }
 
@@ -96,6 +99,7 @@ impl Core {
             Core::BeetleCygne => "Beetle WonderSwan",
             Core::PokeMini => "PokeMini",
             Core::PokeDaisy => "PokeDaisy",
+            Core::Fake08 => "fake-08",
         }
     }
 
@@ -136,7 +140,7 @@ impl Core {
     pub fn socket(self) -> usize {
         match self {
             Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx
-            | Core::Neopop | Core::Handy | Core::BeetleCygne | Core::PokeMini => 0,
+            | Core::Neopop | Core::Handy | Core::BeetleCygne | Core::PokeMini | Core::Fake08 => 0,
             Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive
             | Core::Race | Core::Gearsystem | Core::BeetleLynx => 1,
             Core::PokeDaisy => 2,

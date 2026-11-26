@@ -840,7 +840,8 @@ impl GameSession {
                 // cold-boot freeze and BIOS mapping on resumed states.
                 core.set_option("genesis_plus_gx_bios", "disabled");
             }
-            Core::Picodrive => {}
+            // fake-08 needs no options: its defaults are PICO-8's.
+            Core::Picodrive | Core::Fake08 => {}
             Core::Gearsystem => {
                 core.set_option("gearsystem_bios_gg", "Disabled");
                 core.set_option("gearsystem_bios_sms", "Disabled");
@@ -893,9 +894,10 @@ impl GameSession {
             primary_id: core.instance_id(),
             native_video: !platform.handheld() || which == Core::PokeDaisy,
         });
+        // A system without RetroAchievements (PICO-8: 0) is never wrapped.
         let mut core: Box<dyn RetroCore> = match achievements {
-            Some(service) => service.wrap_for_console(Box::new(core), console),
-            None => Box::new(core),
+            Some(service) if console != 0 => service.wrap_for_console(Box::new(core), console),
+            _ => Box::new(core),
         };
         // bsnes keeps its battery itself, named after the ROM file and
         // written to the save directory when the game unloads, as in
@@ -1178,7 +1180,8 @@ impl GameSession {
             // The Game Gear, Neo Geo Pocket and WonderSwan have no second
             // pad: their link cable is another console.
             second_player: !platform.handheld() && !matches!(platform,
-                Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini),
+                Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini
+                | Platform::Pico8),
             port2: 0, layouts: [None, None],
             blending: None, slot_blending: crate::frame_blend::Mode::Off,
             runahead_video: Vec::new(), runahead_size: (0, 0), runahead_state: Vec::new(),

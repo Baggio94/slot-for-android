@@ -22,6 +22,7 @@ internal object Systems {
     const val WS = "WS"
     const val LYNX = "LYNX"
     const val POKEMINI = "POKEMINI"
+    const val PICO8 = "PICO8"
 
     /** The systems whose Pokemon games PokeDaisy plays (Core::pokedaisy_system). */
     private val POKEDAISY_SYSTEMS = setOf(GB, GBC, GBA)
@@ -62,6 +63,8 @@ internal object Systems {
         // The Lynx (Beetle Lynx needs lynxboot.img) and the Pokemon mini (PokeMini only).
         SystemRow(LYNX, listOf("lnx", "lyx"), listOf("atarilynx", "lynx"), listOf("lynx", "atari-lynx", "atarilynx"), 13, 28, listOf("handy", "mednafen_lynx"), home = true),
         SystemRow(POKEMINI, listOf("min"), listOf("pokemini"), listOf("pokemon-mini", "pokemini"), 24, 211, listOf("pokemini", "pokemini"), home = true),
+        // PICO-8: .p8 text carts and .p8.png pictures of carts (fake-08 only; no RetroAchievements: 0).
+        SystemRow(PICO8, listOf("p8", "png"), listOf("pico8", "pico-8"), listOf("pico-8", "pico"), 0, 234, listOf("fake08", "fake08"), home = true),
     )
 
     /** Every shelf key, in the native side's order. */
@@ -124,6 +127,7 @@ internal object Systems {
         "pokemini" to "PokeMini",
         // The third chip of the Pokemon games' GB, GBC and GBA boards.
         "pokedaisy" to "PokeDaisy",
+        "fake08" to "fake-08",
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
@@ -176,6 +180,35 @@ internal object Systems {
     /** A save flush names its core by key; unknown keys keep the old mGBA fallback. */
     fun folderForKey(key: String): String = FOLDERS[key.lowercase(Locale.ROOT)] ?: "mGBA"
 
+    /** A cart's file name: a PNG only as NAME.p8.png (a PICO-8 cart), never
+     *  cover art or a screenshot. */
+    fun acceptsName(filename: String): Boolean {
+        val name = lower(filename)
+        return name.substringAfterLast('.', "") != "png" || name.endsWith(".p8.png")
+    }
+
+    /** The smallest file that can be a cartridge: a .p8 text cart can be a
+     *  one-line program (its "pico-8 cartridge" header and a few bytes). */
+    fun minRomBytes(ext: String): Int =
+        if (platformFor(ext) == PICO8) 16 else RomSource.MIN_ROM_BYTES
+
+    /** The shelf title of a cart file: its name without the extension, and
+     *  without .p8 for a PICO-8 .p8.png. */
+    fun titleOf(filename: String): String {
+        val bare = filename.substringBeforeLast('.')
+        return if (lower(filename).endsWith(".p8.png")) bare.dropLast(3) else bare
+    }
+
+    /** A PNG signature, then IHDR at PICO-8's 160x205 cart picture. */
+    fun isPico8Png(header: ByteArray): Boolean {
+        val signature = byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(),
+            0x0d, 0x0a, 0x1a, 0x0a)
+        if (header.size < 24 || !header.copyOfRange(0, 8).contentEquals(signature)) return false
+        if (String(header, 12, 4, Charsets.US_ASCII) != "IHDR") return false
+        fun int(at: Int) = (0 until 4).fold(0) { v, i -> (v shl 8) or (header[at + i].toInt() and 0xff) }
+        return int(16) == 160 && int(20) == 205
+    }
+
     /** How many leading bytes the scanner needs to identify a cartridge. */
     fun headerBytes(ext: String): Int = when (platformFor(ext)) {
         // Both LoROM and HiROM headers, behind a possible 512-byte copier header.
@@ -184,8 +217,10 @@ internal object Systems {
         else -> RomSource.MIN_ROM_BYTES
     }
 
-    /** A .bin only counts as a Mega Drive cart with "SEGA" in its header. */
+    /** A .bin only counts as a Mega Drive cart with "SEGA" in its header,
+     *  a .png as a PICO-8 cart only at a cart picture's 160x205. */
     fun acceptsHeader(ext: String, header: ByteArray): Boolean {
+        if (lower(ext) == "png") return isPico8Png(header)
         if (lower(ext) != "bin") return true
         if (header.size < 0x110) return false
         val text = String(header, 0x100, 0x10, Charsets.ISO_8859_1)

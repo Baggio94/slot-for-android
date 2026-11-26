@@ -87,7 +87,7 @@ PLATFORMS = {
 }
 SS_SYSTEM = {'GB': 9, 'GBC': 10, 'GBA': 12, 'NES': 3, 'SNES': 4, 'MD': 1,
              'NGP': 25, 'NGPC': 82, 'WS': 45, 'WSC': 46, 'GG': 21, 'SMS': 2, 'LYNX': 28,
-             'POKEMINI': 211}
+             'POKEMINI': 211, 'PICO8': 234}
 SS_EXPECT = {
     'GB': ('game boy',),
     'GBC': ('game boy color',),

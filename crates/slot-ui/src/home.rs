@@ -37,6 +37,7 @@ impl HomeMould {
             HomeMould::WonderSwan | HomeMould::WonderSwanColor => Platform::Ws,
             HomeMould::Lynx => Platform::Lynx,
             HomeMould::PokemonMini => Platform::Pokemini,
+            HomeMould::Pico8 => Platform::Pico8,
         }
     }
 
@@ -61,6 +62,7 @@ impl HomeMould {
             Platform::Ws => Some(HomeMould::WonderSwan),
             Platform::Lynx => Some(HomeMould::Lynx),
             Platform::Pokemini => Some(HomeMould::PokemonMini),
+            Platform::Pico8 => Some(HomeMould::Pico8),
             Platform::Gba | Platform::Gb | Platform::Gbc => None,
         }
     }
@@ -90,6 +92,7 @@ impl HomeMould {
             HomeMould::MasterSystemJp => Outline::MasterSystemJp,
             HomeMould::MasterSystemCard => Outline::MasterSystemCard,
             HomeMould::GameGearCodemasters => Outline::GameGearCodemasters,
+            HomeMould::Pico8 => Outline::Pico8,
         }
     }
 
@@ -234,6 +237,7 @@ pub fn home_shell(platform: Platform, stem: &str, region: &str, maker: &str) -> 
         Platform::Ws => HomeSystem::WonderSwan,
         Platform::Lynx => HomeSystem::Lynx,
         Platform::Pokemini => HomeSystem::PokemonMini,
+        Platform::Pico8 => HomeSystem::Pico8,
         Platform::Gba | Platform::Gb | Platform::Gbc => return None,
     };
     let (mould, colour, glitter) = home_pick(system, stem, region, maker);

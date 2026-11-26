@@ -571,10 +571,13 @@ const LYNX: [ConsoleButton; 9] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
 const POKEMINI: [ConsoleButton; 9] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
     cb("A", bit::A), cb("B", bit::B), cb("C", bit::R), cb("Shake", bit::L),
     cb_on("Power", bit::SELECT, 0)];
+/// fake-08 reads PICO-8's O from B, X from A and Pause from START.
+const PICO8: [ConsoleButton; 7] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("O", bit::B), cb("X", bit::A), cb("Pause", bit::START)];
 
 /// Systems, by the names slot. files their controls under.
-pub const SYSTEMS: [&str; 13] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv",
-    "lynx", "pokemini"];
+pub const SYSTEMS: [&str; 14] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv",
+    "lynx", "pokemini", "pico8"];
 
 /// Controls of a WonderSwan game made to be held upright.
 pub const WS_UPRIGHT_SYSTEM: &str = "wsv";
@@ -591,6 +594,7 @@ pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
         "wsv" => &WS_UPRIGHT,
         "lynx" => &LYNX,
         "pokemini" => &POKEMINI,
+        "pico8" => &PICO8,
         _ => &TWO_BUTTONS,
     }
 }
@@ -665,7 +669,7 @@ impl ShoulderRole {
 
 /// X / Y and L1 / R1 rows: on which systems they are spare.
 pub fn spare_xy(system: &str) -> bool {
-    matches!(system, "gba" | "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp" | "lynx" | "pokemini")
+    matches!(system, "gba" | "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp" | "lynx" | "pokemini" | "pico8")
 }
 pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp") }
 /// C / Z row: every system but the Mega Drive, whose pad has them.
@@ -1539,6 +1543,18 @@ mod tests {
 
     const NES: Scope = Scope::System("nes");
     fn game() -> Scope { Scope::Game { system: "nes", game: "mario".into() } }
+
+    #[test]
+    fn pico8_plays_o_x_and_pause_from_b_a_and_start() {
+        let resolved = Controls::default().resolve("pico8", None, 0, XyRole::BA);
+        let dpad = bit::UP | bit::DOWN | bit::LEFT | bit::RIGHT;
+        assert_eq!(resolved.apply(dpad, 0), dpad);
+        assert_eq!(resolved.apply(bit::B, 0), bit::B, "O");
+        assert_eq!(resolved.apply(bit::A, 0), bit::A, "X");
+        assert_eq!(resolved.apply(bit::START, 0), bit::START, "Pause");
+        let names: Vec<_> = console_buttons("pico8").iter().map(|b| b.name).collect();
+        assert_eq!(names, ["Up", "Down", "Left", "Right", "O", "X", "Pause"]);
+    }
 
     #[test]
     fn untouched_systems_play_exactly_as_before() {

@@ -179,7 +179,7 @@ pub fn write_system_mode(root: &Path, platform: Platform, mode: VideoMode) -> st
 pub fn screen_fits(platform: Platform, panel: (u32, u32)) -> bool {
     // The handhelds' LCDs: the picture's own shape.
     let shape = if platform.handheld() || matches!(platform,
-        Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini) {
+        Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini | Platform::Pico8) {
         let (w, h) = platform.picture();
         w as f32 / h as f32
     } else {
@@ -264,6 +264,8 @@ pub fn default_mode(platform: Platform, panel: (u32, u32)) -> VideoMode {
 pub fn game_default_mode(platform: Platform, panel: (u32, u32), square: bool,
     frame: (u32, u32)) -> VideoMode
 {
+    // PICO-8's 128x128 starts at Integer: every pixel the same size.
+    if platform == Platform::Pico8 { return VideoMode::Actual; }
     if !home_console(platform) { return VideoMode::Aspect; }
     let mut frame = if frame.0 == 0 || frame.1 == 0 {
         default_frame(platform, square)
@@ -619,6 +621,8 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
         // Their own overlays, above.
         Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
         | Platform::Lynx | Platform::Pokemini => None,
+        // No overlay for PICO-8.
+        Platform::Pico8 => None,
     }
 }
 
@@ -633,6 +637,7 @@ pub fn bezel_offered(platform: Platform, panel: (u32, u32)) -> bool {
         Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
         | Platform::Lynx | Platform::Pokemini => own_aspects(platform).iter().any(|&aspect|
             own_place(aspect, platform.picture(), VideoMode::Aspect, panel, crop_limit(platform)).is_some()),
+        Platform::Pico8 => false,
     }
 }
 

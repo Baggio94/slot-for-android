@@ -64,8 +64,8 @@ internal object RomSource {
                 val entry = zip.nextEntry ?: break
                 if (entry.isDirectory) continue
                 val romExt = extension(entry.name.substringAfterLast('/'))
-                if (romExt !in supported) continue
-                require(entry.size == -1L || entry.size in MIN_ROM_BYTES.toLong()..MAX_ROM_BYTES) {
+                if (romExt !in supported || !Systems.acceptsName(entry.name)) continue
+                require(entry.size == -1L || entry.size in Systems.minRomBytes(romExt).toLong()..MAX_ROM_BYTES) {
                     "ZIP ROM exceeds safe size limits"
                 }
                 // Preserve a deterministic first-ROM choice across scan,
@@ -91,7 +91,7 @@ internal object RomSource {
                 if (n == 0) continue
                 filled += n
             }
-            require(filled >= MIN_ROM_BYTES) { "Cartridge ROM header is too small" }
+            require(filled >= Systems.minRomBytes(ext)) { "Cartridge ROM header is too small" }
             val header = head.copyOf(filled)
             val hasBattery = if (!battery) null else when (Systems.platformFor(ext)) {
                 Systems.WS, "GBA" -> {
