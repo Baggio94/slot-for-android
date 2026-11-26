@@ -1,0 +1,116 @@
+diff --git a/platform/libretro/libretro.cpp b/platform/libretro/libretro.cpp
+index dd6ad9c..f909ee3 100644
+--- a/platform/libretro/libretro.cpp
++++ b/platform/libretro/libretro.cpp
+@@ -717,6 +717,19 @@ EXPORT bool retro_load_game(struct retro_game_info const *info)
+         return true;
+     }
+ 
++    // slot.: the game's save is named after its file (the frontend hands
++    // the cart over under the game's name): NAME.p8, NAME.p8.png, NAME.png.
++    {
++        std::string path = info->path ? info->path : "";
++        size_t slash = path.find_last_of("/\\");
++        std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
++        const char* endings[] = {".p8.png", ".png", ".p8"};
++        for (const char* ending : endings) {
++            if (hasEnding(name, ending)) { name = name.substr(0, name.length() - strlen(ending)); break; }
++        }
++        _host->setGameSaveName(name);
++    }
++
+     auto containingDir = getDirectory(info->path);
+ 
+     if (containingDir.length() > 0) {
+diff --git a/source/host.h b/source/host.h
+index 6aceffb..869fcc4 100644
+--- a/source/host.h
++++ b/source/host.h
+@@ -94,6 +94,12 @@ class Host {
+ 
+     std::string getCartDataFile(std::string cartDataKey);
+ 
++    // slot.: the game's own save, <save dir>/<game>.p8d.txt, for the
++    // first cartdata id the game opens (see setGameSaveName).
++    std::string _gameSaveName;
++    std::string _gameSaveKey;
++    bool gameSaveFor(std::string cartDataKey);
++
+     Color _paletteColors[144];
+ 
+     public:
+@@ -138,6 +144,8 @@ class Host {
+ 
+     void saveCartData(std::string cartDataKey, std::string contents);
+ 
++    void setGameSaveName(std::string name);
++
+     size_t getFileContents(std::string fileName, char* buffer);
+     void writeBufferToFile(std::string cartDataKey, char* buffer, size_t length);
+ 
+diff --git a/source/hostCommonFunctions.cpp b/source/hostCommonFunctions.cpp
+index 6ca10cf..2ad142b 100644
+--- a/source/hostCommonFunctions.cpp
++++ b/source/hostCommonFunctions.cpp
+@@ -201,20 +201,53 @@ std::string Host::getCartDataFile(std::string cartDataKey) {
+     return _logFilePrefix + "cdata/" + cartDataKey + ".p8d.txt";
+ }
+ 
+-std::string Host::getCartDataFileContents(std::string cartDataKey) {
+-    return get_file_contents(getCartDataFile(cartDataKey));
++static bool slot_file_exists(const std::string& path) {
++    FILE * file = fopen(path.c_str(), "rb");
++    if (file == NULL) return false;
++    fclose(file);
++    return true;
+ }
+ 
+-void Host::saveCartData(std::string cartDataKey, std::string contents) {
+-    FILE * file = fopen(getCartDataFile(cartDataKey).c_str(), "w");
++static void slot_write_text(const std::string& path, const std::string& contents) {
++    FILE * file = fopen(path.c_str(), "w");
+     if( file != NULL ) {
+-		//Initialize data
+         fprintf(file, "%s", contents.c_str());
+-		
+         fflush(file);
+-        
+         fclose(file);
+-	}
++    }
++}
++
++void Host::setGameSaveName(std::string name) {
++    _gameSaveName = name;
++    _gameSaveKey = "";
++}
++
++// The game's own save holds its first cartdata id; another id the game
++// opens stays in cdata/ only.
++bool Host::gameSaveFor(std::string cartDataKey) {
++    if (_gameSaveName.length() == 0) return false;
++    if (_gameSaveKey.length() == 0) _gameSaveKey = cartDataKey;
++    return _gameSaveKey == cartDataKey;
++}
++
++std::string Host::getCartDataFileContents(std::string cartDataKey) {
++    if (gameSaveFor(cartDataKey)) {
++        std::string own = _logFilePrefix + _gameSaveName + ".p8d.txt";
++        if (slot_file_exists(own)) return get_file_contents(own);
++        // A game whose save was deleted starts afresh; one never saved in
++        // slot. takes the id's shared file (another cart of the game, or
++        // a save made before).
++        if (slot_file_exists(_logFilePrefix + _gameSaveName + ".p8key")) return "";
++    }
++    return get_file_contents(getCartDataFile(cartDataKey));
++}
++
++void Host::saveCartData(std::string cartDataKey, std::string contents) {
++    slot_write_text(getCartDataFile(cartDataKey), contents);
++    if (gameSaveFor(cartDataKey)) {
++        slot_write_text(_logFilePrefix + _gameSaveName + ".p8d.txt", contents);
++        slot_write_text(_logFilePrefix + _gameSaveName + ".p8key", cartDataKey);
++    }
+ }
+ 
+ size_t Host::getFileContents(std::string fileName, char* buffer) {

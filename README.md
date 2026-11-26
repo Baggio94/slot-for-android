@@ -19,7 +19,7 @@ The port has since grown to other Android handhelds and more systems. The goal s
 ## Highlights
 
 - **Cartridges first.** Your library is a shelf of cartridges with their real labels, insertion and ejection animations and sounds.
-- **12 systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo, Mega Drive, Master System, Game Gear, Neo Geo Pocket/Color, WonderSwan/Color, Atari Lynx and Pokémon mini, with multiple emulation cores where available.
+- **13 systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo, Mega Drive, Master System, Game Gear, Neo Geo Pocket/Color, WonderSwan/Color, Atari Lynx, Pokémon mini and PICO-8, with multiple emulation cores where available.
 - **Any screen shape.** The interface adapts to square, 4:3, 3:2 and widescreen handhelds at their native resolution.
 - **Cart Studio.** Change a cartridge's label, shell colour, finish and shape, right on the handheld.
 - **Themes.** Dark, OLED, Light and Original, with a wallpaper for each shelf.
@@ -73,6 +73,8 @@ The [slot. for Android Wiki](https://github.com/Baggio94/slot-for-android/wiki) 
 ## Credits & License
 
 Thanks to **[Brandon Kowalski](https://github.com/BrandonKowalski/slot)**, creator of the original [slot.](https://slot-cfw.fyi/), **[Markus](https://github.com/MarkusMaribu)** for its artwork, and to the authors of the emulation cores, shaders, overlays and tools slot. for Android uses. The full list is on the [Credits](https://github.com/Baggio94/slot-for-android/wiki/Credits) page.
+
+PICO-8 games are played by fake-08 by jtothebell - https://github.com/jtothebell/fake-08 (MIT, see [its license](licenses/fake-08-MIT.txt)). PICO-8 is a product of Lexaloffle Games; slot. includes none of its files.
 
 The PokéDaisy core is based on PokeDaisy by Lidor Itzhari - https://github.com/lidor30/pokedaisy (GNU GPL-3.0, see [its notice](licenses/pokedaisy-GPL-3.0-NOTICE.txt)).
 

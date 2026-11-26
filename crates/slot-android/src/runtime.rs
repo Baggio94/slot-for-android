@@ -4553,12 +4553,16 @@ impl Engine {
                     // A durable checkpoint was verified BEFORE taking/drop-
                     // ping the session. Never report a false success from a
                     // battery error masked by an unrelated RTC/state write.
-                    if eject_saved && !session.is_link_sandbox() {
-                        if let Some(uri) = self.requested_uri.as_deref() {
-                            let core = session.core_kind().as_str();
-                            let event = serde_json::json!({"uri": uri, "core": core}).to_string();
-                            SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner()).push_back(event);
-                        }
+                    let event = (eject_saved && !session.is_link_sandbox()).then(|| {
+                        self.requested_uri.as_deref().map(|uri| serde_json::json!(
+                            {"uri": uri, "core": session.core_kind().as_str()}).to_string())
+                    }).flatten();
+                    // Unloaded first: a core that writes its own save as the
+                    // game closes (fake-08's cartdata) has written it when the
+                    // save is copied on.
+                    drop(session);
+                    if let Some(event) = event {
+                        SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner()).push_back(event);
                     }
                 }
                 PLAYING.store(false, Ordering::Release);

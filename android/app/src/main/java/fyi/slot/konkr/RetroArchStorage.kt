@@ -66,7 +66,8 @@ internal object RetroArchStorage {
         val name = scannedFileName?.takeIf { candidate ->
             candidate.substringAfterLast('.', "").lowercase(Locale.ROOT) in Systems.ROM_EXTENSIONS
         } ?: queryRomName(context, Uri.parse(rawUri))
-        val stem = name.substringBeforeLast('.', name)
+        // A PICO-8 NAME.p8.png is the game NAME, as on the shelf.
+        val stem = Systems.titleOf(name)
             .trim().take(200)
         require(stem.isNotEmpty() && stem !in setOf(".", "..") &&
             stem.none { it == '/' || it == '\\' || it.code < 32 })

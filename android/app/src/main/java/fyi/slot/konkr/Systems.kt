@@ -145,10 +145,12 @@ internal object Systems {
         "PokeMini" -> "eep"
         "Beetle NeoPop" -> "flash"
         "RACE" -> "ngf"
+        // PICO-8's cartdata, the game's own copy (cores/fake08/zz-slot-game-saves.patch).
+        "fake-08" -> "p8d.txt"
         else -> "srm"
     }
 
-    private val SAVE_SUFFIXES = listOf(".srm", ".eeprom", ".eep", ".flash", ".ngf")
+    private val SAVE_SUFFIXES = listOf(".srm", ".eeprom", ".eep", ".flash", ".ngf", ".p8d.txt")
 
     /** An in-game save's file name, whatever core wrote it. */
     fun isSaveName(name: String): Boolean =

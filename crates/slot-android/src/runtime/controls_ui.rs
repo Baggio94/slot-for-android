@@ -788,15 +788,15 @@ impl Engine {
                     }
                     LayoutRow::Xy => {
                         let (role, own) = self.controls.xy(&scope, port, default_xy);
-                        dim(line("X / Y", role.label().into(), true), own)
+                        dim(line("X / Y", controls::role_label(system, role.label()).into(), true), own)
                     }
                     LayoutRow::Cz => {
                         let (role, own) = self.controls.cz(&scope, port);
-                        dim(line("C / Z", role.cz_label().into(), true), own)
+                        dim(line("C / Z", controls::role_label(system, role.cz_label()).into(), true), own)
                     }
                     LayoutRow::Shoulders => {
                         let (role, own) = self.controls.shoulders(&scope, port);
-                        dim(line("L1 / R1", role.label().into(), true), own)
+                        dim(line("L1 / R1", controls::role_label(system, role.label()).into(), true), own)
                     }
                     LayoutRow::Reset => line("Reset to Default", String::new(), false),
                 }).collect();

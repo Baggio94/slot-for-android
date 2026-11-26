@@ -109,6 +109,10 @@ class SystemsTest {
         assertTrue(Systems.acceptsName("Sonic.md"))
         assertEquals("Jelpi", Systems.titleOf("Jelpi.p8"))
         assertEquals("Sonic (USA)", Systems.titleOf("Sonic (USA).md"))
+        // The game's own cartdata copy is its in-game save.
+        assertEquals("p8d.txt", Systems.saveExtension(Systems.saveFolder("fake-08")))
+        assertTrue(Systems.isSaveName("Celeste.p8d.txt"))
+        assertEquals("Celeste", Systems.saveStem("Celeste.p8d.txt"))
     }
 
     @Test fun everySystemHasOneCompleteRow() {

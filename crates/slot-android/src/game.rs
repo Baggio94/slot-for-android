@@ -904,7 +904,8 @@ impl GameSession {
         // RetroArch. Hand it the cart under its own name, so the file is
         // Saves/bsnes/<game>.srm like every other core's. Handy (.eeprom),
         // PokeMini (.eep), Beetle NeoPop (.flash) and RACE (.ngf) name
-        // theirs the same way, as in RetroArch.
+        // theirs the same way, as in RetroArch; fake-08 (.p8d.txt, the
+        // game's first cartdata, and .p8key, its id) by slot.'s patch.
         // 3.0-rc1 let NeoPop and RACE name their flash after the cached ROM
         // file: that save becomes the game's own once.
         if linked_boot.is_none() {
@@ -919,7 +920,7 @@ impl GameSession {
             }
         }
         let named_rom = if matches!(which, Core::Bsnes | Core::Handy | Core::PokeMini
-                | Core::Neopop | Core::Race)
+                | Core::Neopop | Core::Race | Core::Fake08)
             && linked_boot.is_none() {
             Some(named_rom_alias(storage, rom, rom_stem)?)
         } else { None };

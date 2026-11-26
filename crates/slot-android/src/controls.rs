@@ -599,6 +599,18 @@ pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
     }
 }
 
+/// A role's label in the console's own button names: PICO-8's A and B
+/// are its X and O (fake-08 reads O from B, X from A).
+pub fn role_label(system: &str, label: &'static str) -> &'static str {
+    if system != "pico8" { return label; }
+    match label {
+        "Turbo A / B" => "Turbo X / O",
+        "B / A" => "O / X",
+        "A / B" => "X / O",
+        other => other,
+    }
+}
+
 /// Only NES, SNES, Mega Drive and Master System take a second player.
 pub fn takes_port2(system: &str) -> bool { matches!(system, "nes" | "snes" | "md" | "sms") }
 
@@ -1543,6 +1555,15 @@ mod tests {
 
     const NES: Scope = Scope::System("nes");
     fn game() -> Scope { Scope::Game { system: "nes", game: "mario".into() } }
+
+    #[test]
+    fn pico8_roles_read_its_own_button_names() {
+        assert_eq!(role_label("pico8", XyRole::TurboAB.label()), "Turbo X / O");
+        assert_eq!(role_label("pico8", XyRole::BA.label()), "O / X");
+        assert_eq!(role_label("pico8", ShoulderRole::AB.label()), "X / O");
+        assert_eq!(role_label("pico8", ShoulderRole::States.label()), "Load / Save");
+        assert_eq!(role_label("nes", XyRole::BA.label()), "B / A");
+    }
 
     #[test]
     fn pico8_plays_o_x_and_pause_from_b_a_and_start() {
