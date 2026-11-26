@@ -107,6 +107,9 @@ pub trait RetroCore: Send {
     /// A second local player's buttons, used by every following solo frame
     /// (real or speculative) until changed. Cores with one player ignore it.
     fn set_port2(&mut self, _input: ButtonMask) {}
+    /// The finger on the picture for a core that reads a touchscreen
+    /// (libretro's pointer): -0x7fff to 0x7fff across, and down or not.
+    fn set_pointer(&mut self, _x: i16, _y: i16, _pressed: bool) {}
     /// Reject incomplete native GB/GBC lockstep frames before advancing netplay.
     fn link_step_fault(&self) -> bool { false }
     fn set_option(&mut self, _key: &str, _value: &str) {}

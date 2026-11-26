@@ -227,6 +227,8 @@ const EJECT_SOUND_DELAY_S: f32 = 0.040;
 const EJECT_SOUND_PROGRESS: f32 = 1.0 - EJECT_SOUND_DELAY_S / EJECT_S;
 const SELECT_CHORD_MS: u128 = 600;
 const SELECT_TAP_FRAMES: u8 = 3;
+/// A Game Menu row presses PokeDaisy's key this many frames: one press.
+const POKEDAISY_TAP_FRAMES: u8 = 4;
 /// slot. original's in-game menu: the paused game under this much black.
 const GAME_MENU_SCRIM: f32 = 0.65;
 /// The game menu waits this long for a second slot. tap (Save States).
@@ -617,7 +619,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 178] = [
+const MENU_TEXT: [&str; 180] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -801,6 +803,8 @@ const MENU_TEXT: [&str; 178] = [
     "Hide Side Bars",                     // 175, NES: left and right (Siham 2026-11-23)
     "Audio Filter",                       // 176, NES + WonderSwan optional analogue audio
     "Shelves",                            // 177, Interface: Scroll or Grid (3.0.1-beta12)
+    "Companion",                          // 178, Game Menu: PokeDaisy's companion (X)
+    "Quick Menu",                         // 179, Game Menu: PokeDaisy's quick menu (L3)
 ];
 
 /// Settings > Systems, top to bottom.
@@ -1489,6 +1493,8 @@ struct Engine {
     select_chorded: bool,
     select_forwarded: bool,
     select_tap_frames: u8,
+    /// A key pressed for PokeDaisy from the Game Menu, and its frames left.
+    pokedaisy_tap: (u16, u8),
     chord_releases: u16,
     born: Instant,
     last: Instant,
@@ -2429,6 +2435,7 @@ impl Engine {
             select_chorded: false,
             select_forwarded: false,
             select_tap_frames: 0,
+            pokedaisy_tap: (0, 0),
             chord_releases: 0,
             born: now,
             last: now,
@@ -4871,10 +4878,8 @@ impl Engine {
                             }
                             // Back where Save States was opened from.
                             97=>self.overlay=if self.states_from_menu {
-                                let linked=self.game.as_ref().is_some_and(GameSession::linked);
-                                let relaunch=self.game.as_ref().is_some_and(GameSession::requires_relaunch);
                                 ShelfOverlay::GameMenu {
-                                    row: pause_rows(linked, relaunch, self.multiplayer_offered()).iter()
+                                    row: self.game_menu_rows().iter()
                                         .position(|item| *item==PauseRow::States).unwrap_or(0),
                                 }
                             } else { ShelfOverlay::None },
@@ -4894,9 +4899,9 @@ impl Engine {
                         if let ShelfOverlay::GameMenu { row } = self.overlay {
                             match code {
                                 19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::GameMenu {
-                                    row: move_menu_row(row, code, pause_rows(linked, relaunch, self.multiplayer_offered()).len(), self.menu_repeat_dispatch),
+                                    row: move_menu_row(row, code, self.game_menu_rows().len(), self.menu_repeat_dispatch),
                                 },
-                                96 => match pause_rows(linked, relaunch, self.multiplayer_offered()).get(row).copied() {
+                                96 => match self.game_menu_rows().get(row).copied() {
                                     Some(PauseRow::SaveEject) => self.handle(Input::Exit),
                                     Some(PauseRow::Resume) => self.overlay = ShelfOverlay::None,
                                     Some(PauseRow::States) if !linked && !relaunch => {
@@ -4917,6 +4922,15 @@ impl Engine {
                                         } else { self.enter_multiplayer_menu(); }
                                     },
                                     Some(PauseRow::Cheats) if !linked && !relaunch => self.open_cheats(),
+                                    // Back to the game, PokeDaisy's own key pressed for it.
+                                    Some(PauseRow::Companion) => {
+                                        self.overlay = ShelfOverlay::None;
+                                        self.pokedaisy_tap = (ButtonMask::X, POKEDAISY_TAP_FRAMES);
+                                    }
+                                    Some(PauseRow::QuickMenu) => {
+                                        self.overlay = ShelfOverlay::None;
+                                        self.pokedaisy_tap = (ButtonMask::L3, POKEDAISY_TAP_FRAMES);
+                                    }
                                     Some(PauseRow::Settings) if !relaunch =>
                                         self.overlay = ShelfOverlay::PauseSettings { row: 0 },
                                     _ => {}
@@ -4969,9 +4983,7 @@ impl Engine {
                                     };
                                 },
                                 97 => self.overlay = ShelfOverlay::GameMenu {
-                                    row: pause_rows(self.game.as_ref().is_some_and(GameSession::linked),
-                                        self.game.as_ref().is_some_and(GameSession::requires_relaunch),
-                                        self.multiplayer_offered())
+                                    row: self.game_menu_rows()
                                         .iter().position(|item| *item==PauseRow::Settings).unwrap_or(0),
                                 },
                                 _ => {}
@@ -6057,7 +6069,17 @@ impl Engine {
         if self.playing_video() { self.settings.as_gba_video() } else { self.settings.clone() }
     }
     /// Whether the running game's system has Multiplayer at all.
-    fn multiplayer_offered(&self) -> bool { multiplayer_offered(self.current_cart_platform()) }
+    fn multiplayer_offered(&self) -> bool {
+        multiplayer_offered(self.current_cart_platform()) && !self.pokedaisy_running()
+    }
+
+    /// The Game Menu's rows for the game played.
+    fn game_menu_rows(&self) -> &'static [PauseRow] {
+        let linked = self.game.as_ref().is_some_and(GameSession::linked);
+        let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
+        if !linked && !relaunch && self.pokedaisy_running() { return POKEDAISY_PAUSE_ROWS; }
+        pause_rows(linked, relaunch, self.multiplayer_offered())
+    }
 
     fn current_cart_platform(&self) -> Platform {
         self.shelves[self.active].carts
@@ -9136,9 +9158,8 @@ impl Engine {
             // Waiting out a second slot. tap: the paused game, no menu yet.
             ShelfOverlay::GameMenu { .. } if self.menu_reveal_at.is_some_and(|at| Instant::now() < at) => {}
             ShelfOverlay::GameMenu { row } => {
-                let linked = self.game.as_ref().is_some_and(GameSession::linked);
                 let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
-                let indices: Vec<usize> = pause_rows(linked, relaunch, self.multiplayer_offered()).iter()
+                let indices: Vec<usize> = self.game_menu_rows().iter()
                     .map(|item| pause_row_text(*item, relaunch)).collect();
                 self.draw_original_style_menu(19, &indices, row, out);
             }
@@ -9670,10 +9691,7 @@ impl Engine {
             ShelfOverlay::Menu { row } => (1u8, row, 6usize),
             ShelfOverlay::Library { row } => (2u8, row, LIBRARY_ROWS.len()),
             ShelfOverlay::SavesStates { row } => (33u8, row, SAVES_ROWS.len()),
-            ShelfOverlay::GameMenu { row } => (3u8, row, pause_rows(
-                self.game.as_ref().is_some_and(GameSession::linked),
-                self.game.as_ref().is_some_and(GameSession::requires_relaunch),
-                self.multiplayer_offered()).len()),
+            ShelfOverlay::GameMenu { row } => (3u8, row, self.game_menu_rows().len()),
             ShelfOverlay::PauseSettings { row } => (13u8, row, self.pause_settings_rows().len()),
             ShelfOverlay::PauseScreenSettings { row } =>
                 (14u8, row, self.pause_screen_page_rows().len()),
@@ -10109,7 +10127,7 @@ impl Engine {
                     // the remote frame has not arrived. NEVER invent a solo
                     // frame or perform speculative Run-Ahead on a held link.
                     session.set_port2(self.buttons2);
-                    let advanced = session.advance(self.buttons, live.turbo,
+                    let advanced = session.advance(self.buttons | self.pokedaisy_tap.0, live.turbo,
                         live.rewind && !session.linked());
                     let timing = session.last_step_timings();
                     frame_phases.core_us = frame_phases.core_us
@@ -10199,7 +10217,7 @@ impl Engine {
                 // Predicted video never advances the real saved/RA timeline.
                 let speculation_started = Instant::now();
                 session.set_port2(self.buttons2);
-                session.prepare_runahead(self.buttons, live.turbo,
+                session.prepare_runahead(self.buttons | self.pokedaisy_tap.0, live.turbo,
                     profile.run_ahead_frames);
                 frame_phases.speculative_us = speculation_started.elapsed().as_micros() as u64;
             }
@@ -10230,6 +10248,10 @@ impl Engine {
                 if self.select_tap_frames > 0 {
                     self.select_tap_frames = self.select_tap_frames.saturating_sub(stepped as u8);
                     if self.select_tap_frames == 0 { self.buttons &= !ButtonMask::SELECT; }
+                }
+                if self.pokedaisy_tap.1 > 0 {
+                    self.pokedaisy_tap.1 = self.pokedaisy_tap.1.saturating_sub(stepped as u8);
+                    if self.pokedaisy_tap.1 == 0 { self.pokedaisy_tap.0 = 0; }
                 }
                 let upload_started = Instant::now();
                 if session.frame_size() == (slot_retro::GBA_W, slot_retro::GBA_H)
@@ -10868,7 +10890,13 @@ fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
 /// These rows are modelled by *action*, not by a hardcoded screen index.
 /// It prevents a linked session from routing "Save & Eject" to "Resume".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PauseRow { Resume, States, Multiplayer, Cheats, Settings, SaveEject }
+enum PauseRow { Resume, States, Multiplayer, Cheats, Settings, SaveEject, Companion, QuickMenu }
+/// A game on PokeDaisy: its companion and quick menu from the Game Menu,
+/// no Multiplayer with it yet.
+const POKEDAISY_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::Resume, PauseRow::Companion, PauseRow::QuickMenu, PauseRow::States,
+    PauseRow::Cheats, PauseRow::Settings, PauseRow::SaveEject,
+];
 const SOLO_PAUSE_ROWS: &[PauseRow] = &[
     PauseRow::Resume, PauseRow::States, PauseRow::Multiplayer, PauseRow::Cheats,
     PauseRow::Settings, PauseRow::SaveEject,
@@ -10907,6 +10935,8 @@ fn pause_row_text(row: PauseRow, requires_relaunch: bool) -> usize {
         PauseRow::Settings => 25,
         PauseRow::SaveEject if requires_relaunch => 78,
         PauseRow::SaveEject => 21,
+        PauseRow::Companion => 178,
+        PauseRow::QuickMenu => 179,
     }
 }
 

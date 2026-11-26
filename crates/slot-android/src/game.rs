@@ -571,9 +571,8 @@ impl GameSession {
         // trigger: it runs without RetroAchievements and shows none of its
         // notices, as RetroArch with that core (Snes9x keeps them).
         let achievements = achievements.filter(|_| which != Core::Bsnes);
-        // PokeDaisy's companion changes the game as it plays (FLY, PC
-        // anywhere, no wild encounters): not with RetroAchievements yet.
-        let achievements = achievements.filter(|_| which != Core::PokeDaisy);
+        // PokeDaisy plays with RetroAchievements as mGBA does, in slot.'s
+        // softcore (its companion's FLY or PC anywhere would end hardcore).
         if peer_rom.is_some() && (linked_boot.is_none() || which != Core::Mgba) {
             return Err("A remote cartridge is only valid inside mGBA Cable Link".into());
         }
@@ -2093,6 +2092,13 @@ impl GameSession {
         self.core.set_option(key, value);
         if let Some(spec) = self.runahead_secondary_spec.as_mut() { spec.set_option(key, value); }
         if let Some(copy) = self.runahead_secondary.as_mut() { copy.set_option(key, value); }
+    }
+
+    /// The finger on the picture, for PokeDaisy's touch (libretro's
+    /// pointer), on the real core and its Run-Ahead copy alike.
+    pub fn set_pointer(&mut self, x: i16, y: i16, pressed: bool) {
+        self.core.set_pointer(x, y, pressed);
+        if let Some(copy) = self.runahead_secondary.as_mut() { copy.set_pointer(x, y, pressed); }
     }
 
     /// PokeDaisy's view (ZOOM, EXPAND, ORIGINAL): the core lays out its
