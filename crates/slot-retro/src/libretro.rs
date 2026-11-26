@@ -54,6 +54,9 @@ struct Host {
     inputs: [u16; 2],
     /// A second local player's buttons (NES, SNES, Mega Drive) for solo frames.
     port2: u16,
+    /// The finger on the picture, as libretro's pointer reads it: x, y
+    /// (-0x7fff to 0x7fff) and whether it is down (PokeDaisy's touch).
+    pointer: (i16, i16, bool),
     // Borrowed memory descriptors, valid only while game/core are loaded.
     memory: Vec<MemoryDescriptor>,
     system_dir: CString,
@@ -616,6 +619,18 @@ unsafe extern "C" fn audio_batch(data: *const i16, frames: usize) -> usize {
 unsafe extern "C" fn input_poll() {}
 
 unsafe extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, id: c_uint) -> i16 {
+    if device == DEVICE_POINTER {
+        if port != 0 { return 0; }
+        return with_host(|h| {
+            let (x, y, pressed) = h.pointer;
+            match id {
+                POINTER_X => x,
+                POINTER_Y => y,
+                POINTER_PRESSED => i16::from(pressed),
+                _ => 0,
+            }
+        }).unwrap_or(0);
+    }
     if device != DEVICE_JOYPAD {
         return 0;
     }
@@ -876,6 +891,7 @@ impl LibretroCore {
             audio: Vec::new(),
             inputs: [0; 2],
             port2: 0,
+            pointer: (0, 0, false),
             memory: Vec::new(),
             system_dir: cdir(system_dir)?,
             save_dir: cdir(save_dir)?,
@@ -1232,6 +1248,10 @@ impl RetroCore for LibretroCore {
         self.run_frame_linked(input, ButtonMask(self.host.port2));
     }
 
+    fn set_pointer(&mut self, x: i16, y: i16, pressed: bool) {
+        self.host.pointer = (x, y, pressed);
+    }
+
     fn set_port2(&mut self, input: ButtonMask) {
         self.host.port2 = input.0;
     }
@@ -1563,6 +1583,7 @@ mod tests {
             audio: Vec::new(),
             inputs: [0; 2],
             port2: 0,
+            pointer: (0, 0, false),
             memory: Vec::new(),
             system_dir: CString::new(".").unwrap(),
             save_dir: CString::new(".").unwrap(),

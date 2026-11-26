@@ -4,7 +4,8 @@
 //! on, slow down and settle on a cart with the D-pad's own spring. A tap on
 //! the cart in the middle inserts it, as A does, and so does pulling it
 //! down; a tap on a cart beside it brings that one to the middle. Touch only works on the carousel itself:
-//! never in a game, a menu, or with the RG Rotate closed.
+//! never in a menu or with the RG Rotate closed, and in a game only on
+//! PokeDaisy, which reads it as its own app's touchscreen.
 //!
 //! Pushing the middle cart up opens its core picker, where a tap on a core
 //! chooses it and a tap anywhere else closes it; holding a finger still on a
@@ -98,6 +99,12 @@ pub(super) fn speed_of(samples: &VecDeque<(i64, f32)>, now: i64) -> f32 {
     if dt <= 0.0 { 0.0 } else { (last_x - first.1) / dt }
 }
 
+/// 0 to 1 across the picture as libretro's pointer reads it: -0x7fff to
+/// 0x7fff, the edge past it.
+pub(super) fn pointer_axis(at: f32) -> i16 {
+    ((at * 2.0 - 1.0).clamp(-1.0, 1.0) * 32767.0).round() as i16
+}
+
 /// A cart's (x, y, w, h) lifted by `lift` (0 to 1) of a long press.
 fn lifted_by([x, y, w, h]: [f32; 4], lift: f32) -> [f32; 4] {
     let grow = 1.0 + LIFT_GROW * lift;
@@ -130,6 +137,10 @@ impl Engine {
     /// time.
     pub(super) fn touch(&mut self, action: u8, x: f32, y: f32, ms: i64) {
         let (x, y) = (x * out_w() as f32, y * OUT_H as f32);
+        if self.game.is_some() {
+            self.game_touch(action, x, y);
+            return;
+        }
         if matches!(self.overlay, ShelfOverlay::Shelves { .. }) {
             if self.settings.touchscreen { self.shelves_touch(action, x, y, ms); }
             return;
@@ -279,6 +290,29 @@ impl Engine {
             && self.picker_auto_seat.is_none()
     }
 
+    /// In a game: PokeDaisy reads the finger on its picture (its HUD, its
+    /// companion's tabs and buttons), as the touchscreen of its own app.
+    /// Nothing else in a game takes touch; a menu over it lets go.
+    fn game_touch(&mut self, action: u8, x: f32, y: f32) {
+        let playing = self.settings.touchscreen && self.pokedaisy_running()
+            && matches!(self.overlay, ShelfOverlay::None)
+            && !self.lid_covered && self.lid_t <= 0.0;
+        let Some(session) = self.game.as_mut() else { return };
+        if session.core_kind() != Core::PokeDaisy { return; }
+        if !playing {
+            session.set_pointer(0, 0, false);
+            return;
+        }
+        // Where companion_fit shows the canvas: as large as it fits, centred.
+        let (fw, fh) = session.frame_size();
+        let (cw, ch) = (out_w() as f32, OUT_H as f32);
+        let a = fw.max(1) as f32 / fh.max(1) as f32;
+        let (w, h) = if ch * a <= cw { (ch * a, ch) } else { (cw, cw / a) };
+        let (left, top) = ((cw - w) / 2.0, (ch - h) / 2.0);
+        let (px, py) = (pointer_axis((x - left) / w), pointer_axis((y - top) / h));
+        session.set_pointer(px, py, matches!(action, DOWN | MOVE));
+    }
+
     /// A tap on the open core picker: on one of the board's two halves, that
     /// core (kept once its chip has hopped there; the one already in place
     /// closes it); anywhere else, closes it as B.
@@ -346,6 +380,14 @@ mod tests {
 
     fn samples(points: &[(i64, f32)]) -> VecDeque<(i64, f32)> {
         points.iter().copied().collect()
+    }
+
+    #[test]
+    fn the_pointer_spans_the_picture() {
+        assert_eq!(pointer_axis(0.0), -32767);
+        assert_eq!(pointer_axis(0.5), 0);
+        assert_eq!(pointer_axis(1.0), 32767);
+        assert_eq!(pointer_axis(1.4), 32767);
     }
 
     #[test]

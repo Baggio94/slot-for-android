@@ -107,10 +107,8 @@ impl Engine {
                 set_message("All cheats off".into());
             },
             97 => {
-                let linked = self.game.as_ref().is_some_and(GameSession::linked);
-                let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
                 self.overlay = ShelfOverlay::GameMenu {
-                    row: pause_rows(linked, relaunch, self.multiplayer_offered()).iter()
+                    row: self.game_menu_rows().iter()
                         .position(|item| *item == PauseRow::Cheats).unwrap_or(0),
                 };
                 self.cheat_sources = Vec::new();

@@ -2097,9 +2097,11 @@ class MainActivity : Activity() {
 
     /** Touch on the carousel (runtime/touch.rs): one finger, its position
      *  from 0 to 1 across the view. The native side ignores it anywhere but
-     *  on the carousel. A second finger cancels. */
+     *  on the carousel and in a PokeDaisy game (its touchscreen). A second
+     *  finger cancels. */
     private fun sendTouch(event: MotionEvent) {
-        if (!::view.isInitialized || nativeIsPlaying()) return
+        if (!::view.isInitialized) return
+        val playing = nativeIsPlaying()
         val w = view.surfaceView.width.toFloat()
         val h = view.surfaceView.height.toFloat()
         if (w <= 0f || h <= 0f) return
@@ -2119,7 +2121,7 @@ class MainActivity : Activity() {
             }
         }
         nativeTouch(action, event.getX(0) / w, event.getY(0) / h, event.eventTime)
-        wakeCarouselRender()
+        if (!playing) wakeCarouselRender()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
