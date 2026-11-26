@@ -1,4 +1,4 @@
-# slot. for Android v3.1.0
+# slot. for Android v3.1.1
 
 **A new way to browse your shelves, smarter scaling, faster setup, and more!**
 
@@ -10,7 +10,12 @@
 - **More LCD Effects** — Pixel Transparency and Sunlight Shimmer are now available for Game Gear, Neo Geo Pocket/Color, WonderSwan/Color and Atari Lynx, with per-system and per-game settings (#128).
 - **Rumble strength** — Choose between OFF, LOW, MEDIUM, HIGH and MAX. Short vibration pulses are also handled more reliably (#131).
 - **Swap Menu A/B** — Swap A and B throughout slot.'s interface without changing your in-game controls. Available in **Settings → Controls** (#127).
-- **Faster and lighter** — Faster library scans and label scraping, slot.'s own artwork first, artwork restored from your slot. folder before searching online, game launches that only wait for their own files, more efficient slot. folder syncing, lower memory use, and a SYNCING indicator that counts incoming files without flashing.
+- **Faster and lighter** — Faster library scans and label scraping, slot.'s own artwork first, artwork restored from your slot. folder before searching online, game launches that only wait for their own files, more efficient slot. folder syncing, lower memory use, and a SYNCING indicator that counts incoming files.
+
+### Fixed in 3.1.1
+
+- **slot. folder** — Save states no longer fail to copy with "COPY FAILED" when two folders' names differ only by letter case, as with Pokémon mini states on internal storage or SD cards. The extra "POKEMINI (1)", "POKEMINI (2)"… folders created by this issue are left untouched, and you can delete them.
+- **Shelves** — Names and the selected tile are now easy to read on light backgrounds, in the Light theme and on the Original theme's light shelves.
 
 ### Fixed in 3.1.0
 
