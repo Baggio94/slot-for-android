@@ -2,6 +2,13 @@
 
 This changelog covers the public releases of slot. for Android, an Android port born on the KONKR Pocket Advance (formerly slot. for KONKR Pocket Advance). Earlier development experiments are preserved in Git history.
 
+## v3.1.1 — 26 November 2026
+
+- slot. folder (SlotFolder.kt, FolderSync.kt): a folder whose name differs only in letter case is the same folder where storage doesn't tell case apart (internal storage, SD cards). It is found in any case instead of asked for again, so Android no longer makes "POKEMINI (1)", "(2)"... at each copy until it refuses ("Failed to create unique file", COPY FAILED; Pokémon mini's States/POKEMINI beside RetroArch's States/PokeMini). The folder's files are compared under slot.'s own names; the duplicate folders made before stay in the folder, never copied back.
+- Shelves page (runtime/shelves_grid.rs): words inked from the page's own ground (the shelf's colour, or the wallpaper under its veil), dark on light grounds even under a dark bar (Original: GBA, Pokémon mini, Game Gear, Master System, Lynx, WonderSwan Color); on a light ground the chosen tile is outlined in that ink.
+- README: B on the shelf opens Shelves.
+- Stable Android 3.1.1, versionCode 595. Signed ARM64 upgrade retaining existing package, signature and user data.
+
 ## v3.1.0 — 25 November 2026
 
 - Shelves page (runtime/shelves_grid.rs): B on the shelf. Rounded tiles over the whole screen (no heading, status bar, hints or task pill); each system's chosen cart fanned with the one before and after it, in its own colours and always opaque; Recents and Favorites first, apart, with their first three carts and their sign; the game count in a round pill; the chosen tile's name in a pill in the theme's ink; tiles as large as the screen allows, fewest rows first. Settings → Interface → Shelves: SCROLL (default: sideways, faded edges, the carousel's spring, held-key pace and fling) or GRID (whole rows, one large cart per system, scroll bar). D-pad to the nearest tile that way, L1/R1 previous/next; touch: tap, drag (the row under the finger), fling. Opens on the current system.

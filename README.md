@@ -52,6 +52,7 @@ The KONKR's round top button is the **slot. cap**. On a Retroid Pocket, it's the
 | **SELECT + Y** | Screen menu |
 | **START** (on the shelf) | Main menu |
 | **SELECT** (on the shelf) | Choose the core for a game |
+| **B** (on the shelf) | Open Shelves, to jump to another system |
 
 On a touchscreen, swipe through your cartridges, tap or pull down the middle cart to insert it, push it up to select a core, or hold a cartridge to open Cart Studio.
 

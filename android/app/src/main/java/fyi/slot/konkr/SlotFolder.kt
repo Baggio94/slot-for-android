@@ -995,6 +995,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             return out
         }
         private val files = HashMap<String, String>()
+        override fun alias(path: String, listed: String) { files[listed]?.let { files[path] = it } }
         /** What the last listing found that the folder should no longer hold. */
         private val staleIds = ArrayList<String>()
 
@@ -1018,7 +1019,13 @@ internal class SlotFolder(private val activity: MainActivity) {
             val key = above to name
             failedDirs[key]?.let { throw it }
             try {
-                children(above).firstOrNull { it.dir && it.name == name }?.id ?: createDir(above, name)
+                // The folder of that name in another letter case is the same
+                // one where letter case isn't told apart (internal storage,
+                // SD cards): asked to make it, Android made "POKEMINI (1)",
+                // "(2)"... each copy, until it refused (3.0.0).
+                val here = children(above).filter { it.dir }
+                (here.firstOrNull { it.name == name } ?: here.firstOrNull { it.name.equals(name, ignoreCase = true) })
+                    ?.id ?: createDir(above, name)
             } catch (error: Exception) {
                 failedDirs[key] = error
                 throw error

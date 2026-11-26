@@ -35,6 +35,71 @@ class FolderSyncTest {
         val f = File(root, path); f.parentFile?.mkdirs(); f.writeText(text); f.setLastModified(modified)
     }
 
+    /** A folder whose folders' names don't tell letter case apart, as
+     *  internal storage and SD cards: the first name a folder got stays. */
+    private class FoldingCard : FolderSync.Side {
+        private val shownDirs = HashMap<String, String>()
+        val files = LinkedHashMap<String, Pair<ByteArray, Long>>()
+        private val aliases = HashMap<String, String>()
+        private var clock = 5_000_000L
+        private fun shown(path: String): String {
+            val parts = path.split('/')
+            var dir = ""
+            for (part in parts.dropLast(1)) {
+                val want = if (dir.isEmpty()) part else "$dir/$part"
+                dir = shownDirs.getOrPut(want.lowercase()) {
+                    val parent = want.substringBeforeLast('/', "")
+                    if (parent.isEmpty()) part else "${shownDirs[parent.lowercase()]}/$part"
+                }
+            }
+            return if (dir.isEmpty()) parts.last() else "$dir/${parts.last()}"
+        }
+        override fun list(): Map<String, FolderSync.Meta> =
+            files.mapValues { (_, f) -> FolderSync.Meta(f.first.size.toLong(), f.second) }
+        override fun read(path: String) = files.getValue(aliases[path] ?: shown(path)).first
+        override fun write(path: String, bytes: ByteArray): FolderSync.Meta {
+            val at = aliases[path] ?: shown(path)
+            clock += 1000
+            files[at] = bytes to clock
+            return FolderSync.Meta(bytes.size.toLong(), clock)
+        }
+        override fun delete(path: String) { files.remove(aliases[path] ?: shown(path)) }
+        override fun alias(path: String, listed: String) { aliases[path] = listed }
+    }
+
+    @Test fun foldersNamedAlikeButForLetterCaseAreOneFolderOnACard() {
+        val (mine, _) = dirs()
+        put(mine, "States/PokeMini/Pinball.state.auto", "ra")
+        put(mine, "States/POKEMINI/pokemini/abc/2026-11-24_04-11-19.state", "ring")
+        val card = FoldingCard()
+        val base = FolderSync.Base()
+        val first = FolderSync.sync(FolderSync.PrivateSide(mine), card, base, FolderSync.Start.MERGE)
+        assertTrue(first.failures.toString(), first.failures.isEmpty())
+        assertEquals(2, first.toFolder)
+        assertEquals("one folder for both, under the first name", 1,
+            card.files.keys.map { it.split('/')[1] }.toSet().size)
+        assertEquals(setOf("states/pokemini/pinball.state.auto", "states/pokemini/pokemini/abc/2026-11-24_04-11-19.state"),
+            card.files.keys.map { it.lowercase() }.toSet())
+        // Again: nothing goes out or comes in, nothing doubles on either side.
+        val again = FolderSync.sync(FolderSync.PrivateSide(mine), card, base)
+        assertEquals(0, again.toFolder)
+        assertEquals(0, again.toPrivate)
+        assertEquals(2, card.files.size)
+        assertFalse(File(mine, "States/PokeMini/pokemini").exists())
+        // A changed state replaces its copy, never a second one beside it.
+        put(mine, "States/POKEMINI/pokemini/abc/2026-11-24_04-11-19.state", "ring2", 9_000_000L)
+        FolderSync.sync(FolderSync.PrivateSide(mine), card, base)
+        assertEquals(2, card.files.size)
+        assertEquals("ring2", String(card.files.entries.single { it.key.endsWith("/abc/2026-11-24_04-11-19.state") }.value.first))
+    }
+
+    @Test fun androidsCopiesOfAFolderNamedAlikeStayInTheFolder() {
+        assertFalse(FolderSync.travels("States/POKEMINI (3)/pokemini/abc/2026-11-24_04-11-19.state"))
+        assertFalse(FolderSync.travels("Saves/PokeMini (12)/Pinball.eep"))
+        assertTrue(FolderSync.travels("States/POKEMINI/pokemini/abc/2026-11-24_04-11-19.state"))
+        assertTrue(FolderSync.travels("Saves/mGBA/Golden Sun (1).srm"))
+    }
+
     @Test fun syncingCountsOnlyWhatComesIn() {
         val (mine, card) = dirs()
         // Two saves come in; three of this handheld's go out.

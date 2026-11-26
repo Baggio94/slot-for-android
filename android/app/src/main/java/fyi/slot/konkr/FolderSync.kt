@@ -73,6 +73,9 @@ internal object FolderSync {
          *  RetroAchievements cache and slot.'s old RetroArch copies); how
          *  many it removed. Never anything that travels. */
         fun dropStale(): Int = 0
+        /** The folder answers [path] by the file it listed as [listed]: the
+         *  same file, its folders' names in other letter case (3.1.1). */
+        fun alias(path: String, listed: String) {}
     }
 
     /** What a file was on both sides at the last copy. */
@@ -202,7 +205,7 @@ internal object FolderSync {
         base.entries.keys.removeAll { !travels(it) }
         if (tombs.keys.removeAll { !travels(it) }) report.tombsChanged = true
         val mine = private.list(scope).filterKeys(scope::includes)
-        val theirs = folder.list(scope).filterKeys(scope::includes)
+        val theirs = sameInAnyCase(mine.keys, folder.list(scope).filterKeys(scope::includes), folder)
         // What a game reads at its launch first (beta39): a launch waits for
         // those only, never for the labels behind them.
         val paths = (mine.keys + theirs.keys).sortedWith(compareBy({ !forLaunch(it) }, { it }))
@@ -445,6 +448,32 @@ internal object FolderSync {
     val UNWALKED_DIRS = setOf("Saves/RetroAchievements")
 
     /** A folder path the folder should no longer hold (dropped once, beta39). */
+    /**
+     * The folder's files under the names slot. keeps them by: internal
+     * storage and SD cards don't tell letter case apart, so slot.'s
+     * "States/POKEMINI" and RetroArch's "States/PokeMini" are one folder
+     * there, listed under one of the two names. Compared as they were
+     * listed, the other name's files looked missing, and each copy asked
+     * Android for another "POKEMINI (n)" until it refused (3.0.0,
+     * BogWizard's Pocket Block). A name both sides hold as it is stays as it is.
+     */
+    internal fun sameInAnyCase(mine: Set<String>, theirs: Map<String, Meta>, folder: Side): Map<String, Meta> {
+        if (theirs.keys.all { it in mine }) return theirs
+        val byCase = mine.groupBy { it.lowercase(Locale.ROOT) }
+        val out = HashMap<String, Meta>(theirs.size)
+        for ((listed, meta) in theirs) {
+            val own = if (listed in mine) listed
+                else byCase[listed.lowercase(Locale.ROOT)]?.singleOrNull()?.takeIf { it !in theirs } ?: listed
+            if (own != listed) folder.alias(own, listed)
+            out[own] = meta
+        }
+        return out
+    }
+
+    /** "States/POKEMINI (3)": the folder Android made beside one whose name
+     *  differs only in letter case, again at each copy, before 3.1.1. */
+    private val CASE_COPY_DIR = Regex(""".+ \(\d{1,3}\)""")
+
     fun stale(path: String): Boolean = UNWALKED_DIRS.any { path == it || path.startsWith("$it/") } ||
         path.endsWith(".retroarch-export.state.auto") || path.endsWith(".retroarch-import.state.auto") ||
         path.endsWith(".state-export-protected")
@@ -461,6 +490,8 @@ internal object FolderSync {
         if (top !in TRAVELLING_DIRS || !path.contains('/')) return false
         val name = path.substringAfterLast('/')
         if (name.endsWith(".tmp") || name.endsWith(".carried") || name.endsWith(".once")) return false
+        // Never back into slot.: the player can delete those folders.
+        if ((top == "States" || top == "Saves") && CASE_COPY_DIR.matches(path.split('/')[1])) return false
         // The RetroArch state decoded at each launch, and the guard that
         // protects this handheld's own RetroArch auto-state: both belong to
         // this handheld. Travelling, one handheld's routine deletion of them
