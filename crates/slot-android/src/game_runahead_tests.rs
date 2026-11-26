@@ -187,6 +187,7 @@ fn session(root: &Path, failure: Failure) -> (GameSession, Arc<Mutex<Calls>>) {
         battery_writer: None,
         sample_rate: 65536,
         fps: 59.728,
+        pico8_saves: None,
     };
     (session, calls)
 }
