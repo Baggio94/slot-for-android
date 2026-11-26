@@ -102,7 +102,8 @@ internal object Systems {
         lower(slug).let { s -> TABLE.firstOrNull { s in it.romm }?.platform }
 
     /** RetroAchievements' console id of a shelf. */
-    fun retroAchievementsId(platform: String?): Int? = row(platform)?.retroAchievements
+    /** RetroAchievements' console id, null for a system it has none for (PICO-8). */
+    fun retroAchievementsId(platform: String?): Int? = row(platform)?.retroAchievements?.takeIf { it > 0 }
 
     /** ScreenScraper's system id of a shelf. */
     fun screenScraperId(platform: String?): Int? = row(platform)?.screenScraper

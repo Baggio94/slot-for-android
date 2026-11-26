@@ -146,10 +146,10 @@ class SystemsTest {
         assertEquals("GBC", Systems.platformFor("gbc"))
         assertEquals("MD", Systems.platformFor("bin"))
         assertEquals(mapOf("GB" to 4, "GBA" to 5, "GBC" to 6, "NES" to 7, "SNES" to 3, "MD" to 1,
-            "SMS" to 11, "GG" to 15, "NGP" to 14, "WS" to 53, "LYNX" to 13, "POKEMINI" to 24),
+            "SMS" to 11, "GG" to 15, "NGP" to 14, "WS" to 53, "LYNX" to 13, "POKEMINI" to 24, "PICO8" to null),
             Systems.PLATFORMS.associateWith { Systems.retroAchievementsId(it) })
         assertEquals(mapOf("GB" to null, "GBA" to null, "GBC" to null, "NES" to 3, "SNES" to 4, "MD" to 1,
-            "SMS" to 2, "GG" to 21, "NGP" to 25, "WS" to 45, "LYNX" to 28, "POKEMINI" to 211),
+            "SMS" to 2, "GG" to 21, "NGP" to 25, "WS" to 45, "LYNX" to 28, "POKEMINI" to 211, "PICO8" to 234),
             Systems.PLATFORMS.associateWith { HomeCartLabels.systemId(it) })
         assertEquals("MD", Romm.platformOf("Sega-Mega-Drive"))
         assertEquals("GG", Romm.platformOf("gamegear"))
