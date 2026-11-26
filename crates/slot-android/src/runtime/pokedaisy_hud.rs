@@ -92,7 +92,7 @@ mod tests {
         assert_eq!(places(&hud, Some([0.0, 0.0, 960.0, 640.0]), (240, 160)),
             [[0.0, 0.0, 240.0, 160.0], [720.0, 0.0, 240.0, 160.0],
              [0.0, 480.0, 240.0, 160.0], [720.0, 480.0, 240.0, 160.0]]);
-        let large = slot_retro::PdHud { pct: 100, ..hud };
+        let large = slot_retro::PdHud { pct: 100, area: [0, 0, 210, 160], ..hud };
         assert_eq!(places(&large, Some([60.0, 0.0, 840.0, 640.0]), (210, 160)),
             [[60.0, 0.0, 840.0, 640.0]]);
         assert!(places(&large, None, (210, 160)).is_empty());
