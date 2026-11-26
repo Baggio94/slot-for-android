@@ -492,7 +492,10 @@ internal object FolderSync {
         val top = path.substringBefore('/')
         if (top !in TRAVELLING_DIRS || !path.contains('/')) return false
         val name = path.substringAfterLast('/')
-        if (name.endsWith(".tmp") || name.endsWith(".carried") || name.endsWith(".once")) return false
+        // A copy still being written (RetroArchStorage's ".partial"): it is
+        // renamed or gone a moment later, and copying it failed (3.2.0-beta8).
+        if (name.endsWith(".tmp") || name.endsWith(".partial") || name.endsWith(".carried") ||
+            name.endsWith(".once")) return false
         // Never back into slot.: the player can delete those folders.
         if ((top == "States" || top == "Saves") && CASE_COPY_DIR.matches(path.split('/')[1])) return false
         // Which of mGBA and PokeDaisy last ran a save, with this handheld's

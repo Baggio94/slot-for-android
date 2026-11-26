@@ -98,6 +98,9 @@ class FolderSyncTest {
         assertFalse(FolderSync.travels("Saves/PokeMini (12)/Pinball.eep"))
         assertTrue(FolderSync.travels("States/POKEMINI/pokemini/abc/2026-11-24_04-11-19.state"))
         assertTrue(FolderSync.travels("Saves/mGBA/Golden Sun (1).srm"))
+        // a launch's copy still being written
+        assertFalse(FolderSync.travels("Saves/c887.pico8.retroarch-import.state.auto.partial"))
+        assertFalse(FolderSync.travels("Saves/fake-08/Pico-ball.p8d.txt.partial"))
     }
 
     @Test fun syncingCountsOnlyWhatComesIn() {

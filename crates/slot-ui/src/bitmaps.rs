@@ -241,6 +241,7 @@ pub fn home_slot_png(family: usize, theme: usize) -> (&'static [u8], &'static [u
             include_bytes!(concat!("../../../assets/home/slot_", $part, "_sms", $suffix, ".png")).as_slice(),
             include_bytes!(concat!("../../../assets/home/slot_", $part, "_lynx", $suffix, ".png")).as_slice(),
             include_bytes!(concat!("../../../assets/home/slot_", $part, "_pokemini", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_p8", $suffix, ".png")).as_slice(),
         ]};
     }
     const BACK: [[&[u8]; CONSOLE_SLOTS]; BAR_THEMES] = [bars!("back", ""), bars!("back", "_dark"), bars!("back", "_light")];
@@ -267,7 +268,7 @@ pub fn slot_bar_png(light: bool) -> (&'static [u8], &'static [u8]) {
 pub const BAR_THEMES: usize = 3;
 
 /// How many console slot bars `home_slot` draws.
-pub const CONSOLE_SLOTS: usize = 14;
+pub const CONSOLE_SLOTS: usize = 15;
 
 /// Which console bar a cart goes into (see `home_slot`).
 pub fn console_slot_family(cart: &slot_store::Cart) -> usize {
@@ -286,7 +287,7 @@ pub fn console_slot_takes_dark_ink(family: usize, theme: usize) -> bool {
     match theme {
         1 => false,
         2 => true,
-        _ => !matches!(family, 3 | 6 | 9..=13),
+        _ => !matches!(family, 3 | 6 | 9..=14),
     }
 }
 
@@ -329,8 +330,9 @@ pub fn home_slot_family(cart: &slot_store::Cart) -> Option<usize> {
         M::MasterSystem | M::MasterSystemJp | M::MasterSystemCard => 11,
         M::Lynx => 12,
         M::PokemonMini => 13,
-        // PICO-8 carts go into the Mega Drive's black slot.
-        M::Pico8 => 3,
+        // slot.'s own PICO-8 bar (tools/pico8-mould/bar.py), as wide as
+        // the other handhelds' for its 240-wide seated cart.
+        M::Pico8 => 14,
     })
 }
 
