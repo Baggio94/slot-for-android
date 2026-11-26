@@ -135,8 +135,15 @@ jobs:
           done
       - name: Build PokeDaisy arm64 libretro core
         if: steps.cores.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          # PokeDaisy 1.6.2.1's source, kept by slot. (draft release
+          # pokedaisy-source-717f4f4); the script checks its SHA-256.
+          export POKEDAISY_SOURCE="$RUNNER_TEMP/pokedaisy-source.tar.gz"
+          gh api -H "Accept: application/octet-stream" \
+            "repos/${{ github.repository }}/releases/assets/795292846" > "$POKEDAISY_SOURCE"
           bash scripts/build-pokedaisy-android.sh
       - name: Assemble signed ARM64 release
         env:

@@ -23,31 +23,45 @@ MGBA_PIN=26b7884bc25a5933960f3cdcd98bac1ae14d42e2
 OUT="$ROOT/.build/pokedaisy"
 SRC="$OUT/source"
 BUILD="$OUT/android-arm64"
+# The source: kept by slot. as a tarball of exactly what this core builds
+# from (PIN with its mGBA), checked by its SHA-256, since lidor30/pokedaisy
+# left GitHub (26 Nov 2026). POKEDAISY_SOURCE names it; without it, the
+# upstream repository at PIN, if it can be reached.
+SOURCE_SHA256=aff1ddcd60720b1eda59bd11a5d744de3f5f267bff878aae59580cd0839cfc73
 mkdir -p "$OUT"
-if [ ! -d "$SRC/.git" ]; then
-  git init -q "$SRC"
-  git -C "$SRC" remote add origin https://github.com/lidor30/pokedaisy.git
+if [ -n "${POKEDAISY_SOURCE:-}" ]; then
+  [ "$(shasum -a 256 "$POKEDAISY_SOURCE" | cut -d' ' -f1)" = "$SOURCE_SHA256" ] || {
+    echo "PokeDaisy source tarball isn't the one slot. keeps ($SOURCE_SHA256)" >&2
+    exit 1
+  }
+  rm -rf "$SRC" && mkdir -p "$SRC"
+  tar -xzf "$POKEDAISY_SOURCE" -C "$SRC" --strip-components=1
+else
+  if [ ! -d "$SRC/.git" ]; then
+    git init -q "$SRC"
+    git -C "$SRC" remote add origin https://github.com/lidor30/pokedaisy.git
+  fi
+  if [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" != "$PIN" ]; then
+    git -C "$SRC" fetch --depth=1 origin "$PIN"
+    git -C "$SRC" checkout --detach -q FETCH_HEAD
+  fi
+  # The one submodule this core builds from (the DS cores, armGBA and the
+  # rest are never fetched).
+  git -C "$SRC" submodule update --init --depth=1 third_party/mgba
+  [ "$(git -C "$SRC/third_party/mgba" rev-parse HEAD)" = "$MGBA_PIN" ] || {
+    echo "PokeDaisy pins another mGBA than $MGBA_PIN" >&2
+    exit 1
+  }
 fi
-if [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" != "$PIN" ]; then
-  git -C "$SRC" fetch --depth=1 origin "$PIN"
-  git -C "$SRC" checkout --detach -q FETCH_HEAD
-fi
-# The one submodule this core builds from (the DS cores, armGBA and the
-# rest are never fetched).
-git -C "$SRC" submodule update --init --depth=1 third_party/mgba
-[ "$(git -C "$SRC/third_party/mgba" rev-parse HEAD)" = "$MGBA_PIN" ] || {
-  echo "PokeDaisy pins another mGBA than $MGBA_PIN" >&2
-  exit 1
-}
 # Patches for this core, applied strictly: never a half-patched source.
 PATCHES=()
 for patch_file in "$ROOT/cores/pokedaisy"/*.patch; do
   [ -e "$patch_file" ] || continue
   patch="$(basename "$patch_file")"
-  if git -C "$SRC" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
+  if (cd "$SRC" && git apply --reverse --check "$patch_file") >/dev/null 2>&1; then
     echo "Already applied: $patch"
-  elif git -C "$SRC" apply --check "$patch_file"; then
-    git -C "$SRC" apply "$patch_file"
+  elif (cd "$SRC" && git apply --check "$patch_file"); then
+    (cd "$SRC" && git apply "$patch_file")
     echo "Applied: $patch"
   else
     echo "Patch mismatch (refusing to use unsafe PokeDaisy source): $patch" >&2
@@ -93,6 +107,6 @@ cp "$SRC/NOTICE" "$LICENCES/pokedaisy-NOTICE.txt"
 cp "$SRC/third_party/mgba/LICENSE" "$LICENCES/pokedaisy-mgba-LICENSE.txt"
 PATCH_LIST="$(IFS=,; echo "${PATCHES[*]:-}")"
 cat > "$ROOT/android/app/src/main/assets/core-build-pokedaisy.json" <<JSON
-{"core":"pokedaisy","revision":"$PIN","mgba":"$MGBA_PIN","patches":[$PATCH_LIST]}
+{"core":"pokedaisy","revision":"$PIN","mgba":"$MGBA_PIN","source_sha256":"$SOURCE_SHA256","patches":[$PATCH_LIST]}
 JSON
 echo "PokeDaisy arm64 core: $DEST/libpokedaisy_libretro.so"
