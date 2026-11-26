@@ -19,6 +19,8 @@ struct Calls {
     // Port 2 as each real / predicted frame saw it.
     port2_real: Vec<u16>,
     port2_predicted: Vec<u16>,
+    // The game ended itself (libretro's SHUTDOWN).
+    shut_down: bool,
 }
 struct CoreFixture {
     frame: u32,
@@ -59,6 +61,9 @@ impl RetroCore for CoreFixture {
     }
     fn set_port2(&mut self, input: ButtonMask) {
         self.port2 = input.0;
+    }
+    fn shut_down(&self) -> bool {
+        self.calls.lock().unwrap().shut_down
     }
     fn video_xrgb8888(&self) -> &[u8] {
         &self.pixels
@@ -535,6 +540,22 @@ fn ejecting_without_a_state_after_saving_in_game_retires_the_older_auto_state() 
     assert!(game.advance(ButtonMask::X, true, false));
     assert_eq!(game.save_for_eject(false), Ok(true));
     assert!(marker.exists());
+}
+
+#[test]
+fn a_game_that_shut_itself_down_starts_afresh_next_time() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("test.mgba.state-stale.once");
+    let (mut game, calls) = session(root.path(), Failure::None);
+    game.stale_state = Some(marker.clone());
+    assert!(game.advance(ButtonMask::A, false, false));
+    assert!(!game.shut_down());
+    calls.lock().unwrap().shut_down = true;
+    assert!(game.shut_down());
+    // No state of it is taken, even with Auto Save on Eject.
+    assert_eq!(game.save_for_eject(true), Ok(true));
+    assert!(marker.exists());
+    assert!(!game.state.exists());
 }
 
 #[test]

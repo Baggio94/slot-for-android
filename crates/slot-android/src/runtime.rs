@@ -10428,7 +10428,12 @@ impl Engine {
                 self.pokedaisy_menu = pd_menu_now;
                 self.apply_game_look();
             }
+            let shut_down = session.shut_down();
             if let Some(fault) = peer_fault { self.peer_link_stopped(fault); }
+            if shut_down {
+                crate::game::log_launch_timing("The game shut itself down: ejecting");
+                self.handle(Input::Exit);
+            }
             return;
         }
 

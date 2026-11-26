@@ -74,6 +74,8 @@ struct Host {
     declared: std::collections::HashMap<String, Vec<String>>,
     /// PokeDaisy's own commands and slot.'s to it, answered for it alone.
     pd: PdHost,
+    /// The core ended the game (SHUTDOWN).
+    shut_down: bool,
 }
 
 /// What PokeDaisy and slot. say to each other (cores/pokedaisy).
@@ -243,6 +245,7 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
             *(data as *mut bool) = h.pd.throttle == THROTTLE_FAST_FORWARD;
             true
         }).unwrap_or(false),
+        SHUTDOWN => with_host(|h| h.shut_down = true).is_some(),
         GET_CAN_DUPE => {
             if data.is_null() {
                 return false;
@@ -969,6 +972,7 @@ impl LibretroCore {
             inputs: [0; 2],
             port2: 0,
             pointer: (0, 0, false),
+            shut_down: false,
             memory: Vec::new(),
             system_dir: cdir(system_dir)?,
             save_dir: cdir(save_dir)?,
@@ -1378,6 +1382,8 @@ impl RetroCore for LibretroCore {
         self.host.port2 = input.0;
     }
 
+    fn shut_down(&self) -> bool { self.host.shut_down }
+
     fn link_step_fault(&self) -> bool {
         self.mgba_gb_link_fault.is_some_and(|probe| unsafe { probe() != 0 })
     }
@@ -1710,6 +1716,7 @@ mod tests {
             inputs: [0; 2],
             port2: 0,
             pointer: (0, 0, false),
+            shut_down: false,
             memory: Vec::new(),
             system_dir: CString::new(".").unwrap(),
             save_dir: CString::new(".").unwrap(),

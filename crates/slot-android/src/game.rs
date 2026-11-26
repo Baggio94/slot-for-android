@@ -1760,6 +1760,8 @@ impl GameSession {
     /// True only after prediction has mutated the core and full restoration
     /// failed. Treat all save paths as unsafe until a fresh session is loaded.
     pub fn runahead_rollback_failed(&self) -> bool { self.runahead_rollback_failed }
+    /// The game ended itself (libretro's SHUTDOWN): it is ejected.
+    pub fn shut_down(&self) -> bool { self.core.shut_down() }
 
     /// Require two deliberate Exit actions before discarding a poisoned
     /// in-memory session. Do not touch existing on-disk checkpoints.
@@ -2490,6 +2492,12 @@ impl GameSession {
             return Err("Run-Ahead rollback failed; exit without saving instead".into());
         }
         let battery = self.save_sram_checked()?;
+        if self.core.shut_down() {
+            // A game that shut itself down has nothing to resume: the next
+            // launch starts it afresh (older auto-states are kept).
+            self.retire_auto_state();
+            return Ok(battery);
+        }
         if !with_state && !self.in_multiplayer() {
             self.mark_state_stale_if_saved();
         }
@@ -2525,11 +2533,17 @@ impl GameSession {
     /// Ejected without a state after saving in-game: the auto-state on disk
     /// is older than the battery, so the next resume must not bring it back.
     fn mark_state_stale_if_saved(&mut self) {
-        let Some(marker) = self.stale_state.as_ref() else { return };
+        if self.stale_state.is_none() { return; }
         let now = self.core.save_ram_verified().ok().flatten().map(|ram| battery_hash(&ram));
         if now.is_none() || now == self.opening_battery { return; }
+        self.retire_auto_state();
+    }
+
+    /// The auto-state on disk won't resume: the next launch starts a new one.
+    fn retire_auto_state(&mut self) {
+        let Some(marker) = self.stale_state.as_ref() else { return };
         match atomic_write(marker, b"battery newer than the auto-state") {
-            Ok(()) => log_launch_timing("Saved in-game without a state: the older auto-state won't resume"),
+            Ok(()) => log_launch_timing("The older auto-state won't resume"),
             Err(error) => log_launch_timing(&format!("Stale auto-state guard not written: {error}")),
         }
     }

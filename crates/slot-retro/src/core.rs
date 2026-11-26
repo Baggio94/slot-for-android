@@ -147,6 +147,8 @@ pub trait RetroCore: Send {
     fn take_pd_hud(&mut self) -> Option<PdHud> { None }
     /// Reject incomplete native GB/GBC lockstep frames before advancing netplay.
     fn link_step_fault(&self) -> bool { false }
+    /// The game ended itself (libretro's SHUTDOWN).
+    fn shut_down(&self) -> bool { false }
     fn set_option(&mut self, _key: &str, _value: &str) {}
     /// The cheats to play with, replacing any before: each a code as the
     /// cheat files give it ("+" between the lines of a multi-line code).
