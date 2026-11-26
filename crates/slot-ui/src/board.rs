@@ -718,7 +718,10 @@ pub fn socket_face(core: Core) -> CartFace {
 /// A core's name silkscreened in an empty pak chip footprint, as a GBA
 /// socket shows it.
 fn pak_footprint_face(core: Core) -> CartFace {
-    let (w, h) = (PAK_CHIP.0 as u32, PAK_CHIP.1 as u32);
+    sized_footprint_face(core, PAK_CHIP.0 as u32, PAK_CHIP.1 as u32)
+}
+
+fn sized_footprint_face(core: Core, w: u32, h: u32) -> CartFace {
     let mut face = Canvas::new(w, h).into_cart();
     if let Some(layout) = name_layout(core, (w - 30) as f32) {
         ink_band(&mut face, (h - 34) / 2, 34, &layout, SOCKET_INK, 0.5);
@@ -767,6 +770,163 @@ pub fn chip_shadow_face() -> CartFace {
     CartFace { rgba, w: SHADOW_W, h: SHADOW_H }
 }
 
+// ---- PokeDaisy's chip on the Pokemon games' boards (3.1.1) ----
+
+/// Where a Pokemon game's three chips sit: PokeDaisy where the title chip
+/// was, then the system's two cores, in board units as BoardLayout's.
+/// The chip hops between them in this order (left / right).
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub struct ThreeChips {
+    pub cores: [Core; 3],
+    /// Each chip's top-left, in board units.
+    pub chip: [(f32, f32); 3],
+    /// The GBA's sockets' top-left; a pak board prints its footprints.
+    pub socket: Option<[(f32, f32); 3]>,
+    /// The chip's size at zoom 1, and where its shadow falls from its
+    /// top-left (board units).
+    pub size: (f32, f32),
+    pub shadow_at: (f32, f32),
+}
+
+/// GB/GBC: three footprints of one size (Siham 2026-11-26), PokeDaisy's
+/// over mGBA's and Gambatte's at the right, their chips a little shorter.
+const PD_PAK_CHIP: (f32, f32) = (70.0, 72.0);
+const PD_PAK_SEATS: [(f32, f32); 3] = [(64.0, 97.0), (64.0, 183.0), (184.0, 183.0)];
+/// GBA: PokeDaisy's socket where the title chip was, in line with the two.
+const PD_SOCKET_U: f32 = 45.5;
+/// The title moves to the small chip: the GBA's at the top right, the
+/// pak's at the top.
+const PD_GBA_TITLE: (u32, u32, u32, u32) = (248, 47, 43, 21);
+const PD_PAK_TITLE: (u32, u32, u32, u32) = (117, 57, 29, 23);
+/// What board.svg draws of its title chip (its body, its two pin rows and
+/// its dot): PokeDaisy's socket takes its place.
+const GBA_TITLE_CHIP: [&str; 4] = [
+    r#"x="40" y="33" width="3" height="54""#,
+    r#"x="89" y="33" width="3" height="54""#,
+    r#"x="43" y="31" width="46" height="58""#,
+    r#"cx="47.5" cy="84.5""#,
+];
+
+/// A Pokemon game's three chips on its board: the GBA's and the GB/GBC
+/// pak's, none on a home console's.
+pub fn three_chips(cart: &Cart) -> Option<ThreeChips> {
+    if !Core::pokedaisy_system(cart.platform) {
+        return None;
+    }
+    let cores = [Core::PokeDaisy, Core::primary_for(cart.platform), Core::alternate_for(cart.platform)];
+    match body_of(cart) {
+        Body::Gba => Some(ThreeChips {
+            cores,
+            chip: [
+                (PD_SOCKET_U + CHIP_U[0] - SOCKET_U[0], CHIP_V),
+                (CHIP_U[0], CHIP_V),
+                (CHIP_U[1], CHIP_V),
+            ],
+            socket: Some([(PD_SOCKET_U, SOCKET_V), (SOCKET_U[0], SOCKET_V), (SOCKET_U[1], SOCKET_V)]),
+            size: (CHIP_W as f32, CHIP_H as f32),
+            shadow_at: (19.0, 29.4),
+        }),
+        Body::Gb(_) => {
+            let unit = |px: f32| px / UNIT_PX;
+            Some(ThreeChips {
+                cores,
+                chip: PD_PAK_SEATS.map(|(x, y)| (unit(x), unit(y))),
+                socket: None,
+                size: PD_PAK_CHIP,
+                shadow_at: (unit(PD_PAK_CHIP.0 / 2.0), unit(PD_PAK_CHIP.1 + 4.0)),
+            })
+        }
+        Body::Home(_) => None,
+    }
+}
+
+/// The opened board of a Pokemon game PokeDaisy plays: its title chip
+/// gives way to PokeDaisy's, the title goes on the small chip.
+pub fn board_face_three(cart: &Cart) -> CartFace {
+    if gb_shell_of(cart).is_some() {
+        let alpha = if is_clear(cart) { CLEAR_BACK } else { 255 };
+        let mut face = pak_shell_face(cart, alpha);
+        let board = if cart.battery { GB_BOARD_SVG } else { GB_BOARD_BARE_SVG };
+        over(&mut face, &svg_face(&three_pak_board(board), GB_CART_W, GB_CART_H), 0, 0);
+        let cores = [Core::PokeDaisy, Core::primary_for(cart.platform), Core::alternate_for(cart.platform)];
+        for (core, (x, y)) in cores.into_iter().zip(PD_PAK_SEATS) {
+            over(&mut face, &sized_footprint_face(core, PD_PAK_CHIP.0 as u32, PD_PAK_CHIP.1 as u32),
+                x as u32, y as u32);
+        }
+        let (x, y, w, h) = PD_PAK_TITLE;
+        over(&mut face, &marking_face(&marking(&cart.stem, 8), w, h, 1, 5.0, 4.0), x, y);
+        return face;
+    }
+    let board = if cart.battery { BOARD_SVG } else { BOARD_BARE_SVG };
+    let mut face = svg_face(&shaded(&three_gba_board(board), shell_for(cart).colour), BOARD_W, BOARD_H);
+    let (x, y, w, h) = PD_GBA_TITLE;
+    over(&mut face, &marking_face(&marking(&cart.stem, 10), w, h, 1, 5.5, 4.0), x, y);
+    face
+}
+
+/// A pak chip of the three-chip board: shorter, as its footprints.
+pub fn three_pak_chip_face(core: Option<Core>) -> CartFace {
+    let (w, h) = PD_PAK_CHIP;
+    let mut face = svg_face(&pak_chip_svg(w, h), w as u32, h as u32);
+    if let Some(layout) = core.and_then(|c| name_layout(c, (w - 26.0).max(8.0))) {
+        ink_band(&mut face, (h as u32 - 34) / 2, 34, &layout, CHIP_INK, 0.9);
+    }
+    padded(&face, TURN_PAD)
+}
+
+fn three_gba_board(svg: &str) -> String {
+    svg.lines().filter(|line| !GBA_TITLE_CHIP.iter().any(|mark| line.contains(mark)))
+        .collect::<Vec<_>>().join("\n")
+}
+
+/// gb_board.svg without its square title chip and its two tall
+/// footprints, with the three footprints of one size.
+fn three_pak_board(svg: &str) -> String {
+    let mut out = Vec::new();
+    for line in svg.lines() {
+        let t = line.trim();
+        if t == "</svg>" {
+            for (x, y) in PD_PAK_SEATS {
+                out.push(footprint_svg(x, y, PD_PAK_CHIP.1));
+            }
+            out.push(line.to_string());
+            continue;
+        }
+        let title_chip = t.contains(r#"x="64" y="98" width="62" height="62""#)
+            || t.contains(r#"x="74" y="108" width="42" height="42""#)
+            || (t.contains("#b3b3b8") && (t.contains(r#"y="101""#) || t.contains(r#"x="67""#)));
+        let tall_footprint = t.contains(r#"width="68" height="97""#)
+            || (t.contains(r#"width="8" height="3.2""#) && t.contains("#d4a93c"));
+        if !title_chip && !tall_footprint {
+            out.push(line.to_string());
+        }
+    }
+    out.join("\n")
+}
+
+/// Two rows of pads `h` high, as gb_chip.svg's (a 5.8 pitch).
+fn pad_rows(x: f32, y: f32, h: f32, fill: &str) -> String {
+    let mut out = String::new();
+    let mut at = 3.3;
+    while at + 3.2 <= h - 3.0 {
+        for dx in [4.0, 58.0] {
+            out.push_str(&format!(r#"<rect x="{}" y="{:.1}" width="8" height="3.2" fill="{fill}"/>"#, x + dx, y + at));
+        }
+        at += 5.8;
+    }
+    out
+}
+
+fn footprint_svg(x: f32, y: f32, h: f32) -> String {
+    format!(r##"<rect x="{}" y="{}" width="68" height="{}" rx="3.5" fill="none" stroke="#eef5e6" stroke-width="1.08"/>{}"##,
+        x + 1.0, y - 3.0, h + 6.0, pad_rows(x, y, h, "#d4a93c"))
+}
+
+fn pak_chip_svg(w: f32, h: f32) -> String {
+    format!(r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">{}<rect x="12" y="1" width="46" height="{}" rx="1.55" fill="#1a1a1a"/><circle cx="17.5" cy="{}" r="2.02" fill="#333333"/></svg>"##,
+        pad_rows(0.0, 0.0, h, "#b3b3b8"), h - 2.0, h - 7.0)
+}
+
 fn name_layout(core: Core, max_w: f32) -> Option<text::Layout> {
     let font = text::label_font()?;
     let tracking = |px: f32| (px * 0.10).round();
@@ -779,4 +939,40 @@ fn name_layout(core: Core, max_w: f32) -> Option<text::Layout> {
         px,
         tracking: tracking(px),
     })
+}
+
+#[cfg(test)]
+mod three_chip_tests {
+    use super::*;
+
+    #[test]
+    fn the_gba_board_loses_only_its_title_chip() {
+        let three = three_gba_board(BOARD_SVG);
+        for mark in GBA_TITLE_CHIP {
+            assert_eq!(BOARD_SVG.matches(mark).count(), 1, "{mark}");
+            assert!(!three.contains(mark), "{mark}");
+        }
+        assert_eq!(BOARD_SVG.lines().count() - three.lines().count(), 4);
+        assert_eq!(three_gba_board(BOARD_BARE_SVG).lines().count() + 4, BOARD_BARE_SVG.lines().count());
+    }
+
+    #[test]
+    fn the_pak_board_has_three_footprints_of_one_size() {
+        for svg in [GB_BOARD_SVG, GB_BOARD_BARE_SVG] {
+            let three = three_pak_board(svg);
+            assert!(!three.contains(r#"width="68" height="97""#));
+            assert!(!three.contains(r#"x="74" y="108" width="42" height="42""#));
+            assert_eq!(three.matches(r#"width="68" height="78""#).count(), 3);
+            assert!(three.trim_end().ends_with("</svg>"));
+            // The small chip at the top keeps its pins.
+            assert!(three.contains(r##"<rect x="119" y="49.5" width="4" height="8" fill="#b3b3b8"/>"##));
+        }
+    }
+
+    #[test]
+    fn three_pak_chips_render() {
+        let face = three_pak_chip_face(Some(Core::PokeDaisy));
+        assert_eq!((face.w, face.h), (70 + 2 * TURN_PAD, 72 + 2 * TURN_PAD));
+        assert!(face.rgba.chunks(4).any(|p| p[3] > 0));
+    }
 }

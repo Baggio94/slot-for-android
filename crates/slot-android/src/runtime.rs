@@ -825,7 +825,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 192] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 195] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -889,6 +889,8 @@ const SETTING_VALUE_NAMES: [&str; 192] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "RF", "Soft", "MAME", "Nuked", "Analog",
                                // 169-170 (SHELVES_LAYOUT_VALUES): Interface > Shelves.
                                "SCROLL", "GRID",
+                               // 171-173 (POKEDAISY_VIEW_VALUES): PokeDaisy's Screen Size.
+                               "ZOOM", "EXPAND", "ORIGINAL",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -904,6 +906,8 @@ const EXTRA_VALUES: usize = 150;
 const AUDIO_OPTION_VALUES: usize = EXTRA_VALUES + 14;
 /// Interface > Shelves' Scroll and Grid in SETTING_VALUE_NAMES.
 const SHELVES_LAYOUT_VALUES: usize = AUDIO_OPTION_VALUES + 5;
+/// PokeDaisy's views (ZOOM, EXPAND, ORIGINAL) in SETTING_VALUE_NAMES.
+const POKEDAISY_VIEW_VALUES: usize = SHELVES_LAYOUT_VALUES + 2;
 /// The first RG Rotate value in SETTING_VALUE_NAMES.
 const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
 /// Library's values (2.5): where the slot. folder is, and RomM's sync
@@ -1637,6 +1641,8 @@ struct Engine {
     game_emulation: Option<EmulationProfile>,
     emulation_core_labels: [(slot_gfx::TexId, u32, u32); Core::ALL.len()],
     video_mode: VideoMode,
+    /// PokeDaisy's view of the game played (SELECT + Up / Down).
+    pokedaisy_view: crate::pokedaisy_view::View,
     wallpaper_texture: Option<slot_gfx::TexId>,
     wallpaper_personal: bool,
     /// How light the wallpaper is behind the status bar's top line.
@@ -1782,6 +1788,11 @@ struct Engine {
     // R1 WAN, L1 LAN, Y Share, UP Digit, arrows Move, A Join.
     link_inet_hints: [[(slot_gfx::TexId, u32); 6]; 2],
     board_texture: Option<slot_gfx::TexId>,
+    /// A Pokemon game's board: PokeDaisy's chip beside the two (3.1.1).
+    picker_three: Option<slot_ui::ThreeChips>,
+    /// The three-chip pak board's shorter chips: PokeDaisy, mGBA, Gambatte
+    /// and blank, made the first time one opens.
+    pak_three_textures: Option<[slot_gfx::TexId; 4]>,
     /// The front that lifts off a cart that leaves its contacts on the board
     /// (the Lynx), and whether the open picker's cart has one.
     picker_lid: (Option<slot_gfx::TexId>, bool),
@@ -2524,6 +2535,7 @@ impl Engine {
             game_emulation: None,
             emulation_core_labels,
             video_mode: VideoMode::Actual,
+            pokedaisy_view: crate::pokedaisy_view::View::Expand,
             wallpaper_texture,
             wallpaper_personal,
             wallpaper_top_luma,
@@ -2615,6 +2627,8 @@ impl Engine {
             link_failed_hints,
             link_inet_hints,
             board_texture: None,
+            picker_three: None,
+            pak_three_textures: None,
             picker_lid: (None, false),
             picker: None,
             picker_auto_seat: None,
@@ -5046,6 +5060,12 @@ impl Engine {
                     // local time travel or accelerated single-player frames.
                     if self.game.as_ref().is_some_and(GameSession::linked)
                         && (code == 104 || code == 105) { return; }
+                    // L3 opens PokeDaisy's quick menu, as in its own app.
+                    if code == 106 && self.pokedaisy_running() {
+                        if pressed { self.buttons |= ButtonMask::L3; }
+                        else { self.buttons &= !ButtonMask::L3; }
+                        return;
+                    }
                     // Stick clicks (L3 / R3) set Boktai's sun, as in mGBA.
                     if code == 106 || code == 107 {
                         if pressed && self.game.as_ref().is_some_and(GameSession::solar) {
@@ -5375,10 +5395,14 @@ impl Engine {
                             },
                             ShelfOverlay::Core => {
                                 let now = self.born.elapsed().as_millis() as u64;
+                                // A pak board's PokeDaisy chip sits over mGBA's.
+                                let column = self.picker_three.is_some_and(|t| t.socket.is_none());
                                 if let Some(picker) = self.picker.as_mut() {
                                     match code {
                                         21 => { picker.press(Press::Left, now); }
                                         22 => { picker.press(Press::Right, now); }
+                                        19 if column => { picker.press(Press::To(0), now); }
+                                        20 if column => { picker.press(Press::To(1), now); }
                                         96 => self.seat_core_picker(),
                                         97 | 109 => { picker.press(Press::Back, now); }
                                         _ => {}
@@ -5558,7 +5582,19 @@ impl Engine {
             self.refusal = Some(slot_ui::Refusal::started(self.born.elapsed().as_millis() as u64));
             return;
         }
-        let face = board_face(selected);
+        // PokeDaisy's chip on the board of a Pokemon game it plays, when
+        // this slot. carries its core.
+        let uri = selected.rom.to_string_lossy().into_owned();
+        let carried = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+            .is_some_and(|(_, library)| library.join(format!("lib{}_libretro.so", Core::PokeDaisy.as_str())).is_file());
+        let three = (carried && core_selection::pokedaisy_plays(&uri, selected.platform))
+            .then(|| slot_ui::three_chips(selected)).flatten();
+        let face = if three.is_some() { slot_ui::board_face_three(selected) } else { board_face(selected) };
+        if three.as_ref().is_some_and(|t| t.socket.is_none()) && self.pak_three_textures.is_none() {
+            let gpu = &mut self.gpu;
+            self.pak_three_textures = Some([Some(Core::PokeDaisy), Some(Core::Mgba), Some(Core::Gambatte), None]
+                .map(|core| gpu.create_face(&slot_ui::three_pak_chip_face(core))));
+        }
         if let Some(texture) = self.board_texture {
             self.gpu.update_face(texture, &face);
         } else {
@@ -5582,7 +5618,11 @@ impl Engine {
         let [primary, alternate] = slot_ui::board_cores(selected);
         // A 3.0 test cart keeps no core: its first chip is seated.
         let current_core = if slot_ui::is_test_cart(selected) { primary } else { current_core };
-        let mut picker = CorePicker::open_between(current_core, primary, alternate, now);
+        let mut picker = match three {
+            Some(three) => CorePicker::open_three(current_core, three.cores, now),
+            None => CorePicker::open_between(current_core, primary, alternate, now),
+        };
+        self.picker_three = three;
         // A clear cart's lid waits for its plastic without
         // the board (start_waiting_picker), or the shelf
         // face would lift with the board drawn on it.
@@ -6197,6 +6237,10 @@ impl Engine {
     /// One screen size up (Integer -> Original Ratio -> Stretch) or down,
     /// with its banner. GBA on the KONKR has a single size.
     fn step_screen_size(&mut self, bigger: bool) {
+        if self.pokedaisy_running() {
+            self.step_pokedaisy_view(bigger);
+            return;
+        }
         let same = self.game_integer_is_ratio();
         let mode = if bigger { self.video_mode.bigger_when(same) }
             else { self.video_mode.smaller_when(same) };
@@ -6205,6 +6249,34 @@ impl Engine {
         if self.video_mode != mode { return; }
         self.hud.toast(self.video_mode_toast(), self.born.elapsed().as_millis() as u64);
         self.tell_hidden_bezel();
+    }
+
+    /// The game played runs on PokeDaisy.
+    fn pokedaisy_running(&self) -> bool {
+        self.game.as_ref().is_some_and(|session| session.core_kind() == Core::PokeDaisy)
+    }
+
+    /// ZOOM, EXPAND, ORIGINAL in place of the screen sizes: PokeDaisy lays
+    /// out its own canvas. Kept for this game.
+    fn step_pokedaisy_view(&mut self, up: bool) {
+        use crate::pokedaisy_view::View;
+        let view = self.pokedaisy_view.step(up);
+        if view == self.pokedaisy_view { return; }
+        self.pokedaisy_view = view;
+        if let Some(game) = self.game.as_mut() { game.set_pokedaisy_view(view); }
+        let name = self.shelves[self.active].carts
+            .get(self.shelves[self.active].index)
+            .map_or("", |cart| cart.stem.as_str());
+        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Err(err) = crate::pokedaisy_view::write_view(root, name, view) {
+                set_error_message("Couldn't save the screen size.", &err);
+            }
+        }
+        self.hud.toast(match view {
+            View::Zoom => Toast::ScreenZoom,
+            View::Expand => Toast::ScreenExpand,
+            View::Original => Toast::ScreenOriginal,
+        }, self.born.elapsed().as_millis() as u64);
     }
 
     fn video_mode_toast(&self) -> Toast {
@@ -6699,6 +6771,15 @@ impl Engine {
     }
 
     fn pause_screen_rows(&self) -> &'static [usize] {
+        // PokeDaisy: its views in Screen Size, no bezel (it fills the screen).
+        if self.pokedaisy_running() {
+            return match self.current_cart_platform() {
+                Platform::Gba => &[34,29,120],
+                Platform::Gbc => &[88,29,120],
+                _ if self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) => &[89,36,120],
+                _ => &[89,120],
+            };
+        }
         // GB/GBC resize with L1/R1; GBA's shoulders belong to the game.
         let bezel=video_mode::bezel_offered(self.current_cart_platform(),panel_size());
         // GBA Video: Shader, Upscaler, Color Correction (Siham 2026-11-10).
@@ -6719,6 +6800,15 @@ impl Engine {
         }
     }
     fn pause_screen_key(&self,row:usize)->Option<usize> {
+        if self.pokedaisy_running() {
+            let keys: &[usize] = match self.current_cart_platform() {
+                Platform::Gba => &[0,22,SCREEN_SIZE_KEY],
+                Platform::Gbc => &[21,23,SCREEN_SIZE_KEY],
+                _ if self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) => &[1,3,SCREEN_SIZE_KEY],
+                _ => &[1,SCREEN_SIZE_KEY],
+            };
+            return keys.get(row).copied();
+        }
         if self.playing_video() {
             let rows=self.pause_screen_rows();
             return rows.get(row).map(|label| match label {
@@ -6842,6 +6932,10 @@ impl Engine {
     }
 
     fn change_game_screen_or_gameplay(&mut self, key: usize, right: bool) {
+        if key == SCREEN_SIZE_KEY && self.pokedaisy_running() {
+            self.step_pokedaisy_view(right);
+            return;
+        }
         if key == SCREEN_SIZE_KEY {
             let same = self.game_integer_is_ratio();
             let mode = if right { self.video_mode.bigger_when(same) }
@@ -8079,6 +8173,11 @@ impl Engine {
 
     /// The value face a Settings key shows, None for an action-only row.
     fn setting_value(&self, key: usize) -> Option<usize> {
+        if key == SCREEN_SIZE_KEY && self.pokedaisy_running()
+            && matches!(self.overlay, ShelfOverlay::PauseScreenSettings { .. }) {
+            return Some(POKEDAISY_VIEW_VALUES + crate::pokedaisy_view::View::ORDER.iter()
+                .position(|view| *view == self.pokedaisy_view).unwrap_or(1));
+        }
         let profile = if matches!(self.overlay, ShelfOverlay::PauseEmulationSettings { .. }) {
             self.current_emulation()
         } else { EmulationProfile::from_settings(&self.settings) };
@@ -9094,10 +9193,18 @@ impl Engine {
                 tex, alpha: 1.0,
             });
         }
-        for (i, core) in [picker.left(), picker.right()].into_iter().enumerate() {
-            if !layout.sockets { break; }
+        // Where the sockets sit: the two of the board, or a Pokemon game's
+        // three (PokeDaisy's where the title chip was).
+        let sockets: Vec<(Core, f32, f32)> = match self.picker_three {
+            Some(three) => three.socket.map_or_else(Vec::new, |at| three.cores.into_iter()
+                .zip(at).map(|(core, (u, v))| (core, u, v)).collect()),
+            None if layout.sockets => [picker.left(), picker.right()].into_iter().enumerate()
+                .map(|(i, core)| (core, layout.socket_u[i], layout.socket_v)).collect(),
+            None => Vec::new(),
+        };
+        for (core, su, sv) in sockets {
             let tex = self.socket_textures[core.index()];
-            let (x, y) = layout.at(board, layout.socket_u[i], layout.socket_v);
+            let (x, y) = layout.at(board, su, sv);
             out.push(Draw::Tex {
                 x: x.round(), y: y.round(),
                 w: SOCKET_W as f32 * zoom, h: SOCKET_H as f32 * zoom,
@@ -9106,10 +9213,17 @@ impl Engine {
         }
 
         let chip = picker.chip(now);
-        let u = layout.chip_u[0] + (layout.chip_u[1] - layout.chip_u[0]) * chip.across;
+        let (u, chip_v, shadow_at, chip_size) = match self.picker_three {
+            Some(three) => {
+                let ((u0, v0), (u1, v1)) = (three.chip[chip.from.min(2)], three.chip[chip.to.min(2)]);
+                (u0 + (u1 - u0) * chip.along, v0 + (v1 - v0) * chip.along, three.shadow_at, three.size)
+            }
+            None => (layout.chip_u[0] + (layout.chip_u[1] - layout.chip_u[0]) * chip.across,
+                layout.chip_v, layout.shadow_at, layout.chip),
+        };
         if chip.lift > 0.0 {
             let (cx, cy) = layout.at(board,
-                u + layout.shadow_at.0, layout.chip_v + layout.shadow_at.1);
+                u + shadow_at.0, chip_v + shadow_at.1);
             let (w, h) = (layout.shadow.0 * zoom, layout.shadow.1 * zoom);
             out.push(Draw::Tex {
                 x: cx - w / 2.0, y: cy - h / 2.0, w, h,
@@ -9133,11 +9247,16 @@ impl Engine {
             };
             (&self.pak_chip_textures, blank)
         };
-        let tex = chip.seated.map(|core| chips[core.index()]).unwrap_or(blank);
-        let (x, y) = layout.at(board, u, layout.chip_v - layout.hop * chip.lift);
+        let mut tex = chip.seated.map(|core| chips[core.index()]).unwrap_or(blank);
+        // The three-chip pak board's shorter chips.
+        if let (Some(three), Some(short)) = (self.picker_three.filter(|t| t.socket.is_none()), self.pak_three_textures) {
+            tex = chip.seated.and_then(|core| three.cores.iter().position(|c| *c == core))
+                .map_or(short[3], |at| short[at]);
+        }
+        let (x, y) = layout.at(board, u, chip_v - layout.hop * chip.lift);
         let body = grown(slot_ui::Placed {
             x: x + chip.shake, y,
-            w: layout.chip.0 * zoom, h: layout.chip.1 * zoom,
+            w: chip_size.0 * zoom, h: chip_size.1 * zoom,
         }, TURN_PAD as f32 * zoom);
         out.push(Draw::Turned {
             x: body.x.round(), y: body.y.round(),
@@ -9721,6 +9840,9 @@ impl Engine {
                     let reported = self.game.as_ref().map_or((0, 0), GameSession::frame_size);
                     crate::log_info(&format!("Screen size {:?} ({source}) for {platform:?}: core {}x{}, chosen for {}x{}, square {square}, panel {}x{}",
                         self.video_mode, reported.0, reported.1, frame.0, frame.1, panel_size().0, panel_size().1));
+                    self.pokedaisy_view = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+                        .as_ref().map_or_else(Default::default,
+                            |(root, _)| crate::pokedaisy_view::view_for(root, name));
                     self.apply_video_geometry();
                     self.screen_power = 0.0;
                     self.exiting_screen = false;

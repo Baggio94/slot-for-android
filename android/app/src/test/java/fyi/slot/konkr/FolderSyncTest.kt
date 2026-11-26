@@ -102,6 +102,8 @@ class FolderSyncTest {
         assertFalse("this handheld's own", FolderSync.travels("Saves/abc.mgba.retroarch-import.state.auto"))
         assertFalse(FolderSync.travels("Saves/abc.mgba.state-export-protected"))
         assertTrue(FolderSync.travels("Saves/abc.mgba.state"))
+        assertFalse(FolderSync.travels("Saves/mGBA/Pokemon Emerald.srm.holder"))
+        assertTrue(FolderSync.travels("Saves/mGBA/Pokemon Emerald.srm"))
     }
 
     @Test fun artworkSyncPreservesUnrelatedBaseAndDoesNotTouchSaves() {

@@ -57,26 +57,51 @@ pub fn gambatte_twb64(name: &str) -> Option<&'static str> {
     (name == slot_store::TWB64_GAME_COM).then_some("TWB64 028 - Game.com Ver.")
 }
 
-/// The other cores whose battery files hold the same SRAM: mGBA, Gambatte
-/// and PokeDaisy for GB/GBC, FCEUmm and Nestopia for NES, Snes9x and bsnes
-/// for SNES, Genesis Plus GX and PicoDrive for a Mega Drive cart's battery
-/// SRAM (see md_shares_sram and carry_md). A GBA cart's mGBA and gpSP share
-/// on the Android side (RetroArchStorage); PokeDaisy, mGBA inside, shares
-/// with both here.
-fn other_cores(which: Core, platform: Platform) -> Vec<Core> {
-    if !which.runs(platform) {
-        return Vec::new();
+/// The other core whose battery file holds the same SRAM: mGBA and
+/// Gambatte for GB/GBC, FCEUmm and Nestopia for NES, Snes9x and bsnes for
+/// SNES, Genesis Plus GX and PicoDrive for a Mega Drive cart's battery SRAM
+/// (see md_shares_sram and carry_md). PokeDaisy keeps its battery in mGBA's
+/// own file (battery_core), so it shares as mGBA does.
+fn other_core(which: Core, platform: Platform) -> Option<Core> {
+    let which = battery_core(which);
+    if platform == Platform::Gba || !which.runs(platform) {
+        return None;
     }
-    let mut cores = vec![Core::primary_for(platform), Core::alternate_for(platform)];
-    if Core::pokedaisy_system(platform) {
-        cores.push(Core::PokeDaisy);
-    }
-    if platform == Platform::Gba && which != Core::PokeDaisy {
-        cores.retain(|core| *core == Core::PokeDaisy);
-    }
-    cores.retain(|core| *core != which);
-    cores.dedup();
-    cores
+    let first = Core::primary_for(platform);
+    Some(if which == first { Core::alternate_for(platform) } else { first })
+}
+
+/// The core whose folder holds this core's in-game save: mGBA's for
+/// PokeDaisy, which is mGBA 0.10.5 with its companion over it.
+pub fn battery_core(which: Core) -> Core {
+    if which == Core::PokeDaisy { Core::Mgba } else { which }
+}
+
+/// mGBA and PokeDaisy run one battery file. Which of them ran it last, and
+/// the file's time then, is written beside it at each start
+/// (`<save>.holder`, kept on this handheld): when the other one ran it since and the file changed,
+/// this core's own save states are older than the save.
+pub fn battery_changed_hands(save: &Path, which: Core) -> bool {
+    let Ok(text) = std::fs::read_to_string(holder_path(save)) else { return false };
+    let mut parts = text.split_whitespace();
+    let (Some(core), Some(stamp)) = (parts.next(), parts.next()) else { return false };
+    core != which.as_str() && stamp != modified_stamp(save)
+}
+
+pub fn mark_battery_holder(save: &Path, which: Core) -> std::io::Result<()> {
+    atomic_write(&holder_path(save), format!("{} {}\n", which.as_str(), modified_stamp(save)).as_bytes())
+}
+
+fn holder_path(save: &Path) -> PathBuf {
+    let mut name = save.file_name().unwrap_or_default().to_os_string();
+    name.push(".holder");
+    save.with_file_name(name)
+}
+
+fn modified_stamp(path: &Path) -> String {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or_else(|| "none".to_owned(), |d| d.as_nanos().to_string())
 }
 
 /// Before `which` boots a GB/GBC cart, copy the other core's battery over
@@ -97,16 +122,8 @@ pub fn carry_battery(saves: &Path, stem: &str, which: Core, platform: Platform)
 pub fn carry_battery_for(saves: &Path, stem: &str, which: Core, platform: Platform,
                          rom: Option<&Path>) -> std::io::Result<bool>
 {
-    // The newest of the other cores' batteries is the one carried.
-    let mut other = None;
-    for core in other_cores(which, platform) {
-        let path = saves.join(core.text()).join(format!("{stem}.srm"));
-        let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else { continue };
-        if other.is_none_or(|(_, newest)| modified > newest) {
-            other = Some((core, modified));
-        }
-    }
-    let Some((other, _)) = other else { return Ok(false) };
+    let Some(other) = other_core(which, platform) else { return Ok(false) };
+    let which = battery_core(which);
     if platform == Platform::Md {
         let header = match rom {
             Some(rom) => read_head(rom, 0x200)?,
@@ -336,30 +353,30 @@ mod tests {
     }
 
     #[test]
-    fn pokedaisy_takes_the_newest_battery_of_the_other_cores_and_gives_its_own_back() {
+    fn pokedaisy_runs_mgbas_battery_and_shares_it_with_gambatte() {
         let d = tempfile::tempdir().unwrap();
         put(d.path(), Core::Mgba, &[1, 1, 1, 1, 0xEE], 60);
-        put(d.path(), Core::Gambatte, &[2, 2, 2, 2], 30);
+        put(d.path(), Core::Gambatte, &[2, 2, 2, 2], 10);
         assert!(carry_battery(d.path(), "Pokemon Crystal", Core::PokeDaisy, Platform::Gbc).unwrap());
-        assert_eq!(get(d.path(), Core::PokeDaisy), [2, 2, 2, 2]);
-        put(d.path(), Core::PokeDaisy, &[3, 3, 3, 3, 0xEE], 1);
-        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::Mgba, Platform::Gbc).unwrap());
-        assert_eq!(get(d.path(), Core::Mgba), [3, 3, 3, 3, 0xEE]);
-        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::Gambatte, Platform::Gbc).unwrap());
-        assert_eq!(get(d.path(), Core::Gambatte), [3, 3, 3, 3, 0xEE]);
+        assert_eq!(get(d.path(), Core::Mgba), [2, 2, 2, 2, 0xEE]);
+        assert!(!d.path().join("PokeDaisy").exists(), "no battery of its own");
+        assert!(!carry_battery(d.path(), "Pokemon Crystal", Core::PokeDaisy, Platform::Gba).unwrap());
     }
 
     #[test]
-    fn a_gba_pokemon_game_shares_between_pokedaisy_and_both_gba_cores() {
+    fn a_battery_the_other_core_changed_outdates_this_cores_states() {
         let d = tempfile::tempdir().unwrap();
-        put(d.path(), Core::Gpsp, &[5; 8], 10);
-        put(d.path(), Core::Mgba, &[4; 8], 20);
-        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::PokeDaisy, Platform::Gba).unwrap());
-        assert_eq!(get(d.path(), Core::PokeDaisy), [5; 8]);
-        put(d.path(), Core::PokeDaisy, &[6; 8], 1);
-        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::Gpsp, Platform::Gba).unwrap());
-        assert_eq!(get(d.path(), Core::Gpsp), [6; 8]);
-        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::Mgba, Platform::Gba).unwrap());
-        assert_eq!(get(d.path(), Core::Mgba), [6; 8]);
+        let save = d.path().join("Emerald.srm");
+        std::fs::write(&save, [1u8; 8]).unwrap();
+        assert!(!battery_changed_hands(&save, Core::PokeDaisy), "nobody ran it yet");
+        mark_battery_holder(&save, Core::Mgba).unwrap();
+        assert!(!battery_changed_hands(&save, Core::PokeDaisy), "mGBA ran it but saved nothing");
+        assert!(!battery_changed_hands(&save, Core::Mgba));
+        let later = std::time::SystemTime::now() + Duration::from_secs(5);
+        std::fs::File::options().write(true).open(&save).unwrap().set_modified(later).unwrap();
+        assert!(battery_changed_hands(&save, Core::PokeDaisy), "mGBA saved since");
+        assert!(!battery_changed_hands(&save, Core::Mgba), "its own save");
+        mark_battery_holder(&save, Core::PokeDaisy).unwrap();
+        assert!(!battery_changed_hands(&save, Core::PokeDaisy));
     }
 }

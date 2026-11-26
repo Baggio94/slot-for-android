@@ -147,6 +147,8 @@ class SystemsTest {
         assertEquals("PokeDaisy", Systems.coreFolder("pokedaisy", "gbc"))
         assertEquals("Snes9x", Systems.coreFolder("pokedaisy", "sfc"))
         assertEquals("pokedaisy", Systems.keyForFolder("PokeDaisy"))
+        assertEquals("mGBA", Systems.saveFolder("PokeDaisy"))
+        assertEquals("Gambatte", Systems.saveFolder("Gambatte"))
         assertEquals(listOf("atarilynx", "lynx"), Romm.folderNames("lynx", "LYNX"))
         assertEquals(listOf("ngpc", "ngp"), Romm.folderNames("neo-geo-pocket-color", "NGP"))
         assertEquals(listOf("ngp", "ngpc"), Romm.folderNames("neo-geo-pocket", "NGP"))

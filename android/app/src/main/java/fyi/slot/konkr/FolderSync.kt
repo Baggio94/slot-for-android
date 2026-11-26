@@ -461,6 +461,9 @@ internal object FolderSync {
         if (top !in TRAVELLING_DIRS || !path.contains('/')) return false
         val name = path.substringAfterLast('/')
         if (name.endsWith(".tmp") || name.endsWith(".carried") || name.endsWith(".once")) return false
+        // Which of mGBA and PokeDaisy last ran a save, with this handheld's
+        // file time (gb_core_switch.rs): this handheld's own.
+        if (name.endsWith(".srm.holder")) return false
         // The RetroArch state decoded at each launch, and the guard that
         // protects this handheld's own RetroArch auto-state: both belong to
         // this handheld. Travelling, one handheld's routine deletion of them

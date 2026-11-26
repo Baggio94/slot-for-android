@@ -2337,7 +2337,7 @@ class MainActivity : Activity() {
     private fun settleDeletedOutside(target: RetroArchStorage.Target): Boolean {
         val retroArch = RetroArchStorage.goneFromRetroArch(this, target)
         val inFolder = SaveDeletes.forGame(slotFolder.gonePaths(), target.core, target.stem,
-            target.romIdentity, target.isGba && target.shareGbaSaves)
+            target.romIdentity, target.isGba && target.shareGbaSaves, target.saveCore)
         val kinds = retroArch + inFolder.values
         if (kinds.isEmpty()) return true
         val where = buildSet {
@@ -2673,9 +2673,7 @@ class MainActivity : Activity() {
                 val shared = RetroArchStorage.target(this, rawUri, core, saves, states,
                     scannedFileName = if (RomSource.isContainer(name))
                         RomSource.archiveSaveFilename(name, ext) else null,
-                    // PokeDaisy shares on the native side, newest battery
-                    // first (gb_core_switch.rs); here it keeps its own folder.
-                    shareGbaSaves = storage.shareGbaSaves && core != "PokeDaisy")
+                    shareGbaSaves = storage.shareGbaSaves)
                 // A save folder that can't be read no longer stops the game
                 // (amadeus12, 2026-11-15): it starts with slot.'s own saves,
                 // and nothing is copied to the folder this time, so a save
@@ -2725,8 +2723,9 @@ class MainActivity : Activity() {
                     val useSetAside = handheldWanted == two.handheldSetAside
                     slotFolder.settleTwoSaves(two, useSetAside)
                     if (useSetAside) {
-                        RetroArchStorage.markFolderSave(filesDir, shared.core, shared.stem)
-                        RetroArchStorage.applyFolderSaveMark(filesDir, shared.core, shared.stem, shared.romIdentity)
+                        RetroArchStorage.markFolderSave(filesDir, shared.saveCore, shared.stem)
+                        RetroArchStorage.applyFolderSaveMark(filesDir, shared.saveCore, shared.stem,
+                            shared.romIdentity, shared.core)
                     }
                     SlotLog.i(TAG, "Two saves of ${shared.stem}: " +
                         (if (handheldWanted) "this handheld's" else "the folder's") + " chosen")

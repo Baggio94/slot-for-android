@@ -128,6 +128,10 @@ internal object Systems {
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
 
+    /** The folder an in-game save is kept in: its core's, except
+     *  PokeDaisy's, which is mGBA's own file (PokeDaisy is mGBA 0.10.5). */
+    fun saveFolder(folder: String): String = if (folder == "PokeDaisy") "mGBA" else folder
+
     /** The in-game save's extension a core writes, as in RetroArch: Handy
      *  keeps the Lynx EEPROM in .eeprom, PokeMini the Pokemon mini's in .eep,
      *  Beetle NeoPop and RACE the Neo Geo Pocket's flash in .flash and .ngf. */

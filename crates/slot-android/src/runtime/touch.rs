@@ -293,20 +293,26 @@ impl Engine {
         // The core whose chip is nearer the finger (beta41: the board's
         // halves sent a tap on the GBA's left chip to the right one), for
         // every board, from where its chips are drawn.
+        // A Pokemon game's board has PokeDaisy's chip too: three places.
         let zoom = layout.zoom(board);
-        let centre = |i: usize| {
-            let (cx, cy) = layout.at(board, layout.chip_u[i], layout.chip_v);
-            (cx + layout.chip.0 * zoom / 2.0, cy + layout.chip.1 * zoom / 2.0)
+        let places: Vec<((f32, f32), (f32, f32))> = match self.picker_three {
+            Some(three) => three.chip.iter().map(|at| (*at, three.size)).collect(),
+            None => (0..2).map(|i| ((layout.chip_u[i], layout.chip_v), layout.chip)).collect(),
         };
-        let distance = |(cx, cy): (f32, f32)| (x - cx).hypot(y - cy);
-        let left = distance(centre(0)) <= distance(centre(1));
-        let core = if left { picker.left() } else { picker.right() };
+        let distance = |((u, v), (w, h)): ((f32, f32), (f32, f32))| {
+            let (cx, cy) = layout.at(board, u, v);
+            (x - (cx + w * zoom / 2.0)).hypot(y - (cy + h * zoom / 2.0))
+        };
+        let nearest = (0..places.len())
+            .min_by(|a, b| distance(places[*a]).total_cmp(&distance(places[*b])))
+            .unwrap_or(0);
+        let core = picker.cores().get(nearest).copied().unwrap_or(picker.left());
         let Some(picker) = self.picker.as_mut() else { return };
         if !on_board || core == picker.seat() {
             picker.press(Press::Back, now);
             return;
         }
-        picker.press(if left { Press::Left } else { Press::Right }, now);
+        picker.press(Press::To(nearest), now);
         self.picker_auto_seat = Some(now + crate::core_picker::HOP_MS + SEAT_PAUSE_MS);
     }
 
