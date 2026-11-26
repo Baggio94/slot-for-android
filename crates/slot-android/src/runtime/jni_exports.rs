@@ -38,7 +38,16 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSurfaceCreated(
                 crate::log_warn(&format!("graphics recovery failed; session retained: {error}"));
                 return 0;
             }
-            if let Some(session) = engine.game.as_ref() { engine.gpu.upload_game(session.frame()); }
+            // The game's last frame at its own size (a home console's, or
+            // PokeDaisy's canvas): not read as the 240x160 GBA canvas.
+            if let Some(session) = engine.game.as_ref() {
+                let size = session.frame_size();
+                if size == (slot_retro::GBA_W, slot_retro::GBA_H) && session.display_aspect() <= 0.0 {
+                    engine.gpu.upload_game(session.frame());
+                } else {
+                    engine.gpu.upload_game_sized(session.frame(), size);
+                }
+            }
             engine.last = Instant::now();
             engine.game_accum = 0.0;
             engine.ra_clock.reset();

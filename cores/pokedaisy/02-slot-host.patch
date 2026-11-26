@@ -1,0 +1,327 @@
+slot. for Android's host changes to PokeDaisy's libretro core:
+- ASPECT applied when the frontend's option changes, not every frame, so the
+  companion's own ASPECT / ZOOM / AUTO ZOOM IN work; EXPAND back at 1x;
+  "zoomN" for ZOOM's steps; the companion's pick told to the frontend
+  (SLOT_ENV_VIEW) so slot.'s view follows it.
+- ORIGINAL on the Game Boy: the canvas is the game's own frame, as on the GBA.
+- mgba_color_correction: mGBA's own colour correction (libretro/mgba's table)
+  on the game's picture, never on the companion or the quick menu.
+- SLOT_ENV_MENU: the companion or the quick menu over the game, told.
+- SLOT_ENV_HOLD: the paused game drawn again without running it (slot.'s
+  Screen page shows a change at once).
+- The companion's clock runs (TAP TO FLIP THE CARD, the MAP cursor's blink).
+- The menu buttons offer X, Y, L3 (and the HUD's NONE): slot. keeps L2 and R2.
+
+diff --git a/3ds/core/pd_ui.c b/3ds/core/pd_ui.c
+index 0965000..add0c87 100644
+--- a/3ds/core/pd_ui.c
++++ b/3ds/core/pd_ui.c
+@@ -751,6 +751,7 @@ static void cycle_button(struct pd_settings* s, int row) {
+     for (int step = 1; step <= PD_BUTTONS; step++) {
+         int next = (old + step) % PD_BUTTONS;
+         if (next == PD_BTN_NONE && mine != &s->hudBtn) continue;
++        if (next == PD_BTN_L2 || next == PD_BTN_R2) continue; // slot.: its rewind and fast-forward
+         int* other = NULL;
+         for (int i = 0; i < 3; i++)
+             if (all[i] != mine && *all[i] == next && next != PD_BTN_NONE) other = all[i];
+diff --git a/libretro/pd_libretro.c b/libretro/pd_libretro.c
+index 05d9a9a..8a8c6dd 100644
+--- a/libretro/pd_libretro.c
++++ b/libretro/pd_libretro.c
+@@ -8,6 +8,7 @@
+ #include <arm_neon.h>
+ #endif
+ #include "pd_backend.h"
++#include <math.h>
+ 
+ #include "field_items.h"
+ #include "flash.h"
+@@ -54,17 +55,30 @@ static const unsigned retroId[NKEYS] = {
+     RETRO_DEVICE_ID_JOYPAD_L2,    RETRO_DEVICE_ID_JOYPAD_R2,   RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_L3};
+ 
+ /* ---- the options this layer adds to mGBA's ---- */
+-#define PD_OPTION_COUNT 3
++#define PD_OPTION_COUNT 4
+ static const struct retro_core_option_v2_definition pdOptions[PD_OPTION_COUNT] = {
+     {"pokedaisy_canvas", "Companion canvas", NULL, "The frame size the core reports: the game sits in it at a whole scale, the companion fills it. auto = 320x240.", NULL, NULL,
+      {{"auto", NULL}, {"320x240", NULL}, {"341x256", NULL}, {"400x300", NULL}, {"427x240", NULL}, {NULL, NULL}}, "auto"},
+     {"pokedaisy_panel", "Panel size", NULL, "The frontend's screen. With it the core picks its own canvas: EXPAND at the game's whole scale, each ZOOM step one whole scale further out. auto = the canvas option alone.", NULL, NULL,
+      {{"auto", NULL}, {"480x320", NULL}, {"480x800", NULL}, {"640x480", NULL}, {"720x480", NULL}, {"720x540", NULL}, {"720x720", NULL}, {"752x560", NULL}, {"960x544", NULL}, {"960x720", NULL}, {"1024x768", NULL}, {"1280x720", NULL}, {"1600x1440", NULL}, {"1920x1080", NULL}, {NULL, NULL}}, "auto"},
+     {"pokedaisy_aspect", "Aspect", NULL, "How the game fills the screen where the host can draw past the game's edges: expand (the app's EXPAND, the map rebuilt out to the edges at the game's own scale), zoom (one scale less, more of the map), original (the game's own frame), auto (the core's own ASPECT setting).", NULL, NULL,
+-     {{"auto", NULL}, {"expand", NULL}, {"zoom", NULL}, {"original", NULL}, {NULL, NULL}}, "auto"},
++     {{"auto", NULL}, {"expand", NULL}, {"zoom", NULL}, {"zoom1", NULL}, {"zoom2", NULL}, {"zoom3", NULL}, {"zoom4", NULL},
++      {"zoom5", NULL}, {"original", NULL}, {NULL, NULL}}, "auto"},
++    /* slot.: mGBA's own colour correction (libretro/mgba's), which mGBA 0.10.5's libretro port lacks. */
++    {"mgba_color_correction", "Color Correction", NULL, "The GBA's or the GBC's screen colours on the game's picture.", NULL, NULL,
++     {{"OFF", NULL}, {"GBA", NULL}, {"GBC", NULL}, {"Auto", NULL}, {NULL, NULL}}, "OFF"},
+ };
+ 
+ static retro_environment_t realEnv;
++/* slot. for Android's private commands (a frontend that doesn't know them answers false and nothing changes):
++ * SLOT_ENV_VIEW  data const char *: the view the player picked in the companion ("original", "expand", "zoomN"),
++ *                for the frontend's own ASPECT to follow it.
++ * SLOT_ENV_MENU  data bool *: the companion or the quick menu is over the game now (true) or the game again (false).
++ * SLOT_ENV_HOLD  data bool * (out): draw this frame again from the game as it is, without running it (the frontend's
++ *                own menu is open and shows a change at once). */
++#define SLOT_ENV_VIEW 0x20100
++#define SLOT_ENV_MENU 0x20101
++#define SLOT_ENV_HOLD 0x20102
+ /* diatom's "behind schedule" signal, given just before each frame (its frame skip): this frame's heavy drawing is left out. */
+ static bool frameLate;
+ static void audio_status(bool active, unsigned occupancy, bool underrun) {
+@@ -612,6 +626,39 @@ static void dim(int alpha) {
+ /* Convert and hand the finished canvas to the frontend. */
+ // Only a gameplay frame at the current geometry may be repeated.
+ static bool canDupe, haveGameFrame, repeatedFrame;
++/* slot.: mGBA's colour correction (libretro/mgba's ccLUT), on the frame handed to the frontend while the game is shown
++ * (ccFrame): never on the companion or the quick menu. A table from each RGB565 colour to its corrected one. */
++static uint16_t *ccLut, *ccOut;
++static int ccType; // 0 none, 1 the GBA's screen, 2 the GBC's
++static bool ccFrame;
++static void cc_build(int type) {
++  ccType = 0;
++  if (type <= 0)
++    return;
++  if (!ccLut)
++    ccLut = malloc(65536 * sizeof *ccLut);
++  if (!ccOut)
++    ccOut = malloc((size_t)CANVAS_MAX_W * CANVAS_MAX_H * sizeof *ccOut);
++  if (!ccLut || !ccOut)
++    return;
++  const float lum = 0.94f, r0 = 0.82f, g0 = 0.665f, b0 = 0.73f, rg = 0.125f, rb = 0.195f, gr = 0.24f, gb = 0.075f,
++              br = -0.06f, bg = 0.21f;
++  const float gamma = 2.2f + (type == 1 ? 1.0f : -0.5f), inv = 1.0f / 2.2f;
++  for (unsigned c = 0; c < 65536; c++) {
++    const float r = powf((float)(c >> 11 & 31) / 31.0f, gamma);
++    const float g = powf((float)(c >> 6 & 31) / 31.0f, gamma);
++    const float b = powf((float)(c & 31) / 31.0f, gamma);
++    float rc = lum * (r0 * r + gr * g + br * b), gc = lum * (rg * r + g0 * g + bg * b), bc = lum * (rb * r + gb * g + b0 * b);
++    rc = powf(rc > 0.0f ? rc : 0.0f, inv);
++    gc = powf(gc > 0.0f ? gc : 0.0f, inv);
++    bc = powf(bc > 0.0f ? bc : 0.0f, inv);
++    const unsigned R = (unsigned)((rc > 1.0f ? 1.0f : rc) * 31.0f + 0.5f) & 31;
++    const unsigned G = (unsigned)((gc > 1.0f ? 1.0f : gc) * 31.0f + 0.5f) & 31;
++    const unsigned B = (unsigned)((bc > 1.0f ? 1.0f : bc) * 31.0f + 0.5f) & 31;
++    ccLut[c] = (uint16_t)(R << 11 | G << 6 | (G >> 4) << 5 | B);
++  }
++  ccType = type;
++}
+ static void present(void) {
+   if (messageFrames > 0) {
+     pd_fill(&canvas, 4, CH - 50, CW - 8, 24, 0x181818);
+@@ -621,7 +668,13 @@ static void present(void) {
+   if (!direct565)
+     for (size_t i = 0; i < (size_t)CW * CH; i++)
+       out565[i] = to565(cvs[i]);
+-  realVideo(out565, (unsigned)CW, (unsigned)CH, (size_t)CW * 2);
++  const uint16_t *shown = out565;
++  if (ccFrame && ccType && ccLut && ccOut) {
++    for (size_t i = 0; i < (size_t)CW * CH; i++)
++      ccOut[i] = ccLut[out565[i]];
++    shown = ccOut;
++  }
++  realVideo(shown, (unsigned)CW, (unsigned)CH, (size_t)CW * 2);
+   direct565 = false;
+   repeatedFrame = false;
+ }
+@@ -647,7 +700,11 @@ static int key_of(int btn) {
+ }
+ static void apply_aspect_option(void);
+ /* Asked again whenever the frontend says an option changed, and once after the settings file is read. */
+-static void read_options(void) { apply_aspect_option(); }
++static void cc_read_option(void);
++static void read_options(void) {
++  apply_aspect_option();
++  cc_read_option();
++}
+ 
+ static void poll_keys(void) {
+   held = 0;
+@@ -728,6 +785,7 @@ static int fieldFlags, hudFieldFrames;
+ 
+ /* the quick menu and the game-code jobs: PC, FLY, FLASH, REPEL, BIKE (fly.c, flash.c, field_items.c) */
+ static bool quickOpen;
++static int slotMenuSent = -1; // slot.: what SLOT_ENV_MENU said last (-1: nothing yet)
+ static int quickSel;
+ static const struct pd_config *flyCfg;
+ /* FLASH: the config whose functions this ROM has, and a pick waiting for a frame the game can be called in (counts the
+@@ -757,12 +815,25 @@ static const char *repelNames[REPEL_KINDS];
+ static uint32_t *ovScratch; // the quick menu spread over the canvas (blend_overlay_area)
+ static uint32_t *ovPixels; // the quick menu's canvas, see-through where nothing is drawn
+ static const unsigned char *romData;
++static size_t romLen;
++/* mgba_color_correction: Auto is the GBA's screen for a GBA game, the GBC's for a game the GBC runs in colour. */
++static void cc_read_option(void) {
++  const char *v = pd_option("mgba_color_correction");
++  int type = 0;
++  if (v && !strcmp(v, "GBA"))
++    type = 1;
++  else if (v && !strcmp(v, "GBC"))
++    type = 2;
++  else if (v && !strcmp(v, "Auto"))
++    type = PD_BE_IS_GBA() ? 1 : romData && romLen > 0x143 && (romData[0x143] & 0x80) ? 2 : 0;
++  if (type != ccType)
++    cc_build(type);
++}
+ /* The Game Boy games' PC / FLY / WILD (gb_field.c, the app's GbField): the cart's config, the running frames left before
+  * asking whether the game took a queued action, and whether the map's encounters may still be held (put back once). */
+ static const struct gb_field *gbf;
+ static int gbTake;
+ static bool gbWildHeld;
+-static size_t romLen;
+ static bool polishedActions;
+ static struct pd_binput polishedInput;
+ 
+@@ -1247,7 +1318,7 @@ static void zoom_host_update(void) {
+ static void canvas_update(bool notify) {
+   int w = menuW, h = menuH, scale = 1;
+   unsigned fw = gameW ? gameW : (unsigned)baseGW, fh = gameH ? gameH : (unsigned)baseGH;
+-  if (PD_BE_IS_GBA() && !companion && settings.aspect == PD_ASPECT_ORIGINAL && fw && fh) {
++  if (!companion && settings.aspect == PD_ASPECT_ORIGINAL && fw && fh && (PD_BE_IS_GBA() || !quickOpen)) {
+     w = (int)fw;
+     h = (int)fh;
+   } else if (panelW) {
+@@ -1287,22 +1358,48 @@ static void canvas_update(bool notify) {
+ 
+ /* The frontend's ASPECT row (pokedaisy_aspect), for a host that can draw past the game's edges: auto leaves the core's
+  * own ASPECT setting be. A change resizes the canvas at once and tells the frontend (it presents the new geometry). */
++/* slot.: applied when the option changes, not every frame (the companion's own ASPECT and ZOOM were put back at once),
++ * EXPAND at its 1x again, "zoomN" ZOOM's step N. The view the companion picks is told to the frontend (SLOT_ENV_VIEW),
++ * which keeps it as its option: optionSeen follows it, so the frontend's next pick is a change. */
++static char optionSeen[16], viewSent[16];
++static void view_name(char *out, size_t n) {
++  const int z = settings.zoom + (settings.aspect == PD_ASPECT_ZOOM_OUT ? 1 : 0);
++  if (settings.aspect == PD_ASPECT_ORIGINAL)
++    snprintf(out, n, "original");
++  else if (z > 0)
++    snprintf(out, n, "zoom%d", z);
++  else
++    snprintf(out, n, "expand");
++}
+ static void apply_aspect_option(void) {
+   const char *a = pd_option("pokedaisy_aspect");
+-  if (!a || !strcmp(a, "auto"))
++  if (!a || !strcmp(a, "auto") || !strcmp(a, optionSeen))
+     return;
++  snprintf(optionSeen, sizeof optionSeen, "%s", a);
+   int aspect = settings.aspect, zoom = settings.zoom;
+-  if (!strcmp(a, "expand"))
++  if (!strcmp(a, "expand")) {
+     settings.aspect = PD_ASPECT_EXPAND;
+-  else if (!strcmp(a, "zoom")) {
++    settings.zoom = 0;
++  } else if (!strncmp(a, "zoom", 4)) {
++    const int z = a[4] ? atoi(a + 4) : 1;
+     settings.aspect = PD_ASPECT_EXPAND;
+-    settings.zoom = 1;
+-  }
+-  else if (!strcmp(a, "original"))
++    settings.zoom = z < 1 ? 1 : z;
++  } else if (!strcmp(a, "original"))
+     settings.aspect = PD_ASPECT_ORIGINAL;
++  view_name(viewSent, sizeof viewSent);
+   if ((settings.aspect != aspect || settings.zoom != zoom) && CW > 0)
+     canvas_update(true);
+ }
++static void view_tell(void) {
++  char now[16];
++  view_name(now, sizeof now);
++  if (!strcmp(now, viewSent))
++    return;
++  snprintf(viewSent, sizeof viewSent, "%s", now);
++  snprintf(optionSeen, sizeof optionSeen, "%s", now);
++  if (realEnv)
++    realEnv(SLOT_ENV_VIEW, (void *)now);
++}
+ static void apply_panel_option(void) {
+   const char *v = pd_option("pokedaisy_panel");
+   int w = 0, h = 0;
+@@ -1388,6 +1485,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info *g) {
+   snprintf(pdGamePath, sizeof pdGamePath, "%s", g->path ? g->path : "");
+   PD_BE_AFTER_LOAD(g);
+   choose_canvas();
++  optionSeen[0] = 0;
++  ccType = -1; // a new game: its colour correction built again (Auto follows the game)
+   read_options();
+   {
+     struct pd_hud probe;
+@@ -1447,7 +1546,17 @@ RETRO_API bool retro_load_game(const struct retro_game_info *g) {
+   }
+   pd_look_apply(&game, &settings); // DARK MODE (pd_game_detect applied the game's windows with no settings)
+   autoRunFlip = 0;
++  // slot.: a menu button its frontend keeps for itself (L2 rewinds, R2 fast-forwards) never opens anything: the defaults.
++  if (settings.quickBtn == PD_BTN_L2 || settings.quickBtn == PD_BTN_R2 || settings.companionBtn == PD_BTN_L2 ||
++      settings.companionBtn == PD_BTN_R2 || settings.hudBtn == PD_BTN_L2 || settings.hudBtn == PD_BTN_R2) {
++    settings.quickBtn = PD_BTN_L3;
++    settings.companionBtn = PD_BTN_X;
++    settings.hudBtn = PD_BTN_NONE;
++  }
++  optionSeen[0] = 0;
++  slotMenuSent = -1;
+   read_options(); // the frontend's ASPECT, over the file's own
++  view_name(viewSent, sizeof viewSent);
+   // A resident frontend loads the core again in the same process: nothing of the last game may survive.
+   memset(&snap, 0, sizeof snap);
+   memset(&hudState, 0, sizeof hudState);
+@@ -1782,10 +1891,17 @@ RETRO_API void retro_run(void) {
+     optionsDirty = false;
+     read_options();
+   }
+-  apply_aspect_option(); // the frontend's ASPECT can change mid-game: a lookup a frame, a resize only when it does
++  // slot.: the frontend's menu asks for this frame drawn again from the game as it is (SLOT_ENV_HOLD). mGBA doesn't run,
++  // so it doesn't ask whether an option changed: the frontend's ASPECT and colours are read here, for the frame to show.
++  bool hold = false;
++  if (realEnv && !realEnv(SLOT_ENV_HOLD, &hold))
++    hold = false;
++  if (hold)
++    read_options();
+   apply_panel_option();  // so can its window: the canvas is laid out for the panel again when that changes
+   zoom_host_update();    // the companion's ZOOM list follows the game's size and the window
+   canvas_update(true);   // the companion's ASPECT / ZOOM may have changed: resize only when it does
++  view_tell();           // slot.: and the frontend's ASPECT follows it
+   quickBtn = key_of(settings.quickBtn);
+   companionBtn = key_of(settings.companionBtn);
+   hudBtn = key_of(settings.hudBtn);
+@@ -2275,7 +2391,12 @@ RETRO_API void retro_run(void) {
+     shortcutBlocked |= held;
+   wasPaused = paused;
+   shortcutExclusive = false;
+-  if (!paused) {
++  if (hold && !paused) {
++    if (wideSupported && settings.aspect != PD_ASPECT_ORIGINAL)
++      wide_tick(); // the view laid out again for the canvas as it is now, from the game as it was
++    static const int16_t still[2 * 1024];
++    PD_BE_AUDIO(still, 549);
++  } else if (!paused) {
+     if (polishedActions && !rewinding && settings.wildOff &&
+         !polished_wild_hold(core, game.sha1, pd_lr_read_memory, core)) {
+       settings.wildOff = false;
+@@ -2541,6 +2662,12 @@ RETRO_API void retro_run(void) {
+       pd_font_get(&glyphs, &glyphCount);
+       pd_font_set(NULL, 0);
+     }
++    { // slot.: the companion's clock, a game frame at a time (the card's flip, the MAP cursor's blink, the card's colon)
++      static unsigned tickAcc;
++      tickAcc += 1000;
++      pd_ui_tick(&ui, tickAcc / 60);
++      tickAcc %= 60;
++    }
+     pd_ui_draw(&ui, &canvas, &game, &snap, &host);
+     if (gen2)
+       pd_font_set(glyphs, glyphCount);
+@@ -2617,6 +2744,15 @@ RETRO_API void retro_run(void) {
+     }
+     realEnv(PD_ENV_SET_HUD, &hud);
+   }
++  {
++    const int menu = companion || quickOpen;
++    if (menu != slotMenuSent && realEnv) {
++      bool on = menu;
++      realEnv(SLOT_ENV_MENU, &on);
++      slotMenuSent = menu;
++    }
++  }
++  ccFrame = !companion && !quickOpen;
+   present();
+   haveGameFrame = !companion && !quickOpen && !hudFocus;
+   PF_T(td2);

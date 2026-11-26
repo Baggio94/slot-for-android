@@ -303,12 +303,11 @@ impl Engine {
             session.set_pointer(0, 0, false);
             return;
         }
-        // Where companion_fit shows the canvas: as large as it fits, centred.
-        let (fw, fh) = session.frame_size();
-        let (cw, ch) = (out_w() as f32, OUT_H as f32);
-        let a = fw.max(1) as f32 / fh.max(1) as f32;
-        let (w, h) = if ch * a <= cw { (ch * a, ch) } else { (cw, cw / a) };
-        let (left, top) = ((cw - w) / 2.0, (ch - h) / 2.0);
+        // Where the picture is drawn (pokedaisy_fit: EXPAND and ZOOM as large
+        // as they fit, ORIGINAL at slot.'s screen size).
+        let [left, top, w, h] = self.gpu.game_rect()
+            .unwrap_or([0.0, 0.0, out_w() as f32, OUT_H as f32]);
+        if w <= 0.0 || h <= 0.0 { return; }
         let (px, py) = (pointer_axis((x - left) / w), pointer_axis((y - top) / h));
         session.set_pointer(px, py, matches!(action, DOWN | MOVE));
     }

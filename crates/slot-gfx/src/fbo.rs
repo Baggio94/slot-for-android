@@ -202,6 +202,11 @@ impl Compositor {
         self.game.set_fit(fit);
     }
 
+    /// Where a fitted frame's picture is on the canvas (see GamePass).
+    pub fn game_rect(&self) -> Option<[f32; 4]> {
+        self.game.game_rect()
+    }
+
     pub fn set_game_top(&mut self, top: bool) {
         self.game.set_top(top);
     }

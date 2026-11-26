@@ -415,6 +415,24 @@ pub fn companion_fit(frame: (u32, u32)) -> slot_gfx::Fit {
     slot_gfx::Fit::Aspect(w / h)
 }
 
+/// PokeDaisy's canvas on the screen for a view. ORIGINAL's picture (the
+/// game's own frame, or the GBA's doubled for its quick menu) at slot.'s
+/// screen size, as mGBA's: Integer, Original Ratio or Stretch. EXPAND, ZOOM
+/// and the companion as large as they fit (companion_fit).
+pub fn pokedaisy_fit(view: crate::pokedaisy_view::View, platform: Platform, mode: VideoMode,
+    frame: (u32, u32)) -> slot_gfx::Fit {
+    let (gw, gh) = crate::pokedaisy_view::game_frame(platform);
+    let own = frame.0 >= gw && frame.0 % gw == 0 && frame.1 % gh == 0 && frame.0 / gw == frame.1 / gh;
+    if view != crate::pokedaisy_view::View::Original || !own {
+        return companion_fit(frame);
+    }
+    match mode {
+        VideoMode::Actual => slot_gfx::Fit::Integer(0.0),
+        VideoMode::Aspect => slot_gfx::Fit::Aspect(0.0),
+        VideoMode::Stretch => slot_gfx::Fit::Stretch,
+    }
+}
+
 pub fn write_video_mode(root: &Path, stem: &str, mode: VideoMode) -> std::io::Result<()> {
     ini::write(root, VIDEO_MODE_FILE, stem, mode.as_str())
 }

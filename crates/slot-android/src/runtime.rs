@@ -227,8 +227,6 @@ const EJECT_SOUND_DELAY_S: f32 = 0.040;
 const EJECT_SOUND_PROGRESS: f32 = 1.0 - EJECT_SOUND_DELAY_S / EJECT_S;
 const SELECT_CHORD_MS: u128 = 600;
 const SELECT_TAP_FRAMES: u8 = 3;
-/// A Game Menu row presses PokeDaisy's key this many frames: one press.
-const POKEDAISY_TAP_FRAMES: u8 = 4;
 /// slot. original's in-game menu: the paused game under this much black.
 const GAME_MENU_SCRIM: f32 = 0.65;
 /// The game menu waits this long for a second slot. tap (Save States).
@@ -829,7 +827,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 195] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 199] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -893,8 +891,9 @@ const SETTING_VALUE_NAMES: [&str; 195] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "RF", "Soft", "MAME", "Nuked", "Analog",
                                // 169-170 (SHELVES_LAYOUT_VALUES): Interface > Shelves.
                                "SCROLL", "GRID",
-                               // 171-173 (POKEDAISY_VIEW_VALUES): PokeDaisy's Screen Size.
-                               "ZOOM", "EXPAND", "ORIGINAL",
+                               // 171-177 (POKEDAISY_VIEW_VALUES): PokeDaisy's Screen Size,
+                               // ZOOM's first step, EXPAND, ORIGINAL, then ZOOM's steps 2 to 5.
+                               "ZOOM 1", "EXPAND", "ORIGINAL", "ZOOM 2", "ZOOM 3", "ZOOM 4", "ZOOM 5",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -910,8 +909,19 @@ const EXTRA_VALUES: usize = 150;
 const AUDIO_OPTION_VALUES: usize = EXTRA_VALUES + 14;
 /// Interface > Shelves' Scroll and Grid in SETTING_VALUE_NAMES.
 const SHELVES_LAYOUT_VALUES: usize = AUDIO_OPTION_VALUES + 5;
-/// PokeDaisy's views (ZOOM, EXPAND, ORIGINAL) in SETTING_VALUE_NAMES.
+/// PokeDaisy's views (ZOOM 1, EXPAND, ORIGINAL, ZOOM 2 to 5) in SETTING_VALUE_NAMES.
 const POKEDAISY_VIEW_VALUES: usize = SHELVES_LAYOUT_VALUES + 2;
+
+/// A PokeDaisy view's value face.
+fn pokedaisy_view_value(view: crate::pokedaisy_view::View) -> usize {
+    use crate::pokedaisy_view::View;
+    POKEDAISY_VIEW_VALUES + match view {
+        View::Zoom(step) if step >= 2 => 3 + usize::from(step.min(5)) - 2,
+        View::Zoom(_) => 0,
+        View::Expand => 1,
+        View::Original => 2,
+    }
+}
 /// The first RG Rotate value in SETTING_VALUE_NAMES.
 const ROTATE_VALUES: usize = SETTING_VALUE_NAMES.len() - 21;
 /// Library's values (2.5): where the slot. folder is, and RomM's sync
@@ -1493,8 +1503,6 @@ struct Engine {
     select_chorded: bool,
     select_forwarded: bool,
     select_tap_frames: u8,
-    /// A key pressed for PokeDaisy from the Game Menu, and its frames left.
-    pokedaisy_tap: (u16, u8),
     chord_releases: u16,
     born: Instant,
     last: Instant,
@@ -1649,6 +1657,11 @@ struct Engine {
     video_mode: VideoMode,
     /// PokeDaisy's view of the game played (SELECT + Up / Down).
     pokedaisy_view: crate::pokedaisy_view::View,
+    /// PokeDaisy's HUD, drawn by slot. over the picture.
+    pokedaisy_hud: pokedaisy_hud::PokedaisyHud,
+    /// PokeDaisy's companion or quick menu is over the game: no shader, LCD
+    /// Effect or Frame Blending on it.
+    pokedaisy_menu: bool,
     wallpaper_texture: Option<slot_gfx::TexId>,
     wallpaper_personal: bool,
     /// How light the wallpaper is behind the status bar's top line.
@@ -2435,7 +2448,6 @@ impl Engine {
             select_chorded: false,
             select_forwarded: false,
             select_tap_frames: 0,
-            pokedaisy_tap: (0, 0),
             chord_releases: 0,
             born: now,
             last: now,
@@ -2543,6 +2555,8 @@ impl Engine {
             emulation_core_labels,
             video_mode: VideoMode::Actual,
             pokedaisy_view: crate::pokedaisy_view::View::Expand,
+            pokedaisy_hud: Default::default(),
+            pokedaisy_menu: false,
             wallpaper_texture,
             wallpaper_personal,
             wallpaper_top_luma,
@@ -4922,15 +4936,6 @@ impl Engine {
                                         } else { self.enter_multiplayer_menu(); }
                                     },
                                     Some(PauseRow::Cheats) if !linked && !relaunch => self.open_cheats(),
-                                    // Back to the game, PokeDaisy's own key pressed for it.
-                                    Some(PauseRow::Companion) => {
-                                        self.overlay = ShelfOverlay::None;
-                                        self.pokedaisy_tap = (ButtonMask::X, POKEDAISY_TAP_FRAMES);
-                                    }
-                                    Some(PauseRow::QuickMenu) => {
-                                        self.overlay = ShelfOverlay::None;
-                                        self.pokedaisy_tap = (ButtonMask::L3, POKEDAISY_TAP_FRAMES);
-                                    }
                                     Some(PauseRow::Settings) if !relaunch =>
                                         self.overlay = ShelfOverlay::PauseSettings { row: 0 },
                                     _ => {}
@@ -5104,7 +5109,11 @@ impl Engine {
                     // make them buttons (then they reach the game below).
                     // C / Z (six-button pads) take the same shortcuts.
                     let cz_key = code == 98 || code == 101;
-                    if self.buttons & ButtonMask::SELECT == 0 && (code == 102 || code == 103 || cz_key) {
+                    // PokeDaisy: L1 / R1 are its companion's tabs (and the
+                    // GBA's shoulders); its views are SELECT + Up / Down.
+                    let pokedaisy_shoulder = !cz_key && self.pokedaisy_running();
+                    if self.buttons & ButtonMask::SELECT == 0 && !pokedaisy_shoulder
+                        && (code == 102 || code == 103 || cz_key) {
                         use crate::controls::ShoulderRole as Role;
                         let platform = self.current_cart_platform();
                         let session = self.game.as_ref();
@@ -6077,7 +6086,6 @@ impl Engine {
     fn game_menu_rows(&self) -> &'static [PauseRow] {
         let linked = self.game.as_ref().is_some_and(GameSession::linked);
         let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
-        if !linked && !relaunch && self.pokedaisy_running() { return POKEDAISY_PAUSE_ROWS; }
         pause_rows(linked, relaunch, self.multiplayer_offered())
     }
 
@@ -6109,7 +6117,8 @@ impl Engine {
             // the companion): the whole screen, no bezel.
             self.gpu.set_picture(slot_gfx::WHOLE_TEXTURE);
             self.gpu.set_game_source_rect(slot_gfx::WHOLE_TEXTURE);
-            self.gpu.set_game_fit(video_mode::companion_fit(frame));
+            self.gpu.set_game_fit(video_mode::pokedaisy_fit(self.pokedaisy_view, platform,
+                self.video_mode, frame));
             self.gpu.set_game_top(false);
             self.apply_game_look();
             return;
@@ -6227,7 +6236,9 @@ impl Engine {
         } else { slot_gfx::Upscaler::Off };
         self.gpu.set_upscaler(upscaler);
         self.gpu.set_screen_effect(effect);
-        let lcd = self.game_lcd_effect(self.current_cart_platform());
+        let lcd = if self.pokedaisy_menu && self.pokedaisy_running() {
+            crate::settings::LcdEffect::Off
+        } else { self.game_lcd_effect(self.current_cart_platform()) };
         self.gpu.set_lcd_effect(lcd.gpu());
         let sunlight = lcd == crate::settings::LcdEffect::Sunlight && self.game.is_some();
         if sunlight != self.tilt_on {
@@ -6238,6 +6249,10 @@ impl Engine {
         }
     }
     fn game_effect(&self) -> slot_gfx::ScreenEffect {
+        // PokeDaisy's companion and quick menu: its own drawing, no shader.
+        if self.pokedaisy_menu && self.pokedaisy_running() {
+            return slot_gfx::ScreenEffect::None;
+        }
         let effect = video_mode::screen_effect(self.game_shader(),
             self.current_cart_platform(), self.video_mode);
         // Off the KONKR Original Ratio is rarely a whole multiple of the
@@ -6282,10 +6297,25 @@ impl Engine {
     /// out its own canvas. Kept for this game.
     fn step_pokedaisy_view(&mut self, up: bool) {
         use crate::pokedaisy_view::View;
-        let view = self.pokedaisy_view.step(up);
-        if view == self.pokedaisy_view { return; }
-        self.pokedaisy_view = view;
+        let steps = self.pokedaisy_zoom_steps();
+        let shown = self.pokedaisy_view.within(steps);
+        let view = shown.step(up, steps);
+        if view == shown { return; }
         if let Some(game) = self.game.as_mut() { game.set_pokedaisy_view(view); }
+        self.keep_pokedaisy_view(view);
+        self.hud.toast(match view {
+            View::Zoom(step) => Toast::ScreenZoom(step),
+            View::Expand => Toast::ScreenExpand,
+            View::Original => Toast::ScreenOriginal,
+        }, self.born.elapsed().as_millis() as u64);
+        // A held game (the Screen page) shows it at once.
+        if !matches!(self.overlay, ShelfOverlay::None) { self.redraw_paused_game(); }
+    }
+
+    /// The view this game shows from now on, kept for it (from SELECT +
+    /// Up / Down, the Screen page or PokeDaisy's companion).
+    fn keep_pokedaisy_view(&mut self, view: crate::pokedaisy_view::View) {
+        self.pokedaisy_view = view;
         let name = self.shelves[self.active].carts
             .get(self.shelves[self.active].index)
             .map_or("", |cart| cart.stem.as_str());
@@ -6294,11 +6324,12 @@ impl Engine {
                 set_error_message("Couldn't save the screen size.", &err);
             }
         }
-        self.hud.toast(match view {
-            View::Zoom => Toast::ScreenZoom,
-            View::Expand => Toast::ScreenExpand,
-            View::Original => Toast::ScreenOriginal,
-        }, self.born.elapsed().as_millis() as u64);
+    }
+
+    /// ZOOM's steps for the game played on this panel, as PokeDaisy has them.
+    fn pokedaisy_zoom_steps(&self) -> u8 {
+        crate::pokedaisy_view::zoom_steps(panel_size(),
+            crate::pokedaisy_view::game_frame(self.current_cart_platform()))
     }
 
     fn video_mode_toast(&self) -> Toast {
@@ -6848,7 +6879,10 @@ impl Engine {
         }
     }
     fn pause_emulation_rows(&self) -> &'static [usize] {
-        if self.game.as_ref().is_some_and(GameSession::solar) {
+        // PokeDaisy never runs ahead (its map past the edges): no Run-Ahead.
+        if self.pokedaisy_running() {
+            &[51,52]
+        } else if self.game.as_ref().is_some_and(GameSession::solar) {
             &[51,52,55,119]
         } else if self.game.as_ref().is_some_and(GameSession::motion) {
             &[51,52,55,137]
@@ -6932,6 +6966,18 @@ impl Engine {
     /// at once: the paused game redrawn, the game not moved (Siham
     /// 2026-11-06).
     fn redraw_paused_game(&mut self) {
+        if self.pokedaisy_running() {
+            let platform = self.current_cart_platform();
+            let (view, mode) = (self.pokedaisy_view, self.video_mode);
+            let Some(session) = self.game.as_mut() else { return };
+            if !session.redraw_held() { return; }
+            let size = session.frame_size();
+            self.gpu.upload_game_sized(session.frame(), size);
+            self.gpu.set_game_fit(video_mode::pokedaisy_fit(view, platform, mode, size));
+            if let Some(hud) = session.take_pokedaisy_hud() { self.pokedaisy_hud.update(&mut self.gpu, hud); }
+            if let Some(view) = session.take_pokedaisy_view() { self.keep_pokedaisy_view(view); }
+            return;
+        }
         let platform = self.current_cart_platform();
         let blending = self.game_blending(platform);
         let dither = platform == Platform::Md && self.game_dither();
@@ -8197,8 +8243,7 @@ impl Engine {
     fn setting_value(&self, key: usize) -> Option<usize> {
         if key == SCREEN_SIZE_KEY && self.pokedaisy_running()
             && matches!(self.overlay, ShelfOverlay::PauseScreenSettings { .. }) {
-            return Some(POKEDAISY_VIEW_VALUES + crate::pokedaisy_view::View::ORDER.iter()
-                .position(|view| *view == self.pokedaisy_view).unwrap_or(1));
+            return Some(pokedaisy_view_value(self.pokedaisy_view.within(self.pokedaisy_zoom_steps())));
         }
         let profile = if matches!(self.overlay, ShelfOverlay::PauseEmulationSettings { .. }) {
             self.current_emulation()
@@ -9861,6 +9906,8 @@ impl Engine {
                     self.pokedaisy_view = PATHS.lock().unwrap_or_else(|e| e.into_inner())
                         .as_ref().map_or_else(Default::default,
                             |(root, _)| crate::pokedaisy_view::view_for(root, name));
+                    self.pokedaisy_menu = false;
+                    self.pokedaisy_hud.clear();
                     self.apply_video_geometry();
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
@@ -9919,6 +9966,9 @@ impl Engine {
             let mut commands = vec![Draw::Game];
             if let Some((tex,[x,y,w,h])) = bezel {
                 commands.push(Draw::Tex { x,y,w,h,tex,alpha:1.0 });
+            }
+            if let Some(session) = self.game.as_ref().filter(|s| s.core_kind() == Core::PokeDaisy) {
+                self.pokedaisy_hud.draw(self.gpu.game_rect(), session.frame_size(), &mut commands);
             }
             self.draw_overlay(&mut commands);
             // The original Slot app draws the HUD AFTER draw_game_menu()
@@ -9986,10 +10036,16 @@ impl Engine {
         // Read before the session's borrow: the low battery sign (#87).
         let mut low_battery = Vec::new();
         self.push_low_battery(&mut low_battery);
+        // PokeDaisy's view and menu as this frame leaves them.
+        let mut pd_view_seen = None;
+        let mut pd_menu_now = self.pokedaisy_menu;
         if let Some(session) = self.game.as_mut() {
             // Resume only after the remote has also left its pause menu;
             // LinkPlay::frame holds either core while peer_paused is true.
             session.set_link_paused(false);
+            session.set_throttle(if self.rewind_held { slot_retro::Throttle::Rewinding }
+                else if self.ff_held || self.ff_latched { slot_retro::Throttle::FastForward }
+                else { slot_retro::Throttle::Normal });
             // In-game HUD replaces the shelf chrome; never let the upper
             // Android indicators remain visible on the first game frame.
             SHELF_INDICATOR_FLAGS.store(0, Ordering::Release);
@@ -10127,7 +10183,7 @@ impl Engine {
                     // the remote frame has not arrived. NEVER invent a solo
                     // frame or perform speculative Run-Ahead on a held link.
                     session.set_port2(self.buttons2);
-                    let advanced = session.advance(self.buttons | self.pokedaisy_tap.0, live.turbo,
+                    let advanced = session.advance(self.buttons, live.turbo,
                         live.rewind && !session.linked());
                     let timing = session.last_step_timings();
                     frame_phases.core_us = frame_phases.core_us
@@ -10217,7 +10273,7 @@ impl Engine {
                 // Predicted video never advances the real saved/RA timeline.
                 let speculation_started = Instant::now();
                 session.set_port2(self.buttons2);
-                session.prepare_runahead(self.buttons | self.pokedaisy_tap.0, live.turbo,
+                session.prepare_runahead(self.buttons, live.turbo,
                     profile.run_ahead_frames);
                 frame_phases.speculative_us = speculation_started.elapsed().as_micros() as u64;
             }
@@ -10249,10 +10305,6 @@ impl Engine {
                     self.select_tap_frames = self.select_tap_frames.saturating_sub(stepped as u8);
                     if self.select_tap_frames == 0 { self.buttons &= !ButtonMask::SELECT; }
                 }
-                if self.pokedaisy_tap.1 > 0 {
-                    self.pokedaisy_tap.1 = self.pokedaisy_tap.1.saturating_sub(stepped as u8);
-                    if self.pokedaisy_tap.1 == 0 { self.pokedaisy_tap.0 = 0; }
-                }
                 let upload_started = Instant::now();
                 if session.frame_size() == (slot_retro::GBA_W, slot_retro::GBA_H)
                     && session.display_aspect() <= 0.0 {
@@ -10269,12 +10321,17 @@ impl Engine {
                     let square = video_mode::square_game(cart_platform, panel_size(),
                         session.square_listed());
                     self.gpu.set_game_fit(if session.core_kind() == Core::PokeDaisy {
-                        video_mode::companion_fit(size)
+                        video_mode::pokedaisy_fit(self.pokedaisy_view, cart_platform, self.video_mode, size)
                     } else {
                         video_mode::home_fit(cart_platform, self.video_mode,
                             session.display_aspect(), session.frame_size(), square)
                     });
                 }
+                if let Some(hud) = session.take_pokedaisy_hud() {
+                    self.pokedaisy_hud.update(&mut self.gpu, hud);
+                }
+                pd_view_seen = session.take_pokedaisy_view();
+                pd_menu_now = session.pokedaisy_menu();
                 frame_phases.gpu_upload_us = upload_started.elapsed().as_micros() as u64;
                 let peak = session.take_rumble_peak();
                 if live.rumble && !self.rewind_held && GAME_UNPAUSED.load(Ordering::Acquire) {
@@ -10316,6 +10373,9 @@ impl Engine {
             if let Some((tex,[x,y,w,h]))=bezel {
                 commands.push(Draw::Tex { x,y,w,h,tex,alpha:1.0 });
             }
+            if session.core_kind() == Core::PokeDaisy {
+                self.pokedaisy_hud.draw(self.gpu.game_rect(), session.frame_size(), &mut commands);
+            }
             commands.extend_from_slice(&footer_draws);
             commands.append(&mut low_battery);
             self.hud.draw(self.born.elapsed().as_millis() as u64, &mut commands);
@@ -10350,6 +10410,11 @@ impl Engine {
             a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,
                 stepped, a12_native_started.elapsed().as_micros() as u64,
                 MGBA_CABLE_RECOVERY.load(Ordering::Acquire));
+            if let Some(view) = pd_view_seen { self.keep_pokedaisy_view(view); }
+            if pd_menu_now != self.pokedaisy_menu {
+                self.pokedaisy_menu = pd_menu_now;
+                self.apply_game_look();
+            }
             if let Some(fault) = peer_fault { self.peer_link_stopped(fault); }
             return;
         }
@@ -10890,13 +10955,7 @@ fn link_mode_can_switch(core: Core, chosen: LinkKind, code: &str,
 /// These rows are modelled by *action*, not by a hardcoded screen index.
 /// It prevents a linked session from routing "Save & Eject" to "Resume".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PauseRow { Resume, States, Multiplayer, Cheats, Settings, SaveEject, Companion, QuickMenu }
-/// A game on PokeDaisy: its companion and quick menu from the Game Menu,
-/// no Multiplayer with it yet.
-const POKEDAISY_PAUSE_ROWS: &[PauseRow] = &[
-    PauseRow::Resume, PauseRow::Companion, PauseRow::QuickMenu, PauseRow::States,
-    PauseRow::Cheats, PauseRow::Settings, PauseRow::SaveEject,
-];
+enum PauseRow { Resume, States, Multiplayer, Cheats, Settings, SaveEject }
 const SOLO_PAUSE_ROWS: &[PauseRow] = &[
     PauseRow::Resume, PauseRow::States, PauseRow::Multiplayer, PauseRow::Cheats,
     PauseRow::Settings, PauseRow::SaveEject,
@@ -10935,8 +10994,6 @@ fn pause_row_text(row: PauseRow, requires_relaunch: bool) -> usize {
         PauseRow::Settings => 25,
         PauseRow::SaveEject if requires_relaunch => 78,
         PauseRow::SaveEject => 21,
-        PauseRow::Companion => 178,
-        PauseRow::QuickMenu => 179,
     }
 }
 
@@ -11350,6 +11407,7 @@ mod cart_library;
 mod romm;
 mod carousel_delete;
 mod touch;
+mod pokedaisy_hud;
 mod shelves_grid;
 use carousel_delete::VIDEO_RACK;
 #[cfg(all(test, target_os = "linux"))]

@@ -645,6 +645,18 @@ impl GamePass {
         }
     }
 
+    /// Where a fitted frame's picture is on the canvas (x, y, w, h in
+    /// canvas units): what a finger or a HUD over the picture follows.
+    /// None for the Game Boy Advance canvas (its own picture rect).
+    pub fn game_rect(&self) -> Option<[f32; 4]> {
+        if self.fit == Fit::Canvas { return None; }
+        let (window, _, _, canvas) = self.live();
+        let [wx, wy, ww, wh] = window;
+        if ww <= 0.0 || wh <= 0.0 { return None; }
+        let (cw, ch) = (canvas[2], canvas[3]);
+        Some([-wx / ww * cw, -wy / wh * ch, cw / ww, ch / wh])
+    }
+
     /// What the live game draws with: source rect, texture size, picture
     /// and canvas rects.
     fn live(&self) -> ([f32; 4], (u32, u32), [f32; 4], [f32; 4]) {

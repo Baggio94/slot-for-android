@@ -77,6 +77,29 @@ impl From<std::io::Error> for CoreError {
     }
 }
 
+/// PokeDaisy's field HUD as it last sent it (PD_ENV_SET_HUD): its own
+/// picture (RGBA, straight alpha), its box in the core's canvas (x, y, w, h)
+/// and how it fills it: 100 the whole box, 50 each quarter at its corner.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PdHud {
+    pub rgba: Vec<u8>,
+    pub size: (u32, u32),
+    pub area: [i32; 4],
+    pub pct: i32,
+    pub active: bool,
+}
+
+/// How fast the frontend runs the game, for a core that asks (libretro's
+/// throttle state): PokeDaisy draws less under fast-forward and keeps its
+/// ZOOM while rewinding.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Throttle {
+    #[default]
+    Normal,
+    FastForward,
+    Rewinding,
+}
+
 pub trait RetroCore: Send {
     /// Copies the physical GBA IWRAM (0x8000), EWRAM (0x40000), and
     /// cartridge SRAM (0x10000) into a bounded 0x58000-byte snapshot.
@@ -110,6 +133,18 @@ pub trait RetroCore: Send {
     /// The finger on the picture for a core that reads a touchscreen
     /// (libretro's pointer): -0x7fff to 0x7fff across, and down or not.
     fn set_pointer(&mut self, _x: i16, _y: i16, _pressed: bool) {}
+    /// How fast the game runs, for a core that asks (PokeDaisy).
+    fn set_throttle(&mut self, _throttle: Throttle) {}
+    /// PokeDaisy: the next frame draws the game again as it is, without
+    /// running it (slot.'s menu shows a change on the paused game).
+    fn set_hold(&mut self, _hold: bool) {}
+    /// PokeDaisy: the view its companion picked since the last call
+    /// ("original", "expand", "zoomN").
+    fn take_pd_view(&mut self) -> Option<String> { None }
+    /// PokeDaisy: its companion or quick menu is over the game.
+    fn pd_menu(&self) -> bool { false }
+    /// PokeDaisy: its HUD, when it changed since the last call.
+    fn take_pd_hud(&mut self) -> Option<PdHud> { None }
     /// Reject incomplete native GB/GBC lockstep frames before advancing netplay.
     fn link_step_fault(&self) -> bool { false }
     fn set_option(&mut self, _key: &str, _value: &str) {}

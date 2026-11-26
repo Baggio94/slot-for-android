@@ -54,6 +54,9 @@ else
   }
 fi
 # Patches for this core, applied strictly: never a half-patched source.
+# The source sits inside slot.'s own checkout: git apply must not take it
+# for a subfolder of slot. (it would skip every file, quietly).
+export GIT_CEILING_DIRECTORIES="$OUT"
 PATCHES=()
 for patch_file in "$ROOT/cores/pokedaisy"/*.patch; do
   [ -e "$patch_file" ] || continue

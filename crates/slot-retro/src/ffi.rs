@@ -47,6 +47,36 @@ pub struct MemoryMap {
     pub num_descriptors: c_uint,
 }
 pub const SET_AUDIO_BUFFER_STATUS_CALLBACK: c_uint = 62;
+pub const GET_FASTFORWARDING: c_uint = 49 | 0x10000;
+pub const GET_THROTTLE_STATE: c_uint = 71 | 0x10000;
+pub const THROTTLE_NONE: c_uint = 0;
+pub const THROTTLE_FAST_FORWARD: c_uint = 2;
+pub const THROTTLE_REWINDING: c_uint = 4;
+/// retro_throttle_state.
+#[repr(C)]
+pub struct ThrottleState {
+    pub mode: c_uint,
+    pub rate: f32,
+}
+/// PokeDaisy's own commands (its linux/pd_env.h): its field HUD at its own
+/// pixels, for a frontend that draws it over the picture.
+pub const PD_ENV_SET_HUD: c_uint = 0x20003;
+#[repr(C)]
+pub struct PdHudMessage {
+    pub pixels: *const u32,
+    pub src_w: c_int,
+    pub src_h: c_int,
+    pub x: c_int,
+    pub y: c_int,
+    pub w: c_int,
+    pub h: c_int,
+    pub pct: c_int,
+    pub active: c_int,
+}
+/// slot.'s own commands to PokeDaisy (cores/pokedaisy/02-slot-host.patch).
+pub const SLOT_ENV_VIEW: c_uint = 0x20100;
+pub const SLOT_ENV_MENU: c_uint = 0x20101;
+pub const SLOT_ENV_HOLD: c_uint = 0x20102;
 pub const SET_NETPACKET_INTERFACE: c_uint = 78;
 
 #[repr(C)]

@@ -48,8 +48,8 @@ pub enum Toast {
     ScreenInteger,
     ScreenRatio,
     ScreenStretch,
-    /// PokeDaisy's views from SELECT + Up / Down.
-    ScreenZoom,
+    /// PokeDaisy's views from SELECT + Up / Down: ZOOM's step (1..=5).
+    ScreenZoom(u8),
     ScreenExpand,
     ScreenOriginal,
     Palette(GbPalette),
@@ -78,6 +78,10 @@ const OWN_PALETTE_TEXT: [&str; 11] = [
     "Palette: Red", "Palette: Blue", "Palette: Sepia",
 ];
 
+const ZOOM_TEXT: [&str; 5] = [
+    "Screen: Zoom 1", "Screen: Zoom 2", "Screen: Zoom 3", "Screen: Zoom 4", "Screen: Zoom 5",
+];
+
 const MOTION_TEXT: [&str; 10] = [
     "Sensitivity: 1", "Sensitivity: 2", "Sensitivity: 3", "Sensitivity: 4",
     "Sensitivity: 5", "Sensitivity: 6", "Sensitivity: 7", "Sensitivity: 8",
@@ -85,7 +89,7 @@ const MOTION_TEXT: [&str; 10] = [
 ];
 
 impl Toast {
-    const FIXED: [Toast; 47] = [
+    const FIXED: [Toast; 46] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::NeedsGpsp,
@@ -125,7 +129,6 @@ impl Toast {
         Toast::ScreenInteger,
         Toast::ScreenRatio,
         Toast::ScreenStretch,
-        Toast::ScreenZoom,
         Toast::ScreenExpand,
         Toast::ScreenOriginal,
         Toast::SunSensor,
@@ -142,6 +145,7 @@ impl Toast {
             .chain((0..SUN_TEXT.len() as u8).map(Toast::Sun))
             .chain((1..=MOTION_TEXT.len() as u8).map(Toast::Motion))
             .chain((0..OWN_PALETTE_TEXT.len() as u8).map(Toast::OwnPalette))
+            .chain((1..=ZOOM_TEXT.len() as u8).map(Toast::ScreenZoom))
             .collect()
     }
 
@@ -154,6 +158,8 @@ impl Toast {
                 + usize::from(level.clamp(1, 10) - 1),
             Toast::OwnPalette(at) => Self::FIXED.len() + GbPalette::COUNT + SUN_TEXT.len()
                 + MOTION_TEXT.len() + usize::from(at).min(OWN_PALETTE_TEXT.len() - 1),
+            Toast::ScreenZoom(step) => Self::FIXED.len() + GbPalette::COUNT + SUN_TEXT.len()
+                + MOTION_TEXT.len() + OWN_PALETTE_TEXT.len() + usize::from(step.clamp(1, 5) - 1),
             fixed => Self::FIXED.iter().position(|t| *t == fixed).unwrap_or(0),
         }
     }
@@ -199,7 +205,7 @@ impl Toast {
             Toast::ScreenInteger => "Screen: Integer",
             Toast::ScreenRatio => "Screen: Original Ratio",
             Toast::ScreenStretch => "Screen: Stretch",
-            Toast::ScreenZoom => "Screen: Zoom",
+            Toast::ScreenZoom(step) => ZOOM_TEXT[usize::from(step.clamp(1, 5) - 1)],
             Toast::ScreenExpand => "Screen: Expand",
             Toast::ScreenOriginal => "Screen: Original",
             Toast::Palette(p) => p.label(),

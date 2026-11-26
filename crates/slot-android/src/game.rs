@@ -210,7 +210,8 @@ fn sma4_runahead_guard(rom: &Path, platform: Platform) -> bool {
 }
 
 fn mgba_flash_runahead_guard(rom: &Path, which: Core, platform: Platform) -> bool {
-    if which != Core::Mgba || platform != Platform::Gba { return false; }
+    // PokeDaisy is mGBA too, and plays the same Flash (mGBA's own file).
+    if !matches!(which, Core::Mgba | Core::PokeDaisy) || platform != Platform::Gba { return false; }
     let Ok(mut file) = std::fs::File::open(rom) else { return false; };
     if file.seek(SeekFrom::Start(0xAC)).is_err() { return false; }
     let mut code = [0u8; 4];
@@ -786,7 +787,7 @@ impl GameSession {
                 core.set_option("pokedaisy_panel", &format!("{w}x{h}"));
                 // ZOOM, EXPAND or ORIGINAL, as this game was last shown.
                 core.set_option("pokedaisy_aspect",
-                    crate::pokedaisy_view::view_for(storage, rom_stem).option());
+                    &crate::pokedaisy_view::view_for(storage, rom_stem).option());
             }
             Core::Gpsp => {
                 // Replicate official Slot/fork's core.rs: this option must
@@ -1271,9 +1272,11 @@ impl GameSession {
     /// slot.'s buttons on `port` as the core reads them on `frame`.
     fn pad(&self, port: usize, buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
         // PokeDaisy's own keys reach it as they are: X its companion, Y and
-        // L3 its quick menu (no turbo or second A / B on X and Y).
+        // L3 its quick menu (no turbo or second A / B on X and Y), L1 / R1
+        // its companion's tabs, on the Game Boy too (whose game ignores them).
         if self.core_kind == Core::PokeDaisy && port == 0 {
-            let own = buttons.0 & (ButtonMask::X | ButtonMask::Y | ButtonMask::L3);
+            let own = buttons.0 & (ButtonMask::X | ButtonMask::Y | ButtonMask::L3
+                | ButtonMask::L | ButtonMask::R);
             let rest = self.pad_mapped(port, ButtonMask(buttons.0 & !own), turbo, frame);
             return ButtonMask(rest.0 | own);
         }
@@ -1767,7 +1770,10 @@ impl GameSession {
     }
 
     pub fn runahead_supported(&self) -> bool {
-        !self.mgba_flash_runahead_guard && !self.sma4_runahead_guard
+        // PokeDaisy rebuilds its map past the screen's edges after every
+        // state load: never a speculative frame (its redraw is held_redraw).
+        self.core_kind != Core::PokeDaisy
+            && !self.mgba_flash_runahead_guard && !self.sma4_runahead_guard
             && !self.in_multiplayer()
             && self.link.is_none() && !self.runahead_unavailable
             && self.core.speculative_audio_supported()
@@ -1933,6 +1939,7 @@ impl GameSession {
     /// whose audio cannot be rolled back.
     pub fn set_preemptive_frames(&mut self, frames: u8) {
         let allowed = !self.runahead_rollback_failed && !self.runahead_unavailable
+            && self.core_kind != Core::PokeDaisy
             && !self.mgba_flash_runahead_guard && !self.sma4_runahead_guard
             && !self.in_multiplayer()
             && self.core.speculative_audio_supported();
@@ -2101,12 +2108,49 @@ impl GameSession {
         if let Some(copy) = self.runahead_secondary.as_mut() { copy.set_pointer(x, y, pressed); }
     }
 
-    /// PokeDaisy's view (ZOOM, EXPAND, ORIGINAL): the core lays out its
-    /// canvas again at its next frame, without restarting.
+    /// PokeDaisy's view (ZOOM's steps, EXPAND, ORIGINAL): the core lays
+    /// out its canvas again at its next frame, without restarting.
     pub fn set_pokedaisy_view(&mut self, view: crate::pokedaisy_view::View) {
         if self.core_kind == Core::PokeDaisy {
-            self.set_core_option("pokedaisy_aspect", view.option());
+            self.set_core_option("pokedaisy_aspect", &view.option());
         }
+    }
+
+    /// The view PokeDaisy's companion picked since the last call.
+    pub fn take_pokedaisy_view(&mut self) -> Option<crate::pokedaisy_view::View> {
+        if self.core_kind != Core::PokeDaisy { return None; }
+        self.core.take_pd_view().as_deref().and_then(crate::pokedaisy_view::View::parse)
+    }
+
+    /// PokeDaisy's companion or quick menu is over the game.
+    pub fn pokedaisy_menu(&self) -> bool {
+        self.core_kind == Core::PokeDaisy && self.core.pd_menu()
+    }
+
+    /// PokeDaisy's HUD, when it changed: slot. draws it over the picture.
+    pub fn take_pokedaisy_hud(&mut self) -> Option<slot_retro::PdHud> {
+        if self.core_kind != Core::PokeDaisy { return None; }
+        self.core.take_pd_hud()
+    }
+
+    /// Fast-forward or rewind, for PokeDaisy (its map past the edges).
+    pub fn set_throttle(&mut self, throttle: slot_retro::Throttle) {
+        if self.core_kind == Core::PokeDaisy { self.core.set_throttle(throttle); }
+    }
+
+    /// PokeDaisy's paused game drawn again as it is, without running it: a
+    /// view, a colour or a shader changed in slot.'s menu shows at once.
+    /// The game doesn't move, so its save can't change. False for any
+    /// other core.
+    pub fn redraw_held(&mut self) -> bool {
+        if self.core_kind != Core::PokeDaisy || self.runahead_rollback_failed { return false; }
+        self.core.set_hold(true);
+        self.core.set_frame_skip(false);
+        self.core.run_speculative_frame(ButtonMask(0));
+        self.core.set_hold(false);
+        self.core.discard_audio();
+        self.runahead_video.clear();
+        true
     }
 
     /// Per-game GB palette enable/disable is applied through the core's live
@@ -2162,11 +2206,17 @@ impl GameSession {
     }
 
     /// The mixing slot. does before the picture is drawn (NES, SNES, Mega Drive).
-    pub fn slot_blending(&self) -> crate::frame_blend::Mode { self.slot_blending }
+    pub fn slot_blending(&self) -> crate::frame_blend::Mode {
+        // PokeDaisy's companion and quick menu are no LCD: never blended.
+        if self.core_kind == Core::PokeDaisy && self.core.pd_menu() {
+            return crate::frame_blend::Mode::Off;
+        }
+        self.slot_blending
+    }
 
     pub fn set_colour_correction(&mut self, enabled: bool) {
         let (key, value) = match self.core_kind {
-            Core::Mgba => ("mgba_color_correction",
+            Core::Mgba | Core::PokeDaisy => ("mgba_color_correction",
                 if enabled { "Auto" } else { "OFF" }),
             Core::Gpsp => ("gpsp_color_correction",
                 if enabled { "enabled" } else { "disabled" }),

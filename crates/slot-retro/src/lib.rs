@@ -6,7 +6,7 @@ mod mock;
 mod rumble;
 pub mod sensors;
 
-pub use core::{AvInfo, ButtonMask, CoreError, RetroCore, GBA_H, GBA_W};
+pub use core::{AvInfo, ButtonMask, CoreError, PdHud, RetroCore, Throttle, GBA_H, GBA_W};
 pub use ffi::{
     NETPACKET_BROADCAST, NETPACKET_FLUSH_HINT, NETPACKET_RELIABLE, NETPACKET_UNRELIABLE,
     NETPACKET_UNSEQUENCED,

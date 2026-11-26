@@ -110,6 +110,21 @@ impl RetroCore for Tracked {
     fn set_pointer(&mut self, x: i16, y: i16, pressed: bool) {
         self.core.set_pointer(x, y, pressed);
     }
+    fn set_throttle(&mut self, throttle: slot_retro::Throttle) {
+        self.core.set_throttle(throttle);
+    }
+    fn set_hold(&mut self, hold: bool) {
+        self.core.set_hold(hold);
+    }
+    fn take_pd_view(&mut self) -> Option<String> {
+        self.core.take_pd_view()
+    }
+    fn pd_menu(&self) -> bool {
+        self.core.pd_menu()
+    }
+    fn take_pd_hud(&mut self) -> Option<slot_retro::PdHud> {
+        self.core.take_pd_hud()
+    }
     fn run_frame_linked(&mut self, p1: ButtonMask, p2: ButtonMask) {
         self.core.run_frame_linked(p1, p2);
         self.timeline += 1;

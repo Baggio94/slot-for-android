@@ -1,0 +1,78 @@
+slot.'s own mGBA fixes that apply to PokeDaisy's mGBA 0.10.5 as they are:
+the TWB64 028 Game.com palette (scripts/patch-mgba-twb64.py), a DMG palette
+change shown at once (gb-dmg-palette-follows-option.patch), a stopped GB
+channel kept silent and the blank frame after LCD on (cores/mgba).
+
+diff --git a/third_party/mgba/src/gb/audio.c b/third_party/mgba/src/gb/audio.c
+index 64edb90..8493e6a 100644
+--- a/third_party/mgba/src/gb/audio.c
++++ b/third_party/mgba/src/gb/audio.c
+@@ -729,7 +729,8 @@ void GBAudioSamplePSG(struct GBAudio* audio, int16_t* left, int16_t* right) {
+ 	int sampleLeft = dcOffset;
+ 	int sampleRight = dcOffset;
+ 
+-	if (!audio->forceDisableCh[0]) {
++	// A stopped channel's sample is stale, and zombie-mode writes still move it.
++	if (!audio->forceDisableCh[0] && audio->playingCh1) {
+ 		if (audio->ch1Left) {
+ 			sampleLeft += audio->ch1.sample;
+ 		}
+@@ -739,7 +740,7 @@ void GBAudioSamplePSG(struct GBAudio* audio, int16_t* left, int16_t* right) {
+ 		}
+ 	}
+ 
+-	if (!audio->forceDisableCh[1]) {
++	if (!audio->forceDisableCh[1] && audio->playingCh2) {
+ 		if (audio->ch2Left) {
+ 			sampleLeft +=  audio->ch2.sample;
+ 		}
+diff --git a/third_party/mgba/src/gb/overrides.c b/third_party/mgba/src/gb/overrides.c
+index 5bfc4f3..f97260d 100644
+--- a/third_party/mgba/src/gb/overrides.c
++++ b/third_party/mgba/src/gb/overrides.c
+@@ -736,6 +736,7 @@ static const struct GBColorPreset _colorPresets[] = {
+ 	{ "SGB 4-F", SGB_PAL(4F), },
+ 	{ "SGB 4-G", SGB_PAL(4G), },
+ 	{ "SGB 4-H", SGB_PAL(4H), },
++	{ "TWB64 028 Game.com Ver.", { 0xFFA7BF6B, 0xFF6F8F4F, 0xFF0F4F2F, 0xFF000000, 0xFFA7BF6B, 0xFF6F8F4F, 0xFF0F4F2F, 0xFF000000, 0xFFA7BF6B, 0xFF6F8F4F, 0xFF0F4F2F, 0xFF000000 }, },
+ };
+ 
+ bool GBOverrideColorFind(struct GBCartridgeOverride* override, enum GBColorLookup order) {
+diff --git a/third_party/mgba/src/gb/video.c b/third_party/mgba/src/gb/video.c
+index 37c1e36..c3348d5 100644
+--- a/third_party/mgba/src/gb/video.c
++++ b/third_party/mgba/src/gb/video.c
+@@ -745,6 +745,9 @@ void GBVideoWriteLCDC(struct GBVideo* video, GBRegisterLCDC value) {
+ 		}
+ 		video->p->memory.io[GB_REG_STAT] = video->stat;
+ 		video->renderer->writePalette(video->renderer, 0, video->palette[0]);
++		if (video->frameskipCounter < 1) {
++			video->frameskipCounter = 1;
++		}
+ 
+ 		mTimingDeschedule(&video->p->timing, &video->frameEvent);
+ 	}
+@@ -883,6 +886,11 @@ void GBVideoSetPalette(struct GBVideo* video, unsigned index, uint32_t color) {
+ 		return;
+ 	}
+ 	video->dmgPalette[index] = M_RGB8_TO_RGB5(color);
++	if (video->p->model < GB_MODEL_SGB) {
++		GBVideoWritePalette(video, GB_REG_BGP, video->p->memory.io[GB_REG_BGP]);
++		GBVideoWritePalette(video, GB_REG_OBP0, video->p->memory.io[GB_REG_OBP0]);
++		GBVideoWritePalette(video, GB_REG_OBP1, video->p->memory.io[GB_REG_OBP1]);
++	}
+ }
+ 
+ void GBVideoDisableCGB(struct GBVideo* video) {
+@@ -1208,6 +1216,11 @@ void GBVideoDeserialize(struct GBVideo* video, const struct GBSerializedState* s
+ 		LOAD_16LE(video->palette[i], i * 2, state->video.palette);
+ 		video->renderer->writePalette(video->renderer, i, video->palette[i]);
+ 	}
++	if (video->p->model < GB_MODEL_SGB) {
++		GBVideoWritePalette(video, GB_REG_BGP, state->io[GB_REG_BGP]);
++		GBVideoWritePalette(video, GB_REG_OBP0, state->io[GB_REG_OBP0]);
++		GBVideoWritePalette(video, GB_REG_OBP1, state->io[GB_REG_OBP1]);
++	}
+ 
+ 	memcpy(video->vram, state->vram, GB_SIZE_VRAM);
+ 	memcpy(&video->oam.raw, state->oam, GB_SIZE_OAM);

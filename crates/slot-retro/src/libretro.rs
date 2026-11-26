@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use libloading::Library;
 
-use crate::core::{AvInfo, ButtonMask, CoreError, RetroCore, GBA_H, GBA_W};
+use crate::core::{AvInfo, ButtonMask, CoreError, PdHud, RetroCore, Throttle, GBA_H, GBA_W};
 use crate::ffi::*;
 use crate::link::Link;
 use crate::rumble::Rumble;
@@ -72,6 +72,47 @@ struct Host {
     options: std::collections::HashMap<String, std::ffi::CString>,
     options_dirty: bool,
     declared: std::collections::HashMap<String, Vec<String>>,
+    /// PokeDaisy's own commands and slot.'s to it, answered for it alone.
+    pd: PdHost,
+}
+
+/// What PokeDaisy and slot. say to each other (cores/pokedaisy).
+#[derive(Default)]
+struct PdHost {
+    enabled: bool,
+    throttle: c_uint,
+    hold: bool,
+    view: Option<String>,
+    menu: bool,
+    /// The HUD as it came (ARGB8888) and its box, to tell a change.
+    hud_raw: Vec<u32>,
+    hud_meta: (bool, (u32, u32), [i32; 4], i32),
+    hud_changed: bool,
+    /// The core read the finger down since it was put down: a lift waits
+    /// for that, so a tap shorter than a frame still reaches it.
+    pointer_read: bool,
+    pointer_lift: bool,
+}
+
+/// PD_ENV_SET_HUD: the HUD kept when it changed. True for PokeDaisy alone,
+/// so it draws the HUD in its own picture for any other core's frontend.
+unsafe fn pd_set_hud(h: &mut Host, data: *const c_void) -> bool {
+    if !h.pd.enabled { return false; }
+    if data.is_null() { return true; }
+    let m = &*(data as *const PdHudMessage);
+    let active = m.active != 0 && !m.pixels.is_null() && (1..=1024).contains(&m.src_w)
+        && (1..=1024).contains(&m.src_h) && m.w > 0 && m.h > 0;
+    let size = if active { (m.src_w as u32, m.src_h as u32) } else { (0, 0) };
+    let pixels: &[u32] = if active {
+        std::slice::from_raw_parts(m.pixels, (size.0 * size.1) as usize)
+    } else { &[] };
+    let meta = (active, size, [m.x, m.y, m.w, m.h], m.pct);
+    if meta == h.pd.hud_meta && pixels == &h.pd.hud_raw[..] { return true; }
+    h.pd.hud_meta = meta;
+    h.pd.hud_raw.clear();
+    h.pd.hud_raw.extend_from_slice(pixels);
+    h.pd.hud_changed = true;
+    true
 }
 
 thread_local! {
@@ -168,6 +209,40 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
                         map.num_descriptors as usize).to_vec() };
             }).is_some()
         }
+        PD_ENV_SET_HUD => with_host(|h| pd_set_hud(h, data)).unwrap_or(false),
+        SLOT_ENV_VIEW => with_host(|h| {
+            if !h.pd.enabled || data.is_null() { return false; }
+            let view = std::ffi::CStr::from_ptr(data as *const c_char).to_string_lossy().into_owned();
+            // The core's option follows the companion's pick, unflagged:
+            // a later options change must not put the old view back.
+            if let Ok(value) = CString::new(view.as_str()) {
+                h.options.insert("pokedaisy_aspect".to_string(), value);
+            }
+            h.pd.view = Some(view);
+            true
+        }).unwrap_or(false),
+        SLOT_ENV_MENU => with_host(|h| {
+            if !h.pd.enabled || data.is_null() { return false; }
+            h.pd.menu = *(data as *const bool);
+            true
+        }).unwrap_or(false),
+        SLOT_ENV_HOLD => with_host(|h| {
+            if !h.pd.enabled || data.is_null() { return false; }
+            *(data as *mut bool) = h.pd.hold;
+            true
+        }).unwrap_or(false),
+        GET_THROTTLE_STATE => with_host(|h| {
+            if !h.pd.enabled || data.is_null() { return false; }
+            let state = &mut *(data as *mut ThrottleState);
+            state.mode = h.pd.throttle;
+            state.rate = if h.pd.throttle == THROTTLE_FAST_FORWARD { 0.0 } else { 60.0 };
+            true
+        }).unwrap_or(false),
+        GET_FASTFORWARDING => with_host(|h| {
+            if !h.pd.enabled || data.is_null() { return false; }
+            *(data as *mut bool) = h.pd.throttle == THROTTLE_FAST_FORWARD;
+            true
+        }).unwrap_or(false),
         GET_CAN_DUPE => {
             if data.is_null() {
                 return false;
@@ -623,6 +698,7 @@ unsafe extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, i
         if port != 0 { return 0; }
         return with_host(|h| {
             let (x, y, pressed) = h.pointer;
+            if id == POINTER_PRESSED && pressed { h.pd.pointer_read = true; }
             match id {
                 POINTER_X => x,
                 POINTER_Y => y,
@@ -827,6 +903,7 @@ impl LibretroCore {
         let name = dylib.file_name().and_then(|name| name.to_str());
         let is_gpsp = name == Some("libgpsp_libretro.so");
         let is_mgba = name == Some("libmgba_libretro.so");
+        let is_pokedaisy = name == Some("libpokedaisy_libretro.so");
         // mGBA sizes its audio ring after a ROM is loaded. Resolve its
         // private exports now, but allocate only after core.load_game().
         let mgba_audio_exports = if is_mgba {
@@ -908,6 +985,7 @@ impl LibretroCore {
                 .collect(),
             options_dirty: false,
             declared: std::collections::HashMap::new(),
+            pd: PdHost { enabled: is_pokedaisy, ..PdHost::default() },
         });
         unsafe {
             let _a = Active::bind(&mut host);
@@ -1249,7 +1327,45 @@ impl RetroCore for LibretroCore {
     }
 
     fn set_pointer(&mut self, x: i16, y: i16, pressed: bool) {
+        let held = self.host.pointer.2;
+        if !pressed && held && !self.host.pd.pointer_read {
+            // Lifted before the core saw it down: kept down one frame more.
+            self.host.pd.pointer_lift = true;
+            return;
+        }
+        if pressed && !held { self.host.pd.pointer_read = false; }
+        self.host.pd.pointer_lift = false;
         self.host.pointer = (x, y, pressed);
+    }
+
+    fn set_throttle(&mut self, throttle: Throttle) {
+        self.host.pd.throttle = match throttle {
+            Throttle::Normal => THROTTLE_NONE,
+            Throttle::FastForward => THROTTLE_FAST_FORWARD,
+            Throttle::Rewinding => THROTTLE_REWINDING,
+        };
+    }
+
+    fn set_hold(&mut self, hold: bool) {
+        self.host.pd.hold = hold;
+    }
+
+    fn take_pd_view(&mut self) -> Option<String> {
+        self.host.pd.view.take()
+    }
+
+    fn pd_menu(&self) -> bool {
+        self.host.pd.menu
+    }
+
+    fn take_pd_hud(&mut self) -> Option<PdHud> {
+        if !std::mem::take(&mut self.host.pd.hud_changed) { return None; }
+        let (active, size, area, pct) = self.host.pd.hud_meta;
+        let mut rgba = Vec::with_capacity(self.host.pd.hud_raw.len() * 4);
+        for p in &self.host.pd.hud_raw {
+            rgba.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8, (p >> 24) as u8]);
+        }
+        Some(PdHud { rgba, size, area, pct, active })
     }
 
     fn set_port2(&mut self, input: ButtonMask) {
@@ -1268,6 +1384,10 @@ impl RetroCore for LibretroCore {
         {
             let _a = Active::bind(&mut self.host);
             unsafe { (self.api.run)() };
+        }
+        if self.host.pd.pointer_lift && self.host.pd.pointer_read {
+            self.host.pointer.2 = false;
+            self.host.pd.pointer_lift = false;
         }
         // Read gpSP execution backend only on the first frame and at long
         // intervals thereafter. Changing dynarec/JIT policy is intentionally
@@ -1598,6 +1718,7 @@ mod tests {
             options,
             options_dirty,
             declared: HashMap::new(),
+            pd: PdHost::default(),
         })
     }
 
@@ -1826,6 +1947,54 @@ mod tests {
                 (&enormous as *const MemoryMap).cast_mut().cast()) });
         }
         assert!(host.memory.is_empty());
+    }
+
+    #[test]
+    fn pokedaisy_alone_gets_its_hud_drawn_by_slot() {
+        let mut other = host_with(HashMap::new(), false);
+        let probe = PdHudMessage { pixels: ptr::null(), src_w: 0, src_h: 0, x: 0, y: 0, w: 0, h: 0, pct: 0, active: 0 };
+        {
+            let _active = Active::bind(&mut other);
+            assert!(!unsafe { environment(PD_ENV_SET_HUD, &probe as *const _ as *mut c_void) },
+                "another core keeps its HUD in its picture");
+        }
+        let mut host = host_with(HashMap::new(), false);
+        host.pd.enabled = true;
+        let pixels = [0x80ff0000u32, 0x0000ff00, 0xff0000ff, 0x00000000];
+        let hud = PdHudMessage { pixels: pixels.as_ptr(), src_w: 2, src_h: 2, x: 0, y: 0, w: 240, h: 160, pct: 50, active: 1 };
+        {
+            let _active = Active::bind(&mut host);
+            assert!(unsafe { environment(PD_ENV_SET_HUD, &probe as *const _ as *mut c_void) });
+            assert!(unsafe { environment(PD_ENV_SET_HUD, &hud as *const _ as *mut c_void) });
+        }
+        assert!(host.pd.hud_changed);
+        host.pd.hud_changed = false;
+        {
+            let _active = Active::bind(&mut host);
+            unsafe { environment(PD_ENV_SET_HUD, &hud as *const _ as *mut c_void) };
+        }
+        assert!(!host.pd.hud_changed, "the same HUD again is no change");
+        assert_eq!(host.pd.hud_meta, (true, (2, 2), [0, 0, 240, 160], 50));
+    }
+
+    #[test]
+    fn pokedaisy_tells_its_view_and_slot_keeps_it_as_the_option() {
+        let mut host = host_with(HashMap::new(), false);
+        host.pd.enabled = true;
+        let view = CString::new("zoom2").unwrap();
+        let mut held = true;
+        host.pd.hold = true;
+        {
+            let _active = Active::bind(&mut host);
+            assert!(unsafe { environment(SLOT_ENV_VIEW, view.as_ptr() as *mut c_void) });
+            let mut asked = false;
+            assert!(unsafe { environment(SLOT_ENV_HOLD, &mut asked as *mut bool as *mut c_void) });
+            held = held && asked;
+        }
+        assert!(held);
+        assert_eq!(host.pd.view.as_deref(), Some("zoom2"));
+        assert_eq!(host.options.get("pokedaisy_aspect").and_then(|v| v.to_str().ok()), Some("zoom2"));
+        assert!(!host.options_dirty, "the core knows its own pick");
     }
 
     #[test]
