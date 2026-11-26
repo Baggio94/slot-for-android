@@ -828,9 +828,11 @@ mod tests {
             ((1080, 1080), [A, A, A, A]),
         ] {
             assert_eq!(systems.map(|p| default_mode(p, panel)), expected, "{panel:?}");
+            // PICO-8 starts at Integer everywhere.
             for p in Platform::ALL {
                 if !home_console(p) {
-                    assert_eq!(default_mode(p, panel), A, "{p:?} {panel:?}");
+                    assert_eq!(default_mode(p, panel), if p == Platform::Pico8 { I } else { A },
+                        "{p:?} {panel:?}");
                 }
             }
         }

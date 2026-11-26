@@ -155,9 +155,10 @@ mod tests {
         assert_eq!(for_shelf(&root, 9), None, "WonderSwan");
         assert_eq!(for_shelf(&root, 10), None, "Lynx");
         assert_eq!(for_shelf(&root, 11), None, "Pokemon mini");
-        assert_eq!(for_shelf(&root, 12), None, "Recents");
-        assert_eq!(for_shelf(&root, 13).as_deref(), Some("Favorites.png"));
-        assert_eq!(for_shelf(&root, 14), None);
+        assert_eq!(for_shelf(&root, 12), None, "PICO-8");
+        assert_eq!(for_shelf(&root, 13), None, "Recents");
+        assert_eq!(for_shelf(&root, 14).as_deref(), Some("Favorites.png"));
+        assert_eq!(for_shelf(&root, 15), None);
         assert_eq!(list(&root), vec!["user.png".to_string()]);
         assert_eq!(shelf_target(1).as_deref(), Some("GB.png"));
         assert_eq!(shelf_target(3).as_deref(), Some("NES.png"));
@@ -166,8 +167,9 @@ mod tests {
         assert_eq!(shelf_target(9).as_deref(), Some("WS.png"));
         assert_eq!(shelf_target(10).as_deref(), Some("LYNX.png"));
         assert_eq!(shelf_target(11).as_deref(), Some("POKEMINI.png"));
-        assert_eq!(shelf_target(12).as_deref(), Some("Recents.png"));
-        assert_eq!(shelf_target(13).as_deref(), Some("Favorites.png"));
+        assert_eq!(shelf_target(12).as_deref(), Some("PICO8.png"));
+        assert_eq!(shelf_target(13).as_deref(), Some("Recents.png"));
+        assert_eq!(shelf_target(14).as_deref(), Some("Favorites.png"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
