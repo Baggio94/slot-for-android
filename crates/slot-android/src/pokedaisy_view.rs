@@ -84,7 +84,7 @@ pub fn zoom_steps(panel: (u32, u32), game: (u32, u32)) -> u8 {
     let ((pw, ph), (fw, fh)) = (panel, game);
     if pw == 0 || ph == 0 || fw == 0 || fh == 0 { return 0; }
     let scale = (pw / fw).min(ph / fh);
-    let mut levels = 0;
+    let mut levels: u32 = 0;
     for level in 0..LEVELS_MAX {
         let Some(s) = scale.checked_sub(level).filter(|s| *s >= 1) else { break };
         let (x, y) = (pw / s, ph / s);
