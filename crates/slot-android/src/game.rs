@@ -932,15 +932,29 @@ impl GameSession {
             && linked_boot.is_none() {
             Some(named_rom_alias(storage, rom, rom_stem)?)
         } else { None };
-        // The player's own PICO-8 plays the game's save fake-08 keeps.
+        // The player's own PICO-8 plays the game's save: fake-08's with Share
+        // Core Saves, else its own (Saves/PICO-8).
         let pico8_saves = (which == Core::Pico8 && linked_boot.is_none() && !crate::pico8::splore())
-            .then(|| crate::pico8::SaveBridge::open(&root, &core_root.join("pico-8"), rom_stem));
+            .then(|| crate::pico8::SaveBridge::open(
+                &root.join(if crate::gb_core_switch::sharing() { Core::Fake08 } else { Core::Pico8 }.text()),
+                &core_root.join("pico-8"), rom_stem));
+        // A Neo Geo Pocket core reads its flash file as the game loads: the
+        // other core's newer one is written its way first (Share Core Saves).
+        let carried_flash = platform == Platform::Ngp && linked_boot.is_none()
+            && crate::gb_core_switch::sharing() && match
+            crate::gb_core_switch::carry_ngp_flash(&root, rom_stem, which, rom) {
+            Ok(carried) => carried,
+            Err(error) => {
+                crate::log_warn(&format!("flash carry from the other core skipped: {error}"));
+                false
+            }
+        };
         core.load(named_rom.as_deref().unwrap_or(rom)).map_err(|e| e.to_string())?;
         let load_ms = opening_at.elapsed().as_millis();
         let restore_started = Instant::now();
         // With Share Saves, a GB/GBC cart switched between mGBA and Gambatte
         // brings its newer battery along; that core's older state must not resume.
-        let carried_battery = linked_boot.is_none() && crate::gb_core_switch::sharing() && match
+        let carried_battery = carried_flash || linked_boot.is_none() && crate::gb_core_switch::sharing() && match
             crate::gb_core_switch::carry_battery_for(&root, rom_stem, which, platform, Some(rom)) {
             Ok(carried) => carried,
             Err(error) => {

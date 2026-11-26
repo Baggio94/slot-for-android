@@ -152,6 +152,15 @@ pub fn carry_battery_for(saves: &Path, stem: &str, which: Core, platform: Platfo
         if platform == Platform::Md {
             carried = carry_md(&theirs, Some(own.len()), which);
             if &carried == own { return Ok(false); }
+        } else if matches!(platform, Platform::Sms | Platform::Gg) {
+            // Genesis Plus GX cuts its file after the last byte that isn't
+            // 0xFF, Gearsystem keeps the cart's 32 KiB: what the shorter file
+            // leaves out is 0xFF (unwritten), never the older file's bytes.
+            let len = own.len().max(theirs.len());
+            carried.resize(len, 0xFF);
+            let mut own_full = own.clone();
+            own_full.resize(len, 0xFF);
+            if carried == own_full { return Ok(false); }
         } else {
             let common = own.len().min(theirs.len());
             if own[..common] == theirs[..common] { return Ok(false); }
@@ -201,6 +210,164 @@ pub fn md_shares_sram(header: &[u8]) -> bool {
     let product = header.get(0x180..0x18E).map(|b| String::from_utf8_lossy(b).into_owned())
         .unwrap_or_default();
     !MD_EEPROM_CODES.iter().any(|code| product.contains(code))
+}
+
+/// Neo Geo Pocket flash saves: Beetle NeoPop's `.flash` and RACE's `.ngf`
+/// share NeoPop's layout (0x53, a block count, the file's length, then
+/// blocks of NGPC address, length and bytes), but NeoPop's block length is
+/// 16 bits (and 2 bytes of padding), RACE's 32: RACE writes whole flash
+/// blocks, up to 64 KiB, which NeoPop would read as empty. Each is written
+/// the way its core reads it, before the core boots (the cores read their
+/// file when the game loads). True when a newer save came across.
+pub fn carry_ngp_flash(saves: &Path, stem: &str, which: Core, rom: &Path) -> std::io::Result<bool> {
+    let other = match which {
+        Core::Neopop => Core::Race,
+        Core::Race => Core::Neopop,
+        _ => return Ok(false),
+    };
+    let name = |core: Core| saves.join(core.text())
+        .join(format!("{stem}.{}", if core == Core::Neopop { "flash" } else { "ngf" }));
+    let (own_path, their_path) = (name(which), name(other));
+    let theirs = match std::fs::read(&their_path) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        Ok(_) => return Ok(false),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let own = match std::fs::read(&own_path) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    if own.is_some() && std::fs::metadata(&their_path)?.modified()?
+        <= std::fs::metadata(&own_path)?.modified()? {
+        return Ok(false);
+    }
+    let Some(blocks) = ngp_blocks(&theirs, other == Core::Race) else { return Ok(false) };
+    let carried = match which {
+        Core::Race => ngp_file(&race_blocks(blocks), true),
+        _ => match neopop_blocks(&blocks, rom)? {
+            Some(blocks) => ngp_file(&blocks, false),
+            None => return Ok(false),
+        },
+    };
+    if own.as_deref() == Some(&carried[..]) { return Ok(false); }
+    if let Some(own) = &own { atomic_write(&backup_path(&own_path, other), own)?; }
+    std::fs::create_dir_all(own_path.parent().unwrap_or(saves))?;
+    atomic_write(&own_path, &carried)?;
+    Ok(true)
+}
+
+/// (NGPC address, bytes) of a NeoPop-layout file; `wide`: 32-bit lengths (RACE).
+fn ngp_blocks(file: &[u8], wide: bool) -> Option<Vec<(u32, Vec<u8>)>> {
+    let u16_at = |at: usize| file.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    let u32_at = |at: usize| file.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    if u16_at(0)? != 0x53 { return None; }
+    let count = u16_at(2)? as usize;
+    let mut at = 8;
+    let mut blocks = Vec::with_capacity(count);
+    for _ in 0..count {
+        let addr = u32_at(at)?;
+        let len = if wide { u32_at(at + 4)? as usize } else { u16_at(at + 4)? as usize };
+        at += 8;
+        let bytes = file.get(at..at.checked_add(len)?)?.to_vec();
+        at += len;
+        let flash = (0x200000..0x400000).contains(&addr) || (0x800000..0xA00000).contains(&addr);
+        if !flash { return None; }
+        blocks.push((addr, bytes));
+    }
+    Some(blocks)
+}
+
+fn ngp_file(blocks: &[(u32, Vec<u8>)], wide: bool) -> Vec<u8> {
+    let len = 8 + blocks.iter().map(|(_, b)| 8 + b.len()).sum::<usize>();
+    let mut out = Vec::with_capacity(len);
+    out.extend_from_slice(&0x53u16.to_le_bytes());
+    out.extend_from_slice(&(blocks.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(len as u32).to_le_bytes());
+    for (addr, bytes) in blocks {
+        out.extend_from_slice(&addr.to_le_bytes());
+        if wide { out.extend_from_slice(&(bytes.len() as u32).to_le_bytes()); }
+        else { out.extend_from_slice(&(bytes.len() as u16).to_le_bytes()); out.extend_from_slice(&[0, 0]); }
+        out.extend_from_slice(bytes);
+    }
+    out
+}
+
+/// RACE marks the flash block a range starts in as its own (it writes
+/// that whole block back later): ranges are cut where its blocks end, at
+/// each 64 KiB and at the boot blocks' 32, 40 and 48 KiB (every cart size).
+fn race_blocks(blocks: Vec<(u32, Vec<u8>)>) -> Vec<(u32, Vec<u8>)> {
+    let cut = |chip_offset: u32| -> bool {
+        chip_offset % 0x10000 == 0 || [0x1F0000u32, 0xF0000, 0x70000].iter()
+            .any(|boot| [0x8000u32, 0xA000, 0xC000].iter().any(|o| chip_offset == boot + o))
+    };
+    let mut out = Vec::new();
+    for (addr, bytes) in blocks {
+        let mut start = 0usize;
+        for i in 1..bytes.len() {
+            if cut((addr + i as u32) & 0x1FFFFF) {
+                out.push((addr + start as u32, bytes[start..i].to_vec()));
+                start = i;
+            }
+        }
+        if start < bytes.len() { out.push((addr + start as u32, bytes[start..].to_vec())); }
+    }
+    out
+}
+
+/// NeoPop keeps only the bytes a game wrote: the ranges where RACE's whole
+/// blocks differ from the ROM, close ones joined. None when one would not
+/// fit NeoPop's 16-bit length (NeoPop joins ranges that touch).
+fn neopop_blocks(blocks: &[(u32, Vec<u8>)], rom: &Path) -> std::io::Result<Option<Vec<(u32, Vec<u8>)>>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(rom)?;
+    let size = file.metadata()?.len();
+    let mut out: Vec<(u32, Vec<u8>)> = Vec::new();
+    for (addr, bytes) in blocks {
+        // The cart's own bytes there (the second chip follows the first in the file).
+        let offset = u64::from(if *addr >= 0x800000 { addr - 0x600000 } else { addr - 0x200000 });
+        let mut original = vec![0xFFu8; bytes.len()];
+        if offset < size {
+            file.seek(SeekFrom::Start(offset))?;
+            let n = (size - offset).min(bytes.len() as u64) as usize;
+            file.read_exact(&mut original[..n])?;
+        }
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == original[i] { i += 1; continue; }
+            let start = i;
+            let mut end = i + 1;
+            // Runs fewer than 16 bytes apart are one range.
+            while end < bytes.len() {
+                match (end..bytes.len().min(end + 16)).find(|&j| bytes[j] != original[j]) {
+                    Some(j) => end = j + 1,
+                    None => break,
+                }
+            }
+            out.push((addr + start as u32, bytes[start..end].to_vec()));
+            i = end;
+        }
+    }
+    out.sort_by_key(|(addr, _)| *addr);
+    // NeoPop joins ranges that touch: their sum must fit in 16 bits.
+    let mut run_start = None::<u32>;
+    let mut run_end = 0u32;
+    for (addr, bytes) in &out {
+        let end = addr + bytes.len() as u32;
+        match run_start {
+            Some(start) if *addr <= run_end => {
+                run_end = run_end.max(end);
+                if run_end - start > 0xFFFF { return Ok(None); }
+            }
+            _ => {
+                if bytes.len() > 0xFFFF { return Ok(None); }
+                run_start = Some(*addr);
+                run_end = end;
+            }
+        }
+    }
+    Ok(Some(out))
 }
 
 fn read_head(path: &Path, len: usize) -> std::io::Result<Vec<u8>> {
@@ -343,6 +510,66 @@ mod tests {
             Platform::Md, Some(&rom)).unwrap());
         assert!(!carry_battery(d.path(), "Phantasy Star IV", Core::GenesisPlusGx, Platform::Md).unwrap(),
             "without its ROM a Mega Drive cart never shares");
+    }
+
+    #[test]
+    fn master_system_saves_carry_with_ff_where_the_shorter_file_ends() {
+        let d = tempfile::tempdir().unwrap();
+        let at = |core: Core| d.path().join(core.text()).join("Phantasy Star.srm");
+        let put = |core: Core, bytes: &[u8], age_s: u64| {
+            std::fs::create_dir_all(d.path().join(core.text())).unwrap();
+            std::fs::write(at(core), bytes).unwrap();
+            let when = SystemTime::now() - Duration::from_secs(age_s);
+            std::fs::File::options().write(true).open(at(core)).unwrap().set_modified(when).unwrap();
+        };
+        // Gearsystem's 32 KiB, an older save with a byte at 0x100.
+        let mut gear = vec![0xFFu8; 0x8000];
+        gear[0] = 1; gear[0x100] = 9;
+        put(Core::Gearsystem, &gear, 60);
+        // Genesis Plus GX's newer save, cut after its last written byte.
+        put(Core::GenesisPlusGx, &[2, 0xFF, 3], 1);
+        assert!(carry_battery_for(d.path(), "Phantasy Star", Core::Gearsystem, Platform::Sms, None).unwrap());
+        let back = std::fs::read(at(Core::Gearsystem)).unwrap();
+        assert_eq!(back.len(), 0x8000);
+        assert_eq!(&back[..3], &[2, 0xFF, 3]);
+        assert!(back[3..].iter().all(|b| *b == 0xFF), "never the older file's 9");
+        // The same save the other way: nothing to carry.
+        put(Core::GenesisPlusGx, &[2, 0xFF, 3], 0);
+        std::fs::File::options().write(true).open(at(Core::Gearsystem)).unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(30)).unwrap();
+        assert!(!carry_battery_for(d.path(), "Phantasy Star", Core::GenesisPlusGx, Platform::Gg, None).unwrap());
+    }
+
+    #[test]
+    fn neo_geo_pocket_flash_carries_between_neopop_and_race() {
+        let d = tempfile::tempdir().unwrap();
+        // A 2 MiB cart whose ROM is 0x11 everywhere.
+        let rom = d.path().join("game.ngc");
+        std::fs::write(&rom, vec![0x11u8; 0x200000]).unwrap();
+        let put = |core: Core, ext: &str, bytes: &[u8], age_s: u64| {
+            let dir = d.path().join(core.text());
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join(format!("Game.{ext}"));
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::File::options().write(true).open(&path).unwrap()
+                .set_modified(SystemTime::now() - Duration::from_secs(age_s)).unwrap();
+        };
+        // RACE saved the whole 16 KiB boot block at 0x1FC000: three bytes changed.
+        let mut block = vec![0x11u8; 0x4000];
+        block[4] = 1; block[5] = 2; block[0x3000] = 3;
+        put(Core::Race, "ngf", &ngp_file(&[(0x3FC000, block.clone())], true), 1);
+        assert!(carry_ngp_flash(d.path(), "Game", Core::Neopop, &rom).unwrap());
+        let flash = std::fs::read(d.path().join("Beetle NeoPop/Game.flash")).unwrap();
+        let blocks = ngp_blocks(&flash, false).unwrap();
+        assert_eq!(blocks, vec![(0x3FC004, vec![1, 2]), (0x3FF000, vec![3])], "only what the game wrote");
+        // Back to RACE: NeoPop's ranges, cut at RACE's block ends.
+        put(Core::Neopop, "flash", &ngp_file(&[(0x3EFFFE, vec![7; 4])], false), 0);
+        std::fs::File::options().write(true).open(d.path().join("RACE/Game.ngf")).unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(30)).unwrap();
+        assert!(carry_ngp_flash(d.path(), "Game", Core::Race, &rom).unwrap());
+        let ngf = std::fs::read(d.path().join("RACE/Game.ngf")).unwrap();
+        assert_eq!(ngp_blocks(&ngf, true).unwrap(), vec![(0x3EFFFE, vec![7; 2]), (0x3F0000, vec![7; 2])]);
+        assert!(std::fs::read(d.path().join("RACE/Game.ngf.before-mednafen_ngp")).is_ok(), "RACE's own kept");
     }
 
     #[test]

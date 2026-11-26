@@ -143,10 +143,11 @@ internal object Systems {
 
     /** The folder an in-game save is kept in: its core's, except
      *  PokeDaisy's, which is mGBA's own file (PokeDaisy is mGBA 0.10.5). */
-    fun saveFolder(folder: String): String = when (folder) {
+    fun saveFolder(folder: String, shareCoreSaves: Boolean = true): String = when (folder) {
         "PokeDaisy" -> "mGBA"
-        // The player's own PICO-8 plays fake-08's save of the game (pico8::SaveBridge).
-        "PICO-8" -> "fake-08"
+        // The player's own PICO-8 plays fake-08's save of the game with Share
+        // Core Saves, else its own (pico8::SaveBridge).
+        "PICO-8" -> if (shareCoreSaves) "fake-08" else folder
         else -> folder
     }
 
@@ -159,7 +160,7 @@ internal object Systems {
         "Beetle NeoPop" -> "flash"
         "RACE" -> "ngf"
         // PICO-8's cartdata, the game's own copy (cores/fake08/zz-slot-game-saves.patch).
-        "fake-08" -> "p8d.txt"
+        "fake-08", "PICO-8" -> "p8d.txt"
         else -> "srm"
     }
 

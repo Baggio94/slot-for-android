@@ -91,12 +91,12 @@ fn valid_id(id: &str) -> bool {
         && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 
-/// A game's save is shared by both PICO-8 cores: fake-08 keeps it as
-/// Saves/fake-08/<game>.p8d.txt, with its cartdata id in <game>.p8key
-/// (cores/fake08/zz-slot-game-saves.patch). The player's own PICO-8 keeps
-/// its cartdata in its home's cdata/ folder: the game's save is put there
-/// before it boots, and brought back when it closes (this bridge dropped,
-/// after the core).
+/// A game's save as slot. keeps it: <game>.p8d.txt, with its cartdata id
+/// in <game>.p8key, in fake-08's folder (cores/fake08/zz-slot-game-saves.patch),
+/// which the player's own PICO-8 shares with Share Core Saves, else in its
+/// own folder. The player's own PICO-8 keeps its cartdata in its home's
+/// cdata/ folder: the game's save is put there before it boots, and
+/// brought back when it closes (this bridge dropped, after the core).
 pub struct SaveBridge {
     game: PathBuf,
     cdata: PathBuf,
@@ -105,10 +105,11 @@ pub struct SaveBridge {
 }
 
 impl SaveBridge {
-    /// `saves`: slot.'s Saves folder; `home`: the player's PICO-8's home
-    /// (the core's save folder's pico-8, cores/pico8real/src/libretro.c).
-    pub fn open(saves: &Path, home: &Path, stem: &str) -> SaveBridge {
-        let game = saves.join(slot_store::Core::Fake08.text());
+    /// `game`: the folder of the game's save (Saves/fake-08 or Saves/PICO-8);
+    /// `home`: the player's PICO-8's home (the core's save folder's pico-8,
+    /// cores/pico8real/src/libretro.c).
+    pub fn open(game: &Path, home: &Path, stem: &str) -> SaveBridge {
+        let game = game.to_path_buf();
         let cdata = home.join("cdata");
         let _ = std::fs::create_dir_all(&cdata);
         if let Some(id) = read_id(&game, stem) {
@@ -141,10 +142,15 @@ impl SaveBridge {
     fn bring_back(&self) -> std::io::Result<()> {
         let Some((id, path)) = self.written() else { return Ok(()) };
         let bytes = std::fs::read(path)?;
-        std::fs::create_dir_all(self.game.join("cdata"))?;
+        std::fs::create_dir_all(&self.game)?;
         slot_store::atomic_write(&self.game.join(format!("{}.p8d.txt", self.stem)), &bytes)?;
         slot_store::atomic_write(&self.game.join(format!("{}.p8key", self.stem)), id.as_bytes())?;
-        // fake-08's shared file of the id, for the game's other carts.
+        // fake-08's shared file of the id, for the game's other carts, when
+        // the save is fake-08's too (Share Core Saves).
+        if self.game.file_name() != Some(std::ffi::OsStr::new(slot_store::Core::Fake08.text())) {
+            return Ok(());
+        }
+        std::fs::create_dir_all(self.game.join("cdata"))?;
         slot_store::atomic_write(&self.game.join("cdata").join(format!("{id}.p8d.txt")), &bytes)
     }
 }
@@ -176,7 +182,7 @@ mod tests {
         std::fs::create_dir_all(&game).unwrap();
         std::fs::write(game.join("Jelpi.p8d.txt"), "00000001\n").unwrap();
         std::fs::write(game.join("Jelpi.p8key"), "jelpi_1\n").unwrap();
-        let bridge = SaveBridge::open(&saves, &home, "Jelpi");
+        let bridge = SaveBridge::open(&game, &home, "Jelpi");
         assert_eq!(std::fs::read_to_string(home.join("cdata/jelpi_1.p8d.txt")).unwrap(), "00000001\n");
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(home.join("cdata/jelpi_1.p8d.txt"), "00000002\n").unwrap();
@@ -185,7 +191,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(game.join("cdata/jelpi_1.p8d.txt")).unwrap(), "00000002\n");
         // Deleted in slot.: PICO-8's copy goes too.
         std::fs::remove_file(game.join("Jelpi.p8d.txt")).unwrap();
-        drop(SaveBridge::open(&saves, &home, "Jelpi"));
+        drop(SaveBridge::open(&game, &home, "Jelpi"));
         assert!(!home.join("cdata/jelpi_1.p8d.txt").exists());
         assert!(!game.join("Jelpi.p8d.txt").exists(), "nothing written, nothing brought back");
         std::fs::remove_dir_all(root).unwrap();

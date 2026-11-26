@@ -73,18 +73,20 @@ internal object RetroArchStorage {
             stem.none { it == '/' || it == '\\' || it.code < 32 })
         val digest = GameKeys.digest(rawUri)
         val prefix = File(context.filesDir, "Saves").apply { mkdirs() }
-        val coreFolder = File(prefix, Systems.saveFolder(core)).apply { mkdirs() }
+        // The save's folder: the core's, or the one its save is shared from.
+        val saveCore = Systems.saveFolder(core, shareGbaSaves)
+        val coreFolder = File(prefix, saveCore).apply { mkdirs() }
         val defaultStates = File(File(context.filesDir, "States"), core).apply { mkdirs() }
         val coreLower = coreLower(core)
         return Target(rawUri, stem, core,
-            File(coreFolder, "$stem.${Systems.saveExtension(Systems.saveFolder(core))}"),
+            File(coreFolder, "$stem.${Systems.saveExtension(saveCore)}"),
             File(coreFolder, "$stem.rtc"),
             File(defaultStates, "$stem.state.auto"),
             File(File(prefix, "ManualExports").apply { mkdirs() }, "$digest.$coreLower"),
             File(prefix, "$digest.$coreLower.retroarch-import.state.auto"),
             File(prefix, "$digest.$coreLower.retroarch-export.state.auto"),
             savesTree, statesTree,
-            name.endsWith(".gba", ignoreCase = true), digest, shareGbaSaves)
+            name.endsWith(".gba", ignoreCase = true), digest, shareGbaSaves, saveCore)
     }
 
     /** The choice only exists on an actual mGBA<->gpSP switch with
