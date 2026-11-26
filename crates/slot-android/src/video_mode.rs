@@ -407,6 +407,14 @@ pub fn home_fit(platform: Platform, mode: VideoMode, aspect: f32, frame: (u32, u
     }
 }
 
+/// PokeDaisy's canvas: the game at a whole scale with the map rebuilt out
+/// to the panel's edges (EXPAND) and its companion drawn over it, already
+/// at the panel's shape. Shown as large as it fits, at its own shape.
+pub fn companion_fit(frame: (u32, u32)) -> slot_gfx::Fit {
+    let (w, h) = (frame.0.max(1) as f32, frame.1.max(1) as f32);
+    slot_gfx::Fit::Aspect(w / h)
+}
+
 pub fn write_video_mode(root: &Path, stem: &str, mode: VideoMode) -> std::io::Result<()> {
     ini::write(root, VIDEO_MODE_FILE, stem, mode.as_str())
 }

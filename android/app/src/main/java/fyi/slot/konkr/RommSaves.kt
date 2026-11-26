@@ -86,7 +86,8 @@ internal object RommSaves {
      *  Saves, a GBA game's mGBA and gpSP saves are one save (beta39: the
      *  other core's newer one was passed over, and stayed after DELETE IT). */
     internal fun emulators(target: RetroArchStorage.Target): Set<String> =
-        if (target.isGba && target.shareGbaSaves) setOf("mgba", "gpsp") else setOf(emulator(target))
+        if (target.isGba && target.shareGbaSaves) setOf("mgba", "gpsp", emulator(target))
+        else setOf(emulator(target))
 
     private fun isOurs(save: Romm.ServerSave, target: RetroArchStorage.Target): Boolean =
         save.emulator.lowercase(Locale.ROOT) in emulators(target)

@@ -2673,7 +2673,9 @@ class MainActivity : Activity() {
                 val shared = RetroArchStorage.target(this, rawUri, core, saves, states,
                     scannedFileName = if (RomSource.isContainer(name))
                         RomSource.archiveSaveFilename(name, ext) else null,
-                    shareGbaSaves = storage.shareGbaSaves)
+                    // PokeDaisy shares on the native side, newest battery
+                    // first (gb_core_switch.rs); here it keeps its own folder.
+                    shareGbaSaves = storage.shareGbaSaves && core != "PokeDaisy")
                 // A save folder that can't be read no longer stops the game
                 // (amadeus12, 2026-11-15): it starts with slot.'s own saves,
                 // and nothing is copied to the folder this time, so a save

@@ -571,6 +571,9 @@ impl GameSession {
         // trigger: it runs without RetroAchievements and shows none of its
         // notices, as RetroArch with that core (Snes9x keeps them).
         let achievements = achievements.filter(|_| which != Core::Bsnes);
+        // PokeDaisy's companion changes the game as it plays (FLY, PC
+        // anywhere, no wild encounters): not with RetroAchievements yet.
+        let achievements = achievements.filter(|_| which != Core::PokeDaisy);
         if peer_rom.is_some() && (linked_boot.is_none() || which != Core::Mgba) {
             return Err("A remote cartridge is only valid inside mGBA Cable Link".into());
         }
@@ -699,7 +702,8 @@ impl GameSession {
             .map_err(|e| e.to_string())?;
         // Home consoles hand over frames of varying size (SNES hi-res, MD
         // H32/H40): keep each as it is instead of the GBA canvas.
-        core.set_native_video(!platform.handheld());
+        // PokeDaisy's canvas is the panel's shape at a whole game scale.
+        core.set_native_video(!platform.handheld() || which == Core::PokeDaisy);
         // Exact upstream Slot libretro options for colour and Game Boy palettes.
         // Read only the 336-byte header: never read the entire cached ROM.
         // Game Boy carts only: byte 0x143 of a NES, SNES or Mega Drive ROM
@@ -753,6 +757,28 @@ impl GameSession {
                 }
                 core.set_option("mgba_color_correction",
                     if colour_correction { "Auto" } else { "OFF" });
+            }
+            // PokeDaisy is mGBA 0.10.5 with its companion over it: mGBA's
+            // own options as slot. sets them (no Link), then its canvas
+            // for this panel with EXPAND, the map out to the screen's edges.
+            Core::PokeDaisy => {
+                core.set_option("mgba_use_bios", "ON");
+                core.set_option("mgba_skip_bios", "OFF");
+                core.set_option("mgba_sgb_borders", "OFF");
+                if let Some(name) = gb_palette.filter(|_| dmg_only) {
+                    core.set_option("mgba_gb_model", "Game Boy");
+                    core.set_option("mgba_gb_colors_preset", "0");
+                    core.set_option("mgba_gb_colors", name);
+                } else {
+                    core.set_option("mgba_gb_model", "Autodetect");
+                    core.set_option("mgba_gb_colors_preset", "1");
+                    core.set_option("mgba_gb_colors", "GBC Dark Green →A");
+                }
+                core.set_option("mgba_color_correction",
+                    if colour_correction { "Auto" } else { "OFF" });
+                let (w, h) = crate::runtime::panel_size();
+                core.set_option("pokedaisy_panel", &format!("{w}x{h}"));
+                core.set_option("pokedaisy_aspect", "expand");
             }
             Core::Gpsp => {
                 // Replicate official Slot/fork's core.rs: this option must
@@ -856,7 +882,7 @@ impl GameSession {
             rom: rom.to_path_buf(),
             options: core.options(),
             primary_id: core.instance_id(),
-            native_video: !platform.handheld(),
+            native_video: !platform.handheld() || which == Core::PokeDaisy,
         });
         let mut core: Box<dyn RetroCore> = match achievements {
             Some(service) => service.wrap_for_console(Box::new(core), console),

@@ -104,7 +104,7 @@ jobs:
             android/app/src/main/jniLibs/arm64-v8a/*_libretro.so
             android/app/src/main/assets/core-build-*.json
             android/app/src/main/assets/licenses
-          key: cores-v1-${{ hashFiles('scripts/build-mgba-android.sh', 'scripts/build-gpsp-android.sh', 'scripts/build-gambatte-android.sh', 'scripts/build-home-core-android.sh', 'scripts/patch-*.py', 'cores/**') }}
+          key: cores-v1-${{ hashFiles('scripts/build-mgba-android.sh', 'scripts/build-gpsp-android.sh', 'scripts/build-gambatte-android.sh', 'scripts/build-home-core-android.sh', 'scripts/build-pokedaisy-android.sh', 'scripts/patch-*.py', 'cores/**') }}
       - name: Validate core patch scripts
         if: steps.cores.outputs.cache-hit != 'true'
         run: python3 -m py_compile scripts/patch-mgba-speculative-audio.py scripts/patch-gpsp-speculative-audio.py scripts/patch-mgba-active-sram.py scripts/patch-mgba-sun.py scripts/patch-mgba-twb64.py scripts/patch-mgba-gb-direct-cable.py scripts/patch-mgba-link-peer-bios.py scripts/patch-gpsp-backend-diagnostic.py
@@ -133,6 +133,11 @@ jobs:
           for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini; do
             bash scripts/build-home-core-android.sh "$core"
           done
+      - name: Build PokeDaisy arm64 libretro core
+        if: steps.cores.outputs.cache-hit != 'true'
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          bash scripts/build-pokedaisy-android.sh
       - name: Assemble signed ARM64 release
         env:
           SLOT_KEYSTORE_BASE64: ${{ secrets.SLOT_KEYSTORE_BASE64 }}
@@ -186,7 +191,7 @@ jobs:
           grep -F "package: name='fyi.slot.konkr.diag' versionCode='$VERSION_CODE'" "$RUNNER_TEMP/mac-lab-badging.txt"
           grep -F "versionName='$VERSION_NAME-mac-lab'" "$RUNNER_TEMP/mac-lab-badging.txt"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify "$APK"
-          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro; do
+          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro pokedaisy_libretro; do
             unzip -Z -1 "$APK" | grep -Fx "lib/arm64-v8a/lib${core}.so"
           done
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
@@ -211,7 +216,7 @@ jobs:
           grep -F "versionName='$VERSION_NAME'" "$RUNNER_TEMP/konkr-badging.txt"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" |
             grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
-          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro; do
+          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro pokedaisy_libretro; do
             unzip -Z -1 "$APK" | grep -Fx "lib/arm64-v8a/lib${core}.so"
           done
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
@@ -242,6 +247,8 @@ jobs:
               "handy": "bc55d462f0b2d6b073ea93dc552ebd73cec60fd1",
               "mednafen_lynx": "fcdefcfb3c11d6d2e71be076a5d3df2e88ab73ed",
               "pokemini": "132111b76343559860532a1ccc094f93f1ed5650",
+              # PokeDaisy 1.6.2.1 (mGBA 0.10.5 inside).
+              "pokedaisy": "717f4f49979f4aa5c4c8f4cd64638a0fa935d844",
           }
           for name, revision in home.items():
               with zipfile.ZipFile(sys.argv[1]) as archive:

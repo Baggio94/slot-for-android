@@ -73,4 +73,6 @@ The [slot. for Android Wiki](https://github.com/Baggio94/slot-for-android/wiki) 
 
 Thanks to **[Brandon Kowalski](https://github.com/BrandonKowalski/slot)**, creator of the original [slot.](https://slot-cfw.fyi/), **[Markus](https://github.com/MarkusMaribu)** for its artwork, and to the authors of the emulation cores, shaders, overlays and tools slot. for Android uses. The full list is on the [Credits](https://github.com/Baggio94/slot-for-android/wiki/Credits) page.
 
+The PokéDaisy core is based on PokeDaisy by Lidor Itzhari - https://github.com/lidor30/pokedaisy (GNU GPL-3.0, see [its notice](licenses/pokedaisy-GPL-3.0-NOTICE.txt)).
+
 This is an unofficial community port, not affiliated with or endorsed by the original Slot developers or any handheld manufacturer. The Slot-derived source code is distributed under the [GNU GPL-3.0](LICENSE). Third-party components keep their own licenses, listed in [licenses](licenses).

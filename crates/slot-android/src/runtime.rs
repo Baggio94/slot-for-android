@@ -6040,6 +6040,18 @@ impl Engine {
 
     fn apply_video_geometry(&mut self) {
         let platform = self.current_cart_platform();
+        if let Some(frame) = self.game.as_ref()
+            .filter(|session| session.core_kind() == Core::PokeDaisy)
+            .map(GameSession::frame_size) {
+            // PokeDaisy draws its own canvas at the panel's shape (EXPAND,
+            // the companion): the whole screen, no bezel.
+            self.gpu.set_picture(slot_gfx::WHOLE_TEXTURE);
+            self.gpu.set_game_source_rect(slot_gfx::WHOLE_TEXTURE);
+            self.gpu.set_game_fit(video_mode::companion_fit(frame));
+            self.gpu.set_game_top(false);
+            self.apply_game_look();
+            return;
+        }
         if !platform.handheld() {
             let aspect = self.game.as_ref().map_or(4.0 / 3.0, GameSession::display_aspect);
             self.gpu.set_picture(slot_gfx::WHOLE_TEXTURE);
@@ -6231,6 +6243,10 @@ impl Engine {
     fn game_bezel(&mut self) -> Option<(slot_gfx::TexId, [f32; 4])> {
         use crate::settings::Bezel;
         use video_mode::WatomskFit;
+        // PokeDaisy fills the screen itself: no bezel, no overlay.
+        if self.game.as_ref().is_some_and(|session| session.core_kind() == Core::PokeDaisy) {
+            return None;
+        }
         let platform=self.current_cart_platform();
         // AUTO: the Neo Geo Pocket Color or WonderSwan Color logo for a
         // Color game, the plain one otherwise.
@@ -10108,8 +10124,12 @@ impl Engine {
                     self.gpu.upload_game_sized(picture, size);
                     let square = video_mode::square_game(cart_platform, panel_size(),
                         session.square_listed());
-                    self.gpu.set_game_fit(video_mode::home_fit(cart_platform, self.video_mode,
-                        session.display_aspect(), session.frame_size(), square));
+                    self.gpu.set_game_fit(if session.core_kind() == Core::PokeDaisy {
+                        video_mode::companion_fit(size)
+                    } else {
+                        video_mode::home_fit(cart_platform, self.video_mode,
+                            session.display_aspect(), session.frame_size(), square)
+                    });
                 }
                 frame_phases.gpu_upload_us = upload_started.elapsed().as_micros() as u64;
                 let peak = session.take_rumble_peak();

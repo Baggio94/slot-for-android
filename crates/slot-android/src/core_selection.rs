@@ -85,7 +85,21 @@ fn platform_of(uri: &str) -> Option<Platform> {
 /// cannot run (gpSP on a GB cart, Gambatte on a GBA cart) falls back.
 pub fn selected_for(storage: &Path, uri: &str, platform: Platform) -> Core {
     carry_core(storage, uri);
-    core_for_platform(storage, &key(uri), platform)
+    match core_for_platform(storage, &key(uri), platform) {
+        // Only on a Pokemon game it plays, even if the ini says otherwise.
+        Core::PokeDaisy if !pokedaisy_plays(uri, platform) => default_core(storage, platform),
+        core => core,
+    }
+}
+
+/// PokeDaisy's chip is on this cart's board: a Pokemon game it plays, by
+/// the header the library scan read (GBA game code, Game Boy title).
+pub fn pokedaisy_plays(uri: &str, platform: Platform) -> bool {
+    if !Core::pokedaisy_system(platform) { return false; }
+    let library = crate::library::LIBRARY.lock().unwrap_or_else(|e| e.into_inner());
+    library.entries.as_ref()
+        .and_then(|entries| entries.iter().find(|entry| entry.uri == uri))
+        .is_some_and(|entry| slot_store::pokedaisy::plays(platform, &entry.code, &entry.gb_title))
 }
 
 /// The board's pick for one cart; picking the system's default clears it.

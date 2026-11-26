@@ -23,6 +23,9 @@ internal object Systems {
     const val LYNX = "LYNX"
     const val POKEMINI = "POKEMINI"
 
+    /** The systems whose Pokemon games PokeDaisy plays (Core::pokedaisy_system). */
+    private val POKEDAISY_SYSTEMS = setOf(GB, GBC, GBA)
+
     /** One system slot. plays: a row of slot_store::SYSTEMS, field for field
      *  and in the same order (the native tests read these rows and compare,
      *  so keep each one on a single line). */
@@ -119,6 +122,8 @@ internal object Systems {
         "handy" to "Handy",
         "mednafen_lynx" to "Beetle Lynx",
         "pokemini" to "PokeMini",
+        // The third chip of the Pokemon games' GB, GBC and GBA boards.
+        "pokedaisy" to "PokeDaisy",
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
@@ -155,9 +160,12 @@ internal object Systems {
     /** The folder of the core that runs this cart: the one the native side
      *  picked when it runs this extension's system, else the system default. */
     fun coreFolder(key: String, ext: String): String {
-        val cores = coresFor(platformFor(ext))
+        val platform = platformFor(ext)
+        val cores = coresFor(platform)
         require(cores.isNotEmpty()) { "Unsupported ROM type" }
-        val chosen = key.lowercase(Locale.ROOT).takeIf { it in cores } ?: cores.first()
+        // PokeDaisy: the native side only picks it for a Pokemon game.
+        val pokeDaisy = if (platform in POKEDAISY_SYSTEMS) listOf("pokedaisy") else emptyList()
+        val chosen = key.lowercase(Locale.ROOT).takeIf { it in cores || it in pokeDaisy } ?: cores.first()
         return FOLDERS.getValue(chosen)
     }
 
