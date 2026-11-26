@@ -14,9 +14,9 @@ use crate::rumble::Rumble;
 use crate::sensors;
 
 const VIDEO_BYTES: usize = (GBA_W * GBA_H * 4) as usize;
-/// Largest frame a home console core hands over (SNES hi-res interlaced,
-/// PAL Mega Drive interlaced): 512x512 is ample.
-const NATIVE_MAX: u32 = 512;
+/// Largest frame a core hands over at its own size: SNES hi-res and PAL
+/// Mega Drive interlaced (512), PokeDaisy's widest canvas (640x480).
+const NATIVE_MAX: u32 = 640;
 
 static LIVE: AtomicBool = AtomicBool::new(false);
 // Run-Ahead "second instance": one private prediction copy of the core,

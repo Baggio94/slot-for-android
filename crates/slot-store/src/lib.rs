@@ -7,6 +7,7 @@ mod gb_palette;
 mod gba;
 pub mod ini;
 mod platform;
+pub mod pokedaisy;
 mod ring;
 mod scan;
 mod slot_state;

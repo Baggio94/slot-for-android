@@ -57,16 +57,26 @@ pub fn gambatte_twb64(name: &str) -> Option<&'static str> {
     (name == slot_store::TWB64_GAME_COM).then_some("TWB64 028 - Game.com Ver.")
 }
 
-/// The other core whose battery file holds the same SRAM: mGBA and
-/// Gambatte for GB/GBC, FCEUmm and Nestopia for NES, Snes9x and bsnes for
-/// SNES, Genesis Plus GX and PicoDrive for a Mega Drive cart's battery SRAM
-/// (see md_shares_sram and carry_md).
-fn other_core(which: Core, platform: Platform) -> Option<Core> {
-    if platform == Platform::Gba || !which.runs(platform) {
-        return None;
+/// The other cores whose battery files hold the same SRAM: mGBA, Gambatte
+/// and PokeDaisy for GB/GBC, FCEUmm and Nestopia for NES, Snes9x and bsnes
+/// for SNES, Genesis Plus GX and PicoDrive for a Mega Drive cart's battery
+/// SRAM (see md_shares_sram and carry_md). A GBA cart's mGBA and gpSP share
+/// on the Android side (RetroArchStorage); PokeDaisy, mGBA inside, shares
+/// with both here.
+fn other_cores(which: Core, platform: Platform) -> Vec<Core> {
+    if !which.runs(platform) {
+        return Vec::new();
     }
-    let first = Core::primary_for(platform);
-    Some(if which == first { Core::alternate_for(platform) } else { first })
+    let mut cores = vec![Core::primary_for(platform), Core::alternate_for(platform)];
+    if Core::pokedaisy_system(platform) {
+        cores.push(Core::PokeDaisy);
+    }
+    if platform == Platform::Gba && which != Core::PokeDaisy {
+        cores.retain(|core| *core == Core::PokeDaisy);
+    }
+    cores.retain(|core| *core != which);
+    cores.dedup();
+    cores
 }
 
 /// Before `which` boots a GB/GBC cart, copy the other core's battery over
@@ -87,7 +97,16 @@ pub fn carry_battery(saves: &Path, stem: &str, which: Core, platform: Platform)
 pub fn carry_battery_for(saves: &Path, stem: &str, which: Core, platform: Platform,
                          rom: Option<&Path>) -> std::io::Result<bool>
 {
-    let Some(other) = other_core(which, platform) else { return Ok(false) };
+    // The newest of the other cores' batteries is the one carried.
+    let mut other = None;
+    for core in other_cores(which, platform) {
+        let path = saves.join(core.text()).join(format!("{stem}.srm"));
+        let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else { continue };
+        if other.is_none_or(|(_, newest)| modified > newest) {
+            other = Some((core, modified));
+        }
+    }
+    let Some((other, _)) = other else { return Ok(false) };
     if platform == Platform::Md {
         let header = match rom {
             Some(rom) => read_head(rom, 0x200)?,
@@ -314,5 +333,33 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         put(d.path(), Core::Gpsp, &[5; 8], 1);
         assert!(!carry_battery(d.path(), "Pokemon Crystal", Core::Mgba, Platform::Gba).unwrap());
+    }
+
+    #[test]
+    fn pokedaisy_takes_the_newest_battery_of_the_other_cores_and_gives_its_own_back() {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), Core::Mgba, &[1, 1, 1, 1, 0xEE], 60);
+        put(d.path(), Core::Gambatte, &[2, 2, 2, 2], 30);
+        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::PokeDaisy, Platform::Gbc).unwrap());
+        assert_eq!(get(d.path(), Core::PokeDaisy), [2, 2, 2, 2]);
+        put(d.path(), Core::PokeDaisy, &[3, 3, 3, 3, 0xEE], 1);
+        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::Mgba, Platform::Gbc).unwrap());
+        assert_eq!(get(d.path(), Core::Mgba), [3, 3, 3, 3, 0xEE]);
+        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::Gambatte, Platform::Gbc).unwrap());
+        assert_eq!(get(d.path(), Core::Gambatte), [3, 3, 3, 3, 0xEE]);
+    }
+
+    #[test]
+    fn a_gba_pokemon_game_shares_between_pokedaisy_and_both_gba_cores() {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), Core::Gpsp, &[5; 8], 10);
+        put(d.path(), Core::Mgba, &[4; 8], 20);
+        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::PokeDaisy, Platform::Gba).unwrap());
+        assert_eq!(get(d.path(), Core::PokeDaisy), [5; 8]);
+        put(d.path(), Core::PokeDaisy, &[6; 8], 1);
+        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::Gpsp, Platform::Gba).unwrap());
+        assert_eq!(get(d.path(), Core::Gpsp), [6; 8]);
+        assert!(carry_battery(d.path(), "Pokemon Crystal", Core::Mgba, Platform::Gba).unwrap());
+        assert_eq!(get(d.path(), Core::Mgba), [6; 8]);
     }
 }

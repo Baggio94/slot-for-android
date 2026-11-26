@@ -277,3 +277,18 @@ fn each_home_console_board_holds_its_two_cores() {
     }
     assert_eq!(Core::parse("genesis_plus_gx"), Some(Core::GenesisPlusGx));
 }
+
+#[test]
+fn pokedaisy_is_a_carts_pick_never_a_systems_default() {
+    let d = root_with(Some("Emerald = pokedaisy\nCrystal = pokedaisy\nMario = pokedaisy\n"));
+    std::fs::write(d.path().join("Config/default_core.ini"), "gba = pokedaisy\ngb = gambatte\n").unwrap();
+    assert_eq!(slot_store::default_core(d.path(), Platform::Gba), Core::Mgba);
+    assert_eq!(core_for_platform(d.path(), "Emerald", Platform::Gba), Core::PokeDaisy);
+    assert_eq!(core_for_platform(d.path(), "Crystal", Platform::Gbc), Core::PokeDaisy);
+    assert_eq!(core_for_platform(d.path(), "Mario", Platform::Snes), Core::Snes9x);
+    assert_eq!(core_for_platform(d.path(), "Tetris", Platform::Gb), Core::Gambatte);
+    assert_eq!(Core::PokeDaisy.socket(), 2);
+    assert_eq!(Core::parse("pokedaisy"), Some(Core::PokeDaisy));
+    assert!([Platform::Gb, Platform::Gbc, Platform::Gba].iter().all(|p| Core::PokeDaisy.runs(*p)));
+    assert!(!Core::PokeDaisy.runs(Platform::Nes));
+}

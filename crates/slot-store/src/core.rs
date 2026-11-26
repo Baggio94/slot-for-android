@@ -26,15 +26,18 @@ pub enum Core {
     BeetleLynx,
     BeetleCygne,
     PokeMini,
+    /// PokeDaisy (mGBA with a companion), a third chip on the GB, GBC and
+    /// GBA boards of the Pokemon games only (see `pokedaisy::plays`).
+    PokeDaisy,
 }
 
 impl Core {
-    pub const ALL: [Core; 16] = [
+    pub const ALL: [Core; 17] = [
         Core::Mgba, Core::Gpsp, Core::Gambatte,
         Core::Fceumm, Core::Nestopia, Core::Snes9x, Core::Bsnes,
         Core::GenesisPlusGx, Core::Picodrive,
         Core::Neopop, Core::Race, Core::Gearsystem, Core::Handy, Core::BeetleLynx,
-        Core::BeetleCygne, Core::PokeMini,
+        Core::BeetleCygne, Core::PokeMini, Core::PokeDaisy,
     ];
 
     /// libretro's own core name: lib{as_str}_libretro.so, and the key
@@ -57,6 +60,7 @@ impl Core {
             Core::BeetleLynx => "mednafen_lynx",
             Core::BeetleCygne => "mednafen_wswan",
             Core::PokeMini => "pokemini",
+            Core::PokeDaisy => "pokedaisy",
         }
     }
 
@@ -91,6 +95,7 @@ impl Core {
             Core::BeetleLynx => "Beetle Lynx",
             Core::BeetleCygne => "Beetle WonderSwan",
             Core::PokeMini => "PokeMini",
+            Core::PokeDaisy => "PokeDaisy",
         }
     }
 
@@ -101,6 +106,18 @@ impl Core {
 
     pub fn runs(self, platform: Platform) -> bool {
         self == Core::primary_for(platform) || self == Core::alternate_for(platform)
+            || (self == Core::PokeDaisy && Core::pokedaisy_system(platform))
+    }
+
+    /// The systems whose Pokemon games PokeDaisy plays: GB, GBC and GBA.
+    pub fn pokedaisy_system(platform: Platform) -> bool {
+        matches!(platform, Platform::Gb | Platform::Gbc | Platform::Gba)
+    }
+
+    /// A core a whole system can run on by default. PokeDaisy is chosen
+    /// cart by cart, for the games it knows, never for a system.
+    pub fn system_wide(self) -> bool {
+        self != Core::PokeDaisy
     }
 
     /// The first socket on the board, and the system's default core.
@@ -114,13 +131,15 @@ impl Core {
         platform.system().cores[1]
     }
 
-    /// Which of the board's two sockets this core sits in.
+    /// Which of the board's sockets this core sits in: PokeDaisy has the
+    /// third, on the Pokemon games' boards.
     pub fn socket(self) -> usize {
         match self {
             Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx
             | Core::Neopop | Core::Handy | Core::BeetleCygne | Core::PokeMini => 0,
             Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive
             | Core::Race | Core::Gearsystem | Core::BeetleLynx => 1,
+            Core::PokeDaisy => 2,
         }
     }
 
@@ -161,7 +180,7 @@ pub fn default_core(root: &Path, platform: Platform) -> Core {
     crate::ini::value(root, DEFAULT_CORE_FILE, &default_key(platform))
         .as_deref()
         .and_then(Core::parse)
-        .filter(|core| core.runs(platform))
+        .filter(|core| core.runs(platform) && core.system_wide())
         .unwrap_or_else(|| Core::default_for(platform))
 }
 
