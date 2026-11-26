@@ -2176,7 +2176,9 @@ impl GameSession {
             return;
         }
         self.set_core_option("mgba_gb_colors_preset", if enabled { "0" } else { "1" });
-        if enabled { self.set_core_option("mgba_gb_colors", name); }
+        // Off: the game's own GBC colours, or the palette a game mGBA has
+        // none for starts with (as at boot).
+        self.set_core_option("mgba_gb_colors", if enabled { name } else { "GBC Dark Green →A" });
     }
 
     /// Frame Blending, as slot. original: the Game Boy cores mix frames

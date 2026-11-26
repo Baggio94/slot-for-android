@@ -86,6 +86,8 @@ python3 "$ROOT/scripts/patch-mgba-active-sram.py" "$SRC"
 python3 "$ROOT/scripts/patch-mgba-sun.py" "$SRC"
 # TWB64 028 Game.com Ver., slot.'s default Game Boy palette.
 python3 "$ROOT/scripts/patch-mgba-twb64.py" "$SRC"
+# A Game Boy palette turned off shows while the game runs (its GBC colours).
+python3 "$ROOT/scripts/patch-mgba-gb-palette-off.py" "$SRC"
 # The two linked Game Boys share a direct cable inside this one core instead
 # of mGBA's thread lockstep: no parked CPU, no lost fast-clock byte, the same
 # result on both consoles (tools/gb-link-test checks it in CI). The core links

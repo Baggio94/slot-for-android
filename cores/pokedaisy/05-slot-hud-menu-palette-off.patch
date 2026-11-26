@@ -1,0 +1,298 @@
+slot. for Android: PokeDaisy's HUD menu and a Game Boy palette turned off.
+- HUD: SCREEN EFFECTS (the HUD in the game's picture, through slot.'s shader
+  and LCD Effect; the game's colours corrected before it goes in) and MINIMAP's
+  opacity (100, 85, 70, 55 %, then OFF; 70 % by default).
+- Its mGBA: a palette turned off shows at once (scripts/patch-mgba-gb-palette-off.py,
+  the same change as slot.'s own mGBA).
+
+diff --git a/3ds/core/pd_settings.c b/3ds/core/pd_settings.c
+index 4efef02..5988b9c 100644
+--- a/3ds/core/pd_settings.c
++++ b/3ds/core/pd_settings.c
+@@ -21,6 +21,8 @@ void pd_settings_defaults(struct pd_settings* s) {
+     s->hudLayout = PD_HUD_CORNERS;
+     s->hudLook = PD_HUD_GLASS;
+     s->hudSize = PD_HUD_NORMAL;
++    s->mapOpacity = 2; // slot.: 70 %
++    s->hudEffects = false;
+     s->scaling = PD_SCALE_INTEGER;
+     s->ffAudio = false;
+     s->rewind = false;
+@@ -135,6 +137,8 @@ bool pd_settings_load(struct pd_settings* s, const char* path) {
+         } else if (!strcmp(key, "hudlayout")) int_in(value, 0, PD_HUD_LAYOUTS - 1, &s->hudLayout);
+         else if (!strcmp(key, "hudlook")) int_in(value, 0, PD_HUD_LOOKS - 1, &s->hudLook);
+         else if (!strcmp(key, "hudsize")) int_in(value, 0, PD_HUD_SIZES - 1, &s->hudSize);
++        else if (!strcmp(key, "mapopacity")) int_in(value, 0, PD_MAP_OPACITIES - 1, &s->mapOpacity);
++        else if (!strcmp(key, "hudeffects")) s->hudEffects = atoi(value) != 0;
+         else if (!strcmp(key, "scaling")) int_in(value, 0, PD_SCALINGS - 1, &s->scaling);
+         else if (!strcmp(key, "quickbtn")) int_in(value, 0, PD_BTN_L3, &s->quickBtn);
+         else if (!strcmp(key, "companionbtn")) int_in(value, 0, PD_BTN_L3, &s->companionBtn);
+@@ -184,6 +188,7 @@ bool pd_settings_save(const struct pd_settings* s, const char* path) {
+             s->screenMode, s->ffSpeed, s->guideNotice, s->aspect, s->zoom, s->autoZoom ? 1 : 0, s->wildOff ? 1 : 0, s->tabBar,
+             s->hud ? 1 : 0, s->hudHidden, s->quickGrid ? 1 : 0, s->lcdFilter ? 1 : 0);
+     fprintf(f, "hudlayout=%d\nhudlook=%d\nhudsize=%d\n", s->hudLayout, s->hudLook, s->hudSize);
++    fprintf(f, "mapopacity=%d\nhudeffects=%d\n", s->mapOpacity, s->hudEffects ? 1 : 0);
+     fprintf(f, "scaling=%d\nffaudio=%d\nrewind=%d\nrunindoors=%d\n", s->scaling, s->ffAudio ? 1 : 0,
+             s->rewind ? 1 : 0, s->runIndoors ? 1 : 0);
+     fprintf(f, "quickbtn=%d\ncompanionbtn=%d\nhudbtn=%d\nquickbtnrev=1\n", s->quickBtn, s->companionBtn, s->hudBtn);
+diff --git a/3ds/core/pd_ui.c b/3ds/core/pd_ui.c
+index add0c87..d1a2991 100644
+--- a/3ds/core/pd_ui.c
++++ b/3ds/core/pd_ui.c
+@@ -132,6 +132,8 @@ const char* pd_hud_look_name(int look) {
+     return look >= 0 && look < PD_HUD_LOOKS ? NAMES[look] : "";
+ }
+ 
++const int PD_MAP_OPACITY[PD_MAP_OPACITIES] = {100, 85, 70, 55};
++
+ const char* pd_hud_size_name(int size) {
+     static const char* const NAMES[PD_HUD_SIZES] = { "SMALL", "NORMAL", "LARGE" };
+     return size >= 0 && size < PD_HUD_SIZES ? NAMES[size] : "";
+@@ -159,7 +161,19 @@ void ui_toggle_act(struct pd_ui* ui, int i) {
+         }
+         else if (i == 2) s->hudLook = (s->hudLook + 1) % PD_HUD_LOOKS;
+         else if (i == 3) s->hudSize = (s->hudSize + 1) % PD_HUD_SIZES;
+-        else if (i - 4 < PD_HUD_PARTS) s->hudHidden ^= 1 << (i - 4);
++        else if (i == 4) s->hudEffects = !s->hudEffects; // slot.: SCREEN EFFECTS
++        else if (i - 5 == PD_HUD_MAP) {
++            // slot.: MINIMAP goes through its opacities, then OFF, then back on at the first.
++            if ((s->hudHidden >> PD_HUD_MAP) & 1) {
++                s->hudHidden &= ~(1 << PD_HUD_MAP);
++                s->mapOpacity = 0;
++            } else if (s->mapOpacity + 1 < PD_MAP_OPACITIES) {
++                s->mapOpacity++;
++            } else {
++                s->hudHidden |= 1 << PD_HUD_MAP;
++            }
++        }
++        else if (i - 5 < PD_HUD_PARTS) s->hudHidden ^= 1 << (i - 5);
+         ui->action = PD_ACTION_SETTINGS_CHANGED;
+         return;
+     }
+diff --git a/3ds/core/pd_ui.h b/3ds/core/pd_ui.h
+index f4d22c1..b222f2f 100644
+--- a/3ds/core/pd_ui.h
++++ b/3ds/core/pd_ui.h
+@@ -82,6 +82,8 @@ struct pd_settings {
+     int hudLayout;   // enum pd_hud_layout (the app's FieldHudLayout)
+     int hudLook;     // enum pd_hud_look (FieldHudLook)
+     int hudSize;     // enum pd_hud_size (FieldHudSize)
++    int mapOpacity;  // slot.: MINIMAP's opacity, an index into PD_MAP_OPACITY
++    bool hudEffects; // slot.: SCREEN EFFECTS: the HUD in the game's picture, through the frontend's shader
+     // plorpOS (its in-game menu writes these too):
+     int scaling;     // enum pd_scaling, ASPECT ORIGINAL's picture
+     bool ffAudio;    // the game's sound sped up under fast-forward, else silent
+@@ -148,6 +150,9 @@ const char* pd_hud_part_name(int part);
+ const char* pd_hud_layout_name(int layout);
+ const char* pd_hud_look_name(int look);
+ const char* pd_hud_size_name(int size);
++// slot.: MINIMAP's opacities, percent.
++#define PD_MAP_OPACITIES 4
++extern const int PD_MAP_OPACITY[PD_MAP_OPACITIES];
+ 
+ enum pd_action {
+     PD_ACTION_NONE,
+diff --git a/3ds/core/pd_ui_settings.c b/3ds/core/pd_ui_settings.c
+index f308cf1..4f64b26 100644
+--- a/3ds/core/pd_ui_settings.c
++++ b/3ds/core/pd_ui_settings.c
+@@ -545,22 +545,29 @@ static void tab_bar_page(struct pd_ui* ui, struct pd_canvas* c) {
+ 
+ // FieldHud.kt's fieldHudRows: the switch, LAYOUT / LOOK / SIZE (a press cycles them), then which parts show.
+ static void hud_page(struct pd_ui* ui, struct pd_canvas* c) {
+-    enum { N = 4 + PD_HUD_PARTS };
++    // slot.: SCREEN EFFECTS after SIZE, and MINIMAP's opacity as its value (the note left out for the row's room).
++    enum { N = 5 + PD_HUD_PARTS };
+     const struct pd_settings* s = ui->settings;
+-    const char* labels[N] = { "HUD", "LAYOUT", "LOOK", "SIZE" };
++    const char* labels[N] = { "HUD", "LAYOUT", "LOOK", "SIZE", "SCREEN EFFECTS" };
+     const char* values[N] = { NULL, pd_hud_layout_name(s->hudLayout), pd_hud_look_name(s->hudLook),
+-                              pd_hud_size_name(s->hudSize) };
+-    bool on[N] = { s->hud, true, true, true }, muted[N] = { false, !s->hud, !s->hud, !s->hud };
++                              pd_hud_size_name(s->hudSize), NULL };
++    bool on[N] = { s->hud, true, true, true, s->hudEffects }, muted[N] = { false, !s->hud, !s->hud, !s->hud, !s->hud };
+     if (ui->hudLayoutFixed) {
+         values[1] = "N/A";
+         muted[1] = true;
+     }
++    static char opacity[8];
+     for (int i = 0; i < PD_HUD_PARTS; i++) {
+-        labels[4 + i] = pd_hud_part_name(i);
+-        on[4 + i] = !((s->hudHidden >> i) & 1);
+-        muted[4 + i] = !s->hud;
++        labels[5 + i] = pd_hud_part_name(i);
++        on[5 + i] = !((s->hudHidden >> i) & 1);
++        muted[5 + i] = !s->hud;
++        if (i == PD_HUD_MAP && on[5 + i]) {
++            const int o = s->mapOpacity < 0 || s->mapOpacity >= PD_MAP_OPACITIES ? 0 : s->mapOpacity;
++            snprintf(opacity, sizeof opacity, "%d%%", PD_MAP_OPACITY[o]);
++            values[5 + i] = opacity;
++        }
+     }
+-    toggle_page(ui, c, "HUD", labels, on, muted, N, "Shown over the overworld, off in menus and battles.", values);
++    toggle_page(ui, c, "HUD", labels, on, muted, N, NULL, values);
+ }
+ 
+ // MoreScreen: every tab this game has off the bar as an app tile, a line, and the way to SETTINGS' page for it.
+diff --git a/libretro/pd_libretro.c b/libretro/pd_libretro.c
+index 0d16455..899d1f7 100644
+--- a/libretro/pd_libretro.c
++++ b/libretro/pd_libretro.c
+@@ -648,6 +648,7 @@ static bool canDupe, haveGameFrame, repeatedFrame;
+ static uint16_t *ccLut, *ccOut;
+ static int ccType; // 0 none, 1 the GBA's screen, 2 the GBC's
+ static bool ccFrame;
++static bool ccInPlace; // this frame's game corrected already (SCREEN EFFECTS: before the HUD went into it)
+ static void cc_build(int type) {
+   ccType = 0;
+   if (type <= 0)
+@@ -686,12 +687,13 @@ static void present(void) {
+     for (size_t i = 0; i < (size_t)CW * CH; i++)
+       out565[i] = to565(cvs[i]);
+   const uint16_t *shown = out565;
+-  if (ccFrame && ccType && ccLut && ccOut) {
++  if (ccFrame && ccType && ccLut && ccOut && !ccInPlace) {
+     for (size_t i = 0; i < (size_t)CW * CH; i++)
+       ccOut[i] = ccLut[out565[i]];
+     shown = ccOut;
+   }
+   realVideo(shown, (unsigned)CW, (unsigned)CH, (size_t)CW * 2);
++  ccInPlace = false;
+   direct565 = false;
+   repeatedFrame = false;
+ }
+@@ -1002,12 +1004,26 @@ static void draw_hud(void) {
+     hudPixels = malloc((size_t)CANVAS_MAX_W * CANVAS_MAX_H * sizeof *hudPixels);
+   if (!hudPixels)
+     return;
+-  uint32_t key = hud_key(&game, &snap, &hudState, &settings) ^ (uint32_t)(w * 65599 + hh);
++  uint32_t key = hud_key(&game, &snap, &hudState, &settings) ^ (uint32_t)(w * 65599 + hh) ^
++                 (uint32_t)settings.mapOpacity << 28;
+   if (key != hudDrawnKey || w != hudW || hh != hudH) {
+     struct pd_canvas hc;
+     pd_canvas_init(&hc, w, hh, hudPixels);
+     hudShown = hud_draw(&hc, &game, &snap, &hudState, &settings, &hudHits);
+     quick_finish(&hc);
++    // slot.: MINIMAP at its opacity, the rest of the HUD as it is.
++    const int o = settings.mapOpacity < 0 || settings.mapOpacity >= PD_MAP_OPACITIES ? 0 : settings.mapOpacity;
++    for (int i = 0; PD_MAP_OPACITY[o] < 100 && i < hudHits.n; i++) {
++      if (hudHits.at[i].id != HUD_MAP)
++        continue;
++      for (int y = hudHits.at[i].y; y < hudHits.at[i].y + hudHits.at[i].h && y < hh; y++)
++        for (int x = hudHits.at[i].x; x < hudHits.at[i].x + hudHits.at[i].w && x < w; x++) {
++          if (x < 0 || y < 0)
++            continue;
++          uint32_t *p = &hudPixels[(size_t)y * w + x];
++          *p = (*p & 0xFFFFFF) | ((*p >> 24) * (uint32_t)PD_MAP_OPACITY[o] / 100) << 24;
++        }
++    }
+     hudDrawnKey = key;
+     hudW = w;
+     hudH = hh;
+@@ -1015,6 +1031,45 @@ static void draw_hud(void) {
+   // A host that draws the HUD itself (PD_ENV_SET_HUD: the Linux / Windows host) gets it at the window's corners whatever
+   // the step, half size for SMALL and NORMAL. Any other frontend (RetroArch) keeps the HUD in the game's picture, as
+   // before ZOOM.
++  // slot.: SCREEN EFFECTS, the HUD laid over the whole canvas as slot. would draw it, but into the picture: the
++  // frontend's shader and LCD Effect go over it. The game's colours corrected first, the HUD's left as they are.
++  if (scale == 1 && hudHost && settings.hudEffects) {
++    hudOx = hudOy = 0;
++    hudTW = CW;
++    hudTH = CH;
++    hudPct = settings.hudSize == PD_HUD_SMALL ? 50 : 100;
++    hudScale = 1;
++    hudNativeOn = false;
++    if (!hudShown)
++      return;
++    static uint32_t *hudSpread, *hudBig;
++    if (!hudSpread)
++      hudSpread = malloc((size_t)CANVAS_MAX_W * CANVAS_MAX_H * sizeof *hudSpread);
++    if (hudPct < 100 && !hudBig)
++      hudBig = malloc((size_t)4 * CANVAS_MAX_W * CANVAS_MAX_H * sizeof *hudBig);
++    if (!hudSpread || (hudPct < 100 && !hudBig))
++      return;
++    if (ccFrame && ccType && ccLut && direct565) {
++      for (size_t i = 0; i < (size_t)CW * CH; i++)
++        out565[i] = ccLut[out565[i]];
++      ccInPlace = true;
++    }
++    if (hudPct >= 100) {
++      blend_overlay_area(hudPixels, w, hh, hudSpread);
++    } else {
++      // SMALL: each quarter at half its size at its own corner, as slot. draws it: the quarters at their corners of a
++      // picture twice the HUD's size, spread over the canvas.
++      const int bw = 2 * w, bh = 2 * hh, qw = w / 2, qh = hh / 2;
++      memset(hudBig, 0, (size_t)bw * bh * sizeof *hudBig);
++      for (int q = 0; q < 4; q++) {
++        const int sx = (q % 2) * qw, sy = (q / 2) * qh, dx = q % 2 ? bw - qw : 0, dy = q / 2 ? bh - qh : 0;
++        for (int y = 0; y < qh; y++)
++          memcpy(hudBig + (size_t)(dy + y) * bw + dx, hudPixels + (size_t)(sy + y) * w + sx, (size_t)qw * sizeof *hudBig);
++      }
++      blend_overlay_area(hudBig, bw, bh, hudSpread);
++    }
++    return;
++  }
+   if (scale == 1 && hudHost) {
+     hudOx = hudOy = 0;
+     hudTW = CW;
+diff --git a/third_party/mgba/src/platform/libretro/libretro.c b/third_party/mgba/src/platform/libretro/libretro.c
+index db7f003..82b12ff 100644
+--- a/third_party/mgba/src/platform/libretro/libretro.c
++++ b/third_party/mgba/src/platform/libretro/libretro.c
+@@ -18,6 +18,7 @@
+ #include <mgba/internal/gb/gb.h>
+ #include <mgba/internal/gb/mbc.h>
+ #include <mgba/internal/gb/overrides.h>
++#include <mgba-util/crc32.h>
+ #endif
+ #ifdef M_CORE_GBA
+ #include <mgba/gba/core.h>
+@@ -248,6 +249,39 @@ static void _updateGbPal(void) {
+ 		}
+ 	}
+ }
++
++/* slot.: mgba_gb_colors_preset read again with the palette while the game runs: 0 the palette mgba_gb_colors names,
++ * any other the game's own colours from that lookup, as at boot (a palette turned off shows at once). */
++static void _updateGbColors(void) {
++	if (core->platform(core) != mPLATFORM_GB) {
++		return;
++	}
++	struct retro_variable var = { .key = "mgba_gb_colors_preset", .value = 0 };
++	int preset = 0;
++	if (environCallback(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
++		preset = strtol(var.value, NULL, 10);
++	}
++	struct GB* gb = core->board;
++	if (!preset || !gb->memory.rom || gb->model >= GB_MODEL_CGB) {
++		_updateGbPal();
++		return;
++	}
++	struct GBCartridgeOverride override;
++	memset(&override, 0, sizeof(override));
++	const struct GBCartridge* cart = (const struct GBCartridge*) &gb->memory.rom[0x100];
++	override.headerCrc32 = doCrc32(cart, sizeof(*cart));
++	if (!GBOverrideColorFind(&override, preset)) {
++		_updateGbPal();
++		return;
++	}
++	char key[16];
++	int i;
++	for (i = 0; i < 12; ++i) {
++		snprintf(key, sizeof(key), "gb.pal[%d]", i);
++		mCoreConfigSetUIntValue(&core->config, key, override.gbColors[i] & 0xFFFFFF);
++	}
++	core->reloadConfigOption(core, "gb.pal", NULL);
++}
+ #endif
+ 
+ static void _reloadSettings(void) {
+@@ -572,7 +606,7 @@ void retro_run(void) {
+ 		}
+ 
+ #ifdef M_CORE_GB
+-		_updateGbPal();
++		_updateGbColors();
+ #endif
+ 	}
+ 
