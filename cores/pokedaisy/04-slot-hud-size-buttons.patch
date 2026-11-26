@@ -1,0 +1,55 @@
+slot. for Android: PokeDaisy's HUD SIZE and menu buttons.
+- HUD SIZE: SMALL each quarter at half its size, NORMAL the HUD as in the
+  picture, LARGE the whole HUD (the libretro core's two looks).
+- The quick menu on Y, the companion on X and the HUD cursor on L3 once, as
+  slot. has them; a later pick in SETTINGS is kept (slot-buttons beside
+  settings.ini).
+
+diff --git a/libretro/pd_libretro.c b/libretro/pd_libretro.c
+index c08c1a9..0d16455 100644
+--- a/libretro/pd_libretro.c
++++ b/libretro/pd_libretro.c
+@@ -1019,9 +1019,9 @@ static void draw_hud(void) {
+     hudOx = hudOy = 0;
+     hudTW = CW;
+     hudTH = CH;
+-    // slot.: the HUD at the size it has in the picture. Each quarter at half that (PokeDaisy's own host, a PC window)
+-    // was too small on a handheld's screen.
+-    hudPct = 100;
++    // slot.: the HUD at the size it has in the picture for NORMAL (and LARGE's whole HUD). Each quarter at half that
++    // (PokeDaisy's own host, a PC window) was too small on a handheld's screen: that is SMALL now.
++    hudPct = settings.hudSize == PD_HUD_SMALL ? 50 : 100; // SMALL: half of NORMAL, as in PokeDaisy's own host
+     (void)small;
+     hudScale = 1;
+     // A frontend that draws it takes the picture at its own size instead: the same quarters, each drawn once to the
+@@ -1569,9 +1569,28 @@ RETRO_API bool retro_load_game(const struct retro_game_info *g) {
+   // slot.: a menu button its frontend keeps for itself (L2 rewinds, R2 fast-forwards) never opens anything: the defaults.
+   if (settings.quickBtn == PD_BTN_L2 || settings.quickBtn == PD_BTN_R2 || settings.companionBtn == PD_BTN_L2 ||
+       settings.companionBtn == PD_BTN_R2 || settings.hudBtn == PD_BTN_L2 || settings.hudBtn == PD_BTN_R2) {
+-    settings.quickBtn = PD_BTN_L3;
++    settings.quickBtn = PD_BTN_Y;
+     settings.companionBtn = PD_BTN_X;
+-    settings.hudBtn = PD_BTN_NONE;
++    settings.hudBtn = PD_BTN_L3;
++  }
++  // slot.: the quick menu on Y, the companion on X and the HUD cursor on L3, as slot.'s own keys have them, once (slot-buttons beside the
++  // settings): a later pick in SETTINGS is kept.
++  if (*pdDir) {
++    char mark[1100];
++    snprintf(mark, sizeof mark, "%s/slot-buttons", pdDir);
++    FILE *seen = fopen(mark, "r");
++    if (seen)
++      fclose(seen);
++    else {
++      if (settings.quickBtn == PD_BTN_L3 && settings.companionBtn != PD_BTN_Y && settings.hudBtn != PD_BTN_Y)
++        settings.quickBtn = PD_BTN_Y;
++      if (settings.hudBtn == PD_BTN_NONE && settings.quickBtn != PD_BTN_L3 && settings.companionBtn != PD_BTN_L3)
++        settings.hudBtn = PD_BTN_L3;
++      pd_settings_save(&settings, settingsPath);
++      FILE *made = fopen(mark, "w");
++      if (made)
++        fclose(made);
++    }
+   }
+   optionSeen[0] = 0;
+   slotMenuSent = -1;
