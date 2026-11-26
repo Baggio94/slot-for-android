@@ -50,9 +50,9 @@ internal object SaveDeletes {
 
     /** The slot.-folder paths among [paths] that are this game's, by kind. */
     fun forGame(paths: Collection<String>, core: String, stem: String, id: String,
-                shared: Boolean): Map<String, Kind> {
+                shared: Boolean, saveCore: String = core): Map<String, Kind> {
         val lower = RetroArchStorage.coreLower(core)
-        val cores = if (shared) setOf("mGBA", "gpSP") else setOf(core)
+        val cores = if (shared) setOf("mGBA", "gpSP") else setOf(saveCore)
         val out = LinkedHashMap<String, Kind>()
         for (path in paths) {
             val kind = kindOf(path) ?: continue

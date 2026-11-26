@@ -624,8 +624,15 @@ impl GameSession {
                 .map_err(|e| format!("Cannot allocate private Link session: {e}"))?
         } else { solo_core_root.clone() };
         std::fs::create_dir_all(&core_root).map_err(|e| e.to_string())?;
-        let save = core_root.join(format!("{rom_stem}.srm"));
-        let rtc = core_root.join(format!("{rom_stem}.rtc"));
+        // PokeDaisy's in-game save is mGBA's own file (the same emulator);
+        // its save states and its companion's settings stay in its folder.
+        let battery_root = if which == Core::PokeDaisy && linked_boot.is_none() {
+            let mgba = root.join(Core::Mgba.text());
+            std::fs::create_dir_all(&mgba).map_err(|e| e.to_string())?;
+            mgba
+        } else { core_root.clone() };
+        let save = battery_root.join(format!("{rom_stem}.srm"));
+        let rtc = battery_root.join(format!("{rom_stem}.rtc"));
         if linked_boot.is_some() {
             // Preserve the exact pre-Link solo SRAM/RTC and state identity in
             // the unique private session. Check the original files have not
@@ -778,7 +785,9 @@ impl GameSession {
                     if colour_correction { "Auto" } else { "OFF" });
                 let (w, h) = crate::runtime::panel_size();
                 core.set_option("pokedaisy_panel", &format!("{w}x{h}"));
-                core.set_option("pokedaisy_aspect", "expand");
+                // ZOOM, EXPAND or ORIGINAL, as this game was last shown.
+                core.set_option("pokedaisy_aspect",
+                    crate::pokedaisy_view::view_for(storage, rom_stem).option());
             }
             Core::Gpsp => {
                 // Replicate official Slot/fork's core.rs: this option must
@@ -1016,6 +1025,21 @@ impl GameSession {
         let stale_state = root.join(format!("{id}.{}.state-stale.once", which.as_str()));
         // Link sessions never consume a pending solo mGBA/gpSP
         // cross-core guard; it belongs exclusively to solo resume.
+        // mGBA and PokeDaisy run one battery: the other one saved since
+        // this core's states were made, so they are older than the save.
+        let shares_battery = linked_boot.is_none() && Core::pokedaisy_system(platform)
+            && matches!(which, Core::Mgba | Core::PokeDaisy);
+        if shares_battery {
+            if crate::gb_core_switch::battery_changed_hands(&save, which) && !stale_state.exists() {
+                atomic_write(&stale_state, &[1])
+                    .map_err(|e| format!("Cannot set aside the older save states: {e}"))?;
+                log_launch_timing(&format!(
+                    "{}: the save changed under the other core, its states not resumed", which.text()));
+            }
+            if let Err(error) = crate::gb_core_switch::mark_battery_holder(&save, which) {
+                crate::log_warn(&format!("battery holder not noted: {error}"));
+            }
+        }
         let cross_core_import = linked_boot.is_none()
             && (skip_resume_marker.exists() || stale_state.exists());
         if cross_core_import {
@@ -1247,6 +1271,17 @@ impl GameSession {
 
     /// slot.'s buttons on `port` as the core reads them on `frame`.
     fn pad(&self, port: usize, buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
+        // PokeDaisy's own keys reach it as they are: X its companion, Y and
+        // L3 its quick menu (no turbo or second A / B on X and Y).
+        if self.core_kind == Core::PokeDaisy && port == 0 {
+            let own = buttons.0 & (ButtonMask::X | ButtonMask::Y | ButtonMask::L3);
+            let rest = self.pad_mapped(port, ButtonMask(buttons.0 & !own), turbo, frame);
+            return ButtonMask(rest.0 | own);
+        }
+        self.pad_mapped(port, buttons, turbo, frame)
+    }
+
+    fn pad_mapped(&self, port: usize, buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
         match &self.layouts[port] {
             Some(layout) => ButtonMask(layout.apply(buttons.0, frame)),
             // Without Controls the core gets slot.'s buttons as they are,
@@ -2058,6 +2093,14 @@ impl GameSession {
         self.core.set_option(key, value);
         if let Some(spec) = self.runahead_secondary_spec.as_mut() { spec.set_option(key, value); }
         if let Some(copy) = self.runahead_secondary.as_mut() { copy.set_option(key, value); }
+    }
+
+    /// PokeDaisy's view (ZOOM, EXPAND, ORIGINAL): the core lays out its
+    /// canvas again at its next frame, without restarting.
+    pub fn set_pokedaisy_view(&mut self, view: crate::pokedaisy_view::View) {
+        if self.core_kind == Core::PokeDaisy {
+            self.set_core_option("pokedaisy_aspect", view.option());
+        }
     }
 
     /// Per-game GB palette enable/disable is applied through the core's live

@@ -813,7 +813,7 @@ internal class SlotFolder(private val activity: MainActivity) {
     /** This game's two saves, if a copy met them. */
     fun twoSavesFor(target: RetroArchStorage.Target): TwoSavesFound? {
         if (!twoDir.isDirectory) return null
-        val cores = if (target.isGba && target.shareGbaSaves) listOf("mGBA", "gpSP") else listOf(target.core)
+        val cores = if (target.isGba && target.shareGbaSaves) listOf("mGBA", "gpSP") else listOf(target.saveCore)
         for (core in cores) {
             val path = "Saves/$core/${target.stem}.${Systems.saveExtension(core)}"
             val key = FolderSync.sha1(path.toByteArray(Charsets.UTF_8))

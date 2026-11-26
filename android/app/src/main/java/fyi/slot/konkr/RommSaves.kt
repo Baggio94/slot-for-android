@@ -52,7 +52,7 @@ internal object RommSaves {
 
     private fun recordFile(context: Context, target: RetroArchStorage.Target): File =
         File(File(context.filesDir, "RommSync"),
-            GameKeys.digest(target.romUri) + "." + RetroArchStorage.coreLower(target.core) + ".json")
+            GameKeys.digest(target.romUri) + "." + RetroArchStorage.coreLower(target.saveCore) + ".json")
 
     /** The launch couldn't check the server (it didn't answer in time):
      *  the save goes up only once the server is known not to have changed,
@@ -80,14 +80,13 @@ internal object RommSaves {
         .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 0xff) }
 
     /** The core's name on the server, as RetroArch-core clients use it. */
-    private fun emulator(target: RetroArchStorage.Target): String = RetroArchStorage.coreLower(target.core)
+    private fun emulator(target: RetroArchStorage.Target): String = RetroArchStorage.coreLower(target.saveCore)
 
     /** The cores whose saves are this game's on the server: with Share Core
      *  Saves, a GBA game's mGBA and gpSP saves are one save (beta39: the
      *  other core's newer one was passed over, and stayed after DELETE IT). */
     internal fun emulators(target: RetroArchStorage.Target): Set<String> =
-        if (target.isGba && target.shareGbaSaves) setOf("mgba", "gpsp", emulator(target))
-        else setOf(emulator(target))
+        if (target.isGba && target.shareGbaSaves) setOf("mgba", "gpsp") else setOf(emulator(target))
 
     private fun isOurs(save: Romm.ServerSave, target: RetroArchStorage.Target): Boolean =
         save.emulator.lowercase(Locale.ROOT) in emulators(target)
@@ -194,8 +193,9 @@ internal object RommSaves {
                 bringRtc(context, target, saves)
                 // The game starts from this save, not from slot.'s older
                 // save state (the same guard as Keep Folder Saves).
-                RetroArchStorage.markFolderSave(context.filesDir, target.core, target.stem)
-                RetroArchStorage.applyFolderSaveMark(context.filesDir, target.core, target.stem, target.romIdentity)
+                RetroArchStorage.markFolderSave(context.filesDir, target.saveCore, target.stem)
+                RetroArchStorage.applyFolderSaveMark(context.filesDir, target.saveCore, target.stem,
+                    target.romIdentity, target.core)
                 keep(context, target, Record(romId, server.id, server.updatedAt, serverSha))
                 Outcome("Save brought in from RomM.", pick = Pick.BROUGHT, serverAt = at)
             } else {
@@ -313,7 +313,7 @@ internal object RommSaves {
     /** The server's newest save for this game: our core's first, else any
      *  save of the same kind (.srm, .eeprom, .eep) another client sent. */
     internal fun newest(saves: List<Romm.ServerSave>, target: RetroArchStorage.Target): Romm.ServerSave? {
-        val kind = "." + Systems.saveExtension(target.core)
+        val kind = "." + Systems.saveExtension(target.saveCore)
         val srm = saves.filter { it.fileName.endsWith(kind, ignoreCase = true) }
         val ours = srm.filter { isOurs(it, target) }
         return (ours.ifEmpty { srm }).maxByOrNull { it.updatedAt }

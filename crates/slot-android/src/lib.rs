@@ -104,6 +104,7 @@ mod cheats;
 mod wallpaper;
 // Use Slot's original per-game Actual/Stretch geometry and video_mode.ini.
 mod video_mode;
+mod pokedaisy_view;
 // Master System and Mega Drive games played 256 pixels wide: 8:7 on narrow screens.
 mod square_games;
 #[cfg(test)]
@@ -262,6 +263,25 @@ mod original_picker_integration_tests {
         assert_eq!(picker.press(Press::Left, 1500), Outcome::Nothing);
         assert_eq!(picker.chip(1500 + HOP_MS).across, 0.0);
         assert_eq!(picker.press(Press::Keep, 2000), Outcome::Write(Core::Mgba));
+    }
+    #[test]
+    fn a_pokemon_board_has_pokedaisys_chip_as_a_third_place() {
+        let mut picker = CorePicker::open_three(Core::Mgba, [Core::PokeDaisy, Core::Mgba, Core::Gpsp], 0);
+        picker.start(0);
+        assert_eq!(picker.cores(), [Core::PokeDaisy, Core::Mgba, Core::Gpsp]);
+        assert_eq!(picker.chip(500).across, 1.0);
+        assert_eq!(picker.press(Press::Left, 500), Outcome::Nothing);
+        assert_eq!(picker.seat(), Core::PokeDaisy);
+        let half = picker.chip(500 + HOP_MS / 2);
+        assert_eq!((half.from, half.to), (1, 0));
+        assert!(half.tip < 0.0, "it leans the way it hops");
+        assert_eq!(picker.press(Press::Left, 1000), Outcome::Refused);
+        // A touch on gpSP's chip: two places over, at once.
+        assert_eq!(picker.press(Press::To(2), 1500), Outcome::Nothing);
+        assert_eq!(picker.chip(1500 + HOP_MS).seated, Some(Core::Gpsp));
+        assert_eq!(picker.chip(1500 + HOP_MS).across, 2.0);
+        assert_eq!(picker.press(Press::Right, 2000), Outcome::Refused);
+        assert_eq!(picker.press(Press::Keep, 2500), Outcome::Write(Core::Gpsp));
     }
 }
 
