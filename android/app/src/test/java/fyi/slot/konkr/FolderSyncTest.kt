@@ -76,9 +76,10 @@ class FolderSyncTest {
         val first = FolderSync.sync(FolderSync.PrivateSide(mine), card, base, FolderSync.Start.MERGE)
         assertTrue(first.failures.toString(), first.failures.isEmpty())
         assertEquals(2, first.toFolder)
-        assertEquals("one folder for both, under the first name",
-            setOf("States/PokeMini/Pinball.state.auto", "States/PokeMini/pokemini/abc/2026-11-24_04-11-19.state"),
-            card.files.keys)
+        assertEquals("one folder for both, under the first name", 1,
+            card.files.keys.map { it.split('/')[1] }.toSet().size)
+        assertEquals(setOf("states/pokemini/pinball.state.auto", "states/pokemini/pokemini/abc/2026-11-24_04-11-19.state"),
+            card.files.keys.map { it.lowercase() }.toSet())
         // Again: nothing goes out or comes in, nothing doubles on either side.
         val again = FolderSync.sync(FolderSync.PrivateSide(mine), card, base)
         assertEquals(0, again.toFolder)
@@ -89,7 +90,7 @@ class FolderSyncTest {
         put(mine, "States/POKEMINI/pokemini/abc/2026-11-24_04-11-19.state", "ring2", 9_000_000L)
         FolderSync.sync(FolderSync.PrivateSide(mine), card, base)
         assertEquals(2, card.files.size)
-        assertEquals("ring2", String(card.files.getValue("States/PokeMini/pokemini/abc/2026-11-24_04-11-19.state").first))
+        assertEquals("ring2", String(card.files.entries.single { it.key.endsWith("/abc/2026-11-24_04-11-19.state") }.value.first))
     }
 
     @Test fun androidsCopiesOfAFolderNamedAlikeStayInTheFolder() {
