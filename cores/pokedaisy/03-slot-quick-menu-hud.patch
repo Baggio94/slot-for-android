@@ -1,0 +1,60 @@
+slot. for Android: PokeDaisy's quick menu and HUD on any screen.
+- The paused game under the quick menu fills its canvas, its shape kept
+  (drawn 1:1, it shrank to the middle of the menu's larger canvas).
+- The HUD sent to slot. at the size it has in the picture (pct 100).
+
+diff --git a/libretro/pd_libretro.c b/libretro/pd_libretro.c
+index 8a8c6dd..c08c1a9 100644
+--- a/libretro/pd_libretro.c
++++ b/libretro/pd_libretro.c
+@@ -405,6 +405,23 @@ static void draw_wide_quick_background(void) {
+   }
+ }
+ 
++/* slot.: the game's own frame filling the quick menu's canvas, its shape kept (as draw_wide_quick_background). */
++static void draw_game_quick_background(void) {
++  memset(cvs, 0, (size_t)CW * CH * sizeof *cvs);
++  if (!outputBuffer || !gameW || !gameH)
++    return;
++  const int w = CW * (int)gameH <= CH * (int)gameW ? CW : CH * (int)gameW / (int)gameH;
++  const int h = CW * (int)gameH <= CH * (int)gameW ? CW * (int)gameH / (int)gameW : CH;
++  const int x0 = (CW - w) / 2, y0 = (CH - h) / 2;
++  const uint16_t *src = base_pixels();
++  for (int y = 0; y < h; y++) {
++    const uint16_t *row = src + (size_t)((unsigned)y * gameH / (unsigned)h) * 256;
++    uint32_t *dst = cvs + (size_t)(y0 + y) * CW + x0;
++    for (int x = 0; x < w; x++)
++      dst[x] = from565(row[(unsigned)x * gameW / (unsigned)w]);
++  }
++}
++
+ enum { CANVAS_EXPAND, CANVAS_ZOOM, CANVAS_MENU };
+ static int game_scale(unsigned w, unsigned h) {
+   int sx = CW / canvasScale / (int)w, sy = CH / canvasScale / (int)h;
+@@ -1002,7 +1019,10 @@ static void draw_hud(void) {
+     hudOx = hudOy = 0;
+     hudTW = CW;
+     hudTH = CH;
+-    hudPct = small ? 50 : 100;
++    // slot.: the HUD at the size it has in the picture. Each quarter at half that (PokeDaisy's own host, a PC window)
++    // was too small on a handheld's screen.
++    hudPct = 100;
++    (void)small;
+     hudScale = 1;
+     // A frontend that draws it takes the picture at its own size instead: the same quarters, each drawn once to the
+     // window, so SMALL and NORMAL are as sharp at 1x as they are at 2x (the spread below halves them at 1x).
+@@ -2680,10 +2700,12 @@ RETRO_API void retro_run(void) {
+         focus_draw(&ui, focus);
+     }
+   } else if (quickOpen && ovPixels) {
+-    if (polishedActions && wideReady && settings.aspect != PD_ASPECT_ORIGINAL)
++    // slot.: the paused game at the size it was shown, whatever the menu's canvas. The quick menu's canvas is larger
++    // than the game's (its icons and text sharp): drawn 1:1 in it, the picture shrank to its middle.
++    if (wideReady && settings.aspect != PD_ASPECT_ORIGINAL)
+       draw_wide_quick_background();
+     else
+-      draw_game();
++      draw_game_quick_background();
+     dim(0x55);
+     struct pd_canvas qc;
+     pd_canvas_init(&qc, quick_width(), quick_height(), ovPixels);

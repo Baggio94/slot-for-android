@@ -5013,7 +5013,9 @@ impl Engine {
                                     // (Siham 2026-11-22): seen in the pause.
                                     if matches!(key, 0..=3 | 21..=24 | 66..=69)
                                         || Self::previewed_extra(key) {
-                                        self.redraw_paused_game();
+                                        // A Game Boy palette shows only once
+                                        // the game draws again (key 3).
+                                        self.redraw_paused_game(key == 3);
                                     }
                                 },
                                 // Back: the slot slides down, then Settings.
@@ -6250,8 +6252,15 @@ impl Engine {
     }
     fn game_effect(&self) -> slot_gfx::ScreenEffect {
         // PokeDaisy's companion and quick menu: its own drawing, no shader.
-        if self.pokedaisy_menu && self.pokedaisy_running() {
-            return slot_gfx::ScreenEffect::None;
+        // Its canvas is a whole multiple of the screen on most panels, not
+        // all: Sharp Bilinear keeps every pixel the same size (the same
+        // picture where the multiple is whole).
+        if self.pokedaisy_running() {
+            let effect = video_mode::screen_effect(self.game_shader(),
+                self.current_cart_platform(), self.video_mode);
+            return if self.pokedaisy_menu || effect == slot_gfx::ScreenEffect::None {
+                slot_gfx::ScreenEffect::SharpBilinear
+            } else { effect };
         }
         let effect = video_mode::screen_effect(self.game_shader(),
             self.current_cart_platform(), self.video_mode);
@@ -6309,7 +6318,7 @@ impl Engine {
             View::Original => Toast::ScreenOriginal,
         }, self.born.elapsed().as_millis() as u64);
         // A held game (the Screen page) shows it at once.
-        if !matches!(self.overlay, ShelfOverlay::None) { self.redraw_paused_game(); }
+        if !matches!(self.overlay, ShelfOverlay::None) { self.redraw_paused_game(false); }
     }
 
     /// The view this game shows from now on, kept for it (from SELECT +
@@ -6824,13 +6833,14 @@ impl Engine {
     }
 
     fn pause_screen_rows(&self) -> &'static [usize] {
-        // PokeDaisy: its views in Screen Size, no bezel (it fills the screen).
+        // PokeDaisy: its views in Screen Size, first; no bezel (it fills
+        // the screen).
         if self.pokedaisy_running() {
             return match self.current_cart_platform() {
-                Platform::Gba => &[34,29,120],
-                Platform::Gbc => &[88,29,120],
-                _ if self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) => &[89,36,120],
-                _ => &[89,120],
+                Platform::Gba => &[120,34,29],
+                Platform::Gbc => &[120,88,29],
+                _ if self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) => &[120,89,36],
+                _ => &[120,89],
             };
         }
         // GB/GBC resize with L1/R1; GBA's shoulders belong to the game.
@@ -6855,10 +6865,10 @@ impl Engine {
     fn pause_screen_key(&self,row:usize)->Option<usize> {
         if self.pokedaisy_running() {
             let keys: &[usize] = match self.current_cart_platform() {
-                Platform::Gba => &[0,22,SCREEN_SIZE_KEY],
-                Platform::Gbc => &[21,23,SCREEN_SIZE_KEY],
-                _ if self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) => &[1,3,SCREEN_SIZE_KEY],
-                _ => &[1,SCREEN_SIZE_KEY],
+                Platform::Gba => &[SCREEN_SIZE_KEY,0,22],
+                Platform::Gbc => &[SCREEN_SIZE_KEY,21,23],
+                _ if self.game.as_ref().is_some_and(GameSession::can_change_gb_palette) => &[SCREEN_SIZE_KEY,1,3],
+                _ => &[SCREEN_SIZE_KEY,1],
             };
             return keys.get(row).copied();
         }
@@ -6965,8 +6975,11 @@ impl Engine {
     /// The in-game Screen page previews a look option the core draws itself
     /// at once: the paused game redrawn, the game not moved (Siham
     /// 2026-11-06).
-    fn redraw_paused_game(&mut self) {
-        if self.pokedaisy_running() {
+    /// PokeDaisy: drawn again without running (its view, its colours), or,
+    /// with `runs`, a few frames run and undone as for mGBA (a Game Boy
+    /// palette, which the game applies as it draws).
+    fn redraw_paused_game(&mut self, runs: bool) {
+        if self.pokedaisy_running() && !runs {
             let platform = self.current_cart_platform();
             let (view, mode) = (self.pokedaisy_view, self.video_mode);
             let Some(session) = self.game.as_mut() else { return };

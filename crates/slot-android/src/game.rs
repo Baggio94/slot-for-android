@@ -2017,7 +2017,12 @@ impl GameSession {
     /// until play resumes. False when the core can't roll back safely: the
     /// change shows on resume.
     pub fn redraw_paused(&mut self, mut before_last: impl FnMut(&[u8], (u32, u32))) -> bool {
-        if !self.runahead_supported() || self.runahead_rollback_failed { return false; }
+        // PokeDaisy never runs ahead, but a paused Game Boy game may run a
+        // few frames and come back for a palette: no Flash to keep there.
+        let pokedaisy_once = self.core_kind == Core::PokeDaisy && !self.mgba_flash_runahead_guard
+            && !self.sma4_runahead_guard && !self.in_multiplayer() && self.link.is_none()
+            && !self.runahead_unavailable && self.core.speculative_audio_supported();
+        if !(self.runahead_supported() || pokedaisy_once) || self.runahead_rollback_failed { return false; }
         if self.core.serialize_into(&mut self.runahead_state).is_err()
             || self.core.capture_speculative_audio().is_err() { return false; }
         self.core.set_frame_skip(false);
