@@ -25,6 +25,9 @@ internal object RetroArchCompression {
             "RetroArch state outside supported size limit"
         }
         val chunkSize = 131_072
+        // A large state (the player's own PICO-8's 33 MB) at zlib's fastest:
+        // the same format, RetroArch reads any level, a fraction of the time.
+        val level = if (data.size > 4 * 1024 * 1024) 1 else 6
         val out = ByteArrayOutputStream(data.size / 2 + 64)
         out.write(byteArrayOf(35,82,90,73,80,118,1,35)) // #RZIPv1#
         fun write32(value: Long) {
@@ -37,7 +40,7 @@ internal object RetroArchCompression {
         var offset = 0
         while (offset < data.size) {
             val len = minOf(chunkSize, data.size - offset)
-            val deflater = Deflater(6, false)
+            val deflater = Deflater(level, false)
             val compressed = ByteArrayOutputStream(len / 2 + 64)
             try {
                 deflater.setInput(data, offset, len)

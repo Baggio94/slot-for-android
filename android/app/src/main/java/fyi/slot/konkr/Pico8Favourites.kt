@@ -67,7 +67,7 @@ internal object Pico8Favourites {
      * Saves the favourites not saved before into the ROM folder's PICO-8
      * folder (made when there is none). The files written, for the shelf.
      */
-    fun sync(context: Context, tree: Uri): List<RomLibrary.SavedFile> {
+    fun sync(context: Context, tree: Uri, onSaved: (String) -> Unit = {}): List<RomLibrary.SavedFile> {
         val list = File(home(context), LIST)
         if (!list.isFile) return emptyList()
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -92,6 +92,7 @@ internal object Pico8Favourites {
             val uri = write(context, folder, name, bytes)
             if (uri == null) { Log.w(TAG, "PICO-8 favourite ${fav.id}: couldn't write $name"); continue }
             saved += fav.id
+            onSaved(name)
             written += RomLibrary.SavedFile(uri, folderName)
             Log.i(TAG, "PICO-8 favourite ${fav.id} saved as $name")
         }

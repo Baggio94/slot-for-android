@@ -593,7 +593,7 @@ internal object RetroArchStorage {
             stateRead.value?.also { seen ->
                 rememberSynced(files, stateTree!!, target.core, stateName, seen)
             }
-        } else if (target.stateDefaultLocal.isFile) {
+        } else if (target.stateDefaultLocal.isFile && !ownExportUnchanged(context, target)) {
             target.stateDefaultLocal.readBytes()
         } else null
         val readAt = SystemClock.elapsedRealtime()
@@ -679,6 +679,7 @@ internal object RetroArchStorage {
                     check(target.stateDefaultLocal.readBytes().contentEquals(compressed)) {
                         "Default state verification failed"
                     }
+                    markOwnExport(target)
                 }
                 if (guarded && !guard.delete()) SlotLog.w(TAG, "RetroArch auto-state guard not lifted yet")
             } catch (e: Exception) {
@@ -725,8 +726,37 @@ internal object RetroArchStorage {
             rememberSynced(context.filesDir, target.statesTree.toString(), target.core, name, compressed)
         } else {
             stage(target.stateDefaultLocal, compressed)
+            ownExportMark(target).delete()
         }
         stage(target.stateImportLocal, raw)
+    }
+
+    /** Beside slot.'s own copy of the resume state, what it was when slot.
+     *  wrote it from the engine's state (a dot file: never in the slot.
+     *  folder). Unchanged since, the next launch needn't decode it: the
+     *  engine resumes its own identical state. */
+    private fun ownExportMark(target: Target): File =
+        File(target.stateDefaultLocal.parentFile, "." + target.stateDefaultLocal.name + ".slot-export")
+
+    private fun stamp(file: File): String = "${file.length()}:${file.lastModified()}"
+
+    private fun markOwnExport(target: Target) {
+        try { ownExportMark(target).writeText(stamp(target.stateDefaultLocal)) }
+        catch (error: Exception) { SlotLog.w(TAG, "Own export mark not written", error) }
+    }
+
+    /** slot.'s own copy is still the one slot. wrote, and the engine's own
+     *  state it came from is there to resume. */
+    private fun ownExportUnchanged(context: Context, target: Target): Boolean {
+        val mark = ownExportMark(target)
+        if (!mark.isFile || !target.stateDefaultLocal.isFile) return false
+        if (mark.readText() != stamp(target.stateDefaultLocal)) return false
+        val lower = coreLower(target.core)
+        val index = File(context.filesDir, "Saves/${target.romIdentity}.$lower.state-generation.active")
+        val key = index.takeIf { it.isFile }?.readText()?.trim()
+            ?.takeIf { it.startsWith("${target.romIdentity}.$lower.gen-") && it.matches(Regex("[a-zA-Z0-9.-]{1,180}")) }
+        val own = File(context.filesDir, "Saves/${key ?: "${target.romIdentity}.$lower"}.state")
+        return own.isFile && own.length() > 0
     }
 
     /** The state slot. last wrote for RetroArch: its protected generation's

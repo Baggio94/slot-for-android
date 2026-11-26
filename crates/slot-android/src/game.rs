@@ -458,6 +458,45 @@ fn xy_buttons(buttons: ButtonMask, turbo: bool, frame: u32) -> ButtonMask {
     ButtonMask(mapped)
 }
 
+/// A Save & Eject's state from this size up (the player's own PICO-8's
+/// 33 MB) is written off the screen's thread: the eject plays at once, and
+/// the next launch and the save's copy (SAVE_SYNC) wait for it.
+const BIG_STATE: usize = 4 << 20;
+static STATE_WRITER: std::sync::Mutex<Option<std::thread::JoinHandle<Result<(), String>>>> =
+    std::sync::Mutex::new(None);
+static STATE_WRITES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A Save & Eject's state is still being written.
+pub fn state_writes_pending() -> bool { STATE_WRITES.load(std::sync::atomic::Ordering::Acquire) }
+
+/// Runs `then` once the eject's state is on disk, with how it went: at
+/// once when it was written in place.
+pub fn after_state_writes(then: impl FnOnce(Result<(), String>) + Send + 'static) {
+    let writer = STATE_WRITER.lock().unwrap_or_else(|e| e.into_inner()).take();
+    let Some(writer) = writer else { then(Ok(())); return };
+    std::thread::spawn(move || {
+        let done = writer.join().unwrap_or_else(|_| Err("the state writer stopped".into()));
+        then(done);
+        STATE_WRITES.store(false, std::sync::atomic::Ordering::Release);
+    });
+}
+
+/// A launch reads the states the last eject wrote: never before they're whole.
+fn await_state_writes() {
+    // A writer nobody waits on yet: joined here.
+    let left = STATE_WRITER.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(writer) = left {
+        if let Ok(Err(error)) = writer.join() {
+            log_launch_timing(&format!("Save & Eject's state not written: {error}"));
+        }
+        STATE_WRITES.store(false, std::sync::atomic::Ordering::Release);
+    }
+    let started = Instant::now();
+    while state_writes_pending() && started.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// The cached cart under its game name, for a core that names its own
 /// battery file after the ROM (bsnes). A hard link, or a copy.
 fn named_rom_alias(storage: &Path, rom: &Path, rom_stem: &str) -> Result<PathBuf, String> {
@@ -564,6 +603,8 @@ impl GameSession {
                      linked_resume: Option<&[u8]>,
                      peer_rom: Option<&Path>,
                      peer_bios: &crate::link_net::PeerBios) -> Result<Self, String> {
+        // The last eject's big state, written off the screen's thread, first.
+        await_state_writes();
         let opening_at = Instant::now();
         // gpSP is GBA-only; mGBA also links two Game Boys.
         if linked_boot.is_some() && ((platform != Platform::Gba && which != Core::Mgba) ||
@@ -1214,7 +1255,8 @@ impl GameSession {
             // bsnes shows the frame before an unserialize on the first run
             // after it, so a predicted picture would be stale: no Run-Ahead.
             // The player's own PICO-8: a 33 MB state, none while Splore downloads.
-            runahead_unavailable: which == Core::Bsnes || which == Core::Pico8,
+            // fake-08's state holds its Lua heap: too heavy to run ahead for PICO-8's games.
+            runahead_unavailable: matches!(which, Core::Bsnes | Core::Pico8 | Core::Fake08),
             runahead_rollback_failed: false,
             runahead_discard_confirm: false,
             runahead_probe: RunaheadProbe::default(),
@@ -2509,6 +2551,17 @@ impl GameSession {
     /// rewrites a corrupt battery over a known-good file. An absent battery
     /// on a ROM that does not implement SRAM is not an I/O failure.
     pub fn save_for_eject(&mut self, with_state: bool) -> Result<bool, String> {
+        self.save_checkpoint(with_state, false)
+    }
+
+    /// Save & Eject: as save_for_eject, but a big state (BIG_STATE) is
+    /// written off this thread; the caller hands what follows it to
+    /// after_state_writes.
+    pub fn save_for_eject_in_background(&mut self, with_state: bool) -> Result<bool, String> {
+        self.save_checkpoint(with_state, true)
+    }
+
+    fn save_checkpoint(&mut self, with_state: bool, background: bool) -> Result<bool, String> {
         // A failed Link's private pair is not a valid solo timeline.
         // Preserve the immutable pre-Link solo checkpoint rather than
         // replacing good SRAM/RTC/auto-state with a damaged sandbox.
@@ -2538,22 +2591,34 @@ impl GameSession {
         }
         let data = self.core.serialize()
             .map_err(|e| format!("Auto state capture: {e}"))?;
-        atomic_write(&self.state, &data)
-            .map_err(|e| format!("Auto state write: {e}"))?;
-        let container = retroarch_state::encode(&self.for_retroarch(data))
-            .map_err(|e| format!("RetroArch state encoding: {e}"))?;
-        atomic_write(&self.retroarch_export, &container)
-            .map_err(|e| format!("RetroArch state export: {e}"))?;
         // Its picture beside it, for Sync States with RomM (3.0): what the
         // state shows in RomM. Only with the sync on; never fails the save.
         let syncing = crate::runtime::ROMM_STATES.load(std::sync::atomic::Ordering::Acquire) == 2;
-        if let Some(png) = syncing.then(|| thumb::png_fit(self.core.video_xrgb8888(), self.core.video_size(),
-            self.core.display_aspect())).flatten() {
-            let mut picture = self.retroarch_export.clone().into_os_string();
-            picture.push(".png");
-            if let Err(error) = atomic_write(std::path::Path::new(&picture), &png) {
-                crate::log_warn(&format!("state picture not kept: {error}"));
+        let png = syncing.then(|| thumb::png_fit(self.core.video_xrgb8888(), self.core.video_size(),
+            self.core.display_aspect())).flatten();
+        let mut picture = self.retroarch_export.clone().into_os_string();
+        picture.push(".png");
+        let picture = PathBuf::from(picture);
+        let big = background && data.len() >= BIG_STATE;
+        let container = retroarch_state::encode(&self.for_retroarch(data.clone()))
+            .map_err(|e| format!("RetroArch state encoding: {e}"))?;
+        let (state, export) = (self.state.clone(), self.retroarch_export.clone());
+        let write = move || -> Result<(), String> {
+            atomic_write(&state, &data).map_err(|e| format!("Auto state write: {e}"))?;
+            atomic_write(&export, &container).map_err(|e| format!("RetroArch state export: {e}"))?;
+            if let Some(png) = png {
+                if let Err(error) = atomic_write(&picture, &png) {
+                    crate::log_warn(&format!("state picture not kept: {error}"));
+                }
             }
+            Ok(())
+        };
+        if big {
+            STATE_WRITES.store(true, std::sync::atomic::Ordering::Release);
+            let writer = std::thread::spawn(write);
+            *STATE_WRITER.lock().unwrap_or_else(|e| e.into_inner()) = Some(writer);
+        } else {
+            write()?;
         }
         // The auto-state now matches this battery.
         if self.stale_state.is_some() {

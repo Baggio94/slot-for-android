@@ -237,6 +237,7 @@ class MainActivity : Activity() {
     external fun nativeSensorsWanted(): Int
     external fun nativeSensorEvent(sensor: Int, x: Float, y: Float, z: Float, timestampNs: Long)
     external fun nativeCoreForUri(uri: String): String
+    external fun nativePlayOnPico8(filename: String)
     external fun nativePollSaveFlush(): String?
     external fun nativeSetShareSaves(enabled: Boolean)
     external fun nativeSetNextResumeMode(mode: Int)
@@ -1826,7 +1827,8 @@ class MainActivity : Activity() {
         if (contentResolver.persistedUriPermissions.none { it.uri == root && it.isWritePermission }) return
         pico8Worker.execute {
             val files = try {
-                Pico8Favourites.sync(this, root)
+                // Splore's carts play on the player's own PICO-8.
+                Pico8Favourites.sync(this, root) { name -> nativePlayOnPico8(name) }
             } catch (error: Exception) {
                 SlotLog.w(TAG, "PICO-8 favourites not saved", error)
                 emptyList()

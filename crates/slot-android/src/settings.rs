@@ -501,14 +501,15 @@ impl Shader {
         Self::Simpletex, Self::Dot, Self::LcdGridV2,
     ];
     /// Pokemon mini: PokeMini draws its own LCD (Dot Matrix), no shader.
-    /// PICO-8 offers the same two: its pixels square, or smoothed between.
     pub const POKEMINI: [Self; 2] = [Self::Off, Self::SharpBilinear];
     /// The 3.0 systems' choices; the Master System keeps the CRT ones.
     pub fn list_3_0(platform: slot_store::Platform) -> &'static [Self] {
         use slot_store::Platform::*;
         match platform {
             Gg | Ngp | Ws | Lynx => &Self::LCD,
-            Pokemini | Pico8 => &Self::POKEMINI,
+            Pokemini => &Self::POKEMINI,
+            // PICO-8 takes the handhelds' LCD shaders, Off first (Siham 2026-11-27).
+            Pico8 => &Self::LCD,
             _ => &Self::HOME,
         }
     }
@@ -1625,7 +1626,7 @@ impl Settings {
             SHADER_WS_KEY => self.shader_ws=self.shader_ws.step(&Shader::LCD,right),
             SHADER_LYNX_KEY => self.shader_lynx=self.shader_lynx.step(&Shader::LCD,right),
             SHADER_POKEMINI_KEY => self.shader_pokemini=self.shader_pokemini.step(&Shader::POKEMINI,right),
-            SHADER_PICO8_KEY => self.shader_pico8=self.shader_pico8.step(&Shader::POKEMINI,right),
+            SHADER_PICO8_KEY => self.shader_pico8=self.shader_pico8.step(&Shader::LCD,right),
             3 => step_palette(&mut self.gb_palettes, &mut self.gb_palette, right),
             4 => {
                 let at = SPEEDS.iter().position(|x| *x == self.ff_speed).unwrap_or(0);

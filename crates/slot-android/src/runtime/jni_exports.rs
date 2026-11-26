@@ -831,6 +831,24 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeConfigure(
     }
 }
 
+/// A cart Splore saved to the ROM folder (Pico8Favourites): it came from the
+/// player's own PICO-8, so it plays there, unless that is the default already.
+/// Its file name, as the library will name the game (library::game_keys).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePlayOnPico8(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, filename: JString<'_>,
+) {
+    let Ok(name) = env.get_string(&filename) else { return };
+    let name = name.to_string_lossy().trim().to_lowercase();
+    if name.is_empty() || name.contains('/') { return; }
+    let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let Some((storage, _)) = paths else { return };
+    let key = core_selection::key_of_name(&format!("pico8/{name}"));
+    if let Err(error) = slot_store::choose_core(&storage, &key, Platform::Pico8, Core::Pico8) {
+        crate::log_warn(&format!("Splore favourite's core not saved: {error}"));
+    }
+}
+
 /// How the handheld names itself and its Android model, for the About sticker.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetDevice(
@@ -847,6 +865,12 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetDevice(
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollLaunchUri(
     env: JNIEnv<'_>, _this: JObject<'_>,
 ) -> jstring {
+    // The last eject's state is still being written: its save is copied on
+    // first (SAVE_SYNC), then this launch reads it whole.
+    if crate::game::state_writes_pending()
+        || !SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+        return std::ptr::null_mut();
+    }
     let next = REQUEST.lock().unwrap_or_else(|e| e.into_inner()).take();
     match next.and_then(|v| env.new_string(v).ok()) {
         Some(v) => v.into_raw(), None => std::ptr::null_mut(),

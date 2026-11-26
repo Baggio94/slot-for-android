@@ -4521,7 +4521,7 @@ impl Engine {
                     }
                     Some(session) => match {
                         let save_at = Instant::now();
-                        let saved = session.save_for_eject(with_state);
+                        let saved = session.save_for_eject_in_background(with_state);
                         eject_save_took = Some(save_at.elapsed());
                         saved
                     } {
@@ -4571,9 +4571,17 @@ impl Engine {
                     // game closes (fake-08's cartdata) has written it when the
                     // save is copied on.
                     drop(session);
-                    if let Some(event) = event {
-                        SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner()).push_back(event);
-                    }
+                    // Once the state is on disk (a big one is written off
+                    // this thread: the eject doesn't wait for it).
+                    crate::game::after_state_writes(move |written| match written {
+                        Ok(()) => if let Some(event) = event {
+                            SAVE_SYNC.lock().unwrap_or_else(|e| e.into_inner()).push_back(event);
+                        },
+                        Err(error) => {
+                            crate::game::log_launch_timing(&format!("Save & Eject's state not written: {error}"));
+                            set_message("Couldn't save the game's state.".into());
+                        }
+                    });
                 }
                 PLAYING.store(false, Ordering::Release);
                 SAMPLE_RATE.store(0, Ordering::Release);
@@ -5041,9 +5049,11 @@ impl Engine {
                             },
                             ShelfOverlay::PauseGameplaySettings { row } => match code {
                                 19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::PauseGameplaySettings {
-                                    row: move_menu_row(row,code,GAMEPLAY_KEYS.len(), self.menu_repeat_dispatch),
+                                    row: move_menu_row(row,code,self.pause_gameplay().1.len(), self.menu_repeat_dispatch),
                                 },
-                                21 | 22 => self.change_game_screen_or_gameplay(GAMEPLAY_KEYS[row],code==22),
+                                21 | 22 => if let Some(&key) = self.pause_gameplay().1.get(row) {
+                                    self.change_game_screen_or_gameplay(key,code==22)
+                                },
                                 97 => self.overlay = ShelfOverlay::PauseSettings { row: 1 },
                                 _ => {}
                             },
@@ -5529,6 +5539,14 @@ impl Engine {
                             self.fresh_launch = false;
                             set_message("No core for this system yet: 3.0 test cart.".into());
                             return;
+                        }
+                        // Splore without PICO-8 in the BIOS folder (taken out since): say so.
+                        96 if !self.inserted && self.shelves[self.active].carts
+                            .get(self.shelves[self.active].index)
+                            .is_some_and(|cart| core_selection::is_splore(&cart.rom.to_string_lossy()))
+                            && !PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+                                .is_some_and(|(storage, _)| crate::pico8::installed(storage)) => {
+                            set_message(crate::pico8::MISSING.to_string());
                         }
                         96 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
                             self.load_selected_emulation();
@@ -6937,8 +6955,9 @@ impl Engine {
         }
     }
     fn pause_emulation_rows(&self) -> &'static [usize] {
-        // PokeDaisy never runs ahead (its map past the edges): no Run-Ahead.
-        if self.pokedaisy_running() {
+        // PokeDaisy never runs ahead (its map past the edges): no Run-Ahead;
+        // nor PICO-8 (the real one's 33 MB state, fake-08's Lua heap).
+        if self.pokedaisy_running() || self.current_cart_platform() == Platform::Pico8 {
             &[51,52]
         } else if self.game.as_ref().is_some_and(GameSession::solar) {
             &[51,52,55,119]
@@ -6946,6 +6965,16 @@ impl Engine {
             &[51,52,55,137]
         } else {
             &[51,52,55]
+        }
+    }
+    /// The paused game's Gameplay page, rows and keys: PICO-8 has no rumble,
+    /// and the player's own PICO-8 no rewind (its 33 MB state).
+    fn pause_gameplay(&self) -> (&'static [usize], &'static [usize]) {
+        if self.current_cart_platform() != Platform::Pico8 { return (&GAMEPLAY_ROWS, &GAMEPLAY_KEYS); }
+        if self.game.as_ref().is_some_and(|game| game.core_kind() == Core::Pico8) {
+            (&[27, 28, 39], &[4, 5, 9])
+        } else {
+            (&[27, 28, 37, 39], &[4, 5, 6, 9])
         }
     }
     fn pause_settings_rows(&self) -> &'static [usize] {
@@ -9280,7 +9309,8 @@ impl Engine {
                 self.draw_settings_menu(32, &items, row, &keys, out);
             }
             ShelfOverlay::PauseGameplaySettings { row } => {
-                self.draw_settings_menu(33, &GAMEPLAY_ROWS, row, &GAMEPLAY_KEYS, out);
+                let (rows, keys) = self.pause_gameplay();
+                self.draw_settings_menu(33, rows, row, keys, out);
             }
             ShelfOverlay::Multiplayer => self.draw_multiplayer(out),
             ShelfOverlay::CartStudio => self.draw_cart_studio(out),
@@ -9803,7 +9833,7 @@ impl Engine {
             ShelfOverlay::PauseSettings { row } => (13u8, row, self.pause_settings_rows().len()),
             ShelfOverlay::PauseScreenSettings { row } =>
                 (14u8, row, self.pause_screen_page_rows().len()),
-            ShelfOverlay::PauseGameplaySettings { row } => (15u8, row, GAMEPLAY_KEYS.len()),
+            ShelfOverlay::PauseGameplaySettings { row } => (15u8, row, self.pause_gameplay().1.len()),
             ShelfOverlay::Multiplayer => (11u8, 0, 0usize),
             ShelfOverlay::Settings { row } => (4u8, row, settings_rows().len()),
             ShelfOverlay::ControlsSettings { .. } | ShelfOverlay::ControlsPort { .. }

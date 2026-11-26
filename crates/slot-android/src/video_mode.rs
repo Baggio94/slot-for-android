@@ -425,7 +425,10 @@ pub fn pokedaisy_fit(view: crate::pokedaisy_view::View, platform: Platform, mode
     frame: (u32, u32)) -> slot_gfx::Fit {
     let (gw, gh) = crate::pokedaisy_view::game_frame(platform);
     let own = frame.0 >= gw && frame.0 % gw == 0 && frame.1 % gh == 0 && frame.0 / gw == frame.1 / gh;
-    if view != crate::pokedaisy_view::View::Original || !own {
+    // Before the game can EXPAND (its boot, intro and title screens) the core
+    // hands over the game's own frame: shown as ORIGINAL shows it.
+    let whole = view == crate::pokedaisy_view::View::Original || frame == (gw, gh);
+    if !whole || !own {
         return companion_fit(frame);
     }
     match mode {
