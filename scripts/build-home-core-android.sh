@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Reproducible arm64 builds of the NES, SNES, Mega Drive, Master System,
-# Game Gear, Neo Geo Pocket, WonderSwan, Lynx and Pokemon mini libretro cores,
+# Game Gear, Neo Geo Pocket, WonderSwan, Lynx, Pokemon mini and PICO-8 libretro cores,
 # each from a pinned upstream commit with the core's own Android recipe
 # (jni/Android.mk). No BIOS or ROMs. Usage: build-home-core-android.sh CORE
 #   fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem
-#   mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini
+#   mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini fake08
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NDK="${ANDROID_NDK_HOME:-${ANDROID_SDK_ROOT:?Set ANDROID_NDK_HOME or ANDROID_SDK_ROOT}/ndk/27.2.12479018}"
@@ -13,6 +13,7 @@ LLVM="$(echo "$NDK"/toolchains/llvm/prebuilt/*/bin)"
 CORE="${1:?core name}"
 SUBMODULES=0
 OWNER=libretro
+LIBNAME=retro
 # name | upstream repository | pinned commit | jni folder | licence file
 case "$CORE" in
   fceumm)          REPO=libretro-fceumm;  PIN=ac0d00a7fc01166f84c7bac01d1084ebfd2b865e; JNI=jni;                         LICENCE=Copying ;;
@@ -31,6 +32,8 @@ case "$CORE" in
   handy)           REPO=libretro-handy;        PIN=bc55d462f0b2d6b073ea93dc552ebd73cec60fd1; JNI=jni;          LICENCE=lynx/license.txt ;;
   mednafen_lynx)   REPO=beetle-lynx-libretro;  PIN=fcdefcfb3c11d6d2e71be076a5d3df2e88ab73ed; JNI=jni;          LICENCE=COPYING ;;
   pokemini)        REPO=PokeMini;              PIN=132111b76343559860532a1ccc094f93f1ed5650; JNI=jni;          LICENCE=LICENSE ;;
+  # PICO-8: fake-08 lives outside the libretro organisation and its module is libfake08.so.
+  fake08)          REPO=fake-08; OWNER=jtothebell; PIN=814991a2571ad3970e386cef48f3b148aa1c27b9; JNI=platform/libretro/jni; LICENCE=LICENSE.MD; SUBMODULES=1; LIBNAME=fake08 ;;
   *) echo "Unknown home console core: $CORE" >&2; exit 1 ;;
 esac
 OUT="$ROOT/.build/$CORE"
@@ -46,6 +49,12 @@ if [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" != "$PIN" ]; then
 fi
 if [ "$SUBMODULES" = 1 ]; then
   git -C "$SRC" submodule update --init --depth=1 --recursive
+fi
+# Start from the pinned tree: patches that touch the same file only apply in
+# order, onto the one before (fake08's input and save state patches).
+git -C "$SRC" checkout -q -- .
+if [ "$SUBMODULES" = 1 ]; then
+  git -C "$SRC" submodule foreach -q --recursive git checkout -q -- .
 fi
 # Patches for this core, applied strictly: never a half-patched source.
 PATCHES=()
@@ -69,7 +78,7 @@ done
   APP_SUPPORT_FLEXIBLE_PAGE_SIZES=true \
   NDK_PROJECT_PATH="$SRC/$JNI/.." \
   NDK_OUT="$OUT/obj" NDK_LIBS_OUT="$OUT/libs"
-LIB="$OUT/libs/arm64-v8a/libretro.so"
+LIB="$OUT/libs/arm64-v8a/lib$LIBNAME.so"
 [ -s "$LIB" ] || { echo "Missing $CORE libretro library" >&2; exit 1; }
 SYMBOLS="$("$LLVM/llvm-nm" -D --defined-only "$LIB")"
 for symbol in retro_run retro_serialize retro_unserialize retro_get_system_av_info; do

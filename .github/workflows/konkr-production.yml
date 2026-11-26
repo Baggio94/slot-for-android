@@ -149,11 +149,11 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-gambatte-android.sh
-      - name: Build NES, SNES, Mega Drive, Master System, Game Gear, Neo Geo Pocket and WonderSwan arm64 libretro cores
+      - name: Build NES, SNES, Mega Drive, Master System, Game Gear, Neo Geo Pocket, WonderSwan, Lynx, Pokemon mini and PICO-8 arm64 libretro cores
         if: steps.cores.outputs.cache-hit != 'true'
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini; do
+          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini fake08; do
             bash scripts/build-home-core-android.sh "$core"
           done
       - uses: actions/download-artifact@v7
