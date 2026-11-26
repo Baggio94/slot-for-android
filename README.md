@@ -19,7 +19,7 @@ The port has since grown to other Android handhelds and more systems. The goal s
 ## Highlights
 
 - **Cartridges first.** Your library is a shelf of cartridges with their real labels, insertion and ejection animations and sounds.
-- **13 systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo, Mega Drive, Master System, Game Gear, Neo Geo Pocket/Color, WonderSwan/Color, Atari Lynx, Pokémon mini and PICO-8, with multiple emulation cores where available.
+- **13 systems.** Game Boy, Game Boy Color, Game Boy Advance, NES, Super Nintendo, Mega Drive, Master System, Game Gear, Neo Geo Pocket/Color, WonderSwan/Color, Atari Lynx, Pokémon mini and PICO-8 (played by fake-08, or by your own copy of PICO-8), with multiple emulation cores where available.
 - **Any screen shape.** The interface adapts to square, 4:3, 3:2 and widescreen handhelds at their native resolution.
 - **Cart Studio.** Change a cartridge's label, shell colour, finish and shape, right on the handheld.
 - **Themes.** Dark, OLED, Light and Original, with a wallpaper for each shelf.
@@ -36,6 +36,8 @@ The port has since grown to other Android handhelds and more systems. The goal s
 1. Download the APK from [Releases](https://github.com/Baggio94/slot-for-android/releases/latest) and install it on your Android handheld (Android 12 or later).
 2. Open slot., press **START → Library → Choose ROM Folder**, and select your games folder.
 3. Pick a cartridge, insert it, and play!
+
+**Your own PICO-8 (optional):** slot. does not include PICO-8. If you own it, copy `pico8_64` and `pico8.dat` from its Raspberry Pi download (or the `pico-8_*_raspi.zip` itself) into your BIOS folder (**START → Library → Choose BIOS Folder**). PICO-8 carts can then run on the real PICO-8 (tested with 0.2.7), and Splore is the first cart on the PICO-8 shelf. Pick the core per cart with **SELECT**, or for every cart in **START → Settings → Systems → PICO-8 → Default Core**.
 
 For supported formats, BIOS files, controls, updates, and optional features, see the [Getting Started guide](https://github.com/Baggio94/slot-for-android/wiki/Getting-Started).
 

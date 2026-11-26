@@ -31,15 +31,18 @@ pub enum Core {
     PokeDaisy,
     /// fake-08, PICO-8's player (jtothebell/fake-08, MIT).
     Fake08,
+    /// PICO-8's second socket: the player's own PICO-8 (the Raspberry Pi
+    /// build in the BIOS folder) run by slot.'s own core, with Splore.
+    Pico8,
 }
 
 impl Core {
-    pub const ALL: [Core; 18] = [
+    pub const ALL: [Core; 19] = [
         Core::Mgba, Core::Gpsp, Core::Gambatte,
         Core::Fceumm, Core::Nestopia, Core::Snes9x, Core::Bsnes,
         Core::GenesisPlusGx, Core::Picodrive,
         Core::Neopop, Core::Race, Core::Gearsystem, Core::Handy, Core::BeetleLynx,
-        Core::BeetleCygne, Core::PokeMini, Core::PokeDaisy, Core::Fake08,
+        Core::BeetleCygne, Core::PokeMini, Core::PokeDaisy, Core::Fake08, Core::Pico8,
     ];
 
     /// libretro's own core name: lib{as_str}_libretro.so, and the key
@@ -64,6 +67,7 @@ impl Core {
             Core::PokeMini => "pokemini",
             Core::PokeDaisy => "pokedaisy",
             Core::Fake08 => "fake08",
+            Core::Pico8 => "pico8",
         }
     }
 
@@ -100,6 +104,7 @@ impl Core {
             Core::PokeMini => "PokeMini",
             Core::PokeDaisy => "PokeDaisy",
             Core::Fake08 => "fake-08",
+            Core::Pico8 => "PICO-8",
         }
     }
 
@@ -142,7 +147,7 @@ impl Core {
             Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx
             | Core::Neopop | Core::Handy | Core::BeetleCygne | Core::PokeMini | Core::Fake08 => 0,
             Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive
-            | Core::Race | Core::Gearsystem | Core::BeetleLynx => 1,
+            | Core::Race | Core::Gearsystem | Core::BeetleLynx | Core::Pico8 => 1,
             Core::PokeDaisy => 2,
         }
     }

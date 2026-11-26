@@ -171,7 +171,7 @@ static PANEL_SIZE: AtomicU64 = AtomicU64::new(0);
 /// Paused Screen row choosing the game's size: GBA off the 3:2 KONKR, and
 /// the home consoles everywhere (Integer / Original Ratio / Stretch).
 const SCREEN_SIZE_KEY: usize = 40;
-use crate::settings::{CORE_SMS_KEY, CORE_GG_KEY, CORE_NGP_KEY, CORE_LYNX_KEY,
+use crate::settings::{CORE_SMS_KEY, CORE_GG_KEY, CORE_NGP_KEY, CORE_LYNX_KEY, CORE_PICO8_KEY,
     SHADER_SMS_KEY, SHADER_GG_KEY, SHADER_NGP_KEY, SHADER_WS_KEY, SHADER_LYNX_KEY,
     SHADER_POKEMINI_KEY, BEZEL_SMS_KEY, BEZEL_GG_KEY, BEZEL_NGP_KEY, BEZEL_WS_KEY,
     BEZEL_LYNX_KEY, BEZEL_POKEMINI_KEY, POKEMINI_FILTER_KEY, SHADER_PICO8_KEY};
@@ -828,7 +828,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 199] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 201] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -895,6 +895,8 @@ const SETTING_VALUE_NAMES: [&str; 199] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                // 171-177 (POKEDAISY_VIEW_VALUES): PokeDaisy's Screen Size,
                                // ZOOM's first step, EXPAND, ORIGINAL, then ZOOM's steps 2 to 5.
                                "ZOOM 1", "EXPAND", "ORIGINAL", "ZOOM 2", "ZOOM 3", "ZOOM 4", "ZOOM 5",
+                               // 178-179 (PICO8_CORE_VALUES): PICO-8's two cores.
+                               "fake-08", "PICO-8",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -912,6 +914,8 @@ const AUDIO_OPTION_VALUES: usize = EXTRA_VALUES + 14;
 const SHELVES_LAYOUT_VALUES: usize = AUDIO_OPTION_VALUES + 5;
 /// PokeDaisy's views (ZOOM 1, EXPAND, ORIGINAL, ZOOM 2 to 5) in SETTING_VALUE_NAMES.
 const POKEDAISY_VIEW_VALUES: usize = SHELVES_LAYOUT_VALUES + 2;
+/// PICO-8's cores' names, after PokeDaisy's seven views.
+const PICO8_CORE_VALUES: usize = POKEDAISY_VIEW_VALUES + 7;
 
 /// A PokeDaisy view's value face.
 fn pokedaisy_view_value(view: crate::pokedaisy_view::View) -> usize {
@@ -1194,7 +1198,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         28 => if settings.time_format==crate::settings::TimeFormat::TwelveHour
             {35}else{36},
         29..=31 | 41..=43 | crate::settings::CORE_SMS_KEY | crate::settings::CORE_GG_KEY
-        | crate::settings::CORE_NGP_KEY | crate::settings::CORE_LYNX_KEY =>
+        | crate::settings::CORE_NGP_KEY | crate::settings::CORE_LYNX_KEY
+        | crate::settings::CORE_PICO8_KEY =>
             core_value(Engine::core_key_platform(key)
             .map_or(Core::Mgba, |platform| cores[platform as usize])),
         // Frame Blending, LCD Effect and Dither Blending: the game's own in
@@ -1286,6 +1291,10 @@ fn library_carts(library: Option<&[RomEntry]>, root: Option<&std::path::Path>)
                 cart.battery = saved.contains(std::ffi::OsStr::new(&format!("{}.srm", cart.stem)));
             }
         }
+        // Splore, first on the PICO-8 shelf while PICO-8 is in the BIOS folder.
+        if let Some(splore) = library.and_then(|_| crate::pico8::splore_cart(root)) {
+            systems[Platform::Pico8 as usize].insert(0, splore);
+        }
     }
     let video = systems.pop().unwrap_or_default();
     (systems, video)
@@ -1332,6 +1341,7 @@ fn core_value(core: Core) -> usize {
         Core::Mgba => 50, Core::Gpsp => 51, Core::Gambatte => 52,
         Core::Gearsystem => 135, Core::Neopop => 136, Core::Race => 137,
         Core::Handy => 138, Core::BeetleLynx => 139,
+        Core::Fake08 => PICO8_CORE_VALUES, Core::Pico8 => PICO8_CORE_VALUES + 1,
         other => 70 + other.index() - Core::Fceumm.index(),
     }
 }
@@ -5429,8 +5439,15 @@ impl Engine {
                                 let column = self.picker_three.is_some_and(|t| t.socket.is_none());
                                 if let Some(picker) = self.picker.as_mut() {
                                     match code {
-                                        21 => { picker.press(Press::Left, now); }
-                                        22 => { picker.press(Press::Right, now); }
+                                        21 | 22 => {
+                                            let press = if code == 21 { Press::Left } else { Press::Right };
+                                            // Splore's chip stays on PICO-8: say why.
+                                            let to = if code == 21 { picker.left() } else { picker.right() };
+                                            if picker.press(press, now) == crate::core_picker::Outcome::Refused
+                                                && !picker.allows(to) {
+                                                set_message(crate::pico8::SPLORE_ONLY.to_string());
+                                            }
+                                        }
                                         19 if column => { picker.press(Press::To(0), now); }
                                         20 if column => { picker.press(Press::To(1), now); }
                                         96 => self.seat_core_picker(),
@@ -5524,7 +5541,9 @@ impl Engine {
                             crate::frame_watch::insert_started();
                             self.a_down_at = self.insert_started;
                             self.fresh_launch = false;
-                            if uri.starts_with("content://") {
+                            // ROM files, and Splore (no file: Android hands the
+                            // core a stand-in, MainActivity.loadGameFromSaf).
+                            if uri.starts_with("content://") || core_selection::is_splore(&uri) {
                                 let uri = uri.into_owned();
                                 let platform = selected.platform;
                                 *LAUNCH_CORE.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -5652,6 +5671,9 @@ impl Engine {
             Some(three) => CorePicker::open_three(current_core, three.cores, now),
             None => CorePicker::open_between(current_core, primary, alternate, now),
         };
+        if core_selection::is_splore(&selected.rom.to_string_lossy()) {
+            picker = picker.only(Core::Pico8);
+        }
         self.picker_three = three;
         // A clear cart's lid waits for its plastic without
         // the board (start_waiting_picker), or the shelf
@@ -5678,6 +5700,8 @@ impl Engine {
             let core_file = library.join(format!("lib{}_libretro.so", core.as_str()));
             if !core_file.is_file() {
                 set_message(format!("{} isn't installed.", core.text()));
+            } else if core == Core::Pico8 && !crate::pico8::installed(&storage) {
+                set_message(crate::pico8::MISSING.to_string());
             } else {
                 match core_selection::choose(&storage, &uri, platform, core) {
                     Ok(()) => {
@@ -5971,6 +5995,8 @@ impl Engine {
                 core = Core::Mgba;
             }
             let core_file = library.join(format!("lib{}_libretro.so", core.as_str()));
+            // The core sees a cached copy, never the cart's name.
+            crate::pico8::set_splore(core == Core::Pico8 && core_selection::is_splore(uri));
             // First game still wakes RA if the asynchronous SAF scan has not run.
             // Perform this mutable operation BEFORE borrowing rom_stem.
             // GBA, GB and GBC use the verified per-console memory maps.
@@ -6740,8 +6766,8 @@ impl Engine {
             (Platform::Pokemini,false,false)=>&[120],
             (Platform::Pokemini,false,true)=>&[120,90],
             // One core, no overlay.
-            (Platform::Pico8,true,_)=>&[124],
-            (Platform::Pico8,false,_)=>&[120,124],
+            (Platform::Pico8,true,_)=>&[118,124],
+            (Platform::Pico8,false,_)=>&[118,120,124],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -6787,8 +6813,8 @@ impl Engine {
             (Platform::Pokemini,true,_)=>&[],
             (Platform::Pokemini,false,false)=>&[SCREEN_SIZE_KEY],
             (Platform::Pokemini,false,true)=>&[SCREEN_SIZE_KEY,BEZEL_POKEMINI_KEY],
-            (Platform::Pico8,true,_)=>&[SHADER_PICO8_KEY],
-            (Platform::Pico8,false,_)=>&[SCREEN_SIZE_KEY,SHADER_PICO8_KEY],
+            (Platform::Pico8,true,_)=>&[CORE_PICO8_KEY,SHADER_PICO8_KEY],
+            (Platform::Pico8,false,_)=>&[CORE_PICO8_KEY,SCREEN_SIZE_KEY,SHADER_PICO8_KEY],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
@@ -6799,6 +6825,7 @@ impl Engine {
             crate::settings::CORE_GG_KEY=>Some(Platform::Gg),
             crate::settings::CORE_NGP_KEY=>Some(Platform::Ngp),
             crate::settings::CORE_LYNX_KEY=>Some(Platform::Lynx),
+            crate::settings::CORE_PICO8_KEY=>Some(Platform::Pico8),
             _=>None,
         }
     }
@@ -6832,6 +6859,10 @@ impl Engine {
         } else { Core::primary_for(platform) };
         if !library.join(format!("lib{}_libretro.so", core.as_str())).is_file() {
             set_message(format!("{} isn't installed.", core.text()));
+            return;
+        }
+        if core == Core::Pico8 && !crate::pico8::installed(&storage) {
+            set_message(crate::pico8::MISSING.to_string());
             return;
         }
         match core_selection::set_default(&storage,platform,core) {
@@ -10493,6 +10524,8 @@ impl Engine {
             self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map(|cart|cart.rom.to_string_lossy().into_owned())
+                // only ROM files are copied ahead (Splore is none)
+                .filter(|uri|uri.starts_with("content://"))
         } else { None };
         let mut last = WARM_ROM_URI.lock().unwrap_or_else(|e|e.into_inner());
         if *last != candidate { *last = candidate; }
@@ -11706,6 +11739,9 @@ mod settings_value_tests {
     fn every_core_and_bezel_has_a_name() {
         for core in Core::ALL {
             assert!(core_value(core) < SETTING_VALUE_NAMES.len(), "{core:?}");
+            if matches!(core, Core::Fake08 | Core::Pico8) {
+                assert_eq!(SETTING_VALUE_NAMES[core_value(core)], core.text(), "{core:?}");
+            }
         }
         use crate::settings::Bezel;
         for bezel in Bezel::GB.into_iter().chain(Bezel::GBC).chain(Bezel::GBA)

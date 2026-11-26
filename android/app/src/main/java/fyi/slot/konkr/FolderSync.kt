@@ -445,7 +445,10 @@ internal object FolderSync {
     /** Folders that are never walked on either side: RetroAchievements'
      *  cache (thousands of badges) and its sign-in (beta39: they went to the
      *  card, a full copy took minutes and the token left the handheld). */
-    val UNWALKED_DIRS = setOf("Saves/RetroAchievements")
+    val UNWALKED_DIRS = setOf("Saves/RetroAchievements",
+        // The player's own PICO-8's home: Splore's downloads, its config and
+        // logs. Its game saves travel as fake-08's (pico8::SaveBridge).
+        "Saves/PICO-8/pico-8")
 
     /** A folder path the folder should no longer hold (dropped once, beta39). */
     /**

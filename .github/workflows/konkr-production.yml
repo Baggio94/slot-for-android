@@ -127,7 +127,7 @@ jobs:
             android/app/src/main/jniLibs/arm64-v8a/*_libretro.so
             android/app/src/main/assets/core-build-*.json
             android/app/src/main/assets/licenses
-          key: cores-v1-${{ hashFiles('scripts/build-mgba-android.sh', 'scripts/build-gpsp-android.sh', 'scripts/build-gambatte-android.sh', 'scripts/build-home-core-android.sh', 'scripts/build-pokedaisy-android.sh', 'scripts/patch-*.py', 'cores/**') }}
+          key: cores-v1-${{ hashFiles('scripts/build-mgba-android.sh', 'scripts/build-gpsp-android.sh', 'scripts/build-gambatte-android.sh', 'scripts/build-home-core-android.sh', 'scripts/build-pokedaisy-android.sh', 'scripts/build-pico8-core-android.sh', 'scripts/patch-*.py', 'cores/**') }}
       - name: Validate core patch scripts
         if: steps.cores.outputs.cache-hit != 'true'
         run: python3 -m py_compile scripts/patch-mgba-speculative-audio.py scripts/patch-gpsp-speculative-audio.py scripts/patch-mgba-active-sram.py scripts/patch-mgba-sun.py scripts/patch-mgba-twb64.py scripts/patch-mgba-gb-direct-cable.py scripts/patch-mgba-link-peer-bios.py scripts/patch-gpsp-backend-diagnostic.py
@@ -156,6 +156,11 @@ jobs:
           for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini fake08; do
             bash scripts/build-home-core-android.sh "$core"
           done
+      - name: Build the PICO-8 arm64 libretro core (loads the player's own PICO-8)
+        if: steps.cores.outputs.cache-hit != 'true'
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          bash scripts/build-pico8-core-android.sh
       - uses: actions/download-artifact@v7
         if: steps.cores.outputs.cache-hit != 'true'
         with:

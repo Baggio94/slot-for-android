@@ -1735,6 +1735,8 @@ pub const LCD_EFFECT_LYNX_KEY: usize = 148;
 pub const SHADER_PICO8_KEY: usize = 149;
 pub const BLENDING_PICO8_KEY: usize = 150;
 pub const BEZEL_PICO8_KEY: usize = 151;
+/// Settings > Systems > PICO-8 > Default Core: fake-08 or your own PICO-8.
+pub const CORE_PICO8_KEY: usize = 152;
 
 /// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
 /// grey first, then the three consoles' screens.

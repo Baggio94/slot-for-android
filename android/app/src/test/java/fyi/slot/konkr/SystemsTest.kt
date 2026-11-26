@@ -93,6 +93,9 @@ class SystemsTest {
         assertEquals("PICO8", Systems.platformFor("p8"))
         assertEquals("PICO8", Systems.platformFor("PNG"))
         assertEquals("fake-08", Systems.coreFolder("", "png"))
+        assertEquals("PICO-8", Systems.coreFolder("pico8", "p8"))
+        // The player's own PICO-8 plays fake-08's save of the game.
+        assertEquals("fake-08", Systems.saveFolder("PICO-8"))
         fun png(w: Int, h: Int) = ByteArray(0x150).also {
             byteArrayOf(0x89.toByte(), 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(),
                 0x0d, 0x0a, 0x1a, 0x0a).copyInto(it)

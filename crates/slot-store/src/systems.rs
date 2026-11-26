@@ -129,7 +129,7 @@ pub const SYSTEMS: [System; 13] = [
         extensions: &["p8", "png"], folders: &["pico8", "pico-8"],
         romm: &["pico-8", "pico"],
         retroachievements: 0, screenscraper: 234,
-        cores: [Core::Fake08, Core::Fake08], picture: (128, 128), handheld: false,
+        cores: [Core::Fake08, Core::Pico8], picture: (128, 128), handheld: false,
     },
 ];
 

@@ -425,6 +425,9 @@ pub struct GameSession {
     battery_writer: Option<BatteryWriter>,
     pub sample_rate: i32,
     pub fps: f64,
+    /// Last, so it drops after the core: the player's own PICO-8's save
+    /// goes back to the game's (see pico8::SaveBridge).
+    pico8_saves: Option<crate::pico8::SaveBridge>,
 }
 
 struct HomeNetplay {
@@ -842,6 +845,11 @@ impl GameSession {
             }
             // fake-08 needs no options: its defaults are PICO-8's.
             Core::Picodrive | Core::Fake08 => {}
+            // Splore fetches through slot. (cores/pico8real has no HTTP of its own).
+            Core::Pico8 => {
+                crate::pico8::install_http();
+                core.set_option("pico8_boot", if crate::pico8::splore() { "splore" } else { "cart" });
+            }
             Core::Gearsystem => {
                 core.set_option("gearsystem_bios_gg", "Disabled");
                 core.set_option("gearsystem_bios_sms", "Disabled");
@@ -924,6 +932,9 @@ impl GameSession {
             && linked_boot.is_none() {
             Some(named_rom_alias(storage, rom, rom_stem)?)
         } else { None };
+        // The player's own PICO-8 plays the game's save fake-08 keeps.
+        let pico8_saves = (which == Core::Pico8 && linked_boot.is_none() && !crate::pico8::splore())
+            .then(|| crate::pico8::SaveBridge::open(&root, &core_root.join("pico-8"), rom_stem));
         core.load(named_rom.as_deref().unwrap_or(rom)).map_err(|e| e.to_string())?;
         let load_ms = opening_at.elapsed().as_millis();
         let restore_started = Instant::now();
@@ -1188,7 +1199,8 @@ impl GameSession {
             runahead_video: Vec::new(), runahead_size: (0, 0), runahead_state: Vec::new(),
             // bsnes shows the frame before an unserialize on the first run
             // after it, so a predicted picture would be stale: no Run-Ahead.
-            runahead_unavailable: which == Core::Bsnes,
+            // The player's own PICO-8: a 33 MB state, none while Splore downloads.
+            runahead_unavailable: which == Core::Bsnes || which == Core::Pico8,
             runahead_rollback_failed: false,
             runahead_discard_confirm: false,
             runahead_probe: RunaheadProbe::default(),
@@ -1206,6 +1218,7 @@ impl GameSession {
             cheats: Vec::new(),
             sample_rate: core_sample_rate(sample_rate),
             fps,
+            pico8_saves,
         };
         // The handheld's default sun until the runtime applies this game's own.
         let light = slot_retro::sensors::available() & slot_retro::sensors::ILLUMINANCE != 0;
@@ -1341,7 +1354,8 @@ impl GameSession {
         self.last_step_timings.core_us = core_started.elapsed().as_micros() as u64;
         if !advanced { return false; }
         self.frame_count = self.frame_count.wrapping_add(1);
-        if record_rewind && !self.in_multiplayer() {
+        // The player's own PICO-8's state is 33 MB: no rewind history.
+        if record_rewind && !self.in_multiplayer() && self.core_kind != Core::Pico8 {
             self.rewind_frames += 1;
             if self.rewind_frames >= REWIND_CAPTURE_FRAMES {
                 self.rewind_frames = 0;

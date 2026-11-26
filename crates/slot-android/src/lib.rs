@@ -114,6 +114,8 @@ mod retroarch_state;
 // Reuse the upstream 20 MiB XOR/LZ4 rewind ring without forking its algorithm.
 mod rewind;
 mod core_selection;
+// PICO-8: the player's own engine, Splore, and the saves both cores share.
+mod pico8;
 // GB/GBC chip swap between mGBA and Gambatte: palettes and battery carry.
 #[cfg(any(test, target_os = "android"))]
 mod gb_core_switch;

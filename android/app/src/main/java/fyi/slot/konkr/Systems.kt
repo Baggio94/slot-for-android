@@ -24,6 +24,12 @@ internal object Systems {
     const val POKEMINI = "POKEMINI"
     const val PICO8 = "PICO8"
 
+    /** Splore, PICO-8's cart browser: slot.'s own cart on the PICO-8 shelf
+     *  (core_selection::SPLORE_URI), not a file in the ROM folder. */
+    const val SPLORE_URI = "slot://pico8/Splore.p8"
+    /** What the core is handed for Splore; it boots with -splore instead. */
+    const val SPLORE_CART = "pico-8 cartridge // http://www.pico-8.com\nversion 41\n__lua__\n-- splore\n"
+
     /** The systems whose Pokemon games PokeDaisy plays (Core::pokedaisy_system). */
     private val POKEDAISY_SYSTEMS = setOf(GB, GBC, GBA)
 
@@ -64,7 +70,7 @@ internal object Systems {
         SystemRow(LYNX, listOf("lnx", "lyx"), listOf("atarilynx", "lynx"), listOf("lynx", "atari-lynx", "atarilynx"), 13, 28, listOf("handy", "mednafen_lynx"), home = true),
         SystemRow(POKEMINI, listOf("min"), listOf("pokemini"), listOf("pokemon-mini", "pokemini"), 24, 211, listOf("pokemini", "pokemini"), home = true),
         // PICO-8: .p8 text carts and .p8.png pictures of carts (fake-08 only; no RetroAchievements: 0).
-        SystemRow(PICO8, listOf("p8", "png"), listOf("pico8", "pico-8"), listOf("pico-8", "pico"), 0, 234, listOf("fake08", "fake08"), home = true),
+        SystemRow(PICO8, listOf("p8", "png"), listOf("pico8", "pico-8"), listOf("pico-8", "pico"), 0, 234, listOf("fake08", "pico8"), home = true),
     )
 
     /** Every shelf key, in the native side's order. */
@@ -129,13 +135,20 @@ internal object Systems {
         // The third chip of the Pokemon games' GB, GBC and GBA boards.
         "pokedaisy" to "PokeDaisy",
         "fake08" to "fake-08",
+        // PICO-8's second chip: the player's own PICO-8 (cores/pico8real).
+        "pico8" to "PICO-8",
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
 
     /** The folder an in-game save is kept in: its core's, except
      *  PokeDaisy's, which is mGBA's own file (PokeDaisy is mGBA 0.10.5). */
-    fun saveFolder(folder: String): String = if (folder == "PokeDaisy") "mGBA" else folder
+    fun saveFolder(folder: String): String = when (folder) {
+        "PokeDaisy" -> "mGBA"
+        // The player's own PICO-8 plays fake-08's save of the game (pico8::SaveBridge).
+        "PICO-8" -> "fake-08"
+        else -> folder
+    }
 
     /** The in-game save's extension a core writes, as in RetroArch: Handy
      *  keeps the Lynx EEPROM in .eeprom, PokeMini the Pokemon mini's in .eep,

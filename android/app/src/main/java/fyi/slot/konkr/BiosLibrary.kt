@@ -166,9 +166,16 @@ internal object BiosLibrary {
             }
         } ?: error("Cannot read selected BIOS folder")
 
-        require(allowEmpty || found.isNotEmpty()) {
+        // The player's own PICO-8 is staged on its own, cached between starts.
+        val pico8 = try {
+            Pico8Install.importFrom(context, folder)
+        } catch (error: Exception) {
+            android.util.Log.e("SlotKonkr", "PICO-8 staging failed", error)
+            false
+        }
+        require(allowEmpty || found.isNotEmpty() || pico8) {
             "No BIOS slot. knows found (gba_bios.bin, gb_bios.bin, gbc_bios.bin, " +
-                "lynxboot.img, bios.gg, bios_U.sms, bios_E.sms, bios_J.sms, bios_MD.bin, bios.min)"
+                "lynxboot.img, bios.gg, bios_U.sms, bios_E.sms, bios_J.sms, bios_MD.bin, bios.min, PICO-8)"
         }
         val dest = File(context.filesDir, "BIOS").apply { mkdirs() }
         check(dest.isDirectory) { "BIOS destination unavailable" }
@@ -208,6 +215,6 @@ internal object BiosLibrary {
                 owners.edit().remove(name).commit()
             }
         }
-        return found.keys.toList()
+        return found.keys.toList() + if (pico8) listOf("PICO-8") else emptyList()
     }
 }
