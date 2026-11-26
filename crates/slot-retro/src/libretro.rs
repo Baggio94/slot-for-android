@@ -1302,7 +1302,13 @@ impl RetroCore for LibretroCore {
         self.mgba_runahead_size_age = 0;
         self.try_init_mgba_audio();
         let mut av = SystemAvInfo::default();
-        unsafe { (self.api.get_system_av_info)(&mut av) };
+        {
+            // Bound like load_game: fake-08 asks for RGB565 from
+            // get_system_av_info, and an unbound host dropped that, so its
+            // colours were read as 0RGB1555.
+            let _a = Active::bind(&mut self.host);
+            unsafe { (self.api.get_system_av_info)(&mut av) };
+        }
         self.av = AvInfo {
             fps: av.timing.fps,
             sample_rate: av.timing.sample_rate,
