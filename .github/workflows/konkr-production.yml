@@ -10,7 +10,30 @@ permissions:
   contents: read
 
 jobs:
+  # PokeDaisy 1.6.2.1's source, kept by slot. in the draft release
+  # pokedaisy-source-717f4f4 (lidor30/pokedaisy left GitHub): only a token
+  # that can write sees a draft, so this small job alone fetches it.
+  pokedaisy-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch PokeDaisy's source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -H "Accept: application/octet-stream" \
+            "repos/${{ github.repository }}/releases/assets/795292846" > pokedaisy-source.tar.gz
+          shasum -a 256 pokedaisy-source.tar.gz
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pokedaisy-source
+          path: pokedaisy-source.tar.gz
+          retention-days: 1
+
   arm64-apk:
+    needs: [pokedaisy-source]
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
@@ -133,17 +156,18 @@ jobs:
           for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini; do
             bash scripts/build-home-core-android.sh "$core"
           done
+      - uses: actions/download-artifact@v7
+        if: steps.cores.outputs.cache-hit != 'true'
+        with:
+          name: pokedaisy-source
+          path: ${{ runner.temp }}/pokedaisy
       - name: Build PokeDaisy arm64 libretro core
         if: steps.cores.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-          # PokeDaisy 1.6.2.1's source, kept by slot. (draft release
-          # pokedaisy-source-717f4f4); the script checks its SHA-256.
-          export POKEDAISY_SOURCE="$RUNNER_TEMP/pokedaisy-source.tar.gz"
-          gh api -H "Accept: application/octet-stream" \
-            "repos/${{ github.repository }}/releases/assets/795292846" > "$POKEDAISY_SOURCE"
+          # PokeDaisy 1.6.2.1's source (the pokedaisy-source job); the
+          # script checks its SHA-256.
+          export POKEDAISY_SOURCE="$RUNNER_TEMP/pokedaisy/pokedaisy-source.tar.gz"
           bash scripts/build-pokedaisy-android.sh
       - name: Assemble signed ARM64 release
         env:
