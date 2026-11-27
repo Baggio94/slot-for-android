@@ -2709,9 +2709,24 @@ class MainActivity : Activity() {
                 // core, a save target or a private cache extension.
                 val splore = rawUri == Systems.SPLORE_URI
                 val inspectAt = SystemClock.elapsedRealtime()
-                val ext = if (splore) "p8" else if (RomSource.isContainer(name)) {
+                // A ZIP whose cartridge is already in the ROM cache isn't
+                // opened again to learn its type (3.2 perf): its type was
+                // noted beside the cache the first time.
+                val romDir = File(cacheDir, "rom-cache")
+                val zipNote = File(romDir, GameKeys.digest(rawUri) + ".type")
+                val noted = if (!splore && RomSource.isContainer(name)) try {
+                    zipNote.takeIf { it.isFile }?.readText()?.trim()?.takeIf {
+                        it in Systems.ROM_EXTENSIONS &&
+                            File(romDir, GameKeys.digest(rawUri) + ".$it").let { cached ->
+                                cached.isFile && cached.length() >= Systems.minRomBytes(it)
+                            }
+                    }
+                } catch (_: java.io.IOException) { null } else null
+                val ext = if (splore) "p8" else if (noted != null) noted else if (RomSource.isContainer(name)) {
                     contentResolver.openInputStream(uri)?.use { input ->
                         RomSource.inspect(input, name).extension
+                    }?.also { found ->
+                        try { romDir.mkdirs(); zipNote.writeText(found) } catch (_: java.io.IOException) { }
                     } ?: error("Cannot inspect cartridge ZIP")
                 } else name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
                 require(ext in Systems.ROM_EXTENSIONS) { "Unsupported ROM type" }
@@ -2719,7 +2734,13 @@ class MainActivity : Activity() {
                 // (slot. 2.5), its files from 2.4 carried over first.
                 val digest = GameKeys.digest(rawUri)
                 val carryAt = SystemClock.elapsedRealtime()
-                GameKeys.carryGameFiles(File(filesDir, "Saves"), GameKeys.legacyDigest(rawUri), digest)
+                // The 2.4 names carried over once per game (3.2 perf): the
+                // Saves folder isn't listed at every launch any more.
+                val carried = File(noBackupFilesDir, "carried/$digest")
+                if (!carried.isFile &&
+                    GameKeys.carryGameFiles(File(filesDir, "Saves"), GameKeys.legacyDigest(rawUri), digest)) {
+                    try { carried.parentFile?.mkdirs(); carried.createNewFile() } catch (_: java.io.IOException) { }
+                }
                 val copyAt = SystemClock.elapsedRealtime()
                 val dir = File(cacheDir, "rom-cache").apply { mkdirs() }
                 val target = File(dir, "$digest.$ext")
