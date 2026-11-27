@@ -27,7 +27,10 @@ def main():
         index = harvest.load(out / f'{platform}.json', {})
         if not index:
             continue
-        names = harvest.parse_dat(harvest.read_dat(platform, args.dat))
+        text = harvest.read_dat(platform, args.dat)
+        names = harvest.parse_dat(text)
+        if platform in harvest.BY_SET:
+            names = harvest.by_set(names, harvest.rom_stems(text))
         for crc, entry in sorted(index.items(), key=lambda kv: names.get(kv[0], (kv[0],))[0]):
             name = names.get(crc, (crc,))[0]
             print(f'{platform} {crc} {name}: ' +
