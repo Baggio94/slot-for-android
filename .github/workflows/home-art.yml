@@ -21,7 +21,7 @@ on:
     inputs:
       platform:
         type: choice
-        options: [all, '3.0', GB, GBC, GBA, NES, SNES, MD, NGP, NGPC, WS, WSC, GG, SMS, LYNX, POKEMINI]
+        options: [all, '3.0', '3.2', GB, GBC, GBA, NES, SNES, MD, NGP, NGPC, WS, WSC, GG, SMS, LYNX, POKEMINI, PCE, NEOGEO]
         default: all
       limit:
         description: Games to ask ScreenScraper about, per platform (empty for no limit)

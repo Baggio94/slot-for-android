@@ -2,7 +2,9 @@
 
 slot. for Android's own cart label set, for every system it plays: Game Boy, Game Boy Color,
 Game Boy Advance, NES, Super Nintendo and Mega Drive, and from 3.0 Neo Geo Pocket (Color),
-WonderSwan (Color), Game Gear, Master System, Lynx and Pokémon mini (`--platform 3.0`). It is built ahead of time from
+WonderSwan (Color), Game Gear, Master System, Lynx and Pokémon mini (`--platform 3.0`), and
+from 3.2 PC Engine HuCards (with the SuperGrafx's) and Neo Geo AES (`--platform 3.2`). Neo Geo
+games are indexed by set name (`mslug` for `mslug.zip` or `mslug.neo`), not by CRC32. It is built ahead of time from
 ScreenScraper, the way slot.'s art set (art.slot-cfw.fyi) is, and published to an R2 bucket.
 
 - `harvest.py` asks ScreenScraper about every dump in libretro's No-Intro and rom hack dats,

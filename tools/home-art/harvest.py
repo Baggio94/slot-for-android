@@ -48,6 +48,8 @@ from pathlib import Path
 
 API = 'https://api.screenscraper.fr/api2'
 LIBRETRO = 'https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/no-intro/'
+# libretro's own dats, where the Neo Geo one lives (each game's MAME set name and .neo file).
+LIBRETRO_DAT = 'https://raw.githubusercontent.com/libretro/libretro-database/master/dat/'
 
 LIBRETRO_HACKS = 'https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/hacks/'
 LIBRETRO_HOMEBREW = 'https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/homebrew/'
@@ -84,10 +86,21 @@ PLATFORMS = {
     'SMS': 'Sega - Master System - Mark III',
     'LYNX': 'Atari - Lynx',
     'POKEMINI': 'Nintendo - Pokemon Mini',
+    # PC Engine HuCards (PC Engine, TurboGrafx-16, SuperGrafx in EXTRA_DATS) and Neo Geo AES.
+    'PCE': 'NEC - PC Engine - TurboGrafx 16',
+    'NEOGEO': 'SNK - Neo Geo',
 }
 SS_SYSTEM = {'GB': 9, 'GBC': 10, 'GBA': 12, 'NES': 3, 'SNES': 4, 'MD': 1,
              'NGP': 25, 'NGPC': 82, 'WS': 45, 'WSC': 46, 'GG': 21, 'SMS': 2, 'LYNX': 28,
-             'POKEMINI': 211}
+             'POKEMINI': 211, 'PCE': 31, 'NEOGEO': 142}
+# More No-Intro dats a platform's index takes in, each with its own ScreenScraper system and
+# file extension: the SuperGrafx's few cards share the PC Engine's shelf.
+EXTRA_DATS = {'PCE': (('NEC - PC Engine SuperGrafx', 105, '.sgx'),)}
+# Where a platform's main dat lives, when not in libretro's No-Intro folder.
+DAT_BASE = {'NEOGEO': LIBRETRO_DAT}
+# Platforms indexed by the game's set name (mslug for mslug.zip or mslug.neo) instead of a
+# CRC32: an arcade set is many roms, so ScreenScraper knows it by its file name.
+BY_SET = {'NEOGEO'}
 SS_EXPECT = {
     'GB': ('game boy',),
     'GBC': ('game boy color',),
@@ -103,17 +116,21 @@ SS_EXPECT = {
     'SMS': ('master system', 'mark iii'),
     'LYNX': ('lynx',),
     'POKEMINI': ('mini',),
+    'PCE': ('pc engine', 'pc-engine', 'turbografx'),
+    'NEOGEO': ('neo-geo', 'neo geo', 'neogeo'),
 }
 EXTENSION = {'GB': '.gb', 'GBC': '.gbc', 'GBA': '.gba', 'NES': '.nes', 'SNES': '.sfc', 'MD': '.md',
              'NGP': '.ngp', 'NGPC': '.ngc', 'WS': '.ws', 'WSC': '.wsc', 'GG': '.gg', 'SMS': '.sms',
-             'LYNX': '.lnx', 'POKEMINI': '.min'}
+             'LYNX': '.lnx', 'POKEMINI': '.min', 'PCE': '.pce', 'NEOGEO': '.zip'}
 # Platforms whose label is kept for every region family a shell can ask for, not only the
 # dump's own region: the home consoles, and the 3.0 systems, whose shells are still being drawn.
-HOME = {'NES', 'SNES', 'MD', 'NGP', 'NGPC', 'WS', 'WSC', 'GG', 'SMS', 'LYNX', 'POKEMINI'}
+HOME = {'NES', 'SNES', 'MD', 'NGP', 'NGPC', 'WS', 'WSC', 'GG', 'SMS', 'LYNX', 'POKEMINI',
+        'PCE', 'NEOGEO'}
 # What --platform accepts besides one platform.
 GROUPS = {
     'all': sorted(PLATFORMS),
     '3.0': ['NGP', 'NGPC', 'WS', 'WSC', 'GG', 'SMS', 'LYNX', 'POKEMINI'],
+    '3.2': ['PCE', 'NEOGEO'],
 }
 
 # HomeCartLabels.labelRegions: the regions the app ever asks for, Europe always as this block.
@@ -424,10 +441,12 @@ def parse_dat(text):
     return out
 
 
-def read_dat(platform, local=None, base=LIBRETRO):
+def read_dat(platform, local=None, base=LIBRETRO, name=None):
     if local:
         return Path(local).read_text('utf-8', 'replace')
-    url = base + urllib.parse.quote(PLATFORMS[platform]) + '.dat'
+    if base == LIBRETRO and not name:
+        base = DAT_BASE.get(platform, LIBRETRO)
+    url = base + urllib.parse.quote(name or PLATFORMS[platform]) + '.dat'
     try:
         with urllib.request.urlopen(url, timeout=120) as r:
             return r.read().decode('utf-8', 'replace')
@@ -441,10 +460,33 @@ def dat_texts(platform, local=None, hacks=True):
     """The dats to read for a platform: No-Intro's (or a local one), then libretro's rom hacks
     and homebrew."""
     texts = [read_dat(platform, local)]
+    if not local:
+        texts += [read_dat(platform, name=extra) for extra, _, _ in EXTRA_DATS.get(platform, ())]
     if hacks and not local:
         texts.append(read_dat(platform, base=LIBRETRO_HACKS))
         texts.append(read_dat(platform, base=LIBRETRO_HOMEBREW))
     return texts
+
+
+def extra_systems(platform, local=None):
+    """CRC32 -> (ScreenScraper system, extension) for the dumps of a platform's EXTRA_DATS."""
+    out = {}
+    if not local:
+        for extra, system, ext in EXTRA_DATS.get(platform, ()):
+            for crc in parse_dat(read_dat(platform, name=extra)):
+                out.setdefault(crc, (system, ext))
+    return out
+
+
+def by_set(entries, stems):
+    """CRC32-keyed entries and stems re-keyed by set name (the rom's file stem, lower case),
+    for a platform in BY_SET. The first dump of a set name wins."""
+    out = {}
+    for crc, entry in entries.items():
+        stem = stems.get(crc)
+        if stem:
+            out.setdefault(stem.lower(), entry)
+    return out
 
 
 def entries_for(platform, local=None, hacks=True, texts=None):
@@ -684,7 +726,7 @@ def main():
                 urls[key] = rel
         return rel
 
-    def work(platform, index, asked, crc, name, size):
+    def work(platform, index, asked, crc, name, size, extra):
         with lock:
             if stop.is_set():
                 return
@@ -695,8 +737,12 @@ def main():
                 return
             n['asked'] += 1
             per['asked'] += 1
-        params = dict(c, crc=crc, systemeid=SS_SYSTEM[platform], romtype='rom',
-                      romnom=name + EXTENSION[platform])
+        system, ext = extra.get(crc, (SS_SYSTEM[platform], EXTENSION[platform]))
+        if platform in BY_SET:  # an arcade set: ScreenScraper knows it by its zip's name
+            params = dict(c, systemeid=system, romtype='rom', romnom=crc + ext)
+            size = 0
+        else:
+            params = dict(c, crc=crc, systemeid=system, romtype='rom', romnom=name + ext)
         if size:
             params['romtaille'] = str(size)
         try:
@@ -745,6 +791,9 @@ def main():
             for text in texts:
                 for crc, stem in rom_stems(text).items():
                     stems.setdefault(crc, stem)
+            if platform in BY_SET:
+                entries, stems = by_set(entries, stems), {}
+            extra = extra_systems(platform, args.dat)
             index_path = out / f'{platform}.json'
             index = load(index_path, {})
             # Labels borrowed from the game a dump comes from: ScreenScraper's own answer for
@@ -777,7 +826,7 @@ def main():
                     for job in jobs:
                         if stop.is_set():
                             break
-                        pool.submit(work, platform, index, asked, *job)
+                        pool.submit(work, platform, index, asked, *job, extra)
             finally:
                 derived = derive(index, entries, stems)
                 for crc, parent in derived.items():

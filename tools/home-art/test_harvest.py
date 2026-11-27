@@ -605,6 +605,19 @@ class PlatformTests(unittest.TestCase):
         for group in harvest.GROUPS.values():
             self.assertTrue(set(group) <= set(harvest.PLATFORMS))
 
+    def test_neo_geo_is_keyed_by_set_name(self):
+        text = ('game (\n\tname "Metal Slug - Super Vehicle-001"\n'
+                '\trom ( name "mslug.neo" size 27529216 crc 05BE3849 )\n)\n')
+        entries = harvest.by_set(harvest.parse_dat(text), harvest.rom_stems(text))
+        self.assertEqual({'mslug': ('Metal Slug - Super Vehicle-001', 27529216)}, entries)
+        self.assertIn('NEOGEO', harvest.BY_SET)
+        self.assertIn('NEOGEO', harvest.DAT_BASE)
+
+    def test_supergrafx_cards_join_the_pc_engine(self):
+        names = [extra for extra, _, _ in harvest.EXTRA_DATS['PCE']]
+        self.assertEqual(['NEC - PC Engine SuperGrafx'], names)
+        self.assertEqual(105, harvest.EXTRA_DATS['PCE'][0][1])
+
     def test_new_systems_keep_every_region(self):
         medias = [{'type': harvest.SCAN, 'region': r, 'url': f'https://ss/{r}.png'}
                   for r in ('us', 'eu', 'jp')]
