@@ -117,6 +117,28 @@ pub fn carry_battery(saves: &Path, stem: &str, which: Core, platform: Platform)
     carry_battery_for(saves, stem, which, platform, None)
 }
 
+/// A Game Boy or Game Boy Color Pokemon game now started on PokeDaisy by
+/// default (3.2.0-beta13), Share Core Saves off: the other core's battery
+/// comes across once, when PokeDaisy (mGBA's folder) has none yet, so the
+/// player's game is there. Never over a save PokeDaisy already has.
+pub fn carry_first_battery(saves: &Path, stem: &str, which: Core, platform: Platform)
+    -> std::io::Result<bool>
+{
+    if which != Core::PokeDaisy || !matches!(platform, Platform::Gb | Platform::Gbc) { return Ok(false); }
+    let Some(other) = other_core(which, platform) else { return Ok(false) };
+    let own_path = saves.join(battery_core(which).text()).join(format!("{stem}.srm"));
+    if own_path.exists() { return Ok(false); }
+    let theirs = match std::fs::read(saves.join(other.text()).join(format!("{stem}.srm"))) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        Ok(_) => return Ok(false),
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if let Some(parent) = own_path.parent() { std::fs::create_dir_all(parent)?; }
+    atomic_write(&own_path, &theirs)?;
+    Ok(true)
+}
+
 /// As carry_battery, with the cart's ROM: a Mega Drive cart shares its
 /// battery only when md_shares_sram says its save is plain battery SRAM.
 pub fn carry_battery_for(saves: &Path, stem: &str, which: Core, platform: Platform,
@@ -409,6 +431,22 @@ mod tests {
 
     fn get(root: &Path, core: Core) -> Vec<u8> {
         std::fs::read(root.join(core.text()).join("Pokemon Crystal.srm")).unwrap()
+    }
+
+    #[test]
+    fn pokedaisy_by_default_finds_the_other_cores_save_once() {
+        let d = tempfile::tempdir().unwrap();
+        let other = other_core(Core::PokeDaisy, Platform::Gbc).unwrap();
+        put(d.path(), other, b"crystal", 100);
+        assert!(carry_first_battery(d.path(), "Pokemon Crystal", Core::PokeDaisy, Platform::Gbc).unwrap());
+        assert_eq!(get(d.path(), Core::Mgba), b"crystal");
+        // Never again, never over PokeDaisy's own.
+        put(d.path(), other, b"newer", 0);
+        assert!(!carry_first_battery(d.path(), "Pokemon Crystal", Core::PokeDaisy, Platform::Gbc).unwrap());
+        assert_eq!(get(d.path(), Core::Mgba), b"crystal");
+        // Not another core, not the GBA (one battery already).
+        assert!(!carry_first_battery(d.path(), "Pokemon Crystal", Core::Mgba, Platform::Gbc).unwrap());
+        assert!(!carry_first_battery(d.path(), "Pokemon Crystal", Core::PokeDaisy, Platform::Gba).unwrap());
     }
 
     #[test]

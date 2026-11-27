@@ -1003,6 +1003,16 @@ impl GameSession {
                 false
             }
         };
+        // Share Core Saves off: a Pokemon game PokeDaisy now plays by default
+        // finds the other core's save the first time (carry_first_battery).
+        let carried_battery = carried_battery || linked_boot.is_none() && !crate::gb_core_switch::sharing()
+            && match crate::gb_core_switch::carry_first_battery(&root, rom_stem, which, platform) {
+            Ok(carried) => carried,
+            Err(error) => {
+                crate::log_warn(&format!("battery carry to PokeDaisy skipped: {error}"));
+                false
+            }
+        };
         if carried_battery {
             log_launch_timing(&format!(
                 "{}: newer battery from the other GB core, save state not resumed", which.text()));

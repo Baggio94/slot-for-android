@@ -6024,7 +6024,13 @@ impl Engine {
             let rom_stem = self.shelves[self.active].carts
                 .get(self.shelves[self.active].index)
                 .map_or("", |cart| cart.stem.as_str());
-            let effective_settings = self.game_settings();
+            // The game isn't running yet: PokeDaisy's own defaults (cart_globals
+            // gives them once it is) for the palette and colours it starts with.
+            let mut effective_settings = self.cart_globals();
+            if core == Core::PokeDaisy { effective_settings.apply_pokedaisy_defaults(platform); }
+            if let Some(profile) = self.game_emulation {
+                profile.apply_visual_and_gameplay(&mut effective_settings, platform);
+            }
             // The 3.0 options this game starts with: its own, else its system's.
             crate::settings::CoreExtras::store(&effective_settings);
             let started = Instant::now();
@@ -6130,7 +6136,10 @@ impl Engine {
     /// The global Settings the selected cart starts from: a GBA Video
     /// cart's own Screen in place of the GBA one.
     fn cart_globals(&self) -> crate::settings::Settings {
-        if self.playing_video() { self.settings.as_gba_video() } else { self.settings.clone() }
+        if self.playing_video() { return self.settings.as_gba_video(); }
+        let mut globals = self.settings.clone();
+        if self.pokedaisy_running() { globals.apply_pokedaisy_defaults(self.current_cart_platform()); }
+        globals
     }
     /// Whether the running game's system has Multiplayer at all.
     fn multiplayer_offered(&self) -> bool {
@@ -6252,14 +6261,16 @@ impl Engine {
     fn game_blending(&self, platform: Platform) -> crate::settings::Blending {
         if self.playing_video() { return crate::settings::Blending::Off; }
         self.game_emulation.and_then(|p| p.blending_override)
-            .unwrap_or_else(|| self.settings.blending_for(platform))
+            .unwrap_or_else(|| if self.pokedaisy_running() { crate::settings::Blending::Off }
+                else { self.settings.blending_for(platform) })
     }
     fn game_lcd_effect(&self, platform: Platform) -> crate::settings::LcdEffect {
         if Settings::lcd_effect_key(platform).is_none() || self.playing_video() {
             return crate::settings::LcdEffect::Off;
         }
         self.game_emulation.and_then(|p| p.lcd_effect_override)
-            .unwrap_or_else(|| self.settings.lcd_effect_for(platform))
+            .unwrap_or_else(|| if self.pokedaisy_running() { crate::settings::POKEDAISY_LCD_EFFECT }
+                else { self.settings.lcd_effect_for(platform) })
     }
     fn game_dither(&self) -> bool {
         self.game_emulation.and_then(|p| p.dither_override)

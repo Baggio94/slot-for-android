@@ -424,6 +424,8 @@ fn cycle_rewind_setting(enabled: &mut bool, speed: &mut u8, right: bool) {
 const GB_PALETTE_GBC_GREEN: u8 = 13;
 /// Index of "TWB64 028 Game.com Ver.", the Game Boy default since 1.3.5.
 const GB_PALETTE_TWB64_GAME_COM: u8 = 48;
+/// A PokeDaisy game's LCD Effect unless changed in game (apply_pokedaisy_defaults).
+pub const POKEDAISY_LCD_EFFECT: LcdEffect = LcdEffect::Transparency;
 
 /// Original Slot 1.8.1 (#123): 0 means Fast Forward Off.
 /// Fast Forward MAX: as fast as the handheld goes (Siham 2026-11-11).
@@ -1362,6 +1364,27 @@ impl Settings {
             slot_store::Platform::Pokemini=>Some(SHADER_POKEMINI_KEY),
             slot_store::Platform::Pico8=>Some(SHADER_PICO8_KEY),
             _=>None,
+        }
+    }
+    /// What a game played on PokeDaisy starts from (Siham 2026-11-27,
+    /// from her KPA's pages): Simpletex on the Game Boy and Game Boy Color,
+    /// LCD3x on the GBA, Pixel Transparency, no Frame Blending nor Color
+    /// Correction, the Game Boy's palette on. What the game is given in its
+    /// own pause menu stays its own; Settings > Systems is the other cores'.
+    pub fn apply_pokedaisy_defaults(&mut self, platform: slot_store::Platform) {
+        use slot_store::Platform::*;
+        match platform {
+            Gb => { self.shader_gb = Shader::Simpletex; self.gb_palettes = true; }
+            Gbc => self.shader_gbc = Shader::Simpletex,
+            Gba => self.shader_gba = Shader::Lcd3x,
+            _ => return,
+        }
+        self.set_lcd_effect_for(platform, POKEDAISY_LCD_EFFECT);
+        self.set_colour_for(platform, false);
+        match platform {
+            Gb => self.blending_gb = Blending::Off,
+            Gbc => self.blending_gbc = Blending::Off,
+            _ => self.blending_gba = Blending::Off,
         }
     }
     pub fn colour_for(&self,platform:slot_store::Platform)->bool {
@@ -2900,6 +2923,29 @@ mod tests {
         assert_eq!(s.shader_gba, Shader::Off);
         assert_eq!(s.gb_palette, 1);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pokedaisy_games_start_from_sihams_values() {
+        use slot_store::Platform::*;
+        let mut s = Settings::first_install_defaults();
+        s.shader_gb = Shader::Lcd3x;
+        s.blending_gbc = Blending::Mix;
+        s.colour_correction_gba = true;
+        s.lcd_effect_gba = LcdEffect::Sunlight;
+        for platform in [Gb, Gbc, Gba] { s.apply_pokedaisy_defaults(platform); }
+        assert_eq!((s.shader_gb, s.shader_gbc, s.shader_gba), (Shader::Simpletex, Shader::Simpletex, Shader::Lcd3x));
+        for platform in [Gb, Gbc, Gba] {
+            assert_eq!(s.lcd_effect_for(platform), LcdEffect::Transparency);
+            assert_eq!(s.blending_for(platform), Blending::Off);
+            assert!(!s.colour_for(platform));
+        }
+        assert!(s.gb_palettes);
+        assert_eq!(s.gb_palette, GB_PALETTE_TWB64_GAME_COM);
+        // Another system is left as it is.
+        let before = s.shader_nes;
+        s.apply_pokedaisy_defaults(Nes);
+        assert_eq!(s.shader_nes, before);
     }
 
     #[test]

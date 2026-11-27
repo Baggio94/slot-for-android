@@ -1,0 +1,42 @@
+slot. for Android: PokeDaisy's settings as Siham set them on her KPA
+(2026-11-27): MINIMAP at 85 %, SCREEN EFFECTS on, QUICK MENU on Y, the
+HUD's cursor on L3, DARK MODE on. Everything else was already as she has
+it (HUD on, CORNERS, GLASS, NORMAL, RING, X for the companion, SCENIC,
+VISITED, BIRD, AUTO-RUN off, 5 tabs, language AUTO). A settings file
+already written keeps its values.
+
+diff --git a/3ds/core/pd_settings.c b/3ds/core/pd_settings.c
+index 5988b9c..14749fd 100644
+--- a/3ds/core/pd_settings.c
++++ b/3ds/core/pd_settings.c
+@@ -21,17 +21,17 @@ void pd_settings_defaults(struct pd_settings* s) {
+     s->hudLayout = PD_HUD_CORNERS;
+     s->hudLook = PD_HUD_GLASS;
+     s->hudSize = PD_HUD_NORMAL;
+-    s->mapOpacity = 2; // slot.: 70 %
+-    s->hudEffects = false;
++    s->mapOpacity = 1; // slot.: 85 % (Siham 2026-11-27)
++    s->hudEffects = true; // slot.: SCREEN EFFECTS on
+     s->scaling = PD_SCALE_INTEGER;
+     s->ffAudio = false;
+     s->rewind = false;
+     s->runIndoors = false;
+     s->quickGrid = false;
+     s->lcdFilter = false;
+-    s->quickBtn = PD_BTN_L3; // L3, as the app's QUICK MENU hotkey
++    s->quickBtn = PD_BTN_Y; // slot.: QUICK MENU on Y, the HUD's cursor on L3 (Siham 2026-11-27)
+     s->companionBtn = PD_BTN_X;
+-    s->hudBtn = PD_BTN_NONE;
++    s->hudBtn = PD_BTN_L3;
+     s->hideHints = false;
+     s->oneTapMoves = false;
+     s->battleGen5 = false;
+@@ -47,7 +47,7 @@ void pd_settings_defaults(struct pd_settings* s) {
+     s->gameVolume = 100;
+     s->gameMuted = false;
+     s->autoRun = false;
+-    s->darkMode = false;
++    s->darkMode = true; // slot.: DARK MODE on
+     s->ffNormal = false;
+     s->cheats = false;
+     s->theme = 8; // POKéDAISY

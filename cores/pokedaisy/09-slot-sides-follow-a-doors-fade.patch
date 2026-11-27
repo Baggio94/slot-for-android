@@ -1,0 +1,51 @@
+slot. for Android: a door's fade on the sides as in the middle.
+On a door's fade (PK_WIDE_SCENE_FADE) the glow past the game's edges
+follows the frame at its own brightness and without lagging behind it,
+and the frozen scene gives way to it in 4 frames instead of 16: the sides
+stayed grey while Pokemon Crystal's middle went white, then came back
+after it.
+
+diff --git a/app/src/main/cpp/pk_wide_gb.c b/app/src/main/cpp/pk_wide_gb.c
+index 4ee8baf..0f9c497 100644
+--- a/app/src/main/cpp/pk_wide_gb.c
++++ b/app/src/main/cpp/pk_wide_gb.c
+@@ -1291,8 +1291,13 @@ static void gbBackgroundRows(const uint32_t* frame) {
+ static int32_t gbEdgeAccH[2][GBH][3], gbEdgeAccV[2][GBW][3];   // the edge bands' colour per row / column, x16, smoothed over frames
+ static int32_t gbPreH[2][GBH + 1][3], gbPreV[2][GBW + 1][3];   // their running sums (a blur is a difference)
+ static bool gbEdgeAccOk;
++// slot.: a door's fade (PK_WIDE_SCENE_FADE): the glow follows the frame as it fades, at the frame's own brightness and
++// without lagging behind it, and the frozen scene gives way to it in 4 frames, not 16: the sides stayed grey while the
++// middle went white (Crystal), then came back after it.
++static bool gbFading;
+ 
+ static void gbAmbientPrepare(const uint32_t* frame) {
++    if (gbFading) gbEdgeAccOk = false;
+     for (int side = 0; side < 2; side++) {
+         int x0 = side ? GBW - GB_AMBIENT_BAND : 0, y0 = side ? GBH - GB_AMBIENT_BAND : 0;
+         for (int c = 0; c < 3; c++) gbPreH[side][0][c] = gbPreV[side][0][c] = 0;
+@@ -1339,6 +1344,7 @@ static uint32_t gbGlowAt(const uint32_t* frame, int X, int Y, const int reach[4]
+     int r = 2 + d * 3 / 4;                                            // the glow spreads as it goes out
+     int bright = 256 - 136 * (d - 1) / (far > 1 ? far - 1 : 1);       // 1.0 at the game's edge -> ~0.47 at the window's
+     if (bright < 120) bright = 120;
++    if (gbFading) bright = 256;
+     int seam = d >= 4 ? 256 : d * 64;                                 // the first pixels lean on the edge itself
+     int lo = at - r < 0 ? 0 : at - r, hi = at + r >= len ? len - 1 : at + r;
+     uint32_t v = 0;
+@@ -1691,6 +1697,7 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+                 : !valid ? PK_WIDE_SCENE_MENU
+                 : match->text ? PK_WIDE_SCENE_TEXT : PK_WIDE_SCENE_FIELD;
+     gbLastClose = gbLastScene != PK_WIDE_SCENE_FIELD;
++    gbFading = gbLastScene == PK_WIDE_SCENE_FADE;
+ 
+     if (valid) {
+         const struct GbSnap* s = match;
+@@ -1720,7 +1727,8 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+         gbMix = gbMixSnap || gbMix + GB_MIX_STEP > 256 ? 256 : gbMix + GB_MIX_STEP;
+         gbMixSnap = false;
+     } else {
+-        gbMix = gbMix - GB_MIX_STEP < 0 ? 0 : gbMix - GB_MIX_STEP;   // the last scene, frozen, dissolves into the glow
++        const int step = gbFading ? 4 * GB_MIX_STEP : GB_MIX_STEP;
++        gbMix = gbMix - step < 0 ? 0 : gbMix - step;   // the last scene, frozen, dissolves into the glow
+         gbMixSnap = false; // pk_wide_jump's cut is the frame after it, as pk_wide.c's mixSnap
+     }
+     if (!gbRawView.w) gbMix = 0;

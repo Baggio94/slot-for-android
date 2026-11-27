@@ -88,6 +88,12 @@ pub fn selected_for(storage: &Path, uri: &str, platform: Platform) -> Core {
     // Splore is the player's own PICO-8 alone: fake-08 has none.
     if platform == Platform::Pico8 && is_splore(uri) { return Core::Pico8; }
     carry_core(storage, uri);
+    // A Pokemon game PokeDaisy plays starts on PokeDaisy unless the player
+    // gave it another core (Siham 2026-11-27).
+    if slot_store::ini::value(storage, SELECTED_CORE_FILE, &key(uri)).is_none()
+        && pokedaisy_plays(uri, platform) {
+        return Core::PokeDaisy;
+    }
     match core_for_platform(storage, &key(uri), platform) {
         // The player's own PICO-8 taken out of the BIOS folder: fake-08.
         Core::Pico8 if !crate::pico8::installed(storage) => Core::Fake08,
@@ -115,6 +121,12 @@ pub fn is_splore(uri: &str) -> bool { uri == SPLORE_URI }
 
 /// The board's pick for one cart; picking the system's default clears it.
 pub fn choose(storage: &Path, uri: &str, platform: Platform, core: Core) -> std::io::Result<()> {
+    if pokedaisy_plays(uri, platform) {
+        // PokeDaisy is this game's default: any other pick is written down,
+        // the system's default included; PokeDaisy clears it.
+        let value = (core != Core::PokeDaisy).then(|| core.as_str());
+        return slot_store::ini::write_entry(storage, SELECTED_CORE_FILE, &key(uri), value);
+    }
     choose_core(storage, &key(uri), platform, core)
 }
 

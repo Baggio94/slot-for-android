@@ -1,11 +1,12 @@
 slot. for Android: no blank flash at a Game Boy game's doors.
 Pokemon Red, Blue and Yellow fade to black at each door, white the palette
 out (or turn the screen off) while the next map loads, then show black
-again: the blank screen flashed for six to eight frames. The frame before
-stays (a dupe) while the screen is off and while the game's frame is all
-one colour other than the one-colour frame before it, 12 frames at most.
-The decision is made once the frame has run. One line in the log the
-first times it happens.
+again: the blank screen flashed for six to eight frames. While the screen
+is off, or the game's frame is all one colour other than the one-colour
+frame before it (12 frames at most), the frame is painted that colour
+before anything draws it, at every canvas size (ZOOM's AUTO ZOOM IN
+changes it at the door). Screen off after a frame of several colours: that
+frame is repeated. One line in the log the first times it happens.
 
 diff --git a/app/src/main/cpp/pk_wide.h b/app/src/main/cpp/pk_wide.h
 index bae9abc..a08f951 100644
@@ -36,18 +37,21 @@ index f34a1b7..4ee8baf 100644
  int pk_wide_gb_last_mode(void) { return gbLastMode; }
  int pk_wide_gb_last_score(void) { return gbLastScore; }
 diff --git a/libretro/pd_libretro.c b/libretro/pd_libretro.c
-index c7c8595..29fe749 100644
+index c7c8595..d12c11a 100644
 --- a/libretro/pd_libretro.c
 +++ b/libretro/pd_libretro.c
-@@ -1980,6 +1980,42 @@ static void hud_field_tick(void) {
+@@ -1980,6 +1980,50 @@ static void hud_field_tick(void) {
    hudFieldFrames = field ? hudFieldFrames + 1 : 0;
  }
  
 +/* slot.: a Game Boy game's blank screen between two black ones not shown. Pokemon Red, Blue and Yellow fade to black
 + * at each door, white the palette out (or turn the screen off) while the next map loads, then show black again: the
-+ * blank screen flashed for six to eight frames. Held, the frame before stays (a dupe): while the screen is off, and
-+ * while the game's frame is all one colour other than the one-colour frame before it, at most 12 frames in a row. */
-+static bool gb_blank_hold(void) {
++ * blank screen flashed for six to eight frames. While the screen is off, or the game's frame is all one colour other
++ * than the one-colour frame before it, at most 12 frames in a row, the frame is painted that colour before anything
++ * draws it: this works at every canvas size, ZOOM's AUTO ZOOM IN changing it at the door included (a repeated frame
++ * can't, beta12). Screen off after a frame of several colours: that frame is repeated (GB_HOLD_REPEAT). */
++enum { GB_HOLD_NONE, GB_HOLD_PAINTED, GB_HOLD_REPEAT };
++static int gb_blank_hold(void) {
 +  static bool lastUniform;
 +  static uint16_t lastColour;
 +  static int held;
@@ -55,9 +59,9 @@ index c7c8595..29fe749 100644
 +  if (PD_BE_IS_GBA()) {
 +    held = 0;
 +    lastUniform = false;
-+    return false;
++    return GB_HOLD_NONE;
 +  }
-+  const uint16_t *px = outputBuffer;
++  uint16_t *px = outputBuffer;
 +  const uint16_t c = px[0];
 +  bool uniform = true;
 +  for (unsigned y = 0; y < 144 && uniform; y++)
@@ -71,18 +75,23 @@ index c7c8595..29fe749 100644
 +    if (!held && logCallback && told++ < 3)
 +      logCallback(RETRO_LOG_WARN, "pokedaisy: %s, the frame before held\n", off ? "screen off" : "blank screen");
 +    held++;
-+    return true; // what is on screen stays the one-colour frame before
++    if (!lastUniform)
++      return GB_HOLD_REPEAT;
++    for (unsigned y = 0; y < 144; y++)
++      for (unsigned x = 0; x < 160; x++)
++        px[y * 256 + x] = lastColour;
++    return GB_HOLD_PAINTED; // what is on screen stays the one-colour frame before
 +  }
 +  held = 0;
 +  lastUniform = uniform;
 +  lastColour = c;
-+  return false;
++  return GB_HOLD_NONE;
 +}
 +
  RETRO_API void retro_run(void) {
    if (!haveGame) {
      mgba_retro_run();
-@@ -2483,6 +2519,7 @@ RETRO_API void retro_run(void) {
+@@ -2483,6 +2527,7 @@ RETRO_API void retro_run(void) {
      companion = false; // The native battle / Bag / party resumes with the selected action.
    bool paused = companion || hudFocus || (quickOpen && !flyAsk);
    const bool expanded = wideSupported && settings.aspect != PD_ASPECT_ORIGINAL;
@@ -90,15 +99,15 @@ index c7c8595..29fe749 100644
    const bool repeat = late && canDupe && haveGameFrame && !paused && !quickOpen &&
                        (!ff || (expanded && !repeatedFrame));
    maskGame = paused;
-@@ -2551,6 +2588,7 @@ RETRO_API void retro_run(void) {
+@@ -2551,6 +2596,7 @@ RETRO_API void retro_run(void) {
                   gb_field_release_wild(core, gbf, romData, romLen))
          gbWildHeld = false;
      }
-+    blankHeld = gb_blank_hold() && canDupe && haveGameFrame && !paused && !quickOpen;
++    blankHeld = gb_blank_hold() == GB_HOLD_REPEAT && canDupe && haveGameFrame && !paused && !quickOpen;
      if (repeat && expanded)
        pk_wide_skip(core, wideSource); // Keep the RAM history current for the next drawn frame.
      else
-@@ -2723,7 +2761,7 @@ RETRO_API void retro_run(void) {
+@@ -2723,7 +2769,7 @@ RETRO_API void retro_run(void) {
    }
  
  
