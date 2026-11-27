@@ -1,0 +1,56 @@
+slot. for Android: plain sides on a Game Boy game's plain background.
+When most of the frame's outer edge (60 %) is one colour, the window past
+the game's edges is that colour, plain, rather than the glow: its dimming
+toward the window's edges drew a bevelled frame around a battle (Pokemon
+Blue, Crystal), and on a door's white or black and a room's dark outside
+the glow still blurred and bevelled the corners. Otherwise the glow, as
+before. Siham 2026-11-27.
+
+diff --git a/app/src/main/cpp/pk_wide_gb.c b/app/src/main/cpp/pk_wide_gb.c
+index d0ae384..8e9dfae 100644
+--- a/app/src/main/cpp/pk_wide_gb.c
++++ b/app/src/main/cpp/pk_wide_gb.c
+@@ -1296,7 +1296,35 @@ static bool gbEdgeAccOk;
+ // middle went white (Crystal), then came back after it.
+ static bool gbFading;
+ 
++// slot.: the screen's background, when most of the frame's outer edge is one colour (a battle, a door's white or black, a
++// room's dark outside): the window past the edges is that colour, plain, rather than the glow, whose dimming toward the
++// window's edges made a bevelled frame around a battle (Siham 2026-11-27).
++#define GB_FLAT_SHARE 60   // per cent of the edge's pixels
++static bool gbFlatOk;
++static uint32_t gbFlat;
++
++static void gbFlatPrepare(const uint32_t* frame) {
++    uint32_t cand = 0;
++    int votes = 0, total = 0, same = 0;
++    for (int pass = 0; pass < 2; pass++)
++        for (int i = 0; i < 2 * GBW + 2 * GBH; i++) {
++            uint32_t c = (i < GBW ? frame[i] : i < 2 * GBW ? frame[(GBH - 1) * GBW + i - GBW]
++                          : i < 2 * GBW + GBH ? frame[(i - 2 * GBW) * GBW] : frame[(i - 2 * GBW - GBH) * GBW + GBW - 1]) &
++                         0x00FFFFFFu;
++            if (!pass) {   // the most common colour (Boyer-Moore), then counted
++                if (!votes) cand = c;
++                votes += c == cand ? 1 : -1;
++            } else {
++                total++;
++                same += c == cand;
++            }
++        }
++    gbFlatOk = same * 100 >= GB_FLAT_SHARE * total;
++    gbFlat = cand;
++}
++
+ static void gbAmbientPrepare(const uint32_t* frame) {
++    gbFlatPrepare(frame);
+     if (gbFading) gbEdgeAccOk = false;
+     for (int side = 0; side < 2; side++) {
+         int x0 = side ? GBW - GB_AMBIENT_BAND : 0, y0 = side ? GBH - GB_AMBIENT_BAND : 0;
+@@ -1332,6 +1360,7 @@ static void gbAmbientPrepare(const uint32_t* frame) {
+ /** The glow at screen pixel (X, Y), off the frame; `reach` is how far the window goes past each edge (left, right, top,
+  * bottom), where it is dimmest. */
+ static uint32_t gbGlowAt(const uint32_t* frame, int X, int Y, const int reach[4], uint32_t alpha) {
++    if (gbFlatOk) return gbFlat | alpha;
+     int ox = X < 0 ? -X : X >= GBW ? X - GBW + 1 : 0;
+     int oy = Y < 0 ? -Y : Y >= GBH ? Y - GBH + 1 : 0;
+     bool across = ox >= oy;   // from the left / right edge, else the top / bottom one
