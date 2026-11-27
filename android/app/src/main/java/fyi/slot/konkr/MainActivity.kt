@@ -1655,6 +1655,10 @@ class MainActivity : Activity() {
                 uiVsyncCallbacks.set(0L); uiVsyncOver25ms.set(0L); uiVsyncOver40ms.set(0L)
             }
             override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+                // This GL thread asks for more CPU while a cart goes in
+                // (Android 13+, LaunchBoost); a new one starts over.
+                LaunchBoost.reset()
+                LaunchBoost.join(this@MainActivity)
                 // The GL thread runs the core: give it Android's render-thread
                 // priority so background work never delays a frame.
                 try {
@@ -2691,7 +2695,10 @@ class MainActivity : Activity() {
         val queuedAt = SystemClock.elapsedRealtime()
         // Its warm copy, when one is under way, goes on for this launch.
         RomWarmCache.launching.set(rawUri)
+        LaunchBoost.loadUp()
         gameLoader.execute {
+            LaunchBoost.join(this@MainActivity)
+            LaunchBoost.loadUp()
             val launchStart = SystemClock.elapsedRealtime()
             val queueWait = launchStart - queuedAt
             if (queueWait > 20) {
