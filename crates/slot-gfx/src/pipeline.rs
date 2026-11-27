@@ -432,6 +432,16 @@ impl GamePass {
     }
 
     /// Pixel Transparency / Sunlight Shimmer over the current shader.
+    /// Compile what [effect] with [lcd] will need, before it is chosen (a
+    /// coming game's screen): nothing else changes. As set_effect then
+    /// set_lcd_effect would, with the LCD Effect in use and the coming one.
+    pub fn prepare_effect(&mut self, effect: ScreenEffect, lcd: LcdEffect) {
+        if self.context_lost { return; }
+        let current = self.lcd;
+        self.build(effect, current, false);
+        self.build(effect, lcd, false);
+    }
+
     pub fn set_lcd_effect(&mut self, lcd: LcdEffect) {
         if self.build(self.effect, lcd, false) {
             if self.running != Upscaler::Off { self.build(self.effect, lcd, true); }

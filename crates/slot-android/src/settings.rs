@@ -1807,7 +1807,7 @@ pub const BLENDING_NEOGEO_KEY: usize = 156;
 pub const BLENDING_PCE_KEY: usize = 157;
 pub const BEZEL_NEOGEO_KEY: usize = 158;
 pub const BEZEL_PCE_KEY: usize = 159;
-pub const NEOGEO_BIOS_KEY: usize = 161;
+pub const NEOGEO_BIOS_KEY: usize = 162;
 
 /// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
 /// grey first, then the three consoles' screens.

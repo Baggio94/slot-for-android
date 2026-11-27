@@ -188,6 +188,7 @@ fn session(root: &Path, failure: Failure) -> (GameSession, Arc<Mutex<Calls>>) {
         sample_rate: 65536,
         fps: 59.728,
         pico8_saves: None,
+        save_parts: String::new(),
     };
     (session, calls)
 }

@@ -73,9 +73,11 @@ internal object GameKeys {
      * its address in 2.4, take its portable digest: each file moves to the
      * new name unless one is already there, and the few small records that
      * name their own files (state-generation.active) are rewritten with it.
+     * False when a file couldn't be carried (it is tried again next time).
      */
-    fun carryGameFiles(saves: File, old: String, new: String) {
-        if (old == new || old.isEmpty() || new.isEmpty()) return
+    fun carryGameFiles(saves: File, old: String, new: String): Boolean {
+        if (old == new || old.isEmpty() || new.isEmpty()) return true
+        var failed = false
         val dirs = listOf(saves, File(saves, "ManualExports"), File(saves, "ManualImports"))
         var moved = 0
         for (dir in dirs) {
@@ -89,12 +91,13 @@ internal object GameKeys {
                         if (text.contains(old)) {
                             val temp = File(dir, target.name + ".carry.tmp")
                             temp.writeBytes(text.replace(old, new).toByteArray(Charsets.UTF_8))
-                            if (temp.renameTo(target)) { file.delete(); moved++ } else temp.delete()
+                            if (temp.renameTo(target)) { file.delete(); moved++ } else { temp.delete(); failed = true }
                             continue
                         }
                     }
-                    if (file.renameTo(target)) moved++
+                    if (file.renameTo(target)) moved++ else failed = true
                 } catch (error: Exception) {
+                    failed = true
                     warn("Couldn't carry ${file.name} over", error)
                 }
             }
@@ -103,6 +106,7 @@ internal object GameKeys {
             try { Log.i(TAG, "Carried $moved save files to the game's portable name") }
             catch (_: RuntimeException) {} // JVM unit tests have no Android log
         }
+        return !failed
     }
 
     private fun warn(message: String, error: Exception) {

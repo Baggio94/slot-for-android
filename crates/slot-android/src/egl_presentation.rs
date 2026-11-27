@@ -10,7 +10,7 @@
 #![cfg(target_os = "android")]
 
 use std::cell::RefCell;
-use crate::presentation_probe::{PresentationProbe, Source, Timestamp};
+use crate::presentation_probe::{Failing, OnFailure, PresentationProbe, Source, Timestamp};
 use std::ffi::{c_char, c_void, CStr, CString};
 use jni::{JNIEnv, objects::JObject, sys::jstring};
 
@@ -79,6 +79,7 @@ struct Probe {
     tried: bool,
     status: &'static str,
     samples: PresentationProbe,
+    failing: Failing,
 }
 
 impl Probe {
@@ -86,6 +87,7 @@ impl Probe {
         Self {
             extension: None, tried: false, status: "pending",
             samples: PresentationProbe::new(),
+            failing: Failing::default(),
         }
     }
     fn init(&mut self) {
@@ -154,7 +156,22 @@ impl Probe {
             self.init();
             return;
         }
+        let before = self.samples.errors();
         self.samples.tick_with_input(&mut EglSource(ext), input_ns);
+        match self.failing.after(self.samples.errors() > before) {
+            OnFailure::Nothing => {}
+            OnFailure::Reenable => {
+                if unsafe { eglSurfaceAttrib(ext.display, ext.surface, EGL_TIMESTAMPS_ANDROID, 1) } == 0 {
+                    self.stop();
+                }
+            }
+            OnFailure::Stop => self.stop(),
+        }
+    }
+    /// No more queries on this surface (until the next one: Reset).
+    fn stop(&mut self) {
+        self.extension = None;
+        self.status = "timestamps_lost";
     }
     fn report(&mut self) -> String {
         self.samples.report(self.status)
@@ -188,3 +205,4 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeEglPresentationRep
         env.new_string(report).ok().map_or(std::ptr::null_mut(), |s| s.into_raw())
     })
 }
+

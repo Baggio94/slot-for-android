@@ -8,8 +8,10 @@ use slot_ui::CartFace;
 
 const MAGIC: &[u8;8] = b"SLOTCF02";
 const MAX_FACE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_DISK_BYTES: u64 = 160 * 1024 * 1024;
-const MAX_DISK_FILES: usize = 400;
+// Room for a whole library's faces (3.2 perf: 400 faces were a shelf or
+// two, and the rest were drawn again from their labels each time).
+const MAX_DISK_BYTES: u64 = 320 * 1024 * 1024;
+const MAX_DISK_FILES: usize = 3000;
 
 pub(crate) struct DiskCache {
     dir: PathBuf,
@@ -77,8 +79,15 @@ impl DiskCache {
         if size!=expected {return None;}
         let rgba=lz4_flex::decompress_size_prepended(&data[16..]).ok()?;
         if rgba.len()!=expected{return None;}
+        // Used now: trim() lets the faces used longest ago go first, not
+        // the ones written first (3.2 perf). Best effort.
+        if let Ok(file)=fs::File::options().write(true).open(self.path(key)) {
+            let _=file.set_modified(SystemTime::now());
+        }
         Some(CartFace {rgba,w,h})
     }
+    /// A face for [key] is kept (not read: the whole-library fill skips it).
+    pub fn contains(&self, key: &str) -> bool { self.path(key).is_file() }
     pub fn write(&self, key:&str, face:&CartFace) -> io::Result<()> {
         let raw=face.w.checked_mul(face.h).and_then(|v|v.checked_mul(4))
             .ok_or_else(||io::Error::new(io::ErrorKind::InvalidData,"bad face size"))? as usize;

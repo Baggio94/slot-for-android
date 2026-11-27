@@ -174,6 +174,12 @@ struct Cart {
     eject: bool,
     started: Instant,
     sound_ms: Option<u128>,
+    /// Android took the launch request (3.2 perf).
+    handed_ms: Option<u128>,
+    /// The core started opening (the cart seated and the ROM ready).
+    core_at_ms: Option<u128>,
+    /// What the ejection's save did, part by part (3.2 perf).
+    detail: String,
     rom_ms: Option<u128>,
     core_ms: Option<u128>,
     save_ms: Option<u128>,
@@ -190,7 +196,8 @@ fn cart() -> std::sync::MutexGuard<'static, Option<Cart>> {
 }
 
 fn new_cart(eject: bool, save_ms: Option<u128>) -> Cart {
-    Cart { eject, started: Instant::now(), sound_ms: None, rom_ms: None, core_ms: None,
+    Cart { eject, started: Instant::now(), sound_ms: None, handed_ms: None, core_at_ms: None, detail: String::new(),
+        rom_ms: None, core_ms: None,
         save_ms, longest_ms: 0.0, asked_ms: 0 }
 }
 
@@ -214,6 +221,21 @@ pub(crate) fn asked(ms: u128) {
     if let Some(c) = cart().as_mut() { if !c.eject { c.asked_ms += ms; } }
 }
 
+/// Android took the launch request (MainActivity.nativePollLaunchUri).
+pub(crate) fn handed() {
+    if let Some(c) = cart().as_mut() { if !c.eject { c.handed_ms.get_or_insert(c.started.elapsed().as_millis()); } }
+}
+
+/// The ejection's save and the core's closing, part by part.
+pub(crate) fn eject_detail(text: String) {
+    if let Some(c) = cart().as_mut() { if c.eject { c.detail = text; } }
+}
+
+/// The core starts opening.
+pub(crate) fn core_started() {
+    if let Some(c) = cart().as_mut() { if !c.eject { c.core_at_ms.get_or_insert(c.started.elapsed().as_millis()); } }
+}
+
 /// Android prepared the ROM and its saves (MainActivity.loadGameFromSaf).
 pub(crate) fn rom_ready() {
     if let Some(c) = cart().as_mut() { c.rom_ms.get_or_insert(c.started.elapsed().as_millis()); }
@@ -232,9 +254,10 @@ pub(crate) fn insert_done() {
     let asked = c.asked_ms;
     let window = if asked > 0 { format!(", a window answered in {asked}ms (left out)") } else { String::new() };
     crate::game::log_launch_timing(&format!(
-        "Insert timeline: click {}, ROM and saves ready {}, core {}, screen on +{}ms \
-         (original Slot: 730ms), longest frame {:.0}ms{window}",
-        ms(c.sound_ms), ms(c.rom_ms.map(|v| v.saturating_sub(asked))),
+        "Insert timeline: Android took it {}, click {}, ROM and saves ready {}, core from {} for {}, \
+         screen on +{}ms (original Slot: 730ms), longest frame {:.0}ms{window}",
+        ms(c.handed_ms), ms(c.sound_ms), ms(c.rom_ms.map(|v| v.saturating_sub(asked))),
+        ms(c.core_at_ms.map(|v| v.saturating_sub(asked))),
         c.core_ms.map_or("-".to_string(), |v| format!("{v}ms")),
         c.started.elapsed().as_millis().saturating_sub(asked), c.longest_ms));
 }
@@ -245,8 +268,9 @@ pub(crate) fn cart_out() {
     let Some(c) = cart().take() else { return };
     if !c.eject { return; }
     crate::game::log_launch_timing(&format!(
-        "Eject timeline: save {}, click {}, cart out +{}ms, longest frame {:.0}ms",
+        "Eject timeline: save {}{}, click {}, cart out +{}ms, longest frame {:.0}ms",
         c.save_ms.map_or("-".to_string(), |v| format!("{v}ms")),
+        if c.detail.is_empty() { String::new() } else { format!(" ({})", c.detail) },
         c.sound_ms.map_or("-".to_string(), |v| format!("+{v}ms")),
         c.started.elapsed().as_millis(), c.longest_ms));
 }
@@ -297,6 +321,64 @@ pub(crate) fn frame(took: Duration, moment: Moment) {
         if window.slow > 0 { crate::game::log_launch_timing(&window.line("5 s")); }
         *window = Window { started: Some(now), ..Window::default() };
     }
+}
+
+/// Labels on the shelf (3.2 perf): where each face came from and what it
+/// cost, the uploads, and the carts on screen still without their face.
+/// One line per 5 s with any label work; nothing per frame.
+#[derive(Default)]
+struct Labels {
+    started: Option<Instant>,
+    disk: u32,
+    disk_us: u64,
+    drawn: u32,
+    drawn_us: u64,
+    uploads: u32,
+    blank: u32,
+    blank_frames: u32,
+}
+
+static LABELS: Mutex<Labels> = Mutex::new(Labels {
+    started: None, disk: 0, disk_us: 0, drawn: 0, drawn_us: 0, uploads: 0, blank: 0, blank_frames: 0,
+});
+
+fn labels() -> std::sync::MutexGuard<'static, Labels> {
+    LABELS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A face read back from the disk cache in [took] (a raster worker).
+pub(crate) fn label_from_disk(took: Duration) {
+    let mut l = labels();
+    l.disk += 1;
+    l.disk_us += took.as_micros() as u64;
+}
+
+/// A face drawn from its label in [took] (a raster worker).
+pub(crate) fn label_drawn(took: Duration) {
+    let mut l = labels();
+    l.drawn += 1;
+    l.drawn_us += took.as_micros() as u64;
+}
+
+/// One frame of the shelf: [uploads] faces sent to the GPU, [blank] carts
+/// on screen without their face yet.
+pub(crate) fn labels_frame(uploads: u32, blank: u32) {
+    let mut l = labels();
+    l.uploads += uploads;
+    l.blank += blank;
+    if blank > 0 { l.blank_frames += 1; }
+    let now = Instant::now();
+    let started = *l.started.get_or_insert(now);
+    if now.duration_since(started) < WINDOW { return; }
+    if l.disk + l.drawn + l.uploads + l.blank > 0 {
+        let avg = |us: u64, n: u32| if n == 0 { "-".to_string() } else { format!("{:.1}ms", us as f64 / n as f64 / 1000.0) };
+        crate::game::log_launch_timing(&format!(
+            "Shelf labels (5 s): {} from the disk cache (each {}), {} drawn (each {}), {} uploads, \
+             {} frames with carts on screen still blank ({} cart-frames)",
+            l.disk, avg(l.disk_us, l.disk), l.drawn, avg(l.drawn_us, l.drawn), l.uploads,
+            l.blank_frames, l.blank));
+    }
+    *l = Labels { started: Some(now), ..Labels::default() };
 }
 
 /// The bench's end: the frames since the last line, slow or not.

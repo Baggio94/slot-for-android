@@ -70,6 +70,9 @@ impl PresentationProbe {
     pub(crate) fn tick(&mut self, source: &mut impl Source) {
         self.tick_with_input(source, 0);
     }
+    /// Failed EGL queries so far in this report window.
+    pub(crate) fn errors(&self) -> u64 { self.query_errors }
+
     /// `input_ns` is when the button press read by this callback happened.
     pub(crate) fn tick_with_input(&mut self, source: &mut impl Source, input_ns: i64) {
         self.ticks += 1;
@@ -248,6 +251,29 @@ impl PresentationProbe {
     }
 }
 
+/// What a frame whose timestamp query failed leads to.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum OnFailure { Nothing, Reenable, Stop }
+
+/// Frames in a row whose EGL query failed. A window surface remade at the
+/// same handle comes back without timestamps, and every query then fails
+/// and libEGL logs it, each frame: timestamps go on again once, and the
+/// probe stops after a few more failed frames rather than keep asking.
+#[derive(Default)]
+pub(crate) struct Failing(u8);
+impl Failing {
+    const STOP_AFTER: u8 = 8;
+    pub(crate) fn after(&mut self, failed: bool) -> OnFailure {
+        if !failed { self.0 = 0; return OnFailure::Nothing; }
+        self.0 = self.0.saturating_add(1);
+        match self.0 {
+            1 => OnFailure::Reenable,
+            n if n >= Self::STOP_AFTER => OnFailure::Stop,
+            _ => OnFailure::Nothing,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,5 +445,17 @@ mod tests {
         assert!(probe
             .report("supported")
             .contains("present_fps_valid=false"));
+    }
+
+    #[test]
+    fn failed_queries_turn_timestamps_on_once_then_stop_asking() {
+        let mut failing = Failing::default();
+        assert_eq!(failing.after(false), OnFailure::Nothing);
+        assert_eq!(failing.after(true), OnFailure::Reenable);
+        for _ in 2..Failing::STOP_AFTER { assert_eq!(failing.after(true), OnFailure::Nothing); }
+        assert_eq!(failing.after(true), OnFailure::Stop);
+        // A frame that went through starts the count again.
+        assert_eq!(failing.after(false), OnFailure::Nothing);
+        assert_eq!(failing.after(true), OnFailure::Reenable);
     }
 }

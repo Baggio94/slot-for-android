@@ -428,6 +428,8 @@ pub struct GameSession {
     /// Last, so it drops after the core: the player's own PICO-8's save
     /// goes back to the game's (see pico8::SaveBridge).
     pico8_saves: Option<crate::pico8::SaveBridge>,
+    /// What the last checkpoint took, part by part, for the eject's line.
+    save_parts: String,
 }
 
 struct HomeNetplay {
@@ -849,6 +851,9 @@ impl GameSession {
                 // ZOOM, EXPAND or ORIGINAL, as this game was last shown.
                 core.set_option("pokedaisy_aspect",
                     &crate::pokedaisy_view::view_for(storage, rom_stem).option());
+                // INTRO: the start-up screens in ORIGINAL or EXPAND.
+                core.set_option("pokedaisy_intro", crate::pokedaisy_view::intro_option(
+                    crate::pokedaisy_view::intro_expands(storage, rom_stem)));
             }
             Core::Gpsp => {
                 // Replicate official Slot/fork's core.rs: this option must
@@ -1337,6 +1342,7 @@ impl GameSession {
             sample_rate: core_sample_rate(sample_rate),
             fps,
             pico8_saves,
+            save_parts: String::new(),
         };
         // The handheld's default sun until the runtime applies this game's own.
         let light = slot_retro::sensors::available() & slot_retro::sensors::ILLUMINANCE != 0;
@@ -1350,6 +1356,9 @@ impl GameSession {
         }
         Ok(session)
     }
+
+    /// What the last checkpoint took, part by part (the eject's line).
+    pub fn take_save_parts(&mut self) -> String { std::mem::take(&mut self.save_parts) }
 
     /// The cheats turned on for this game.
     pub fn cheats(&self) -> &[crate::cheats::Cheat] { &self.cheats }
@@ -2259,6 +2268,13 @@ impl GameSession {
         }
     }
 
+    /// PokeDaisy's INTRO: the start-up screens in EXPAND or ORIGINAL.
+    pub fn set_pokedaisy_intro(&mut self, expand: bool) {
+        if self.core_kind == Core::PokeDaisy {
+            self.set_core_option("pokedaisy_intro", crate::pokedaisy_view::intro_option(expand));
+        }
+    }
+
     /// The view PokeDaisy's companion picked since the last call.
     pub fn take_pokedaisy_view(&mut self) -> Option<crate::pokedaisy_view::View> {
         if self.core_kind != Core::PokeDaisy { return None; }
@@ -2586,6 +2602,9 @@ impl GameSession {
                 log_launch_timing("Pokémon Flash has no complete save; the save on disk is kept");
                 self.kept_flash_save = true;
             }
+            // The same bytes as on disk already (3.2 perf): nothing to
+            // write, the save is there and whole.
+            Some(bytes) if std::fs::read(&self.save).is_ok_and(|disk| disk == bytes) => wrote = true,
             Some(bytes) => match atomic_write(&self.save, &bytes) {
                 Ok(()) => wrote = true,
                 Err(err) => error = Some(format!("Battery save: {err}")),
@@ -2593,7 +2612,9 @@ impl GameSession {
             None => {}
         }
         if let Some(bytes) = self.core.save_rtc() {
-            match atomic_write(&self.rtc, &bytes) {
+            if std::fs::read(&self.rtc).is_ok_and(|disk| disk == bytes) {
+                wrote = true;
+            } else { match atomic_write(&self.rtc, &bytes) {
                 Ok(()) => wrote = true,
                 Err(err) => {
                     let reason = format!("RTC save: {err}");
@@ -2602,7 +2623,7 @@ impl GameSession {
                         previous.push_str(&reason);
                     } else { error = Some(reason); }
                 }
-            }
+            } }
         }
         self.last_sram = Instant::now();
         error.map_or(Ok(wrote), Err)
@@ -2638,7 +2659,9 @@ impl GameSession {
         if self.runahead_rollback_failed {
             return Err("Run-Ahead rollback failed; exit without saving instead".into());
         }
+        let battery_at = Instant::now();
         let battery = self.save_sram_checked()?;
+        self.save_parts = format!("battery {}ms", battery_at.elapsed().as_millis());
         if self.core.shut_down() {
             // A game that shut itself down has nothing to resume: the next
             // launch starts it afresh (older auto-states are kept).
@@ -2651,8 +2674,10 @@ impl GameSession {
         if !with_state || self.in_multiplayer() {
             return Ok(battery);
         }
+        let capture_at = Instant::now();
         let data = self.core.serialize()
             .map_err(|e| format!("Auto state capture: {e}"))?;
+        let capture_ms = capture_at.elapsed().as_millis();
         // Its picture beside it, for Sync States with RomM (3.0): what the
         // state shows in RomM. Only with the sync on; never fails the save.
         let syncing = crate::runtime::ROMM_STATES.load(std::sync::atomic::Ordering::Acquire) == 2;
@@ -2661,6 +2686,7 @@ impl GameSession {
         let mut picture = self.retroarch_export.clone().into_os_string();
         picture.push(".png");
         let picture = PathBuf::from(picture);
+        let data_len = data.len();
         let big = background && data.len() >= BIG_STATE;
         let container = retroarch_state::encode(&self.for_retroarch(data.clone()))
             .map_err(|e| format!("RetroArch state encoding: {e}"))?;
@@ -2675,6 +2701,8 @@ impl GameSession {
             }
             Ok(())
         };
+        let prepared_ms = capture_at.elapsed().as_millis() - capture_ms;
+        let write_at = Instant::now();
         if big {
             STATE_WRITES.store(true, std::sync::atomic::Ordering::Release);
             let writer = std::thread::spawn(write);
@@ -2682,6 +2710,9 @@ impl GameSession {
         } else {
             write()?;
         }
+        self.save_parts.push_str(&format!(", state {} KB: capture {capture_ms}ms, picture and container {prepared_ms}ms, \
+            write {}", data_len / 1024,
+            if big { "in the background".to_string() } else { format!("{}ms", write_at.elapsed().as_millis()) }));
         // The auto-state now matches this battery.
         if self.stale_state.is_some() {
             self.opening_battery = self.core.save_ram_verified().ok().flatten().map(|ram| battery_hash(&ram));

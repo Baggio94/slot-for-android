@@ -861,6 +861,17 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetDevice(
     *DEVICE_NAME.lock().unwrap_or_else(|e| e.into_inner()) = (name, model);
 }
 
+/// A launch request waits for Android (3.2 perf): asked by the GL thread
+/// after each frame, so the request is taken at once instead of at the
+/// next 100 ms pulse. Nothing is taken here.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeLaunchWaiting(
+    _env: JNIEnv<'_>, _this: JObject<'_>,
+) -> jni::sys::jboolean {
+    let waiting = REQUEST.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+    if waiting { jni::sys::JNI_TRUE } else { jni::sys::JNI_FALSE }
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollLaunchUri(
     env: JNIEnv<'_>, _this: JObject<'_>,
@@ -872,6 +883,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollLaunchUri(
         return std::ptr::null_mut();
     }
     let next = REQUEST.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if next.is_some() { crate::frame_watch::handed(); }
     match next.and_then(|v| env.new_string(v).ok()) {
         Some(v) => v.into_raw(), None => std::ptr::null_mut(),
     }
