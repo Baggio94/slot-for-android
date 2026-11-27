@@ -1,16 +1,18 @@
 slot. for Android: a Game Boy Color door's fade on the sides as in the middle.
-From a door's fade (PK_WIDE_SCENE_FADE) until the next map is read and
-fully mixed in, the glow past the game's edges follows the frame at its
-own brightness and without lagging behind it, and the frozen scene gives
-way to it in 4 frames instead of 16: the sides stayed grey while Pokemon
-Crystal's middle went white, then showed dark bands as the town (read
-while the screen was still white) mixed in. The next map mixes in only
-once the game fades it in: a room's dark outside, which doesn't fade with
-the game's colours, darkened the edges of a white screen going in. Game
+From a door's fade (PK_WIDE_SCENE_FADE, or a whole white or black frame)
+until the next map is read and fully mixed in, the glow past the game's
+edges follows the frame at its own brightness and without lagging behind
+it, and the frozen scene gives way to it in 4 frames instead of 16: the
+sides stayed grey while Pokemon Crystal's middle went white, then showed
+dark bands as the town (read while the screen was still white) mixed in.
+While the frame is all white or black the sides are the glow alone; the
+next map mixes in once the game fades it in: going in, the room is read on
+the first white frame (never a FADE scene) and its dark outside, which
+doesn't fade with the game's colours, darkened the window's edges. Game
 Boy games keep their doors as they were (right in Pokemon Blue).
 
 diff --git a/app/src/main/cpp/pk_wide_gb.c b/app/src/main/cpp/pk_wide_gb.c
-index 4ee8baf..e229497 100644
+index 4ee8baf..d0ae384 100644
 --- a/app/src/main/cpp/pk_wide_gb.c
 +++ b/app/src/main/cpp/pk_wide_gb.c
 @@ -1291,8 +1291,13 @@ static void gbBackgroundRows(const uint32_t* frame) {
@@ -35,26 +37,31 @@ index 4ee8baf..e229497 100644
      int seam = d >= 4 ? 256 : d * 64;                                 // the first pixels lean on the edge itself
      int lo = at - r < 0 ? 0 : at - r, hi = at + r >= len ? len - 1 : at + r;
      uint32_t v = 0;
-@@ -1691,6 +1697,10 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+@@ -1691,6 +1697,13 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
                  : !valid ? PK_WIDE_SCENE_MENU
                  : match->text ? PK_WIDE_SCENE_TEXT : PK_WIDE_SCENE_FIELD;
      gbLastClose = gbLastScene != PK_WIDE_SCENE_FIELD;
 +    // A Game Boy Color game's door, from its fade until the next map is read and fully in (the town is read while the screen
 +    // is still white: the glow dimmed again as the scene mixed in, dark bands on Crystal's sides). Not a Game Boy game's:
 +    // its doors were right as they were (Pokemon Blue).
-+    gbFading = (gbB->model & GB_MODEL_CGB) && (gbLastScene == PK_WIDE_SCENE_FADE || (gbFading && (!valid || gbMix < 256)));
++    // Going in, the room is read on the first white frame, never a FADE scene: a white (or black) frame is the door too.
++    const bool cgbFaded = (gbB->model & GB_MODEL_CGB) && gbFaded(frame);
++    gbFading = (gbB->model & GB_MODEL_CGB) &&
++               (gbLastScene == PK_WIDE_SCENE_FADE || cgbFaded || (gbFading && (!valid || gbMix < 256)));
  
      if (valid) {
          const struct GbSnap* s = match;
-@@ -1717,10 +1727,15 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+@@ -1717,10 +1730,17 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
              gbDraw(s, ox, oy, 0, 0, GBW, GBH, centre, GBW, alpha, true);
              gbNObjs = n;
          }
 -        gbMix = gbMixSnap || gbMix + GB_MIX_STEP > 256 ? 256 : gbMix + GB_MIX_STEP;
-+        // slot.: a Game Boy Color door's next map, read while the screen is still white (or black): the glow stays until the
++        // slot.: a Game Boy Color door's next map, read while the screen is still white (or black): the glow alone until the
 +        // game fades it in. The rebuilt scene's surroundings (a room's dark outside) don't fade with the game's colours:
 +        // mixed in on a white screen, they darkened the window's edges first (Crystal, going in).
-+        if (!(gbFading && gbFaded(frame)))
++        if (gbFading && cgbFaded)
++            gbMix = 0; // the sides are the screen's own white (or black) until the game fades the next map in
++        else
 +            gbMix = gbMixSnap || gbMix + GB_MIX_STEP > 256 ? 256 : gbMix + GB_MIX_STEP;
          gbMixSnap = false;
      } else {
