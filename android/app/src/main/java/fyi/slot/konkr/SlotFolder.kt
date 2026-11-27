@@ -419,7 +419,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         ui { activity.nativeExternalReturn(); toast("Copying to your slot. folder…") }
         val report = try {
             val tombs = readTombs(side)
-            FolderSync.sync(privateSide(), side, base, if (first) start else FolderSync.Start.SYNC,
+            FolderSync.sync(privateSide(), FolderSync.OwnFilesInFolder(side), base, if (first) start else FolderSync.Start.SYNC,
                 tombs = tombs, restore = paths(restoreFile), progress = progress()).also {
                 if (it.tombsChanged) writeTombs(side, tombs)?.let { error -> it.failures.add(error) }
                 keepGone(it)
@@ -683,7 +683,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             val started = SystemClock.elapsedRealtime()
             val report = try {
                 val tombs = readTombs(side)
-                FolderSync.sync(privateSide(), side, base, pull = pull, tombs = tombs,
+                FolderSync.sync(privateSide(), FolderSync.OwnFilesInFolder(side), base, pull = pull, tombs = tombs,
                     restore = paths(restoreFile), launchFilesDone = launchFilesDone,
                     progress = { done, total -> syncDone = done; syncTotal = total },
                     scope = scope, changed = { syncHasChanges = true }, shouldYield = shouldYield,
@@ -1150,6 +1150,23 @@ internal class SlotFolder(private val activity: MainActivity) {
             val id = files[path] ?: return
             DocumentsContract.deleteDocument(resolver, DocumentsContract.buildDocumentUriUsingTree(tree, id))
             files.remove(path)
+        }
+
+        /** Within the card (Saves/Resume, 3.2.0-beta10): Android moves the
+         *  file itself, its size and time kept. Null where the provider can't. */
+        override fun move(from: String, to: String): FolderSync.Meta? {
+            val id = files[from] ?: return null
+            val above = from.substringBeforeLast('/', "")
+            val source = if (above.isEmpty()) root else dirs[above] ?: return null
+            val target = dirOf(to)
+            val moved = DocumentsContract.moveDocument(resolver,
+                DocumentsContract.buildDocumentUriUsingTree(tree, id),
+                DocumentsContract.buildDocumentUriUsingTree(tree, source),
+                DocumentsContract.buildDocumentUriUsingTree(tree, target)) ?: return null
+            val newId = DocumentsContract.getDocumentId(moved)
+            files.remove(from)
+            files[to] = newId
+            return meta(newId)
         }
 
         /** Deletes what slot. put in this folder (scenario A10, confirmed). */

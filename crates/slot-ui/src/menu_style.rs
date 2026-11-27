@@ -72,6 +72,8 @@ impl MenuPalette {
             11 => ([40, 40, 40], [72, 72, 74], [220, 196, 192]),    // Master System
             12 => ([40, 39, 39], [72, 71, 72], [232, 214, 182]),    // Lynx
             13 => ([86, 91, 128], [120, 126, 164], [215, 223, 175]), // Pokemon mini
+            // PICO-8: the default cart's plastic, its palette's cream (colour 7) for the shelf.
+            14 => ([52, 52, 56], [84, 84, 90], [255, 241, 232]), // PICO-8
             _ => ([74, 80, 152], [108, 114, 184], [196, 198, 228]), // Game Boy Advance
         };
         let ink = crate::bitmaps::console_slot_takes_dark_ink(family, 0).then_some(DARK_INK);
@@ -278,7 +280,7 @@ mod tests {
 
     #[test]
     fn original_menus_write_as_the_clock_on_their_console_bar() {
-        for family in 0..14 {
+        for family in 0..crate::bitmaps::CONSOLE_SLOTS {
             let dark = crate::bitmaps::console_slot_takes_dark_ink(family, 0);
             assert_eq!(MenuPalette::original(family).ink.is_some(), dark, "family {family}");
         }
@@ -291,6 +293,16 @@ mod tests {
         assert!(MenuPalette::original(8).ink.is_some());
         assert!(MenuPalette::original(9).ink.is_none());
         assert!(MenuPalette::LIGHT.ink.is_some());
+    }
+
+    #[test]
+    fn every_console_bar_has_its_own_original_colours() {
+        // Only the GBA (6) takes the fallback: a new bar without its row
+        // showed the GBA's indigo (PICO-8 in 3.2.0-beta9).
+        for family in (0..crate::bitmaps::CONSOLE_SLOTS).filter(|&f| f != 6) {
+            assert_ne!(MenuPalette::original(family), MenuPalette::original(6), "family {family}");
+        }
+        assert!(MenuPalette::original(14).ink.is_none());
     }
 
     #[test]

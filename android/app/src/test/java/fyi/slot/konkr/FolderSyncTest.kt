@@ -93,6 +93,41 @@ class FolderSyncTest {
         assertEquals("ring2", String(card.files.entries.single { it.key.endsWith("/abc/2026-11-24_04-11-19.state") }.value.first))
     }
 
+    /** A card that moves files as Android's provider does (time kept). */
+    private class MovingCard(root: File) : FolderSync.Side by Card(root) {
+        private val dir = root
+        override fun move(from: String, to: String): FolderSync.Meta? {
+            val a = File(dir, from); val b = File(dir, to); b.parentFile?.mkdirs()
+            val time = a.lastModified()
+            if (!a.renameTo(b)) return null
+            b.setLastModified(time)
+            return FolderSync.Meta(b.length(), b.lastModified())
+        }
+    }
+
+    @Test fun theGamesOwnFilesGoInResumeInTheFolder() {
+        val (mine, card) = dirs()
+        val id = "c8870117201eec1175d6f8b85d70e8d9d2f8735880894a90db37ae520d3b1745"
+        put(mine, "Saves/$id.pico8.state", "resume")
+        put(mine, "Saves/mGBA/Emerald.srm", "battery")
+        // Left at the top of the folder's Saves by beta9, unchanged since.
+        put(card, "Saves/$id.fake08.state", "old")
+        val base = FolderSync.Base()
+        val side = FolderSync.OwnFilesInFolder(MovingCard(card))
+        FolderSync.sync(FolderSync.PrivateSide(mine), side, base)
+        assertEquals("resume", File(card, "Saves/Resume/$id.pico8.state").readText())
+        assertEquals("battery", File(card, "Saves/mGBA/Emerald.srm").readText())
+        assertFalse(File(card, "Saves/$id.pico8.state").exists())
+        // The old one moved in, and came back to the handheld under its own name.
+        assertFalse(File(card, "Saves/$id.fake08.state").exists())
+        assertEquals("old", File(card, "Saves/Resume/$id.fake08.state").readText())
+        assertEquals("old", File(mine, "Saves/$id.fake08.state").readText())
+        assertTrue(base.entries.keys.all { !it.startsWith("Saves/Resume/") })
+        // A second copy changes nothing.
+        val again = FolderSync.sync(FolderSync.PrivateSide(mine), FolderSync.OwnFilesInFolder(MovingCard(card)), base)
+        assertTrue(again.pulled.isEmpty())
+    }
+
     @Test fun androidsCopiesOfAFolderNamedAlikeStayInTheFolder() {
         assertFalse(FolderSync.travels("States/POKEMINI (3)/pokemini/abc/2026-11-24_04-11-19.state"))
         assertFalse(FolderSync.travels("Saves/PokeMini (12)/Pinball.eep"))

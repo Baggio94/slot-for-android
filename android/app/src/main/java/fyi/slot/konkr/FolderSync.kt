@@ -76,6 +76,65 @@ internal object FolderSync {
         /** The folder answers [path] by the file it listed as [listed]: the
          *  same file, its folders' names in other letter case (3.1.1). */
         fun alias(path: String, listed: String) {}
+        /** Moves a file to another folder without copying it (the same
+         *  card); its meta after, or null where the folder can't. */
+        fun move(from: String, to: String): Meta? = null
+    }
+
+    /**
+     * slot.'s own per-game files, named after the game's digest (its resume
+     * states and their guards), sit at the top of slot.'s private Saves; in
+     * the slot. folder they go in Saves/Resume, out of the way of the saves
+     * the player looks at (Siham 2026-11-27). The sync knows them by their
+     * private paths; copies left at the top by earlier versions are moved in
+     * as the folder is listed (or replaced when next written).
+     */
+    class OwnFilesInFolder(private val inner: Side) : Side {
+        /** Private path -> where an earlier version left it in the folder. */
+        private val left = HashMap<String, String>()
+        override fun list(): Map<String, Meta> = list(Scope.ALL)
+        override fun list(scope: Scope): Map<String, Meta> {
+            val raw = inner.list(scope)
+            left.clear()
+            val out = HashMap<String, Meta>(raw.size)
+            for ((path, meta) in raw) if (!own(path)) out[fromFolder(path)] = meta
+            for ((path, meta) in raw) {
+                if (!own(path)) continue
+                val moved = inFolder(path)
+                val there = raw[moved]
+                when {
+                    // Both: the newer stays, in Resume.
+                    there != null && there.modified >= meta.modified -> try { inner.delete(path) } catch (_: Exception) {}
+                    else -> {
+                        if (there != null) try { inner.delete(moved) } catch (_: Exception) {}
+                        val after = try { inner.move(path, moved) } catch (_: Exception) { null }
+                        if (after == null) left[path] = path
+                        out[path] = after ?: meta
+                    }
+                }
+            }
+            return out
+        }
+        override fun read(path: String): ByteArray = inner.read(left[path] ?: inFolder(path))
+        override fun write(path: String, bytes: ByteArray): Meta {
+            val meta = inner.write(inFolder(path), bytes)
+            left.remove(path)?.let { try { inner.delete(it) } catch (_: Exception) {} }
+            return meta
+        }
+        override fun delete(path: String) { inner.delete(left.remove(path) ?: inFolder(path)) }
+        override fun dropStale(): Int = inner.dropStale()
+        override fun alias(path: String, listed: String) = inner.alias(inFolder(path), inFolder(listed))
+        override fun move(from: String, to: String): Meta? = inner.move(inFolder(from), inFolder(to))
+
+        companion object {
+            const val DIR = "Saves/Resume/"
+            private val OWN = Regex("""Saves/[0-9a-f]{32,64}\.[^/]+""")
+            /** A digest-named file at the top of Saves. */
+            fun own(path: String): Boolean = OWN.matches(path)
+            fun inFolder(path: String): String = if (own(path)) DIR + path.removePrefix("Saves/") else path
+            fun fromFolder(path: String): String =
+                if (path.startsWith(DIR) && own("Saves/" + path.removePrefix(DIR))) "Saves/" + path.removePrefix(DIR) else path
+        }
     }
 
     /** What a file was on both sides at the last copy. */

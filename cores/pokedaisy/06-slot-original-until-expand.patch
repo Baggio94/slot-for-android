@@ -1,32 +1,35 @@
 slot. for Android: PokeDaisy's boot, intro and title screens whole on the screen.
-EXPAND's canvas comes once the game first has a view past its edges; before
-that (and after a reset, a state or a new game) the game's own frame, as
-ORIGINAL. The view chosen stays EXPAND or ZOOM.
+EXPAND's canvas comes the first time the game is on its map (pk_wide_scene
+says FIELD); before that (and after a reset, a state or a new game) the
+game's own frame, as ORIGINAL, without EXPAND's blurred sides. The view
+chosen stays EXPAND or ZOOM.
 
 diff --git a/libretro/pd_libretro.c b/libretro/pd_libretro.c
-index 899d1f7..2441af1 100644
+index 899d1f7..38c24ec 100644
 --- a/libretro/pd_libretro.c
 +++ b/libretro/pd_libretro.c
 @@ -378,6 +378,9 @@ enum { PF_RUN, PF_WIDE, PF_DRAW, PF_PRESENT, PF_TOTAL, PF_CONV, PF_VIEW };
  
  /* EXPAND (the game-code layer, below): the window it rebuilt past the game's edges, when this frame has one. */
  static bool wideSupported, wideReady, fieldKnown;
-+/* slot.: EXPAND shown once the game first has a view past its edges; its boot, intro and title screens before that
++/* slot.: EXPAND shown once the game is first on its map; its boot, intro and title screens before that
 + * at the game's own frame (as ORIGINAL), whole on the screen. Set again by a load, a state or a reset. */
 +static bool wideSeen;
  static unsigned wideW, wideH;
  static uint32_t wideSource[240 * 160], wideFrame[PK_WIDE_MAX_VIEW_W * PK_WIDE_MAX_VIEW_H];
  static const uint16_t *base_pixels(void);
-@@ -1256,6 +1259,8 @@ static void wide_tick(void) {
+@@ -1256,6 +1259,10 @@ static void wide_tick(void) {
    PF_T(vw1);
    pf_add(PF_VIEW, vw1 - vw0);
    wideReady = !pk_wide_fault();
-+  if (wideReady)
-+    wideSeen = true; // the next canvas_update gives EXPAND its canvas
++  // The first time the game is on its map (not the boot logo, the title or the first menus, which would only show
++  // EXPAND's blurred sides): the next canvas_update gives EXPAND (or its zoom) its canvas.
++  if (wideReady && pk_wide_scene() == PK_WIDE_SCENE_FIELD)
++    wideSeen = true;
  }
  
  /* The canvas for a fw x fh game on the panel: the panel over the game's whole scale, one whole scale less per ZOOM step
-@@ -1393,7 +1398,8 @@ static void zoom_host_update(void) {
+@@ -1393,7 +1400,8 @@ static void zoom_host_update(void) {
  static void canvas_update(bool notify) {
    int w = menuW, h = menuH, scale = 1;
    unsigned fw = gameW ? gameW : (unsigned)baseGW, fh = gameH ? gameH : (unsigned)baseGH;
@@ -36,7 +39,7 @@ index 899d1f7..2441af1 100644
      w = (int)fw;
      h = (int)fh;
    } else if (panelW) {
-@@ -1672,7 +1678,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *g) {
+@@ -1672,7 +1680,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *g) {
    gameW = gameH = 0;
    quickSel = 0;
    wideSupported = pk_wide_configure(crc) != 0;   // Polished Crystal 3.2.3 too (pk_wide_gb.c, by its CRC)
@@ -45,7 +48,7 @@ index 899d1f7..2441af1 100644
    quickOpen = flyList = repelList = false; // before the canvas: an open menu doubles it (canvas_update)
    canvas_update(false);
    fieldKnown = PD_BE_IS_GBA() && pk_field_configure(crc);
-@@ -1764,7 +1770,7 @@ static void layer_jump(void) {
+@@ -1764,7 +1772,7 @@ static void layer_jump(void) {
    else
      pk_wide_reset();
    haveGameFrame = repeatedFrame = false;
