@@ -263,6 +263,11 @@ impl Compositor {
         self.game.set_effect(effect);
     }
 
+    /// A coming game's shader compiled ahead (GamePipeline::prepare_effect).
+    pub fn prepare_screen_effect(&mut self, effect: crate::ScreenEffect, lcd: crate::LcdEffect) {
+        self.game.prepare_effect(effect, lcd);
+    }
+
     pub fn set_colour_correction(&mut self, enabled: bool) {
         self.game.set_colour_correction(enabled);
     }

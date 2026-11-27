@@ -919,6 +919,16 @@ const POKEDAISY_VIEW_VALUES: usize = SHELVES_LAYOUT_VALUES + 2;
 const PICO8_CORE_VALUES: usize = POKEDAISY_VIEW_VALUES + 7;
 
 /// A PokeDaisy view's value face.
+/// A game's screen settings, read before its screen goes on.
+struct ScreenReady {
+    mode: VideoMode,
+    source: &'static str,
+    frame: (u32, u32),
+    square: bool,
+    view: crate::pokedaisy_view::View,
+    intro: bool,
+}
+
 fn pokedaisy_view_value(view: crate::pokedaisy_view::View) -> usize {
     use crate::pokedaisy_view::View;
     POKEDAISY_VIEW_VALUES + match view {
@@ -1676,6 +1686,10 @@ struct Engine {
     pokedaisy_view: crate::pokedaisy_view::View,
     /// INTRO for the game played: its start-up screens in EXPAND.
     pokedaisy_intro: bool,
+    /// The coming game's screen, read while its cart is seated (3.2 perf):
+    /// its screen size, where that came from and the frame it was chosen
+    /// for, PokeDaisy's view and Intro. Taken when its screen goes on.
+    screen_ready: Option<ScreenReady>,
     /// PokeDaisy's HUD, drawn by slot. over the picture.
     pokedaisy_hud: pokedaisy_hud::PokedaisyHud,
     /// PokeDaisy's companion or quick menu is over the game: no shader, LCD
@@ -2575,6 +2589,7 @@ impl Engine {
             video_mode: VideoMode::Actual,
             pokedaisy_view: crate::pokedaisy_view::View::Expand,
             pokedaisy_intro: true,
+            screen_ready: None,
             pokedaisy_hud: Default::default(),
             pokedaisy_menu: false,
             wallpaper_texture,
@@ -4553,7 +4568,7 @@ impl Engine {
                 self.cancel_link_discovery();
                 self.link_identity = None;
                 self.reset_time_controls();
-                self.pending_game = None;
+                self.pending_game = None; self.screen_ready = None;
                 // Preserve the final video texture for the original 160ms CRT
                 // power-off before the mechanical 450ms cartridge ejection.
                 if self.game.is_some() {
@@ -5547,7 +5562,7 @@ impl Engine {
                             // core to start yet (3.0.0-cartes1).
                             self.inserted = true;
                             self.prepared_rom = None;
-                            self.pending_game = None;
+                            self.pending_game = None; self.screen_ready = None;
                             self.insert_started = Some(Instant::now());
                             self.a_down_at = self.insert_started;
                             self.fresh_launch = false;
@@ -5568,7 +5583,7 @@ impl Engine {
                             let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
                             let uri = selected.rom.to_string_lossy();
                                         self.prepared_rom = None;
-                            self.pending_game = None;
+                            self.pending_game = None; self.screen_ready = None;
                             self.insert_started = Some(Instant::now());
                             crate::frame_watch::insert_started();
                             self.a_down_at = self.insert_started;
@@ -5604,7 +5619,7 @@ impl Engine {
                             self.fresh_launch = false;
                             self.awaiting_game = false;
                             self.prepared_rom = None;
-                            self.pending_game = None;
+                            self.pending_game = None; self.screen_ready = None;
                             self.requested_uri = None;
                                         *REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = None;
                             return;
@@ -6093,6 +6108,7 @@ impl Engine {
                             else { format!("{cheats_on} cheats on") });
                     }
                     self.pending_game = Some(session);
+                    self.screen_ready = None;
                     let recents_started = Instant::now();
                     self.record_recent();
                     crate::game::log_launch_timing(&format!(
@@ -6191,6 +6207,56 @@ impl Engine {
                 session.display_aspect(), session.frame_size(), self.game_square(), panel),
             _ => video_mode::integer_is_ratio(platform, panel),
         }
+    }
+
+    /// The screen [session]'s game starts with: its screen size, chosen
+    /// once from the core's first geometry (later frame changes update the
+    /// fit, not the size), PokeDaisy's view and Intro. Reads the game's
+    /// files.
+    fn screen_settings(&self, session: &GameSession) -> ScreenReady {
+        let name = self.shelves[self.active].carts
+            .get(self.shelves[self.active].index)
+            .map_or("", |cart| cart.stem.as_str());
+        let platform = self.current_cart_platform();
+        let square = video_mode::square_game(platform, panel_size(), session.square_listed());
+        let frame = video_mode::launch_frame(platform, session.frame_size(), square, session.fps < 55.0);
+        let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let root = paths.as_ref().map(|(root, _)| root.as_path());
+        let mode = match root {
+            None => video_mode::game_default_mode(platform, panel_size(), square, frame)
+                .at_launch(platform, panel_size()),
+            Some(root) => video_mode::video_mode_for(root, name, platform, panel_size(), square, frame),
+        };
+        let source = root.map_or("auto", |root| video_mode::video_mode_source(root, name, platform));
+        let view = root.map_or_else(Default::default, |root| crate::pokedaisy_view::view_for(root, name));
+        let intro = root.is_none_or(|root| crate::pokedaisy_view::intro_expands(root, name));
+        ScreenReady { mode, source, frame, square, view, intro }
+    }
+
+    /// While the cart is seated (3.2 perf): the coming game's screen
+    /// settings are read, and its shader compiled and its pictures (paper,
+    /// dot matrix) loaded, so its screen goes on without that work. Nothing
+    /// is applied: the screen still goes on as before (apply_video_geometry).
+    fn ready_coming_screen(&mut self) {
+        if self.screen_ready.is_some() { return; }
+        let Some(session) = self.pending_game.as_ref() else { return };
+        let started = Instant::now();
+        let ready = self.screen_settings(session);
+        let pokedaisy = session.core_kind() == Core::PokeDaisy;
+        let effect = self.game_effect_for(ready.mode, pokedaisy);
+        let lcd = if pokedaisy { crate::settings::POKEDAISY_LCD_EFFECT }
+            else { self.game_lcd_effect(self.current_cart_platform()) };
+        self.screen_ready = Some(ready);
+        use slot_gfx::ScreenEffect as E;
+        if matches!(effect, E::Simpletex | E::SimpletexGba) && !self.gpu.has_paper() {
+            if let Some((size, rgba)) = shader_texture(PAPER_PNG) { self.gpu.set_paper(size, &rgba); }
+        }
+        if matches!(effect, E::DotMatrix | E::DotMatrixColour) && !self.gpu.has_dot_background() {
+            if let Some((size, rgba)) = shader_texture(DOT_MATRIX_PNG) { self.gpu.set_dot_background(size, &rgba); }
+        }
+        self.gpu.prepare_screen_effect(effect, lcd.gpu());
+        crate::game::log_launch_timing(&format!(
+            "Coming screen ready while seated: {}ms ({effect:?})", started.elapsed().as_millis()));
     }
 
     fn apply_video_geometry(&mut self) {
@@ -6336,25 +6402,30 @@ impl Engine {
         }
     }
     fn game_effect(&self) -> slot_gfx::ScreenEffect {
+        self.game_effect_for(self.video_mode, self.pokedaisy_running())
+    }
+
+    /// The game's shader in [mode], PokeDaisy's or another core's.
+    fn game_effect_for(&self, mode: VideoMode, pokedaisy: bool) -> slot_gfx::ScreenEffect {
         // PokeDaisy's companion and quick menu: its own drawing, no shader.
         // Its canvas is a whole multiple of the screen on most panels, not
         // all: Sharp Bilinear keeps every pixel the same size (the same
         // picture where the multiple is whole).
-        if self.pokedaisy_running() {
+        if pokedaisy {
             let effect = video_mode::screen_effect(self.game_shader(),
-                self.current_cart_platform(), self.video_mode);
+                self.current_cart_platform(), mode);
             return if self.pokedaisy_menu || effect == slot_gfx::ScreenEffect::None {
                 slot_gfx::ScreenEffect::SharpBilinear
             } else { effect };
         }
         let effect = video_mode::screen_effect(self.game_shader(),
-            self.current_cart_platform(), self.video_mode);
+            self.current_cart_platform(), mode);
         // Off the KONKR Original Ratio is rarely a whole multiple of the
         // picture: keep every pixel the same size, as on the KONKR.
         let platform = self.current_cart_platform();
-        let uneven = fitted_canvas() && self.video_mode != VideoMode::Stretch
+        let uneven = fitted_canvas() && mode != VideoMode::Stretch
             && !video_mode::whole_scale(platform,
-                video_mode::picture_rect(platform, self.video_mode, panel_size()));
+                video_mode::picture_rect(platform, mode, panel_size()));
         // An upscaled GBA Video picture is already smooth.
         let upscaled = self.playing_video()
             && self.game_settings().upscaler_gbav != crate::settings::Upscaler::Off;
@@ -9998,10 +10069,12 @@ impl Engine {
             // Read wall time, not accumulated clipped frame dt: a slow core
             // load must be hidden INSIDE the hold, not added after it.
             let inserted_for = self.insert_started.map_or(0.0, |t| t.elapsed().as_secs_f32());
+            let mut core_opened_now = false;
             if inserted_for >= SEATED_AT && self.a_down_at.is_none()
                 && self.pending_game.is_none()
             {
                 if let Some(local) = self.prepared_rom.take() {
+                    core_opened_now = true;
                     crate::frame_watch::core_started();
                     let core_at = Instant::now();
                     self.prepare_game_core(&local);
@@ -10011,6 +10084,11 @@ impl Engine {
             }
             // Re-read wall time after core.load() and save-state import.
             let inserted_for = self.insert_started.map_or(0.0, |t| t.elapsed().as_secs_f32());
+            if inserted_for < INSERT_S && self.pending_game.is_some() && !core_opened_now {
+                // The frame after the core opened, the cart still seated:
+                // the coming screen is made ready (3.2 perf).
+                self.ready_coming_screen();
+            }
             if inserted_for >= INSERT_S {
                 if let Some(session) = self.pending_game.take() {
                     crate::game::log_launch_timing(&format!(
@@ -10036,40 +10114,34 @@ impl Engine {
                     // carousel in the first game-frame callback.
                     self.game_accum = 0.0;
                     let look_at = Instant::now();
-                    self.apply_game_look();
-                    let look_ms = look_at.elapsed().as_millis();
+                    // The game's look is applied once, below, with its own
+                    // screen size (apply_video_geometry): no look applied
+                    // first with the last game's size (3.2 perf).
                     // The exact Slot upstream geometry: GB/GBC 160x144
                     // is centred within the 240x160 libretro canvas.
-                    let name = self.shelves[self.active].carts
-                        .get(self.shelves[self.active].index)
-                        .map_or("", |cart| cart.stem.as_str());
                     let platform = self.current_cart_platform();
-                    let square = self.game_square();
-                    // Resolve the automatic mode once from the core's initial
-                    // geometry. Later frame changes update fit, not the mode.
-                    let frame = self.game.as_ref().map_or(platform.picture(), |session|
-                        video_mode::launch_frame(platform, session.frame_size(), square, session.fps < 55.0));
-                    self.video_mode = PATHS.lock().unwrap_or_else(|e| e.into_inner())
-                        .as_ref().map_or_else(
-                            || video_mode::game_default_mode(platform, panel_size(), square, frame)
-                                .at_launch(platform, panel_size()),
-                            |(root, _)| video_mode::video_mode_for(root, name, platform, panel_size(), square, frame));
-                    let source = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
-                        .map_or("auto", |(root, _)| video_mode::video_mode_source(root, name, platform));
+                    // Read while the cart was seated, else now.
+                    let ready = match self.screen_ready.take() {
+                        Some(ready) => ready,
+                        None => {
+                            let session = self.game.as_ref().expect("game just set");
+                            self.screen_settings(session)
+                        }
+                    };
+                    let ScreenReady { mode, source, frame, square, view, intro } = ready;
+                    self.video_mode = mode;
                     let reported = self.game.as_ref().map_or((0, 0), GameSession::frame_size);
                     crate::log_info(&format!("Screen size {:?} ({source}) for {platform:?}: core {}x{}, chosen for {}x{}, square {square}, panel {}x{}",
                         self.video_mode, reported.0, reported.1, frame.0, frame.1, panel_size().0, panel_size().1));
-                    self.pokedaisy_view = PATHS.lock().unwrap_or_else(|e| e.into_inner())
-                        .as_ref().map_or_else(Default::default,
-                            |(root, _)| crate::pokedaisy_view::view_for(root, name));
-                    self.pokedaisy_intro = PATHS.lock().unwrap_or_else(|e| e.into_inner())
-                        .as_ref().is_none_or(|(root, _)| crate::pokedaisy_view::intro_expands(root, name));
+                    self.pokedaisy_view = view;
+                    self.pokedaisy_intro = intro;
                     self.pokedaisy_menu = false;
                     self.pokedaisy_hud.clear();
+                    let settings_ms = look_at.elapsed().as_millis();
                     self.apply_video_geometry();
                     crate::game::log_launch_timing(&format!(
-                        "Screen on work: shader and look {look_ms}ms, screen settings {}ms",
-                        look_at.elapsed().as_millis() - look_ms));
+                        "Screen on work: screen settings {settings_ms}ms, shader and look {}ms",
+                        look_at.elapsed().as_millis() - settings_ms));
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
                     self.gpu.set_screen_power(0.0);
