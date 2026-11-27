@@ -4577,7 +4577,12 @@ impl Engine {
                     // Unloaded first: a core that writes its own save as the
                     // game closes (fake-08's cartdata) has written it when the
                     // save is copied on.
+                    let mut session = session;
+                    let parts = session.take_save_parts();
+                    let drop_at = Instant::now();
                     drop(session);
+                    crate::frame_watch::eject_detail(format!("{parts}{}core closed {}ms",
+                        if parts.is_empty() { "" } else { ", " }, drop_at.elapsed().as_millis()));
                     // Once the state is on disk (a big one is written off
                     // this thread: the eject doesn't wait for it).
                     crate::game::after_state_writes(move |written| match written {
@@ -5819,10 +5824,12 @@ impl Engine {
             && matches!(self.overlay,ShelfOverlay::None);
         let limit=if quiet {2} else {1};
         let upload_started=Instant::now();
+        let mut uploads=0u32;
         for _ in 0..limit {
             if upload_started.elapsed()>=CART_GPU_UPLOAD_BUDGET {break}
             let Some(((shelf_id,index),face,layers))=self.cart_render.ready() else {break};
             crate::frame_watch::did(crate::frame_watch::WORK_LABEL);
+            uploads+=1;
             // Library > RomM's carts live on its page, not on a shelf.
             if shelf_id==romm::ROMM_RACK { self.romm_face(index,&face); continue; }
             let Some(shelf)=self.shelves.get(shelf_id) else {continue};
@@ -5870,6 +5877,11 @@ impl Engine {
         }
         let shelf_id = self.active;
         let selected = self.shelves[shelf_id].index;
+        let blank = if matches!(self.overlay, ShelfOverlay::None) && !self.inserted {
+            self.shelves[shelf_id].on_screen().into_iter()
+                .filter(|index| self.shelves[shelf_id].face(*index).is_none()).count() as u32
+        } else { 0 };
+        crate::frame_watch::labels_frame(uploads, blank);
         // Priorities are recomputed every frame, so a rapid D-pad or L1/R1
         // turn promotes new visible carts ahead of stale background requests.
         // Order: selected, active +/-1, next/previous system, the rest.
@@ -9990,6 +10002,7 @@ impl Engine {
                 && self.pending_game.is_none()
             {
                 if let Some(local) = self.prepared_rom.take() {
+                    crate::frame_watch::core_started();
                     let core_at = Instant::now();
                     self.prepare_game_core(&local);
                     crate::frame_watch::did(crate::frame_watch::WORK_CORE);
@@ -10022,7 +10035,9 @@ impl Engine {
                     // preparation; avoid synchronous IO/rebuilding the
                     // carousel in the first game-frame callback.
                     self.game_accum = 0.0;
+                    let look_at = Instant::now();
                     self.apply_game_look();
+                    let look_ms = look_at.elapsed().as_millis();
                     // The exact Slot upstream geometry: GB/GBC 160x144
                     // is centred within the 240x160 libretro canvas.
                     let name = self.shelves[self.active].carts
@@ -10052,6 +10067,9 @@ impl Engine {
                     self.pokedaisy_menu = false;
                     self.pokedaisy_hud.clear();
                     self.apply_video_geometry();
+                    crate::game::log_launch_timing(&format!(
+                        "Screen on work: shader and look {look_ms}ms, screen settings {}ms",
+                        look_at.elapsed().as_millis() - look_ms));
                     self.screen_power = 0.0;
                     self.exiting_screen = false;
                     self.gpu.set_screen_power(0.0);

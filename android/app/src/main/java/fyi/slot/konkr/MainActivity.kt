@@ -1420,7 +1420,9 @@ class MainActivity : Activity() {
                 val core = Systems.folderForKey(payload.getString("core"))
                 val target = activeTargets[uri]
                 if (target != null && target.core == core) {
+                    val exportQueuedAt = SystemClock.elapsedRealtime()
                     gameLoader.execute {
+                        val exportAt = SystemClock.elapsedRealtime()
                         val stamp = payload.optString("manual_stamp", "")
                         val deleted = payload.optString("deleted_stamp", "")
                         val failures = if (stamp.isNotEmpty()) {
@@ -1449,6 +1451,8 @@ class MainActivity : Activity() {
                                 }
                             }
                         }
+                        SlotLog.i(TAG, "Save export: ${SystemClock.elapsedRealtime() - exportAt}ms for " +
+                            "${target.core}/${target.stem} (waited ${exportAt - exportQueuedAt}ms to start)")
                         if (failures.isNotEmpty()) {
                             runOnUiThread {
                                 if (!isDestroyed) {
@@ -2641,6 +2645,7 @@ class MainActivity : Activity() {
                 // input. Inspect the embedded extension before selecting a
                 // core, a save target or a private cache extension.
                 val splore = rawUri == Systems.SPLORE_URI
+                val inspectAt = SystemClock.elapsedRealtime()
                 val ext = if (splore) "p8" else if (RomSource.isContainer(name)) {
                     contentResolver.openInputStream(uri)?.use { input ->
                         RomSource.inspect(input, name).extension
@@ -2650,7 +2655,9 @@ class MainActivity : Activity() {
                 // Saves, states and the cache by the game's portable name
                 // (slot. 2.5), its files from 2.4 carried over first.
                 val digest = GameKeys.digest(rawUri)
+                val carryAt = SystemClock.elapsedRealtime()
                 GameKeys.carryGameFiles(File(filesDir, "Saves"), GameKeys.legacyDigest(rawUri), digest)
+                val copyAt = SystemClock.elapsedRealtime()
                 val dir = File(cacheDir, "rom-cache").apply { mkdirs() }
                 val target = File(dir, "$digest.$ext")
                 // Always open via Android SAF; no assumptions about physical filesystem paths.
@@ -2723,6 +2730,7 @@ class MainActivity : Activity() {
                     return@execute
                 }
                 val folderWaitAt = SystemClock.elapsedRealtime()
+                val targetMs = folderWaitAt - romReadyAt
                 // Only this game's saves, states, cheats and settings are
                 // waited for (3.0.1-beta11): the copy takes them first, the
                 // other games' follow after the launch. A game whose own
@@ -2739,6 +2747,7 @@ class MainActivity : Activity() {
                 (SystemClock.elapsedRealtime() - folderWaitAt).takeIf { it > 20 }?.let {
                     SlotLog.i(TAG, "Slot launch waited ${it}ms for the slot. folder")
                 }
+                val importAt = SystemClock.elapsedRealtime()
                 if (!settleDeletedOutside(shared)) {
                     nativeGameError(rawUri, "quiet:Deleted save choice cancelled")
                     return@execute
@@ -2811,6 +2820,7 @@ class MainActivity : Activity() {
                 // Sync Saves with RomM (2.5): the server's newer save comes
                 // in first. Never stops the game.
                 // Not while this game's save is still going up: it's the newest.
+                val rommStartAt = SystemClock.elapsedRealtime()
                 if (rommBusy.containsKey(rommKey(shared))) {
                     SlotLog.i(TAG, "RomM: ${shared.stem}'s save is still being sent; launching with it")
                 } else {
@@ -2851,6 +2861,7 @@ class MainActivity : Activity() {
                         }
                     }
                 }
+                val rommMs = SystemClock.elapsedRealtime() - rommStartAt
                 step = "core"
                 // Share Saves never silently chooses an old same-core state
                 // over freshly imported cross-core SRAM. A direct same-core
@@ -2928,6 +2939,10 @@ class MainActivity : Activity() {
                 val readyAt = SystemClock.elapsedRealtime()
                 SlotLog.i(TAG, "Slot launch preparation: ROM cache=${romReadyAt - launchStart}ms, " +
                     "RetroArch import=${readyAt - romReadyAt}ms, total=${readyAt - launchStart}ms")
+                SlotLog.i(TAG, "Slot launch steps: queue=${queueWait}ms, zip check=${carryAt - inspectAt}ms, " +
+                    "old names=${copyAt - carryAt}ms, ROM copy=${romReadyAt - copyAt}ms, save target=${targetMs}ms, " +
+                    "slot. folder=${importAt - folderWaitAt}ms, RetroArch folders=${rommStartAt - importAt}ms, " +
+                    "RomM=${rommMs}ms, rest=${readyAt - rommStartAt - rommMs}ms")
                 nativeSetNextResumeMode(resumeChoice)
                 nativeGameReady(rawUri, target.absolutePath)
                 if (ext == "gba") prefs.edit().putString("last_gba_core_$digest", core).apply()

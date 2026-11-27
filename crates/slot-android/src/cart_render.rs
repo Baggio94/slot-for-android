@@ -100,14 +100,19 @@ impl CartRender {
                         // An unchanged cartridge can be restored from LZ4 on
                         // either raster worker, avoiding PNG/emboss/upscale on
                         // subsequent launches; never access disk on the GL thread.
+                        let face_at=std::time::Instant::now();
                         let disk_key=disk.as_ref().map(|cache|cache.key(&cart));
                         let cached=match (disk.as_ref(),disk_key.as_deref()) {
                             (Some(cache),Some(key)) => cache.read(key),
                             _ => None,
                         };
                         let needs_write=cached.is_none();
-                        let pixels=cached.unwrap_or_else(||
-                            panel_face(cart_face_with_material(&cart,None)));
+                        if !needs_write { crate::frame_watch::label_from_disk(face_at.elapsed()); }
+                        let pixels=cached.unwrap_or_else(|| {
+                            let face=panel_face(cart_face_with_material(&cart,None));
+                            crate::frame_watch::label_drawn(face_at.elapsed());
+                            face
+                        });
                         let layers = if include_material && is_clear(&cart) {
                             let original = [
                                 cart_interior(&cart),

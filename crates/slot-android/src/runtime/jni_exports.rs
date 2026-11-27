@@ -872,6 +872,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativePollLaunchUri(
         return std::ptr::null_mut();
     }
     let next = REQUEST.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if next.is_some() { crate::frame_watch::handed(); }
     match next.and_then(|v| env.new_string(v).ok()) {
         Some(v) => v.into_raw(), None => std::ptr::null_mut(),
     }

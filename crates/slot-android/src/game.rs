@@ -428,6 +428,8 @@ pub struct GameSession {
     /// Last, so it drops after the core: the player's own PICO-8's save
     /// goes back to the game's (see pico8::SaveBridge).
     pico8_saves: Option<crate::pico8::SaveBridge>,
+    /// What the last checkpoint took, part by part, for the eject's line.
+    save_parts: String,
 }
 
 struct HomeNetplay {
@@ -1288,6 +1290,7 @@ impl GameSession {
             sample_rate: core_sample_rate(sample_rate),
             fps,
             pico8_saves,
+            save_parts: String::new(),
         };
         // The handheld's default sun until the runtime applies this game's own.
         let light = slot_retro::sensors::available() & slot_retro::sensors::ILLUMINANCE != 0;
@@ -1301,6 +1304,9 @@ impl GameSession {
         }
         Ok(session)
     }
+
+    /// What the last checkpoint took, part by part (the eject's line).
+    pub fn take_save_parts(&mut self) -> String { std::mem::take(&mut self.save_parts) }
 
     /// The cheats turned on for this game.
     pub fn cheats(&self) -> &[crate::cheats::Cheat] { &self.cheats }
@@ -2596,7 +2602,9 @@ impl GameSession {
         if self.runahead_rollback_failed {
             return Err("Run-Ahead rollback failed; exit without saving instead".into());
         }
+        let battery_at = Instant::now();
         let battery = self.save_sram_checked()?;
+        self.save_parts = format!("battery {}ms", battery_at.elapsed().as_millis());
         if self.core.shut_down() {
             // A game that shut itself down has nothing to resume: the next
             // launch starts it afresh (older auto-states are kept).
@@ -2609,8 +2617,10 @@ impl GameSession {
         if !with_state || self.in_multiplayer() {
             return Ok(battery);
         }
+        let capture_at = Instant::now();
         let data = self.core.serialize()
             .map_err(|e| format!("Auto state capture: {e}"))?;
+        let capture_ms = capture_at.elapsed().as_millis();
         // Its picture beside it, for Sync States with RomM (3.0): what the
         // state shows in RomM. Only with the sync on; never fails the save.
         let syncing = crate::runtime::ROMM_STATES.load(std::sync::atomic::Ordering::Acquire) == 2;
@@ -2619,6 +2629,7 @@ impl GameSession {
         let mut picture = self.retroarch_export.clone().into_os_string();
         picture.push(".png");
         let picture = PathBuf::from(picture);
+        let data_len = data.len();
         let big = background && data.len() >= BIG_STATE;
         let container = retroarch_state::encode(&self.for_retroarch(data.clone()))
             .map_err(|e| format!("RetroArch state encoding: {e}"))?;
@@ -2633,6 +2644,8 @@ impl GameSession {
             }
             Ok(())
         };
+        let prepared_ms = capture_at.elapsed().as_millis() - capture_ms;
+        let write_at = Instant::now();
         if big {
             STATE_WRITES.store(true, std::sync::atomic::Ordering::Release);
             let writer = std::thread::spawn(write);
@@ -2640,6 +2653,9 @@ impl GameSession {
         } else {
             write()?;
         }
+        self.save_parts.push_str(&format!(", state {} KB: capture {capture_ms}ms, picture and container {prepared_ms}ms, \
+            write {}", data_len / 1024,
+            if big { "in the background".to_string() } else { format!("{}ms", write_at.elapsed().as_millis()) }));
         // The auto-state now matches this battery.
         if self.stale_state.is_some() {
             self.opening_battery = self.core.save_ram_verified().ok().flatten().map(|ram| battery_hash(&ram));
