@@ -1,19 +1,20 @@
-slot. for Android: a door's fade on the sides as in the middle.
-On a door's fade (PK_WIDE_SCENE_FADE) the glow past the game's edges
-follows the frame at its own brightness and without lagging behind it,
-and the frozen scene gives way to it in 4 frames instead of 16: the sides
-stayed grey while Pokemon Crystal's middle went white, then came back
-after it.
+slot. for Android: a Game Boy Color door's fade on the sides as in the middle.
+From a door's fade (PK_WIDE_SCENE_FADE) until the next map is read, the
+glow past the game's edges follows the frame at its own brightness and
+without lagging behind it, and the frozen scene gives way to it in 4
+frames instead of 16: the sides stayed grey while Pokemon Crystal's
+middle went white, then showed dark bands as the town faded in. Game Boy
+games keep their doors as they were (right in Pokemon Blue).
 
 diff --git a/app/src/main/cpp/pk_wide_gb.c b/app/src/main/cpp/pk_wide_gb.c
-index 4ee8baf..0f9c497 100644
+index 4ee8baf..6eb5f63 100644
 --- a/app/src/main/cpp/pk_wide_gb.c
 +++ b/app/src/main/cpp/pk_wide_gb.c
 @@ -1291,8 +1291,13 @@ static void gbBackgroundRows(const uint32_t* frame) {
  static int32_t gbEdgeAccH[2][GBH][3], gbEdgeAccV[2][GBW][3];   // the edge bands' colour per row / column, x16, smoothed over frames
  static int32_t gbPreH[2][GBH + 1][3], gbPreV[2][GBW + 1][3];   // their running sums (a blur is a difference)
  static bool gbEdgeAccOk;
-+// slot.: a door's fade (PK_WIDE_SCENE_FADE): the glow follows the frame as it fades, at the frame's own brightness and
++// slot.: a Game Boy Color game's door (PK_WIDE_SCENE_FADE, until the next map is read): the glow follows the frame as it fades, at the frame's own brightness and
 +// without lagging behind it, and the frozen scene gives way to it in 4 frames, not 16: the sides stayed grey while the
 +// middle went white (Crystal), then came back after it.
 +static bool gbFading;
@@ -31,15 +32,17 @@ index 4ee8baf..0f9c497 100644
      int seam = d >= 4 ? 256 : d * 64;                                 // the first pixels lean on the edge itself
      int lo = at - r < 0 ? 0 : at - r, hi = at + r >= len ? len - 1 : at + r;
      uint32_t v = 0;
-@@ -1691,6 +1697,7 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+@@ -1691,6 +1697,9 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
                  : !valid ? PK_WIDE_SCENE_MENU
                  : match->text ? PK_WIDE_SCENE_TEXT : PK_WIDE_SCENE_FIELD;
      gbLastClose = gbLastScene != PK_WIDE_SCENE_FIELD;
-+    gbFading = gbLastScene == PK_WIDE_SCENE_FADE;
++    // A Game Boy Color game's door, from its fade until the next map is read (the glow dimmed again in between: dark bands
++    // on the sides as Crystal's town faded in). Not a Game Boy game's: its doors were right as they were (Pokemon Blue).
++    gbFading = (gbB->model & GB_MODEL_CGB) && (gbLastScene == PK_WIDE_SCENE_FADE || (gbFading && !valid));
  
      if (valid) {
          const struct GbSnap* s = match;
-@@ -1720,7 +1727,8 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+@@ -1720,7 +1729,8 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
          gbMix = gbMixSnap || gbMix + GB_MIX_STEP > 256 ? 256 : gbMix + GB_MIX_STEP;
          gbMixSnap = false;
      } else {
