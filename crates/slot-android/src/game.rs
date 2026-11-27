@@ -2550,6 +2550,9 @@ impl GameSession {
                 log_launch_timing("Pokémon Flash has no complete save; the save on disk is kept");
                 self.kept_flash_save = true;
             }
+            // The same bytes as on disk already (3.2 perf): nothing to
+            // write, the save is there and whole.
+            Some(bytes) if std::fs::read(&self.save).is_ok_and(|disk| disk == bytes) => wrote = true,
             Some(bytes) => match atomic_write(&self.save, &bytes) {
                 Ok(()) => wrote = true,
                 Err(err) => error = Some(format!("Battery save: {err}")),
@@ -2557,7 +2560,9 @@ impl GameSession {
             None => {}
         }
         if let Some(bytes) = self.core.save_rtc() {
-            match atomic_write(&self.rtc, &bytes) {
+            if std::fs::read(&self.rtc).is_ok_and(|disk| disk == bytes) {
+                wrote = true;
+            } else { match atomic_write(&self.rtc, &bytes) {
                 Ok(()) => wrote = true,
                 Err(err) => {
                     let reason = format!("RTC save: {err}");
@@ -2566,7 +2571,7 @@ impl GameSession {
                         previous.push_str(&reason);
                     } else { error = Some(reason); }
                 }
-            }
+            } }
         }
         self.last_sram = Instant::now();
         error.map_or(Ok(wrote), Err)
