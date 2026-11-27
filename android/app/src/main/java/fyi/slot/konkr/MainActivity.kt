@@ -168,6 +168,7 @@ class MainActivity : Activity() {
     external fun nativeConfigure(dataDir: String, libraryDir: String,
         isRetroidPocketClassic: Boolean)
     external fun nativePollLaunchUri(): String?
+    external fun nativeLaunchWaiting(): Boolean
     external fun nativeGameReady(uri: String, path: String)
     external fun nativeGameError(uri: String, message: String)
     external fun nativeExitGame()
@@ -1211,14 +1212,7 @@ class MainActivity : Activity() {
                 stopAudio()
             }
             keepScreenOn(playing && nativeGameUnpaused())
-            drainPendingSaveFlush()
-            val request = nativePollLaunchUri()
-            if (request != null) {
-                raLaunchPending = true
-                raLaunchRequestedAt = SystemClock.elapsedRealtime()
-                raPendingGameNotice = null
-                loadGameFromSaf(request)
-            }
+            pollLaunch()
             romm.poll()
             deleteRequestedGames()
             SlotUi.updateMenuPalette(nativeMenuPalette(), nativeMenuDarkInk())
@@ -1406,6 +1400,26 @@ class MainActivity : Activity() {
             if (!isDestroyed && resumed) uiHandler.postDelayed(this, 100L)
         }
     }
+    /** The cart's launch request, taken on the main thread: at the 100 ms
+     *  pulse, and at once when the GL thread sees one waiting after its
+     *  frame (3.2 perf, launchSoon). Saves to copy go first, as before. */
+    private fun pollLaunch() {
+        drainPendingSaveFlush()
+        val request = nativePollLaunchUri()
+        if (request != null) {
+            raLaunchPending = true
+            raLaunchRequestedAt = SystemClock.elapsedRealtime()
+            raPendingGameNotice = null
+            loadGameFromSaf(request)
+        }
+    }
+
+    private val launchSoonPosted = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val launchSoon = Runnable {
+        launchSoonPosted.set(false)
+        if (!isDestroyed && resumed) pollLaunch()
+    }
+
     // Runs on the main thread, queueing real storage I/O on gameLoader.
     // Called at the 100ms foreground pulse AND after the final suspend save,
     // so stopping the UI timer cannot strand an export until next resume.
@@ -1646,6 +1660,11 @@ class MainActivity : Activity() {
                     if (audioRunning.get() && nativeIsPlaying() &&
                         audioFrameSignal.availablePermits() == 0
                     ) audioFrameSignal.release()
+                    // A cart just went in: Android takes its launch now, not
+                    // at the next 100 ms pulse (3.2 perf).
+                    if (nativeLaunchWaiting() && launchSoonPosted.compareAndSet(false, true)) {
+                        uiHandler.post(launchSoon)
+                    }
                     // Drain on the render thread for frame-accurate insert/eject clicks.
                     var kind = nativePollCartSfx()
                     while (kind != 0) {
