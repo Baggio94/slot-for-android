@@ -4,11 +4,13 @@ fully mixed in, the glow past the game's edges follows the frame at its
 own brightness and without lagging behind it, and the frozen scene gives
 way to it in 4 frames instead of 16: the sides stayed grey while Pokemon
 Crystal's middle went white, then showed dark bands as the town (read
-while the screen was still white) mixed in. Game Boy games keep their
-doors as they were (right in Pokemon Blue).
+while the screen was still white) mixed in. The next map mixes in only
+once the game fades it in: a room's dark outside, which doesn't fade with
+the game's colours, darkened the edges of a white screen going in. Game
+Boy games keep their doors as they were (right in Pokemon Blue).
 
 diff --git a/app/src/main/cpp/pk_wide_gb.c b/app/src/main/cpp/pk_wide_gb.c
-index 4ee8baf..6ccb07e 100644
+index 4ee8baf..e229497 100644
 --- a/app/src/main/cpp/pk_wide_gb.c
 +++ b/app/src/main/cpp/pk_wide_gb.c
 @@ -1291,8 +1291,13 @@ static void gbBackgroundRows(const uint32_t* frame) {
@@ -44,8 +46,16 @@ index 4ee8baf..6ccb07e 100644
  
      if (valid) {
          const struct GbSnap* s = match;
-@@ -1720,7 +1730,8 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
-         gbMix = gbMixSnap || gbMix + GB_MIX_STEP > 256 ? 256 : gbMix + GB_MIX_STEP;
+@@ -1717,10 +1727,15 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+             gbDraw(s, ox, oy, 0, 0, GBW, GBH, centre, GBW, alpha, true);
+             gbNObjs = n;
+         }
+-        gbMix = gbMixSnap || gbMix + GB_MIX_STEP > 256 ? 256 : gbMix + GB_MIX_STEP;
++        // slot.: a Game Boy Color door's next map, read while the screen is still white (or black): the glow stays until the
++        // game fades it in. The rebuilt scene's surroundings (a room's dark outside) don't fade with the game's colours:
++        // mixed in on a white screen, they darkened the window's edges first (Crystal, going in).
++        if (!(gbFading && gbFaded(frame)))
++            gbMix = gbMixSnap || gbMix + GB_MIX_STEP > 256 ? 256 : gbMix + GB_MIX_STEP;
          gbMixSnap = false;
      } else {
 -        gbMix = gbMix - GB_MIX_STEP < 0 ? 0 : gbMix - GB_MIX_STEP;   // the last scene, frozen, dissolves into the glow
