@@ -20,6 +20,10 @@ concurrency:
 
 jobs:
   scrape:
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [PCE, NEOGEO]
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -32,11 +36,12 @@ jobs:
           SS_SOFTNAME: ${{ secrets.SCREENSCRAPER_SOFTNAME }}
           SS_SSID: ${{ secrets.SCREENSCRAPER_SSID }}
           SS_SSPASSWORD: ${{ secrets.SCREENSCRAPER_SSPASSWORD }}
-        run: python3 tools/cart-colours-ng/scrape_ng.py out
+        run: python3 tools/cart-colours-ng/scrape_ng.py out ${{ matrix.group == 'PCE' && 'PCE SGX' || 'NEOGEO' }}
       - name: Push the data branch
+        if: always()
         run: |
-          cd out
+          mkdir -p out && cd out
           git init -q -b data
           git -c user.name=Baggio94 -c user.email=sahbito@gmail.com add -A
           git -c user.name=Baggio94 -c user.email=sahbito@gmail.com commit -qm "cart shells PCE / Neo Geo data"
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data:tools/cart-colours-ng-data
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data:tools/cart-colours-ng-data-${{ matrix.group }}

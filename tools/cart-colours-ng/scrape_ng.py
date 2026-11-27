@@ -4,7 +4,7 @@ ScreenScraper support-2D (front render of the cart or HuCard), its outline's
 aspect, the shell's colour round its edge and a small thumbnail, so the
 exceptions to each system's default shell can be read off a contact sheet.
 
-usage: scrape_ng.py OUT_DIR   (ScreenScraper credentials as for home-art)"""
+usage: scrape_ng.py OUT_DIR [KEY ...]   (ScreenScraper credentials as for home-art)"""
 import io, json, re, sys, time, urllib.parse, urllib.request
 from pathlib import Path
 
@@ -20,7 +20,7 @@ SYSTEMS = {
     'NEOGEO': (142, ('neo-geo', 'neo geo', 'neogeo'), ('fbneo', None, '.zip')),
 }
 FBNEO_NEOGEO = ('https://raw.githubusercontent.com/libretro/FBNeo/master/dats/'
-                + urllib.parse.quote('FinalBurn Neo (ClrMame Pro XML, Neo Geo only).dat'))
+                + urllib.parse.quote('FinalBurn Neo (ClrMame Pro XML, Neogeo only).dat'))
 
 
 def get(url):
@@ -67,23 +67,27 @@ def shell_stats(im):
             if al > 200:
                 acc[0] += r; acc[1] += g; acc[2] += b; n += 1
     rgb = [round(v / n) for v in acc] if n else None
-    alpha_frac = sum(1 for v in a.getdata() if v > 127) / (im.size[0] * im.size[1])
+    alpha_frac = a.point(lambda v: 255 if v > 127 else 0).histogram()[255] / (im.size[0] * im.size[1])
     return dict(w=im.size[0], h=im.size[1], aspect=round(h / w, 3) if w else None,
                 edge=rgb, fill=round(alpha_frac, 3))
 
 
-def main(out):
+def main(out, keys):
     out = Path(out); (out / 'thumbs').mkdir(parents=True, exist_ok=True)
     c = H.creds()
     listed = (H.call('systemesListe.php', c) or {}).get('response', {}).get('systemes', [])
     names = {int(s['id']): ' | '.join(str(v).lower() for v in (s.get('noms') or {}).values()) for s in listed if str(s.get('id', '')).isdigit()}
     seen_game, rows = set(), []
-    for key, (sid, words, _) in SYSTEMS.items():
+    for key in keys:
+        sid, words, _ = SYSTEMS[key]
         got = names.get(sid, '')
         print(f'{key}: ScreenScraper {sid} = {got}', flush=True)
         if not any(w in got for w in words):
             sys.exit(f'{key}: system id {sid} is not it')
-        todo = games(key)
+        try:
+            todo = games(key)
+        except Exception as e:
+            print(f'{key}: no game list ({e})', flush=True); continue
         print(f'{key}: {len(todo)} dumps', flush=True)
         for i, g in enumerate(todo):
             params = dict(c, systemeid=sid, romtype='rom', romnom=g['romnom'])
@@ -127,4 +131,4 @@ def main(out):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2:] or list(SYSTEMS))
