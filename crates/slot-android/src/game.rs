@@ -832,6 +832,9 @@ impl GameSession {
                 // ZOOM, EXPAND or ORIGINAL, as this game was last shown.
                 core.set_option("pokedaisy_aspect",
                     &crate::pokedaisy_view::view_for(storage, rom_stem).option());
+                // INTRO: the start-up screens in ORIGINAL or EXPAND.
+                core.set_option("pokedaisy_intro", crate::pokedaisy_view::intro_option(
+                    crate::pokedaisy_view::intro_expands(storage, rom_stem)));
             }
             Core::Gpsp => {
                 // Replicate official Slot/fork's core.rs: this option must
@@ -2204,6 +2207,13 @@ impl GameSession {
     pub fn set_pokedaisy_view(&mut self, view: crate::pokedaisy_view::View) {
         if self.core_kind == Core::PokeDaisy {
             self.set_core_option("pokedaisy_aspect", &view.option());
+        }
+    }
+
+    /// PokeDaisy's INTRO: the start-up screens in EXPAND or ORIGINAL.
+    pub fn set_pokedaisy_intro(&mut self, expand: bool) {
+        if self.core_kind == Core::PokeDaisy {
+            self.set_core_option("pokedaisy_intro", crate::pokedaisy_view::intro_option(expand));
         }
     }
 

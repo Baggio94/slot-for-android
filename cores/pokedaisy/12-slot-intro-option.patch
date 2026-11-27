@@ -1,0 +1,156 @@
+slot. for Android: INTRO, the start-up screens in ORIGINAL or EXPAND.
+A new option, pokedaisy_intro (original by default). ORIGINAL keeps
+patch 06: the boot, the intro, the title and the first menus at the
+game's own shape until the game is seen. EXPAND keeps the wide canvas
+from the start, with plain sides (the frame's colour at 60 %, black
+when it has none) and no blend toward the game's edges, on Game Boy,
+Game Boy Color and GBA alike. slot. sets it per game from its Screen
+page (Siham 2026-11-27).
+
+diff --git a/app/src/main/cpp/pk_wide.c b/app/src/main/cpp/pk_wide.c
+index ad599a8..c660af9 100644
+--- a/app/src/main/cpp/pk_wide.c
++++ b/app/src/main/cpp/pk_wide.c
+@@ -2560,7 +2560,38 @@ static int32_t edgeAccV[2][PK_WIDE_W][3];   // the top / bottom band's per colum
+ static int32_t preH[2][PK_WIDE_H + 1][3], preV[2][PK_WIDE_W + 1][3];   // their running sums (a blur is a difference)
+ static bool edgeAccOk;
+ 
++int pk_wide_dark_sides;
++
++// slot.: INTRO in EXPAND, before the game has started (pk_wide_dark_sides): the screen's background, when most of the
++// frame's outer edge is one colour (the BIOS's white, the credits' black), else black. In game, the glow as before.
++#define FLAT_SHARE 60
++static bool flatOk;
++static uint32_t flatColour;
++
++static void flatPrepare(const uint32_t* frame) {
++    uint32_t cand = 0;
++    int votes = 0, total = 0, same = 0;
++    const int n = 2 * PK_WIDE_W + 2 * PK_WIDE_H;
++    for (int pass = 0; pass < 2; pass++)
++        for (int i = 0; i < n; i++) {
++            uint32_t c = (i < PK_WIDE_W ? frame[i]
++                          : i < 2 * PK_WIDE_W ? frame[(PK_WIDE_H - 1) * PK_WIDE_W + i - PK_WIDE_W]
++                          : i < 2 * PK_WIDE_W + PK_WIDE_H ? frame[(i - 2 * PK_WIDE_W) * PK_WIDE_W]
++                          : frame[(i - 2 * PK_WIDE_W - PK_WIDE_H) * PK_WIDE_W + PK_WIDE_W - 1]) & 0x00FFFFFFu;
++            if (!pass) {
++                if (!votes) cand = c;
++                votes += c == cand ? 1 : -1;
++            } else {
++                total++;
++                same += c == cand;
++            }
++        }
++    flatOk = same * 100 >= FLAT_SHARE * total;
++    flatColour = cand;
++}
++
+ static void ambientPrepare(const uint32_t* frame) {
++    if (pk_wide_dark_sides) flatPrepare(frame);
+     for (int side = 0; side < 2; side++) {
+         int x0 = side ? PK_WIDE_W - AMBIENT_BAND : 0, y0 = side ? PK_WIDE_H - AMBIENT_BAND : 0;
+         for (int c = 0; c < 3; c++) preH[side][0][c] = preV[side][0][c] = 0;
+@@ -2596,6 +2627,7 @@ static void ambientPrepare(const uint32_t* frame) {
+ /** The glow at screen pixel (X, Y), off the frame; `reach` is how far the window goes past each edge (left, right,
+  * top, bottom), where it's dimmest. */
+ static uint32_t glowAt(const uint32_t* frame, int X, int Y, const int reach[4], uint32_t alpha) {
++    if (pk_wide_dark_sides) return (flatOk ? flatColour : 0) | alpha;
+     int ox = X < 0 ? -X : X >= PK_WIDE_W ? X - PK_WIDE_W + 1 : 0;
+     int oy = Y < 0 ? -Y : Y >= PK_WIDE_H ? Y - PK_WIDE_H + 1 : 0;
+     bool across = ox >= oy;   // from the left / right edge, else the top / bottom one
+@@ -4899,6 +4931,7 @@ static void fullDraw(const struct FullView* f) {
+     PW_MARK(pw4);
+     PW_ADD(2, pw3, pw4);
+     if (!rawView.w) mix = 0;   // nothing drawn yet
++    if (pk_wide_dark_sides) mix = 0;   // slot.: INTRO in EXPAND, before the game has started: no scene, its rows' bands
+     if (mix < 256) ambientPrepare(frame);
+     else edgeAccOk = false;    // the glow starts from the edges as they are when it's next needed
+     int reach[4] = { -v.x, v.x + v.w - PK_WIDE_W, -v.y, v.y + v.h - PK_WIDE_H };
+diff --git a/app/src/main/cpp/pk_wide.h b/app/src/main/cpp/pk_wide.h
+index 6c1baf3..ac7dc7d 100644
+--- a/app/src/main/cpp/pk_wide.h
++++ b/app/src/main/cpp/pk_wide.h
+@@ -353,6 +353,9 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+ /** pk_wide_glow's twin for a Game Boy game: the frame over its menus' bars. */
+ int pk_wide_gb_glow(struct mCore* core, const uint32_t* frame, uint32_t* out, struct PkWideView view);
+ int pk_wide_gb_scene(void);
++/** slot.: INTRO in EXPAND, before the game's map or a battle: the window past a screen whose edge isn't one colour is
++ * black rather than the glow, and the GBA's is the screen's background where it is (pk_wide_gb.c's always is). */
++extern int pk_wide_dark_sides;
+ /** slot.: a Game Boy game in a battle, by its RAM, as the last frame was read. */
+ int pk_wide_gb_in_battle(void);
+ /** slot.: the Game Boy's screen is off (LCDC bit 7 clear) as the frame ends. 0 for anything else. */
+diff --git a/app/src/main/cpp/pk_wide_gb.c b/app/src/main/cpp/pk_wide_gb.c
+index 922733c..3ccd1d3 100644
+--- a/app/src/main/cpp/pk_wide_gb.c
++++ b/app/src/main/cpp/pk_wide_gb.c
+@@ -1361,6 +1361,7 @@ static void gbAmbientPrepare(const uint32_t* frame) {
+  * bottom), where it is dimmest. */
+ static uint32_t gbGlowAt(const uint32_t* frame, int X, int Y, const int reach[4], uint32_t alpha) {
+     if (gbFlatOk) return gbFlat | alpha;
++    if (pk_wide_dark_sides) return alpha;
+     int ox = X < 0 ? -X : X >= GBW ? X - GBW + 1 : 0;
+     int oy = Y < 0 ? -Y : Y >= GBH ? Y - GBH + 1 : 0;
+     bool across = ox >= oy;   // from the left / right edge, else the top / bottom one
+@@ -1775,7 +1776,7 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+         gbMix = gbMix - step < 0 ? 0 : gbMix - step;   // the last scene, frozen, dissolves into the glow
+         gbMixSnap = false; // pk_wide_jump's cut is the frame after it, as pk_wide.c's mixSnap
+     }
+-    if (!gbRawView.w) gbMix = 0;
++    if (!gbRawView.w || pk_wide_dark_sides) gbMix = 0;   // slot.: INTRO in EXPAND before the game has started: no scene
+     if (!PK_WIDE_GB_GLOW) {
+         if (!valid || !gbFillSet) gbBackgroundRows(frame);   // fading in again from a menu: from its bars
+     } else if (gbMix < 256) gbAmbientPrepare(frame);
+diff --git a/libretro/pd_libretro.c b/libretro/pd_libretro.c
+index b92b6f3..770ffad 100644
+--- a/libretro/pd_libretro.c
++++ b/libretro/pd_libretro.c
+@@ -55,7 +55,7 @@ static const unsigned retroId[NKEYS] = {
+     RETRO_DEVICE_ID_JOYPAD_L2,    RETRO_DEVICE_ID_JOYPAD_R2,   RETRO_DEVICE_ID_JOYPAD_SELECT, RETRO_DEVICE_ID_JOYPAD_L3};
+ 
+ /* ---- the options this layer adds to mGBA's ---- */
+-#define PD_OPTION_COUNT 4
++#define PD_OPTION_COUNT 5
+ static const struct retro_core_option_v2_definition pdOptions[PD_OPTION_COUNT] = {
+     {"pokedaisy_canvas", "Companion canvas", NULL, "The frame size the core reports: the game sits in it at a whole scale, the companion fills it. auto = 320x240.", NULL, NULL,
+      {{"auto", NULL}, {"320x240", NULL}, {"341x256", NULL}, {"400x300", NULL}, {"427x240", NULL}, {NULL, NULL}}, "auto"},
+@@ -64,6 +64,11 @@ static const struct retro_core_option_v2_definition pdOptions[PD_OPTION_COUNT] =
+     {"pokedaisy_aspect", "Aspect", NULL, "How the game fills the screen where the host can draw past the game's edges: expand (the app's EXPAND, the map rebuilt out to the edges at the game's own scale), zoom (one scale less, more of the map), original (the game's own frame), auto (the core's own ASPECT setting).", NULL, NULL,
+      {{"auto", NULL}, {"expand", NULL}, {"zoom", NULL}, {"zoom1", NULL}, {"zoom2", NULL}, {"zoom3", NULL}, {"zoom4", NULL},
+       {"zoom5", NULL}, {"original", NULL}, {NULL, NULL}}, "auto"},
++    /* slot.: the boot, the intro, the title and the first menus (until the game's map or a battle) as ORIGINAL, or in
++     * EXPAND's canvas from the first frame: their sides the screen's own background where its edge is one colour, else
++     * black (pk_wide_dark_sides). */
++    {"pokedaisy_intro", "Intro", NULL, "Before the game's map or a battle: original (the game's own frame) or expand (EXPAND's canvas, plain sides).", NULL, NULL,
++     {{"original", NULL}, {"expand", NULL}, {NULL, NULL}}, "original"},
+     /* slot.: mGBA's own colour correction (libretro/mgba's), which mGBA 0.10.5's libretro port lacks. */
+     {"mgba_color_correction", "Color Correction", NULL, "The GBA's or the GBC's screen colours on the game's picture.", NULL, NULL,
+      {{"OFF", NULL}, {"GBA", NULL}, {"GBC", NULL}, {"Auto", NULL}, {NULL, NULL}}, "OFF"},
+@@ -723,7 +728,10 @@ static int key_of(int btn) {
+ static void apply_aspect_option(void);
+ /* Asked again whenever the frontend says an option changed, and once after the settings file is read. */
+ static void cc_read_option(void);
++static bool introExpand; // slot.: pokedaisy_intro is expand
+ static void read_options(void) {
++  const char *intro = pd_option("pokedaisy_intro");
++  introExpand = intro && !strcmp(intro, "expand");
+   apply_aspect_option();
+   cc_read_option();
+ }
+@@ -1252,6 +1260,7 @@ static void wide_tick(void) {
+   }
+   struct PkWideView v = wide_rect(fw, fh);
+   PF_T(vw0);
++  pk_wide_dark_sides = introExpand && wideSupported && !wideSeen;
+   pk_wide_view(core, wideSource, wideFrame, v, NULL);
+   if (freeFlight)
+     pk_flight_draw_wide(wideFrame, v.w, v.h, v.x, v.y); // FREE FLIGHT's clouds over the whole picture
+@@ -1402,7 +1411,7 @@ static void zoom_host_update(void) {
+ static void canvas_update(bool notify) {
+   int w = menuW, h = menuH, scale = 1;
+   unsigned fw = gameW ? gameW : (unsigned)baseGW, fh = gameH ? gameH : (unsigned)baseGH;
+-  const bool original = settings.aspect == PD_ASPECT_ORIGINAL || (wideSupported && !wideSeen);
++  const bool original = settings.aspect == PD_ASPECT_ORIGINAL || (wideSupported && !wideSeen && !introExpand);
+   if (!companion && original && fw && fh && (PD_BE_IS_GBA() || !quickOpen)) {
+     w = (int)fw;
+     h = (int)fh;

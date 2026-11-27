@@ -617,7 +617,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 181] = [
+const MENU_TEXT: [&str; 182] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -804,6 +804,7 @@ const MENU_TEXT: [&str; 181] = [
     "Companion",                          // 178, Game Menu: PokeDaisy's companion (X)
     "Quick Menu",                         // 179, Game Menu: PokeDaisy's quick menu (L3)
     "PICO-8",                             // 180, Systems
+    "Intro",                              // 181, Screen: PokeDaisy's start-up screens
 ];
 
 /// Settings > Systems, top to bottom.
@@ -1351,6 +1352,9 @@ const SUN_KEY: usize = 100;
 /// Pause Emulation's Sensitivity row (tilt and gyro games), drawn with the
 /// number values 1 to 10.
 const MOTION_KEY: usize = 102;
+/// Pause Screen's Intro row (PokeDaisy in EXPAND or ZOOM): the start-up
+/// screens in ORIGINAL or EXPAND, kept per game.
+const POKEDAISY_INTRO_KEY: usize = 161;
 /// The longest a core picker waits for a clear cart's lid before opening.
 const PICKER_LID_WAIT_MS: u64 = 600;
 /// Interface > Wallpaper > Shelf's value: GENERAL or a shelf name.
@@ -1670,6 +1674,8 @@ struct Engine {
     video_mode: VideoMode,
     /// PokeDaisy's view of the game played (SELECT + Up / Down).
     pokedaisy_view: crate::pokedaisy_view::View,
+    /// INTRO for the game played: its start-up screens in EXPAND.
+    pokedaisy_intro: bool,
     /// PokeDaisy's HUD, drawn by slot. over the picture.
     pokedaisy_hud: pokedaisy_hud::PokedaisyHud,
     /// PokeDaisy's companion or quick menu is over the game: no shader, LCD
@@ -2568,6 +2574,7 @@ impl Engine {
             emulation_core_labels,
             video_mode: VideoMode::Actual,
             pokedaisy_view: crate::pokedaisy_view::View::Expand,
+            pokedaisy_intro: false,
             pokedaisy_hud: Default::default(),
             pokedaisy_menu: false,
             wallpaper_texture,
@@ -6401,6 +6408,22 @@ impl Engine {
         }
     }
 
+    /// INTRO: ORIGINAL or EXPAND for this game's start-up screens, kept for
+    /// it. The core takes it at its next frame.
+    fn toggle_pokedaisy_intro(&mut self) {
+        let expand = !self.pokedaisy_intro;
+        self.pokedaisy_intro = expand;
+        if let Some(game) = self.game.as_mut() { game.set_pokedaisy_intro(expand); }
+        let name = self.shelves[self.active].carts
+            .get(self.shelves[self.active].index)
+            .map_or("", |cart| cart.stem.as_str());
+        if let Some((root, _)) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Err(err) = crate::pokedaisy_view::write_intro(root, name, expand) {
+                set_error_message("Couldn't save the intro setting.", &err);
+            }
+        }
+    }
+
     /// ZOOM's steps for the game played on this panel, as PokeDaisy has them.
     fn pokedaisy_zoom_steps(&self) -> u8 {
         crate::pokedaisy_view::zoom_steps(panel_size(),
@@ -6702,6 +6725,14 @@ impl Engine {
         let mut keys = Vec::new();
         for (row, &label) in own.iter().enumerate() {
             if let Some(key) = self.pause_screen_key(row) { rows.push(label); keys.push(key); }
+        }
+        // PokeDaisy's Intro, under Screen Size, while that is EXPAND or a
+        // ZOOM step (ORIGINAL has no wide canvas to choose for).
+        if self.pokedaisy_running() && self.pokedaisy_view.within(self.pokedaisy_zoom_steps())
+            != crate::pokedaisy_view::View::Original {
+            if let Some(at) = keys.iter().position(|&k| k == SCREEN_SIZE_KEY) {
+                rows.insert(at + 1, 181); keys.insert(at + 1, POKEDAISY_INTRO_KEY);
+            }
         }
         // A GBA Video cart has no LCD Effect and no Frame Blending.
         if !self.playing_video() {
@@ -7094,6 +7125,10 @@ impl Engine {
     }
 
     fn change_game_screen_or_gameplay(&mut self, key: usize, right: bool) {
+        if key == POKEDAISY_INTRO_KEY {
+            if self.pokedaisy_running() { self.toggle_pokedaisy_intro(); }
+            return;
+        }
         if key == SCREEN_SIZE_KEY && self.pokedaisy_running() {
             self.step_pokedaisy_view(right);
             return;
@@ -8339,6 +8374,11 @@ impl Engine {
         if key == SCREEN_SIZE_KEY && self.pokedaisy_running()
             && matches!(self.overlay, ShelfOverlay::PauseScreenSettings { .. }) {
             return Some(pokedaisy_view_value(self.pokedaisy_view.within(self.pokedaisy_zoom_steps())));
+        }
+        if key == POKEDAISY_INTRO_KEY {
+            return Some(pokedaisy_view_value(if self.pokedaisy_intro {
+                crate::pokedaisy_view::View::Expand
+            } else { crate::pokedaisy_view::View::Original }));
         }
         let profile = if matches!(self.overlay, ShelfOverlay::PauseEmulationSettings { .. }) {
             self.current_emulation()
@@ -10007,6 +10047,8 @@ impl Engine {
                     self.pokedaisy_view = PATHS.lock().unwrap_or_else(|e| e.into_inner())
                         .as_ref().map_or_else(Default::default,
                             |(root, _)| crate::pokedaisy_view::view_for(root, name));
+                    self.pokedaisy_intro = PATHS.lock().unwrap_or_else(|e| e.into_inner())
+                        .as_ref().is_some_and(|(root, _)| crate::pokedaisy_view::intro_expands(root, name));
                     self.pokedaisy_menu = false;
                     self.pokedaisy_hud.clear();
                     self.apply_video_geometry();
