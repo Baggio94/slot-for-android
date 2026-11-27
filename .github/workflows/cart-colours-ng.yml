@@ -1,0 +1,42 @@
+name: Cart shells PCE and Neo Geo
+
+# One-off research pass (2026-11-27): every PC Engine / SuperGrafx / Neo Geo
+# game's ScreenScraper cart render, pushed to the data branch
+# tools/cart-colours-ng-data. Shares the cart art harvest's queue so the two
+# never use ScreenScraper at the same time.
+
+on:
+  push:
+    branches: [tools/cart-colours-ng]
+    paths: ['tools/cart-colours-ng/**', '.github/workflows/cart-colours-ng.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cart-art
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 -m pip install --quiet Pillow
+      - name: Scrape
+        env:
+          SS_DEVID: ${{ secrets.SCREENSCRAPER_DEV_ID }}
+          SS_DEVPASSWORD: ${{ secrets.SCREENSCRAPER_DEV_PASSWORD }}
+          SS_SOFTNAME: ${{ secrets.SCREENSCRAPER_SOFTNAME }}
+          SS_SSID: ${{ secrets.SCREENSCRAPER_SSID }}
+          SS_SSPASSWORD: ${{ secrets.SCREENSCRAPER_SSPASSWORD }}
+        run: python3 tools/cart-colours-ng/scrape_ng.py out
+      - name: Push the data branch
+        run: |
+          cd out
+          git init -q -b data
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com add -A
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com commit -qm "cart shells PCE / Neo Geo data"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data:tools/cart-colours-ng-data
