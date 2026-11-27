@@ -7,13 +7,15 @@ import android.os.Process
 
 /**
  * Asks Android for more CPU while a cart goes in (3.2 perf): Android's own
- * performance hint (ADPF), CPU_LOAD_UP, for slot.'s screen thread and the
- * thread that prepares the game. Android 13 and later; elsewhere, or when
+ * performance hint (ADPF) for slot.'s screen thread and the thread that
+ * prepares the game: a work time reported well over the frame's target,
+ * the public way to say the load just went up. Android 13 and later; elsewhere, or when
  * the device offers no hints, nothing happens and nothing changes.
  */
 object LaunchBoost {
     private const val TAG = "SlotKonkr"
     private const val FRAME_NS = 16_666_667L
+    private const val LOAD_UP_FRAMES = 4L
     private val tids = linkedSetOf<Int>()
     private var session: PerformanceHintManager.Session? = null
 
@@ -37,7 +39,7 @@ object LaunchBoost {
     fun loadUp() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         try {
-            session?.sendHint(PerformanceHintManager.Session.CPU_LOAD_UP)
+            session?.reportActualWorkDuration(FRAME_NS * LOAD_UP_FRAMES)
         } catch (error: RuntimeException) {
             session = null
         }
