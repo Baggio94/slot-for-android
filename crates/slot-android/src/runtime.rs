@@ -2574,7 +2574,7 @@ impl Engine {
             emulation_core_labels,
             video_mode: VideoMode::Actual,
             pokedaisy_view: crate::pokedaisy_view::View::Expand,
-            pokedaisy_intro: false,
+            pokedaisy_intro: true,
             pokedaisy_hud: Default::default(),
             pokedaisy_menu: false,
             wallpaper_texture,
@@ -10048,7 +10048,7 @@ impl Engine {
                         .as_ref().map_or_else(Default::default,
                             |(root, _)| crate::pokedaisy_view::view_for(root, name));
                     self.pokedaisy_intro = PATHS.lock().unwrap_or_else(|e| e.into_inner())
-                        .as_ref().is_some_and(|(root, _)| crate::pokedaisy_view::intro_expands(root, name));
+                        .as_ref().is_none_or(|(root, _)| crate::pokedaisy_view::intro_expands(root, name));
                     self.pokedaisy_menu = false;
                     self.pokedaisy_hud.clear();
                     self.apply_video_geometry();

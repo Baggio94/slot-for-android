@@ -12,9 +12,9 @@ use slot_store::Platform;
 
 pub const VIEW_FILE: &str = "Config/pokedaisy_view.ini";
 /// INTRO, per game: how EXPAND and ZOOM show the start-up screens and the
-/// title menus, before the game's world is first seen. ORIGINAL (the
-/// default) shows them at the game's own shape; EXPAND keeps the wide
-/// canvas with plain sides.
+/// title menus, before the game's world is first seen. EXPAND (the
+/// default, Siham 2026-11-27) keeps the wide canvas with plain sides;
+/// ORIGINAL shows them at the game's own shape.
 pub const INTRO_FILE: &str = "Config/pokedaisy_intro.ini";
 
 /// PokeDaisy's largest canvas (its CANVAS_MAX_W x CANVAS_MAX_H).
@@ -107,10 +107,10 @@ pub fn write_view(root: &Path, stem: &str, view: View) -> std::io::Result<()> {
     slot_store::ini::write(root, VIEW_FILE, stem, &view.option())
 }
 
-/// Whether this game's INTRO is EXPAND (ORIGINAL when never set).
+/// Whether this game's INTRO is EXPAND (EXPAND when never set).
 pub fn intro_expands(root: &Path, stem: &str) -> bool {
     slot_store::ini::value(root, INTRO_FILE, stem)
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("expand"))
+        .is_none_or(|value| !value.trim().eq_ignore_ascii_case("original"))
 }
 
 pub fn write_intro(root: &Path, stem: &str, expand: bool) -> std::io::Result<()> {
@@ -170,15 +170,15 @@ mod tests {
     }
 
     #[test]
-    fn intro_is_original_until_a_game_asks_for_expand() {
+    fn intro_is_expand_until_a_game_asks_for_original() {
         let d = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(d.path().join("Config")).unwrap();
-        assert!(!intro_expands(d.path(), "Pokemon Crystal"));
-        write_intro(d.path(), "Pokemon Crystal", true).unwrap();
         assert!(intro_expands(d.path(), "Pokemon Crystal"));
-        assert!(!intro_expands(d.path(), "Pokemon Blue"));
         write_intro(d.path(), "Pokemon Crystal", false).unwrap();
         assert!(!intro_expands(d.path(), "Pokemon Crystal"));
+        assert!(intro_expands(d.path(), "Pokemon Blue"));
+        write_intro(d.path(), "Pokemon Crystal", true).unwrap();
+        assert!(intro_expands(d.path(), "Pokemon Crystal"));
         assert_eq!(intro_option(true), "expand");
         assert_eq!(intro_option(false), "original");
     }

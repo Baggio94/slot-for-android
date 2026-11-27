@@ -1,11 +1,11 @@
 slot. for Android: INTRO, the start-up screens in ORIGINAL or EXPAND.
-A new option, pokedaisy_intro (original by default). ORIGINAL keeps
-patch 06: the boot, the intro, the title and the first menus at the
-game's own shape until the game is seen. EXPAND keeps the wide canvas
-from the start, with plain sides (the frame's colour at 60 %, black
+A new option, pokedaisy_intro (expand by default). EXPAND keeps the wide
+canvas from the start, with plain sides (the frame's colour at 60 %, black
 when it has none) and no blend toward the game's edges, on Game Boy,
-Game Boy Color and GBA alike. slot. sets it per game from its Screen
-page (Siham 2026-11-27).
+Game Boy Color and GBA alike. ORIGINAL keeps patch 06: the boot, the
+intro, the title and the first menus at the game's own shape until the
+game is seen. slot. sets it per game from its Screen page (Siham
+2026-11-27).
 
 diff --git a/app/src/main/cpp/pk_wide.c b/app/src/main/cpp/pk_wide.c
 index ad599a8..c660af9 100644
@@ -102,7 +102,7 @@ index 922733c..3ccd1d3 100644
          if (!valid || !gbFillSet) gbBackgroundRows(frame);   // fading in again from a menu: from its bars
      } else if (gbMix < 256) gbAmbientPrepare(frame);
 diff --git a/libretro/pd_libretro.c b/libretro/pd_libretro.c
-index b92b6f3..770ffad 100644
+index b92b6f3..d536cbf 100644
 --- a/libretro/pd_libretro.c
 +++ b/libretro/pd_libretro.c
 @@ -55,7 +55,7 @@ static const unsigned retroId[NKEYS] = {
@@ -122,7 +122,7 @@ index b92b6f3..770ffad 100644
 +     * EXPAND's canvas from the first frame: their sides the screen's own background where its edge is one colour, else
 +     * black (pk_wide_dark_sides). */
 +    {"pokedaisy_intro", "Intro", NULL, "Before the game's map or a battle: original (the game's own frame) or expand (EXPAND's canvas, plain sides).", NULL, NULL,
-+     {{"original", NULL}, {"expand", NULL}, {NULL, NULL}}, "original"},
++     {{"expand", NULL}, {"original", NULL}, {NULL, NULL}}, "expand"},
      /* slot.: mGBA's own colour correction (libretro/mgba's), which mGBA 0.10.5's libretro port lacks. */
      {"mgba_color_correction", "Color Correction", NULL, "The GBA's or the GBC's screen colours on the game's picture.", NULL, NULL,
       {{"OFF", NULL}, {"GBA", NULL}, {"GBC", NULL}, {"Auto", NULL}, {NULL, NULL}}, "OFF"},
@@ -130,10 +130,10 @@ index b92b6f3..770ffad 100644
  static void apply_aspect_option(void);
  /* Asked again whenever the frontend says an option changed, and once after the settings file is read. */
  static void cc_read_option(void);
-+static bool introExpand; // slot.: pokedaisy_intro is expand
++static bool introExpand = true; // slot.: pokedaisy_intro is expand (its default)
  static void read_options(void) {
 +  const char *intro = pd_option("pokedaisy_intro");
-+  introExpand = intro && !strcmp(intro, "expand");
++  introExpand = !intro || strcmp(intro, "original") != 0;
    apply_aspect_option();
    cc_read_option();
  }
