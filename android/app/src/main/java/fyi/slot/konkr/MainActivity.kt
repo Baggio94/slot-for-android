@@ -293,6 +293,40 @@ class MainActivity : Activity() {
     }
     private val raSmartRunning = AtomicBoolean(false)
     private val gameLoader = Executors.newSingleThreadExecutor()
+    /** The copies of a game's saves to the RetroArch folders, after its
+     *  save (3.2 perf): one at a time, in order, on their own worker. A
+     *  launch waits only for its own game's (exportsPending), not for
+     *  another game's as when they shared gameLoader. A folder transfer
+     *  waits for all of them. */
+    private val saveExports = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "slot-save-exports")
+    }
+    /** Exports queued or running, by game (its save's name, lower case). */
+    private val exportsPending = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val exportsLock = Object()
+
+    private fun exportKey(target: RetroArchStorage.Target) = target.stem.lowercase(java.util.Locale.ROOT)
+
+    private fun exportQueued(key: String) = synchronized(exportsLock) {
+        exportsPending.merge(key, 1, Int::plus)
+    }
+
+    private fun exportDone(key: String) = synchronized(exportsLock) {
+        exportsPending.computeIfPresent(key) { _, n -> if (n <= 1) null else n - 1 }
+        exportsLock.notifyAll()
+    }
+
+    /** Waits until [key]'s exports (or every game's, with null) are done:
+     *  its save is in the folders before the launch reads them. */
+    private fun awaitExports(key: String?): Long {
+        val started = SystemClock.elapsedRealtime()
+        synchronized(exportsLock) {
+            while (if (key == null) exportsPending.isNotEmpty() else exportsPending.containsKey(key)) {
+                exportsLock.wait(1_000L)
+            }
+        }
+        return SystemClock.elapsedRealtime() - started
+    }
     /** RomM's saves go up here, not on gameLoader: the next cart's insertion
      *  never waits on the server (beta37). */
     private val rommSync = Executors.newSingleThreadExecutor { task ->
@@ -1420,12 +1454,13 @@ class MainActivity : Activity() {
         if (!isDestroyed && resumed) pollLaunch()
     }
 
-    // Runs on the main thread, queueing real storage I/O on gameLoader.
+    // Runs on the main thread, queueing real storage I/O on saveExports.
     // Called at the 100ms foreground pulse AND after the final suspend save,
     // so stopping the UI timer cannot strand an export until next resume.
     private fun drainPendingSaveFlush() {
         // Flush requests before accepting a new ROM launch to preserve
-        // save-before-load ordering on the single storage worker.
+        // save-before-load ordering: the launch waits for its own game's
+        // exports registered here (awaitExports).
         var completed = nativePollSaveFlush()
         while (completed != null) {
             try {
@@ -1435,7 +1470,10 @@ class MainActivity : Activity() {
                 val target = activeTargets[uri]
                 if (target != null && target.core == core) {
                     val exportQueuedAt = SystemClock.elapsedRealtime()
-                    gameLoader.execute {
+                    val key = exportKey(target)
+                    exportQueued(key)
+                    try { saveExports.execute {
+                        try {
                         val exportAt = SystemClock.elapsedRealtime()
                         val stamp = payload.optString("manual_stamp", "")
                         val deleted = payload.optString("deleted_stamp", "")
@@ -1467,26 +1505,32 @@ class MainActivity : Activity() {
                         }
                         SlotLog.i(TAG, "Save export: ${SystemClock.elapsedRealtime() - exportAt}ms for " +
                             "${target.core}/${target.stem} (waited ${exportAt - exportQueuedAt}ms to start)")
-                        if (failures.isNotEmpty()) {
-                            runOnUiThread {
-                                if (!isDestroyed) {
-                                    SlotLog.w(TAG, "Save export warnings: " + failures.joinToString(" | "))
-                                    val onlyMirrors = failures.all {
-                                        it.startsWith("Shared GBA save sync deferred")
-                                    }
-                                    val notice = if (onlyMirrors)
-                                        "Game saved. The copy for the other core will be made later."
-                                    else exportNotice(failures)
-                                    SlotToast.makeText(this@MainActivity, notice, Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
+                        handleExportFailures(failures)
+                        } finally { exportDone(key) }
+                    } } catch (error: java.util.concurrent.RejectedExecutionException) {
+                        exportDone(key)
                     }
                 }
             } catch (error: Exception) {
                 SlotLog.e(TAG, "Invalid save sync notification", error)
             }
             completed = nativePollSaveFlush()
+        }
+    }
+
+    private fun handleExportFailures(failures: List<String>) {
+        if (failures.isEmpty()) return
+        runOnUiThread {
+            if (!isDestroyed) {
+                SlotLog.w(TAG, "Save export warnings: " + failures.joinToString(" | "))
+                val onlyMirrors = failures.all {
+                    it.startsWith("Shared GBA save sync deferred")
+                }
+                val notice = if (onlyMirrors)
+                    "Game saved. The copy for the other core will be made later."
+                else exportNotice(failures)
+                SlotToast.makeText(this@MainActivity, notice, Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -2651,7 +2695,7 @@ class MainActivity : Activity() {
             val launchStart = SystemClock.elapsedRealtime()
             val queueWait = launchStart - queuedAt
             if (queueWait > 20) {
-                SlotLog.i(TAG, "Slot launch queue delay: ${queueWait}ms (waiting for preceding save exports)")
+                SlotLog.i(TAG, "Slot launch queue delay: ${queueWait}ms (waiting for the game loader)")
             }
             // Which step failed, for the message on screen (runtime.rs).
             var step = "rom"
@@ -2744,6 +2788,12 @@ class MainActivity : Activity() {
                 // A whole copy (a folder just chosen) can take minutes: the
                 // player is told instead of waiting (beta38). A copy that
                 // only writes to the folder isn't waited for.
+                // This game's saves still being copied to the RetroArch
+                // folders (its last eject): the launch reads them whole.
+                // Another game's copy goes on meanwhile (3.2 perf).
+                awaitExports(exportKey(shared)).takeIf { it > 20 }?.let {
+                    SlotLog.i(TAG, "Slot launch waited ${it}ms for ${shared.stem}'s save export")
+                }
                 slotFolder.copyPercent()?.let { percent ->
                     nativeGameError(rawUri, "say:Copying to your slot. folder… $percent%")
                     return@execute
@@ -4574,6 +4624,9 @@ class MainActivity : Activity() {
     private fun transferToFolder(root: Uri, states: Boolean) {
         val noun = if (states) "state" else "save"
         gameLoader.execute {
+            // Every game's copy to the folders first: the transfer sees
+            // the saves as they are (3.2 perf, saveExports).
+            awaitExports(null)
             val result = try {
                 val plan = RetroArchStorage.planTransfer(applicationContext, root, states)
                 val keepSlot = plan.different.isEmpty() ||
@@ -4948,6 +5001,8 @@ class MainActivity : Activity() {
         raLoginWorker.shutdownNow()
         raSmartWorker.shutdownNow()
         gameLoader.shutdownNow()
+        // A save's copy under way finishes: never cut in the middle.
+        saveExports.shutdown()
         romWarmWorker.shutdownNow()
         autoLabelsWorker.shutdownNow()
         uiHandler.removeCallbacks(pulse)
