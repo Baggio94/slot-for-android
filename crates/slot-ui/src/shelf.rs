@@ -533,6 +533,26 @@ impl Shelf {
         Some((self.centre(0) - w / 2.0, body_foot_y(body) - h, w, h))
     }
 
+    /// Which way the shelf is going: +1 towards the next carts, -1 towards
+    /// the previous ones, 0 at rest. The held D-pad's way first.
+    pub fn heading(&self) -> i32 {
+        if let Some((by, _, _)) = self.held { return by.signum(); }
+        let ahead = self.scroll_target() - self.scroll;
+        if ahead.abs() > 0.03 { ahead.signum() as i32 }
+        else if self.vel.abs() > 0.05 { self.vel.signum() as i32 }
+        else { 0 }
+    }
+
+    /// The carts about to come on screen, the way the shelf is going
+    /// (nearest first): [count] past the last one on screen.
+    pub fn coming(&self, count: i32) -> Vec<usize> {
+        let way = self.heading();
+        if way == 0 || self.carts.len() <= (2 * SLOTS + 1) as usize { return Vec::new(); }
+        let on = self.on_screen();
+        (SLOTS + 1..=SLOTS + count).filter_map(|k| self.cart_at_offset(way * k))
+            .filter(|i| !on.contains(i)).collect()
+    }
+
     /// True while spring-driven shelf scrolling is visibly in flight.
     pub fn is_scrolling(&self) -> bool {
         (self.scroll_target()-self.scroll).abs()>0.03 || self.vel.abs()>0.05 || self.closing > 0.0

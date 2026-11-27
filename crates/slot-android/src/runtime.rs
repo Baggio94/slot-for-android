@@ -271,6 +271,12 @@ fn cyclic_distance(a: usize, b: usize, len: usize) -> usize {
     d.min(len - d)
 }
 const CART_IDLE_PREFETCH_CAP: usize = 155;
+/// Carts asked for ahead of the screen while the shelf moves.
+const CART_LOOK_AHEAD: i32 = 6;
+/// The shelf at rest this long: its carts go into the disk cache.
+const DISK_FILL_AFTER: Duration = Duration::from_secs(3);
+/// Carts a disk fill covers (the disk cache keeps 3000 faces).
+const DISK_FILL_CAP: usize = 2500;
 const CART_IDLE_GRACE: Duration = Duration::from_millis(400);
 const CART_GPU_UPLOAD_BUDGET: Duration = Duration::from_millis(2);
 
@@ -1690,6 +1696,10 @@ struct Engine {
     /// its screen size, where that came from and the frame it was chosen
     /// for, PokeDaisy's view and Intro. Taken when its screen goes on.
     screen_ready: Option<ScreenReady>,
+    /// The whole-library disk fill (3.2 perf): the next system shelf and
+    /// cart to draw into the disk cache, how many carts the pass covers
+    /// (a new count starts it again) and how many it has sent.
+    disk_fill: (usize, usize, usize, usize),
     /// PokeDaisy's HUD, drawn by slot. over the picture.
     pokedaisy_hud: pokedaisy_hud::PokedaisyHud,
     /// PokeDaisy's companion or quick menu is over the game: no shader, LCD
@@ -2590,6 +2600,7 @@ impl Engine {
             pokedaisy_view: crate::pokedaisy_view::View::Expand,
             pokedaisy_intro: true,
             screen_ready: None,
+            disk_fill: (0, 0, 0, 0),
             pokedaisy_hud: Default::default(),
             pokedaisy_menu: false,
             wallpaper_texture,
@@ -5580,6 +5591,8 @@ impl Engine {
                         96 if !self.inserted && !self.shelves[self.active].carts.is_empty() => {
                             self.load_selected_emulation();
                             self.inserted = true;
+                            // A launch owns the CPU: the disk fill waits.
+                            self.cart_render.stop_filling();
                             let selected = &self.shelves[self.active].carts[self.shelves[self.active].index];
                             let uri = selected.rom.to_string_lossy();
                                         self.prepared_rom = None;
@@ -5837,7 +5850,9 @@ impl Engine {
             && self.last_cart_navigation.elapsed()>=CART_IDLE_GRACE
             && !self.shelves[self.active].is_scrolling()
             && matches!(self.overlay,ShelfOverlay::None);
-        let limit=if quiet {2} else {1};
+        // Two faces a frame, moving or not, within the 2 ms budget (3.2
+        // perf: one while the shelf moved).
+        let limit=2;
         let upload_started=Instant::now();
         let mut uploads=0u32;
         for _ in 0..limit {
@@ -5897,6 +5912,10 @@ impl Engine {
                 .filter(|index| self.shelves[shelf_id].face(*index).is_none()).count() as u32
         } else { 0 };
         crate::frame_watch::labels_frame(uploads, blank);
+        if quiet && self.last_cart_navigation.elapsed() >= DISK_FILL_AFTER
+            && self.cart_render.is_idle() && self.game.is_none() {
+            self.fill_disk_cache();
+        }
         // Priorities are recomputed every frame, so a rapid D-pad or L1/R1
         // turn promotes new visible carts ahead of stale background requests.
         // Order: selected, active +/-1, next/previous system, the rest.
@@ -5917,6 +5936,13 @@ impl Engine {
             }
         }
         for index in self.shelves[shelf_id].on_screen() {
+            if !priority.contains(&(shelf_id,index)) {
+                priority.push((shelf_id,index));
+            }
+        }
+        // While the shelf moves, the carts about to come on screen, the
+        // way it goes (3.2 perf): their faces are ready when they arrive.
+        for index in self.shelves[shelf_id].coming(CART_LOOK_AHEAD) {
             if !priority.contains(&(shelf_id,index)) {
                 priority.push((shelf_id,index));
             }
@@ -5961,11 +5987,14 @@ impl Engine {
         if quiet {
             // Fill the 160-entry LRU while idle, not while the D-pad is
             // moving. Active system first; other systems around their focus.
+            // A set says what is listed already (3.2 perf: the list was
+            // searched for each of up to 155 carts, every frame).
+            let mut listed: std::collections::HashSet<(usize,usize)> = priority.iter().copied().collect();
             for (sid,shelf) in self.shelves.iter().enumerate() {
                 let radius=if sid==shelf_id {80} else {16};
                 for index in shelf.around(radius) {
                     if priority.len()>=CART_IDLE_PREFETCH_CAP {break}
-                    if !priority.contains(&(sid,index)) {priority.push((sid,index));}
+                    if listed.insert((sid,index)) {priority.push((sid,index));}
                 }
                 if priority.len()>=CART_IDLE_PREFETCH_CAP {break}
             }
@@ -5988,17 +6017,15 @@ impl Engine {
             self.cart_render.prioritize(&priority);
         }
         // Touch the LRU least important first, so the selected cart and its
-        // neighbours end up the most recently used.
-        for (sid, index) in priority.iter().rev().copied() {
-            if self.shelves.get(sid).is_some_and(|shelf| shelf.face(index).is_some()) {
-                if let Some(pos) = self.texture_cache.iter()
-                    .position(|(s, i, _)| *s == sid && *i == index)
-                {
-                    if let Some(entry) = self.texture_cache.remove(pos) {
-                        self.texture_cache.push_back(entry);
-                    }
-                }
-            }
+        // neighbours end up the most recently used: the faces wanted go to
+        // the back in that order, the others keep theirs in front (one
+        // stable sort, 3.2 perf, instead of a search per wanted cart).
+        let rank: std::collections::HashMap<(usize,usize),usize> = priority.iter().copied().enumerate()
+            .filter(|(_, (sid, index))| self.shelves.get(*sid).is_some_and(|shelf| shelf.face(*index).is_some()))
+            .map(|(rank, key)| (key, rank)).rev().collect();
+        if !rank.is_empty() {
+            self.texture_cache.make_contiguous().sort_by_key(|(sid, index, _)|
+                rank.get(&(*sid, *index)).map_or((0, 0), |rank| (1, usize::MAX - rank)));
         }
         for (sid, index) in priority {
             // Clear-cart composite is expensive: delay its three material
@@ -6016,6 +6043,29 @@ impl Engine {
             let Some(cart) = self.shelves.get(sid).and_then(|shelf| shelf.carts.get(index))
             else { continue; };
             self.cart_render.request((sid, index), cart, wants_material);
+        }
+    }
+
+    /// While the shelf rests, every system's carts drawn into the disk
+    /// cache once, two at a time behind any face wanted (3.2 perf): later
+    /// each one comes back from the disk instead of being drawn again from
+    /// its label. One pass per library; a library of another size starts
+    /// a new one. At most DISK_FILL_CAP carts.
+    fn fill_disk_cache(&mut self) {
+        let systems = Platform::ALL.len().min(self.shelves.len());
+        let total: usize = self.shelves[..systems].iter().map(|shelf| shelf.carts.len()).sum();
+        if total != self.disk_fill.2 { self.disk_fill = (0, 0, total, 0); }
+        while self.disk_fill.3 < total.min(DISK_FILL_CAP) {
+            let (sid, index, _, _) = self.disk_fill;
+            if sid >= systems { self.disk_fill.3 = total; break; }
+            let Some(cart) = self.shelves[sid].carts.get(index) else {
+                self.disk_fill.0 += 1;
+                self.disk_fill.1 = 0;
+                continue;
+            };
+            if !self.cart_render.fill_disk((sid, index), cart) { break; }
+            self.disk_fill.1 += 1;
+            self.disk_fill.3 += 1;
         }
     }
 

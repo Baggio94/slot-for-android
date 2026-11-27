@@ -25,7 +25,8 @@ fn panel_face(face: CartFace) -> CartFace {
 
 type Key = (usize, usize);
 type WorkKey = (Key, u64);
-type Job = (WorkKey, Cart, bool);
+/// (work, cart, clear-cart material, for the disk cache only).
+type Job = (WorkKey, Cart, bool, bool);
 /// Three source-faithful clear-cart textures for a *selected* cartridge:
 /// original back, PCB, translucent front/label. Side carts keep one face.
 pub(crate) type Layers = [CartFace; 3];
@@ -52,6 +53,9 @@ pub(crate) struct CartRender {
     wanted: Vec<Key>,
     // Recents/Favorites can reuse the same index for a different ROM.
     epochs: [u64; RACKS],
+    /// Faces drawn for the disk cache only, queued or being drawn (the
+    /// whole-library fill, 3.2 perf).
+    filling: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl CartRender {
@@ -76,7 +80,9 @@ impl CartRender {
                     }
                 }).ok().map(|_|tx)
         });
+        let filling = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         for index in 0..2 {
+            let filling = Arc::clone(&filling);
             let source = Arc::clone(&work);
             let sink = ready.clone();
             let disk = disk_cache.clone();
@@ -84,6 +90,7 @@ impl CartRender {
             thread::Builder::new()
                 .name(format!("slot-kpa-cart-{index}"))
                 .spawn(move || {
+                    let mut filled = 0usize;
                     loop {
                         let job = {
                             let (lock, notify) = &*source;
@@ -94,7 +101,24 @@ impl CartRender {
                             }
                             if queue.closing { None } else { queue.jobs.pop_front() }
                         };
-                        let Some((key, cart, include_material)) = job else { break };
+                        let Some((key, cart, include_material, disk_only)) = job else { break };
+                        if disk_only {
+                            // The whole-library fill: drawn into the disk
+                            // cache, never uploaded. Already kept: nothing.
+                            if let Some(cache) = disk.as_ref() {
+                                let name = cache.key(&cart);
+                                if !cache.contains(&name) {
+                                    let face = panel_face(cart_face_with_material(&cart, None));
+                                    if cache.write(&name, &face).is_ok() {
+                                        filled += 1;
+                                        if filled.is_multiple_of(32) { cache.trim(); }
+                                    }
+                                }
+                            }
+                            let _ = key;
+                            filling.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+                            continue;
+                        }
                         // No PNG decoding occurs on the GLES thread. At most
                         // two previously started jobs can become obsolete.
                         // An unchanged cartridge can be restored from LZ4 on
@@ -139,7 +163,7 @@ impl CartRender {
                 .map_err(|e| format!("Cannot start cartridge renderer: {e}"))?;
         }
         Ok(Self {
-            work, finished, pending: HashSet::new(), wanted: Vec::new(), epochs: [0; RACKS],
+            work, finished, pending: HashSet::new(), wanted: Vec::new(), epochs: [0; RACKS], filling,
         })
     }
 
@@ -158,7 +182,7 @@ impl CartRender {
             self.pending.retain(|(key, _)| key.0 != shelf);
             let (lock, _) = &*self.work;
             let mut q=lock.lock().unwrap_or_else(|e|e.into_inner());
-            q.jobs.retain(|((key,_),_,_)| key.0 != shelf);
+            q.jobs.retain(|((key,_),_,_,_)| key.0 != shelf);
         }
     }
 
@@ -169,7 +193,7 @@ impl CartRender {
         self.pending.retain(|(k, _)| *k != key);
         let (lock, _) = &*self.work;
         let mut q=lock.lock().unwrap_or_else(|e|e.into_inner());
-        q.jobs.retain(|((k,_),_,_)| *k != key);
+        q.jobs.retain(|((k,_),_,_,_)| *k != key);
     }
 
     /// Called every GL frame with the new navigation priorities.
@@ -182,8 +206,9 @@ impl CartRender {
         let (lock, _) = &*self.work;
         let mut queue=lock.lock().unwrap_or_else(|e|e.into_inner());
         let mut dropped=Vec::new();
-        queue.jobs.retain(|(work,_,_)| {
-            let keep=desired.contains(&work.0);
+        queue.jobs.retain(|(work,_,_,disk_only)| {
+            // The whole-library fill stays queued, behind every face wanted.
+            let keep=*disk_only || desired.contains(&work.0);
             if !keep { dropped.push(*work); }
             keep
         });
@@ -192,6 +217,7 @@ impl CartRender {
         // rapid system switch. The workers may finish, but ready() discards it.
         self.pending.retain(|(key,_)|desired.contains(key));
         queue.jobs.make_contiguous().sort_by_key(|job| {
+            if job.3 { return usize::MAX; }
             desired.iter().position(|key|*key==job.0.0).unwrap_or(usize::MAX)
         });
     }
@@ -205,12 +231,38 @@ impl CartRender {
         if queue.closing || queue.jobs.len() >= 16 { return }
         let rank=self.wanted.iter().position(|item|*item==key).unwrap_or(usize::MAX);
         let at=queue.jobs.iter().position(|item| {
-            self.wanted.iter().position(|k|*k==item.0.0)
+            item.3 || self.wanted.iter().position(|k|*k==item.0.0)
                 .unwrap_or(usize::MAX)>rank
         }).unwrap_or(queue.jobs.len());
-        queue.jobs.insert(at,(work,cart.clone(),include_material));
+        queue.jobs.insert(at,(work,cart.clone(),include_material,false));
         self.pending.insert(work);
         notify.notify_one();
+    }
+
+    /// Draw [cart]'s face into the disk cache only, behind every face
+    /// wanted on screen (the whole-library fill, 3.2 perf). False when two
+    /// are already under way: the caller asks again on a later frame.
+    pub(crate) fn fill_disk(&mut self, key: Key, cart: &Cart) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.filling.load(Ordering::Acquire) >= 2 { return false; }
+        let (lock, notify) = &*self.work;
+        let mut queue=lock.lock().unwrap_or_else(|e|e.into_inner());
+        if queue.closing { return false; }
+        self.filling.fetch_add(1, Ordering::AcqRel);
+        queue.jobs.push_back(((key, u64::MAX), cart.clone(), false, true));
+        notify.notify_one();
+        true
+    }
+
+    /// The fill's queued faces dropped (a cart goes in: the launch owns
+    /// the CPU). One being drawn finishes.
+    pub(crate) fn stop_filling(&mut self) {
+        use std::sync::atomic::Ordering;
+        let (lock, _) = &*self.work;
+        let mut queue=lock.lock().unwrap_or_else(|e|e.into_inner());
+        let before = queue.jobs.len();
+        queue.jobs.retain(|job| !job.3);
+        self.filling.fetch_sub(before - queue.jobs.len(), Ordering::AcqRel);
     }
 
     pub(crate) fn ready(&mut self) -> Option<(Key, CartFace, Option<Layers>)> {

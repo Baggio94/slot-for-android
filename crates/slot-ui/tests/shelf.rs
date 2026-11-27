@@ -891,3 +891,19 @@ fn a_cart_pushed_onto_the_row_draws_rather_than_stopping_the_device() {
         "the row holding a cart the shells never heard of did not draw both its neighbours"
     );
 }
+
+#[test]
+fn the_carts_about_to_come_on_screen_are_the_ones_the_shelf_goes_towards() {
+    let mut s = shelf_with(40);
+    assert!(s.coming(6).is_empty(), "a shelf at rest asks for nothing ahead");
+    s.hold_right(0);
+    let ahead = s.coming(6);
+    assert_eq!(ahead.len(), 6);
+    let on = s.on_screen();
+    assert!(ahead.iter().all(|i| !on.contains(i)), "a cart on screen is not ahead");
+    assert_eq!(ahead[0], (s.index + 4) % 40, "the nearest coming cart first");
+    s.release_right();
+    s.hold_left(0);
+    assert_eq!(s.coming(1), vec![(s.index + 40 - 4) % 40], "going left, the carts on the left");
+    assert!(shelf_with(7).coming(6).is_empty(), "every cart is on screen already");
+}
