@@ -5061,10 +5061,12 @@ impl Engine {
                                 19 | 20 | 102 | 103 => self.overlay = ShelfOverlay::PauseEmulationSettings {
                                     row: move_menu_row(row, code, self.pause_emulation_rows().len(), self.menu_repeat_dispatch),
                                 },
-                                21 | 22 if row == 3 && self.game.as_ref().is_some_and(GameSession::motion) =>
-                                    self.change_game_motion(code == 22),
-                                21 | 22 if row == 3 => self.change_game_sun(code == 22),
-                                21 | 22 => self.change_game_emulation(row + 10, code == 22),
+                                21 | 22 => match self.pause_emulation().1.get(row).copied() {
+                                    Some(MOTION_KEY) => self.change_game_motion(code == 22),
+                                    Some(SUN_KEY) => self.change_game_sun(code == 22),
+                                    Some(key) => self.change_game_emulation(key, code == 22),
+                                    None => {}
+                                },
                                 97 => self.overlay = ShelfOverlay::PauseSettings { row: 2 },
                                 _ => {}
                             },
@@ -6133,13 +6135,15 @@ impl Engine {
     /// Whether the running game's system has Multiplayer at all.
     fn multiplayer_offered(&self) -> bool {
         multiplayer_offered(self.current_cart_platform()) && !self.pokedaisy_running()
+            && self.game.as_ref().map_or(true, |game| core_has_multiplayer(game.core_kind()))
     }
 
     /// The Game Menu's rows for the game played.
     fn game_menu_rows(&self) -> &'static [PauseRow] {
         let linked = self.game.as_ref().is_some_and(GameSession::linked);
         let relaunch = self.game.as_ref().is_some_and(GameSession::requires_relaunch);
-        pause_rows(linked, relaunch, self.multiplayer_offered())
+        pause_rows_with(linked, relaunch, self.multiplayer_offered(),
+            cheats_offered(self.current_cart_platform()))
     }
 
     fn current_cart_platform(&self) -> Platform {
@@ -6954,28 +6958,17 @@ impl Engine {
             Self::screen_keys(self.current_cart_platform()).get(row).copied()
         }
     }
-    fn pause_emulation_rows(&self) -> &'static [usize] {
-        // PokeDaisy never runs ahead (its map past the edges): no Run-Ahead;
-        // nor PICO-8 (the real one's 33 MB state, fake-08's Lua heap).
-        if self.pokedaisy_running() || self.current_cart_platform() == Platform::Pico8 {
-            &[51,52]
-        } else if self.game.as_ref().is_some_and(GameSession::solar) {
-            &[51,52,55,119]
-        } else if self.game.as_ref().is_some_and(GameSession::motion) {
-            &[51,52,55,137]
-        } else {
-            &[51,52,55]
-        }
+    /// The paused game's Emulation page, its rows and their Settings keys
+    /// (pause_emulation_page).
+    fn pause_emulation(&self) -> (Vec<usize>, Vec<usize>) {
+        let game = self.game.as_ref();
+        pause_emulation_page(game.map(GameSession::core_kind), self.current_cart_platform(),
+            game.is_some_and(GameSession::solar), game.is_some_and(GameSession::motion))
     }
-    /// The paused game's Gameplay page, rows and keys: PICO-8 has no rumble,
-    /// and the player's own PICO-8 no rewind (its 33 MB state).
-    fn pause_gameplay(&self) -> (&'static [usize], &'static [usize]) {
-        if self.current_cart_platform() != Platform::Pico8 { return (&GAMEPLAY_ROWS, &GAMEPLAY_KEYS); }
-        if self.game.as_ref().is_some_and(|game| game.core_kind() == Core::Pico8) {
-            (&[27, 28, 39], &[4, 5, 9])
-        } else {
-            (&[27, 28, 37, 39], &[4, 5, 6, 9])
-        }
+    fn pause_emulation_rows(&self) -> Vec<usize> { self.pause_emulation().0 }
+    /// The paused game's Gameplay page, rows and keys (pause_gameplay_page).
+    fn pause_gameplay(&self) -> (Vec<usize>, Vec<usize>) {
+        pause_gameplay_page(self.game.as_ref().map(GameSession::core_kind), self.current_cart_platform())
     }
     fn pause_settings_rows(&self) -> &'static [usize] {
         if self.game.as_ref().is_some_and(GameSession::linked) {
@@ -8534,6 +8527,15 @@ impl Engine {
     /// A settings page: its rows, then their values, fitted together.
     fn draw_settings_menu(&self, heading: usize, items: &[usize], row: usize,
                           keys: &[usize], out: &mut Vec<Draw>) {
+        // One value per row, never more: a value left over from a row
+        // taken away pushed every value off its row (3.2.0-beta9).
+        if keys.len() != items.len() {
+            static TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !TOLD.swap(true, Ordering::Relaxed) {
+                crate::log_warn(&format!("settings page {heading}: {} rows, {} values", items.len(), keys.len()));
+            }
+        }
+        let keys = &keys[..keys.len().min(items.len())];
         let scales = self.fit_scales(items, keys);
         self.draw_menu_rows(heading, items, row, &scales, out);
         self.draw_values(heading, items, row, keys, &scales, out);
@@ -8616,10 +8618,11 @@ impl Engine {
     fn draw_values(&self, heading: usize, items: &[usize], row: usize, keys: &[usize],
                    scales: &[(f32, f32)], out: &mut Vec<Draw>) {
         // Six rows at most on screen; a longer page scrolls (as Controls).
-        let top = self.menu_rows_top(keys.len().min(self.visible_rows()));
+        // Placed by the rows: a value always sits on its own row.
+        let top = self.menu_rows_top(items.len().min(self.visible_rows()));
         let caret = self.setting_carets[0].1 as f32 + 8.0;
         for (index, key) in keys.iter().copied().enumerate() {
-            let Some((dy, shows)) = self.menu_row_place(index, keys.len()) else { continue };
+            let Some((dy, shows)) = self.menu_row_place(index, items.len()) else { continue };
             let Some((tex, width, height)) = self.value_face(key) else { continue };
             let (label_scale, scale) = scales.get(index).copied().unwrap_or((0.79, 0.79));
             let right = out_w() as f32 - 34.0;
@@ -9175,15 +9178,9 @@ impl Engine {
                 self.draw_settings_menu(50, &[51, 52, 55], row, &[10, 11, 12], out);
             }
             ShelfOverlay::PauseEmulationSettings { row } => {
-                // One value per visible row: an extra action sentinel
-                // displaced ALL value glyphs by half a row and
-                // desynchronised them from their carets.
-                let keys: &[usize] = if self.pause_emulation_rows().len() < 4 {
-                    &[10, 11, 12]
-                } else if self.game.as_ref().is_some_and(GameSession::motion) {
-                    &[10, 11, 12, MOTION_KEY]
-                } else { &[10, 11, 12, SUN_KEY] };
-                self.draw_settings_menu(50, self.pause_emulation_rows(), row, keys, out);
+                // One value per visible row, from the same list as the rows.
+                let (rows, keys) = self.pause_emulation();
+                self.draw_settings_menu(50, &rows, row, &keys, out);
                 // Identify the selected core without changing Slot's menu
                 // layout or existing keycap typography.
                 let (tex, w, h) = self.emulation_core_labels[self.selected_emulation_core().index()];
@@ -9310,7 +9307,7 @@ impl Engine {
             }
             ShelfOverlay::PauseGameplaySettings { row } => {
                 let (rows, keys) = self.pause_gameplay();
-                self.draw_settings_menu(33, rows, row, keys, out);
+                self.draw_settings_menu(33, &rows, row, &keys, out);
             }
             ShelfOverlay::Multiplayer => self.draw_multiplayer(out),
             ShelfOverlay::CartStudio => self.draw_cart_studio(out),
@@ -11076,15 +11073,70 @@ const SOLO_ONLY_PAUSE_ROWS: &[PauseRow] = &[
     PauseRow::Resume, PauseRow::States, PauseRow::Cheats,
     PauseRow::Settings, PauseRow::SaveEject,
 ];
+/// Neither Multiplayer nor Cheats: the Neo Geo Pocket, the Lynx, the
+/// Pokemon mini and PICO-8, whose cores apply no cheats (3.2.0-beta11).
+const PLAIN_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::Resume, PauseRow::States, PauseRow::Settings, PauseRow::SaveEject,
+];
+const SOLO_NO_CHEATS_PAUSE_ROWS: &[PauseRow] = &[
+    PauseRow::Resume, PauseRow::States, PauseRow::Multiplayer,
+    PauseRow::Settings, PauseRow::SaveEject,
+];
 fn multiplayer_offered(platform: Platform) -> bool {
     !matches!(platform, Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini
         | Platform::Pico8)
 }
+/// A core that plays Multiplayer: the home consoles' netplay cores and the
+/// handhelds' Link cores. Not bsnes nor Gearsystem (3.2.0-beta11 audit).
+fn core_has_multiplayer(core: Core) -> bool {
+    core.netplay() || matches!(core, Core::Mgba | Core::Gpsp | Core::Gambatte)
+}
+/// Whether the paused game offers Cheats: not where its cores apply none
+/// (NeoPop, RACE, Handy, Beetle Lynx, PokeMini, fake-08, PICO-8: their
+/// retro_cheat_set does nothing).
+fn cheats_offered(platform: Platform) -> bool {
+    !matches!(platform, Platform::Ngp | Platform::Lynx | Platform::Pokemini | Platform::Pico8)
+}
+/// A system one of whose cores makes the handheld rumble (mGBA, gpSP,
+/// Gambatte, PokeDaisy, PokeMini ask for rumble; the others never do).
+fn rumble_offered(platform: Platform) -> bool {
+    matches!(platform, Platform::Gb | Platform::Gbc | Platform::Gba | Platform::Pokemini)
+}
+/// A core that never runs ahead: bsnes (its first frame after a load),
+/// PokeDaisy (its map past the edges), PICO-8's two (their states' size).
+fn core_runs_ahead(core: Core) -> bool {
+    !matches!(core, Core::Bsnes | Core::PokeDaisy | Core::Pico8 | Core::Fake08)
+}
+/// The paused game's Emulation page: rows and the Settings key of each,
+/// one for one (3.2.0-beta9 drew Run-Ahead's value under two rows).
+fn pause_emulation_page(core: Option<Core>, platform: Platform, solar: bool, motion: bool)
+    -> (Vec<usize>, Vec<usize>) {
+    let mut page = vec![(51, 10), (52, 11)];
+    let ahead = core.map_or(true, core_runs_ahead) && platform != Platform::Pico8;
+    if ahead { page.push((55, 12)); }
+    if solar { page.push((119, SUN_KEY)); } else if motion { page.push((137, MOTION_KEY)); }
+    page.into_iter().unzip()
+}
+/// The paused game's Gameplay page: no Rumble where no core rumbles, no
+/// Rewind on the player's own PICO-8 (its 33 MB state).
+fn pause_gameplay_page(core: Option<Core>, platform: Platform) -> (Vec<usize>, Vec<usize>) {
+    GAMEPLAY_ROWS.into_iter().zip(GAMEPLAY_KEYS)
+        .filter(|&(label, _)| label != 30 || rumble_offered(platform))
+        .filter(|&(label, _)| label != 37 || core != Some(Core::Pico8))
+        .unzip()
+}
 fn pause_rows(linked: bool, requires_relaunch: bool, offered: bool) -> &'static [PauseRow] {
+    pause_rows_with(linked, requires_relaunch, offered, true)
+}
+/// The pause menu's rows, with Multiplayer (`offered`) and Cheats
+/// (`cheats`) only where the game's core plays them.
+fn pause_rows_with(linked: bool, requires_relaunch: bool, offered: bool, cheats: bool) -> &'static [PauseRow] {
     if requires_relaunch { RELAUNCH_PAUSE_ROWS }
     else if linked { LINK_PAUSE_ROWS }
-    else if offered { SOLO_PAUSE_ROWS }
-    else { SOLO_ONLY_PAUSE_ROWS }
+    else if offered && cheats { SOLO_PAUSE_ROWS }
+    else if offered { SOLO_NO_CHEATS_PAUSE_ROWS }
+    else if cheats { SOLO_ONLY_PAUSE_ROWS }
+    else { PLAIN_PAUSE_ROWS }
 }
 fn pause_row_text(row: PauseRow, requires_relaunch: bool) -> usize {
     match row {
@@ -11495,6 +11547,8 @@ fn picker_span(shelf: &Shelf, progress: f32) -> [f32; 2] {
 
 #[cfg(test)]
 mod ui_feedback_tests;
+#[cfg(test)]
+mod settings_pages_tests;
 
 #[cfg(test)]
 mod link_hardware_tests;

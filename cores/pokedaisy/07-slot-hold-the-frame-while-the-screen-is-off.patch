@@ -1,0 +1,60 @@
+slot. for Android: no flash when a Game Boy game turns its screen off.
+Pokemon Red, Blue and Yellow turn the screen off at each door while the
+next map loads: the blank screen showed for about six frames between two
+black ones. The frame before stays (a dupe), and the frame after the
+screen comes back on, which the hardware doesn't show either. One line in
+the log the first times it happens.
+
+diff --git a/app/src/main/cpp/pk_wide.h b/app/src/main/cpp/pk_wide.h
+index bae9abc..a08f951 100644
+--- a/app/src/main/cpp/pk_wide.h
++++ b/app/src/main/cpp/pk_wide.h
+@@ -353,6 +353,8 @@ int pk_wide_gb_view(struct mCore* core, const uint32_t* frame, uint32_t* out, st
+ /** pk_wide_glow's twin for a Game Boy game: the frame over its menus' bars. */
+ int pk_wide_gb_glow(struct mCore* core, const uint32_t* frame, uint32_t* out, struct PkWideView view);
+ int pk_wide_gb_scene(void);
++/** slot.: the Game Boy's screen is off (LCDC bit 7 clear) as the frame ends. 0 for anything else. */
++int pk_wide_gb_lcd_off(struct mCore* core);
+ int pk_wide_gb_wants_close(void);
+ int pk_wide_gb_last_mode(void);
+ int pk_wide_gb_last_score(void);
+diff --git a/app/src/main/cpp/pk_wide_gb.c b/app/src/main/cpp/pk_wide_gb.c
+index f34a1b7..4ee8baf 100644
+--- a/app/src/main/cpp/pk_wide_gb.c
++++ b/app/src/main/cpp/pk_wide_gb.c
+@@ -1440,6 +1440,10 @@ void pk_wide_gb_reset(void) {
+ }
+ 
+ int pk_wide_gb_scene(void) { return gbLastScene; }
++int pk_wide_gb_lcd_off(struct mCore* core) {
++    if (!core || core->platform(core) != mPLATFORM_GB || !core->board) return 0;
++    return !(((struct GB*) core->board)->memory.io[GB_REG_LCDC] & 0x80);
++}
+ int pk_wide_gb_wants_close(void) { return gbLastClose; }
+ int pk_wide_gb_last_mode(void) { return gbLastMode; }
+ int pk_wide_gb_last_score(void) { return gbLastScore; }
+diff --git a/libretro/pd_libretro.c b/libretro/pd_libretro.c
+index c7c8595..598bf32 100644
+--- a/libretro/pd_libretro.c
++++ b/libretro/pd_libretro.c
+@@ -2483,7 +2483,19 @@ RETRO_API void retro_run(void) {
+     companion = false; // The native battle / Bag / party resumes with the selected action.
+   bool paused = companion || hudFocus || (quickOpen && !flyAsk);
+   const bool expanded = wideSupported && settings.aspect != PD_ASPECT_ORIGINAL;
+-  const bool repeat = late && canDupe && haveGameFrame && !paused && !quickOpen &&
++  // slot.: a Game Boy game that turns its screen off (Gen 1's doors, as it loads the next map) would show the blank
++  // screen for a few frames between two black ones, a flash: the frame before stays, and the first frame after the
++  // screen comes back on (the hardware shows nothing on it either).
++  static int lcdHold;
++  static unsigned lcdHeld;
++  if (!PD_BE_IS_GBA() && pk_wide_gb_lcd_off(core)) {
++    if (!lcdHold && logCallback && lcdHeld++ < 3)
++      logCallback(RETRO_LOG_WARN, "pokedaisy: screen off, the last frame held\n");
++    lcdHold = 2;
++  } else if (lcdHold > 0) {
++    lcdHold--;
++  }
++  const bool repeat = (late || lcdHold > 0) && canDupe && haveGameFrame && !paused && !quickOpen &&
+                       (!ff || (expanded && !repeatedFrame));
+   maskGame = paused;
+   // The button that closed the companion / quick menu / HUD cursor (A on a pick, B backing out) is still held: it stays
