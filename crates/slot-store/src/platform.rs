@@ -26,14 +26,19 @@ pub enum Platform {
     Pokemini,
     /// PICO-8 carts (.p8 and .p8.png).
     Pico8,
+    /// Neo Geo AES and MVS: FinalBurn Neo's .zip sets, Geolith's .neo files.
+    NeoGeo,
+    /// PC Engine, TurboGrafx-16 and SuperGrafx HuCards: one shelf.
+    Pce,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 13] = [
+    pub const ALL: [Platform; 15] = [
         Platform::Gba, Platform::Gb, Platform::Gbc,
         Platform::Nes, Platform::Snes, Platform::Md,
         Platform::Sms, Platform::Gg, Platform::Ngp, Platform::Ws,
         Platform::Lynx, Platform::Pokemini, Platform::Pico8,
+        Platform::NeoGeo, Platform::Pce,
     ];
 
     pub fn name(self) -> &'static str {
@@ -69,6 +74,10 @@ impl Platform {
         if self == Platform::Pico8 && !pico8_name(path) {
             return false;
         }
+        // The Neo Geo BIOS sets sit beside the games: never a cart.
+        if self == Platform::NeoGeo && neogeo_bios_name(path) {
+            return false;
+        }
         path.extension()
             .and_then(|e| e.to_str())
             .is_some_and(|ext| {
@@ -85,6 +94,17 @@ fn pico8_name(path: &Path) -> bool {
         .and_then(|n| n.to_str())
         .map(|n| n.to_ascii_lowercase())
         .is_some_and(|n| n.ends_with(".p8") || n.ends_with(".p8.png"))
+}
+
+/// The BIOS sets a Neo Geo folder holds beside its games (MAME's and
+/// FinalBurn Neo's names): neogeo.zip (MVS, Universe BIOS), aes.zip (AES),
+/// and the Neo Geo CD's, which slot. doesn't play yet.
+pub const NEOGEO_BIOS_SETS: [&str; 4] = ["neogeo", "aes", "neocdz", "neocd"];
+
+pub fn neogeo_bios_name(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| NEOGEO_BIOS_SETS.iter().any(|b| n.eq_ignore_ascii_case(b)))
 }
 
 /// A cart's name without its extension: "Celeste.p8.png" is "Celeste", as

@@ -40,7 +40,18 @@ internal object BiosLibrary {
             bytes.size in 2_048..16_384 &&
                 String(bytes, 0x120, 10, Charsets.US_ASCII) == "GENESIS OS" },
         Kind("bios.min", 4_096, Systems.POKEMINI, sized(4_096)),
+        // The Neo Geo's, from a recent MAME set: neogeo.zip (MVS and
+        // Universe BIOS, also FinalBurn Neo's), aes.zip (the AES, Geolith).
+        Kind("neogeo.zip", NEOGEO_BIOS_MAX, Systems.NEOGEO, ::isZip),
+        Kind("aes.zip", NEOGEO_BIOS_MAX, Systems.NEOGEO, ::isZip),
     )
+
+    /** A Neo Geo BIOS set is a few MB (neogeo.zip with every Universe BIOS). */
+    private const val NEOGEO_BIOS_MAX = 16 * 1024 * 1024
+
+    private fun isZip(bytes: ByteArray): Boolean = bytes.size > 22 &&
+        bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte() &&
+        bytes[2] == 3.toByte() && bytes[3] == 4.toByte()
 
     private fun kindOf(name: String): Kind? =
         KINDS.firstOrNull { it.name.equals(name, ignoreCase = true) }
@@ -65,6 +76,7 @@ internal object BiosLibrary {
         Systems.SMS -> "Master System"
         Systems.MD -> "Mega Drive"
         Systems.POKEMINI -> "Pokemon mini"
+        Systems.NEOGEO -> "Neo Geo"
         else -> name
     }
 
@@ -98,6 +110,41 @@ internal object BiosLibrary {
             check(temp.renameTo(target)) { "Could not install ${kind.name}" }
         } finally {
             temp.delete()
+        }
+        return true
+    }
+
+    /** A Neo Geo BIOS set found in the ROM folder (neogeo.zip next to the
+     *  games, as FinalBurn Neo has it): staged for both cores unless the
+     *  BIOS folder gave its own. True when it was written. */
+    @Synchronized
+    fun stageFromRomFolder(context: Context, uri: Uri, name: String): Boolean {
+        val kind = kindOf(name)?.takeIf { it.platform == Systems.NEOGEO } ?: return false
+        val owners = context.getSharedPreferences("local-bios-provenance", Context.MODE_PRIVATE)
+        if (owners.getString(kind.name, null) != null) return false
+        val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+            val data = ByteArray(kind.max + 1)
+            var count = 0
+            while (count < data.size) {
+                val n = stream.read(data, count, data.size - count)
+                if (n < 0) break
+                count += n
+            }
+            data.copyOf(count)
+        } ?: return false
+        if (bytes.size > kind.max || !kind.valid(bytes)) return false
+        val dest = File(context.filesDir, "BIOS").apply { mkdirs() }
+        val target = File(dest, kind.name)
+        if (target.isFile && target.length() == bytes.size.toLong() &&
+            fingerprint(target.readBytes()) == fingerprint(bytes)) return false
+        val atomic = AtomicFile(target)
+        val stream = atomic.startWrite()
+        try {
+            stream.write(bytes)
+            atomic.finishWrite(stream)
+        } catch (error: Exception) {
+            atomic.failWrite(stream)
+            throw error
         }
         return true
     }
@@ -175,7 +222,8 @@ internal object BiosLibrary {
         }
         require(allowEmpty || found.isNotEmpty() || pico8) {
             "No BIOS slot. knows found (gba_bios.bin, gb_bios.bin, gbc_bios.bin, " +
-                "lynxboot.img, bios.gg, bios_U.sms, bios_E.sms, bios_J.sms, bios_MD.bin, bios.min, PICO-8)"
+                "lynxboot.img, bios.gg, bios_U.sms, bios_E.sms, bios_J.sms, bios_MD.bin, bios.min, " +
+                "neogeo.zip, aes.zip, PICO-8)"
         }
         val dest = File(context.filesDir, "BIOS").apply { mkdirs() }
         check(dest.isDirectory) { "BIOS destination unavailable" }

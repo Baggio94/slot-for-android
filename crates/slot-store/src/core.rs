@@ -34,15 +34,25 @@ pub enum Core {
     /// PICO-8's second socket: the player's own PICO-8 (the Raspberry Pi
     /// build in the BIOS folder) run by slot.'s own core, with Splore.
     Pico8,
+    /// FinalBurn Neo built for the Neo Geo alone (its neogeo subset):
+    /// the .zip sets.
+    FbNeo,
+    /// Geolith (BSD-3): the .neo files.
+    Geolith,
+    /// Beetle PCE FAST (Mednafen's pce_fast): PC Engine, TurboGrafx-16.
+    BeetlePceFast,
+    /// Beetle PCE (Mednafen's pce): the SuperGrafx too.
+    BeetlePce,
 }
 
 impl Core {
-    pub const ALL: [Core; 19] = [
+    pub const ALL: [Core; 23] = [
         Core::Mgba, Core::Gpsp, Core::Gambatte,
         Core::Fceumm, Core::Nestopia, Core::Snes9x, Core::Bsnes,
         Core::GenesisPlusGx, Core::Picodrive,
         Core::Neopop, Core::Race, Core::Gearsystem, Core::Handy, Core::BeetleLynx,
         Core::BeetleCygne, Core::PokeMini, Core::PokeDaisy, Core::Fake08, Core::Pico8,
+        Core::FbNeo, Core::Geolith, Core::BeetlePceFast, Core::BeetlePce,
     ];
 
     /// libretro's own core name: lib{as_str}_libretro.so, and the key
@@ -68,6 +78,10 @@ impl Core {
             Core::PokeDaisy => "pokedaisy",
             Core::Fake08 => "fake08",
             Core::Pico8 => "pico8",
+            Core::FbNeo => "fbneo",
+            Core::Geolith => "geolith",
+            Core::BeetlePceFast => "mednafen_pce_fast",
+            Core::BeetlePce => "mednafen_pce",
         }
     }
 
@@ -105,6 +119,21 @@ impl Core {
             Core::PokeDaisy => "PokeDaisy",
             Core::Fake08 => "fake-08",
             Core::Pico8 => "PICO-8",
+            // RetroArch's full FinalBurn Neo: its save folder, though this
+            // build calls itself "FinalBurn Neo (neogeo subset)".
+            Core::FbNeo => "FinalBurn Neo",
+            Core::Geolith => "Geolith",
+            Core::BeetlePceFast => "Beetle PCE Fast",
+            Core::BeetlePce => "Beetle PCE",
+        }
+    }
+
+    /// The name printed on the board's chip: FinalBurn Neo's short one, as
+    /// the Neo Geo board showed it (Siham 2026-11-27).
+    pub fn chip_text(self) -> &'static str {
+        match self {
+            Core::FbNeo => "FBNeo",
+            other => other.text(),
         }
     }
 
@@ -145,15 +174,31 @@ impl Core {
     pub fn socket(self) -> usize {
         match self {
             Core::Mgba | Core::Fceumm | Core::Snes9x | Core::GenesisPlusGx
-            | Core::Neopop | Core::Handy | Core::BeetleCygne | Core::PokeMini | Core::Fake08 => 0,
+            | Core::Neopop | Core::Handy | Core::BeetleCygne | Core::PokeMini | Core::Fake08
+            | Core::FbNeo | Core::BeetlePceFast => 0,
             Core::Gpsp | Core::Gambatte | Core::Nestopia | Core::Bsnes | Core::Picodrive
-            | Core::Race | Core::Gearsystem | Core::BeetleLynx | Core::Pico8 => 1,
+            | Core::Race | Core::Gearsystem | Core::BeetleLynx | Core::Pico8
+            | Core::Geolith | Core::BeetlePce => 1,
             Core::PokeDaisy => 2,
         }
     }
 
     pub fn default_for(platform: Platform) -> Core {
         Core::primary_for(platform)
+    }
+
+    /// The core a cart's file imposes, whatever was picked: a Neo Geo
+    /// .zip set is FinalBurn Neo's and a .neo file Geolith's (neither plays
+    /// the other's), a SuperGrafx .sgx Beetle PCE's (Beetle PCE FAST has
+    /// no SuperGrafx). `ext` is the cart's extension, any case.
+    pub fn imposed_by(platform: Platform, ext: &str) -> Option<Core> {
+        let ext = ext.to_ascii_lowercase();
+        match (platform, ext.as_str()) {
+            (Platform::NeoGeo, "zip") => Some(Core::FbNeo),
+            (Platform::NeoGeo, "neo") => Some(Core::Geolith),
+            (Platform::Pce, "sgx") => Some(Core::BeetlePce),
+            _ => None,
+        }
     }
 }
 

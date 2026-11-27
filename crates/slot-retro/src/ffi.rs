@@ -110,6 +110,17 @@ pub const NETPACKET_UNSEQUENCED: i32 = 1 << 1;
 pub const NETPACKET_FLUSH_HINT: i32 = 1 << 2;
 pub const NETPACKET_BROADCAST: u16 = 0xFFFF;
 
+/// retro_system_info: only need_fullpath is read (a core that loads the
+/// file itself, such as FinalBurn Neo with a whole Neo Geo set).
+#[repr(C)]
+pub struct SystemInfo {
+    pub library_name: *const c_char,
+    pub library_version: *const c_char,
+    pub valid_extensions: *const c_char,
+    pub need_fullpath: bool,
+    pub block_extract: bool,
+}
+
 #[repr(C)]
 pub struct GameInfo {
     pub path: *const c_char,
@@ -225,6 +236,7 @@ pub struct Api {
     /// both; missing ones only turn cheats off.
     pub cheat_reset: Option<unsafe extern "C" fn()>,
     pub cheat_set: Option<unsafe extern "C" fn(c_uint, bool, *const c_char)>,
+    pub get_system_info: Option<unsafe extern "C" fn(*mut SystemInfo)>,
 }
 
 impl Api {
@@ -257,6 +269,7 @@ impl Api {
             get_memory_size: get!("retro_get_memory_size"),
             cheat_reset: lib.get(b"retro_cheat_reset\0").ok().map(|f| *f),
             cheat_set: lib.get(b"retro_cheat_set\0").ok().map(|f| *f),
+            get_system_info: lib.get(b"retro_get_system_info\0").ok().map(|f| *f),
         })
     }
 }

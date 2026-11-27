@@ -122,13 +122,15 @@ class SystemsTest {
     }
 
     @Test fun everySystemHasOneCompleteRow() {
-        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI", "PICO8"), Systems.PLATFORMS)
+        assertEquals(listOf("GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI", "PICO8",
+            "NEOGEO", "PCE"), Systems.PLATFORMS)
         for (row in Systems.TABLE) {
             val p = row.platform
             assertTrue(p, row.extensions.isNotEmpty() && row.folders.isNotEmpty() && row.romm.isNotEmpty())
             assertEquals(p, 2, row.cores.size)
             for (core in row.cores) assertEquals(p, core, Systems.keyForFolder(Systems.folderForKey(core)))
-            for (ext in row.extensions) assertTrue("$p .$ext", ext in Systems.ROM_EXTENSIONS)
+            // A Neo Geo set's "zip" is the whole ZIP (RomSource.NeoGeoSet).
+            for (ext in row.extensions) assertTrue("$p .$ext", ext in Systems.ROM_EXTENSIONS || ext == Systems.NEOGEO_SET)
             for (slug in row.romm) assertEquals("$p $slug", p, Romm.platformOf(slug))
             assertEquals(p, row.home, p in Systems.HOME_PLATFORMS)
             // PICO-8 has no RetroAchievements set (0).
@@ -136,6 +138,23 @@ class SystemsTest {
         }
         assertEquals(Systems.TABLE.size, Systems.TABLE.map { it.retroAchievements }.toSet().size)
         assertEquals(Systems.TABLE.size, Systems.TABLE.map { it.screenScraper }.toSet().size)
+    }
+
+    @Test fun theFileDecidesTheNeoGeoAndSuperGrafxCore() {
+        assertEquals("NEOGEO", Systems.platformFor("neo"))
+        assertEquals("NEOGEO", Systems.platformFor(Systems.NEOGEO_SET))
+        assertEquals("PCE", Systems.platformFor("SGX"))
+        assertEquals("FinalBurn Neo", Systems.coreFolder("geolith", Systems.NEOGEO_SET))
+        assertEquals("Geolith", Systems.coreFolder("fbneo", "neo"))
+        assertEquals("Beetle PCE", Systems.coreFolder("mednafen_pce_fast", "sgx"))
+        assertEquals("Beetle PCE Fast", Systems.coreFolder("", "pce"))
+        assertEquals("Beetle PCE", Systems.coreFolder("mednafen_pce", "pce"))
+        assertTrue(Systems.isNeoGeoBios("neogeo.zip"))
+        assertTrue(Systems.isNeoGeoBios("AES.ZIP"))
+        assertFalse(Systems.isNeoGeoBios("mslug.zip"))
+        assertFalse(Systems.isNeoGeoBios("neogeo.neo"))
+        assertEquals("PCE", Romm.platformOf("tg16"))
+        assertEquals("NEOGEO", Romm.platformOf("neogeoaes"))
     }
 
     @Test fun ourOwnFoldersAreNeverSkippedByTheScan() {
@@ -150,16 +169,20 @@ class SystemsTest {
 
     @Test fun theTableKeepsTheSixSystemsAsTheyWere() {
         assertEquals(setOf("gba", "gb", "gbc", "nes", "fc", "unf", "unif", "sfc", "smc", "md", "gen", "smd", "bin",
-            "sms", "gg", "ngp", "ngc", "ngpc", "ws", "wsc", "lnx", "lyx", "min", "p8", "png"), Systems.ROM_EXTENSIONS)
-        assertEquals(setOf("NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI", "PICO8"), Systems.HOME_PLATFORMS)
+            "sms", "gg", "ngp", "ngc", "ngpc", "ws", "wsc", "lnx", "lyx", "min", "p8", "png", "neo", "pce", "sgx"),
+            Systems.ROM_EXTENSIONS)
+        assertEquals(setOf("NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI", "PICO8", "NEOGEO", "PCE"),
+            Systems.HOME_PLATFORMS)
         assertEquals("GBA", Systems.platformFor("GBA"))
         assertEquals("GBC", Systems.platformFor("gbc"))
         assertEquals("MD", Systems.platformFor("bin"))
         assertEquals(mapOf("GB" to 4, "GBA" to 5, "GBC" to 6, "NES" to 7, "SNES" to 3, "MD" to 1,
-            "SMS" to 11, "GG" to 15, "NGP" to 14, "WS" to 53, "LYNX" to 13, "POKEMINI" to 24, "PICO8" to null),
+            "SMS" to 11, "GG" to 15, "NGP" to 14, "WS" to 53, "LYNX" to 13, "POKEMINI" to 24, "PICO8" to null,
+            "NEOGEO" to 27, "PCE" to 8),
             Systems.PLATFORMS.associateWith { Systems.retroAchievementsId(it) })
         assertEquals(mapOf("GB" to null, "GBA" to null, "GBC" to null, "NES" to 3, "SNES" to 4, "MD" to 1,
-            "SMS" to 2, "GG" to 21, "NGP" to 25, "WS" to 45, "LYNX" to 28, "POKEMINI" to 211, "PICO8" to 234),
+            "SMS" to 2, "GG" to 21, "NGP" to 25, "WS" to 45, "LYNX" to 28, "POKEMINI" to 211, "PICO8" to 234,
+            "NEOGEO" to 142, "PCE" to 31),
             Systems.PLATFORMS.associateWith { HomeCartLabels.systemId(it) })
         assertEquals("MD", Romm.platformOf("Sega-Mega-Drive"))
         assertEquals("GG", Romm.platformOf("gamegear"))

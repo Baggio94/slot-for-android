@@ -74,6 +74,10 @@ impl MenuPalette {
             13 => ([86, 91, 128], [120, 126, 164], [215, 223, 175]), // Pokemon mini
             // PICO-8: the default cart's plastic, its palette's cream (colour 7) for the shelf.
             14 => ([52, 52, 56], [84, 84, 90], [255, 241, 232]), // PICO-8
+            // 3.2: the Neo Geo's black bar on its charcoal mosaic, the PC
+            // Engine's white one on its ivory.
+            15 => ([36, 36, 38], [70, 70, 74], [51, 50, 54]),       // Neo Geo
+            16 => ([226, 223, 214], [244, 242, 236], [242, 226, 202]), // PC Engine
             _ => ([74, 80, 152], [108, 114, 184], [196, 198, 228]), // Game Boy Advance
         };
         let ink = crate::bitmaps::console_slot_takes_dark_ink(family, 0).then_some(DARK_INK);
@@ -303,6 +307,9 @@ mod tests {
             assert_ne!(MenuPalette::original(family), MenuPalette::original(6), "family {family}");
         }
         assert!(MenuPalette::original(14).ink.is_none());
+        // The black Neo Geo writes white, the white PC Engine dark.
+        assert!(MenuPalette::original(15).ink.is_none());
+        assert!(MenuPalette::original(16).ink.is_some());
     }
 
     #[test]

@@ -220,7 +220,8 @@ pub fn slot_front_light() -> &'static [u8] {
 /// A console's slot bar (`family`: 0 Famicom, 1 NES, 2 Super Nintendo,
 /// 3 Mega Drive, 4 Game Boy, 5 Game Boy Color, 6 GBA; the 3.0 systems: 7
 /// Neo Geo Pocket, 8 WonderSwan, 9 WonderSwan Color, 10 Game Gear, 11
-/// Master System, 12 Lynx, 13 Pokémon mini) in a bar theme: 0
+/// Master System, 12 Lynx, 13 Pokémon mini, 14 PICO-8; 3.2.0: 15 Neo
+/// Geo, 16 PC Engine) in a bar theme: 0
 /// the console's own colours, 1 dark (black and grey), 2 light (light
 /// versions of its colours) (Siham 2026-11-03).
 /// A console's slot bar masters, PNG bytes at 3x (`family`, `theme` as `home_slot`).
@@ -242,6 +243,8 @@ pub fn home_slot_png(family: usize, theme: usize) -> (&'static [u8], &'static [u
             include_bytes!(concat!("../../../assets/home/slot_", $part, "_lynx", $suffix, ".png")).as_slice(),
             include_bytes!(concat!("../../../assets/home/slot_", $part, "_pokemini", $suffix, ".png")).as_slice(),
             include_bytes!(concat!("../../../assets/home/slot_", $part, "_p8", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_neogeo", $suffix, ".png")).as_slice(),
+            include_bytes!(concat!("../../../assets/home/slot_", $part, "_pce", $suffix, ".png")).as_slice(),
         ]};
     }
     const BACK: [[&[u8]; CONSOLE_SLOTS]; BAR_THEMES] = [bars!("back", ""), bars!("back", "_dark"), bars!("back", "_light")];
@@ -268,7 +271,7 @@ pub fn slot_bar_png(light: bool) -> (&'static [u8], &'static [u8]) {
 pub const BAR_THEMES: usize = 3;
 
 /// How many console slot bars `home_slot` draws.
-pub const CONSOLE_SLOTS: usize = 15;
+pub const CONSOLE_SLOTS: usize = 17;
 
 /// Which console bar a cart goes into (see `home_slot`).
 pub fn console_slot_family(cart: &slot_store::Cart) -> usize {
@@ -287,7 +290,7 @@ pub fn console_slot_takes_dark_ink(family: usize, theme: usize) -> bool {
     match theme {
         1 => false,
         2 => true,
-        _ => !matches!(family, 3 | 6 | 9..=14),
+        _ => !matches!(family, 3 | 6 | 9..=15),
     }
 }
 
@@ -304,7 +307,8 @@ pub fn home_closer(family: usize) -> Vec<(&'static [u8], u32, u32)> {
     match family {
         1 => vec![(load(NES, 248, 26, &C[0]), 248, 26)],
         2 => vec![(load(SNES_TOP, 244, 13, &C[1]), 244, 13), (load(SNES_BOTTOM, 244, 13, &C[2]), 244, 13)],
-        3 => vec![(load(MD_LEFT, 124, 26, &C[3]), 124, 26), (load(MD_RIGHT, 124, 26, &C[4]), 124, 26)],
+        // The Neo Geo AES's slot closes with the same two doors.
+        3 | 15 => vec![(load(MD_LEFT, 124, 26, &C[3]), 124, 26), (load(MD_RIGHT, 124, 26, &C[4]), 124, 26)],
         _ => Vec::new(),
     }
 }
@@ -333,6 +337,9 @@ pub fn home_slot_family(cart: &slot_store::Cart) -> Option<usize> {
         // slot.'s own PICO-8 bar (tools/pico8-mould/bar.py), as wide as
         // the other handhelds' for its 240-wide seated cart.
         M::Pico8 => 14,
+        // 3.2.0: the Neo Geo AES's black bar and the PC Engine's white one.
+        M::NeoGeo => 15,
+        M::Pce => 16,
     })
 }
 

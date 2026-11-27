@@ -23,6 +23,30 @@ internal object RomSource {
 
     data class Header(val extension: String, val bytes: ByteArray, val battery: Boolean? = null)
 
+    /** A Neo Geo game: the .zip is the cartridge, whole (FinalBurn Neo
+     *  reads the set by its name), never a ROM to take out of it. */
+    class NeoGeoSet : IllegalArgumentException("A Neo Geo set: the ZIP is the cartridge")
+
+    /** The biggest Neo Geo set or .neo file slot. copies (the biggest
+     *  commercial ones are about 100 MB). */
+    const val MAX_NEOGEO_BYTES: Long = 256L * 1024 * 1024
+
+    /** The most a cartridge of this extension may hold. */
+    fun maxRomBytes(ext: String): Long =
+        if (Systems.platformFor(ext) == Systems.NEOGEO) MAX_NEOGEO_BYTES else MAX_ROM_BYTES
+
+    /** A Neo Geo set's ROM chip as MAME and FinalBurn Neo name them:
+     *  201-p1.p1, 201-c1.c1, 232-m1.m1, k2k4s-p1.bin... */
+    private val NEOGEO_CHIP = Regex("""^(p|c|m|s|v|sp|ep)[0-9]{1,2}$""")
+    private val NEOGEO_CHIP_STEM = Regex("""[-_](p|c|m|s|v)[0-9]{1,2}[a-z]?$""")
+    internal fun neoGeoChip(entryName: String): Boolean {
+        val name = entryName.substringAfterLast('/').lowercase(Locale.ROOT)
+        val ext = name.substringAfterLast('.', "")
+        val stem = name.substringBeforeLast('.')
+        return NEOGEO_CHIP.matches(ext) ||
+            (ext in setOf("bin", "rom") && NEOGEO_CHIP_STEM.containsMatchIn(stem))
+    }
+
     fun isContainer(filename: String): Boolean =
         filename.substringAfterLast('.', "").lowercase(Locale.ROOT) == "zip"
 
@@ -56,7 +80,7 @@ internal object RomSource {
         val ext = extension(filename)
         require(ext in supported + "zip") { "Unsupported cartridge type" }
         if (ext != "zip") {
-            return source.use { operation(Limited(it), ext) }
+            return source.use { operation(Limited(it, maxRomBytes(ext)), ext) }
         }
         return ZipInputStream(BufferedInputStream(source)).use { zip ->
             var visited = 0
@@ -64,13 +88,16 @@ internal object RomSource {
                 val entry = zip.nextEntry ?: break
                 if (entry.isDirectory) continue
                 val romExt = extension(entry.name.substringAfterLast('/'))
+                // A Neo Geo set's chips are no cartridge of their own: the
+                // whole ZIP is the game, known by its first chip.
+                if (romExt !in supported && neoGeoChip(entry.name)) throw NeoGeoSet()
                 if (romExt !in supported || !Systems.acceptsName(entry.name)) continue
-                require(entry.size == -1L || entry.size in Systems.minRomBytes(romExt).toLong()..MAX_ROM_BYTES) {
+                require(entry.size == -1L || entry.size in Systems.minRomBytes(romExt).toLong()..maxRomBytes(romExt)) {
                     "ZIP ROM exceeds safe size limits"
                 }
                 // Preserve a deterministic first-ROM choice across scan,
                 // warming, artwork/RA fingerprints and emulator launch.
-                return@use operation(Limited(zip), romExt)
+                return@use operation(Limited(zip, maxRomBytes(romExt)), romExt)
             }
             throw IllegalArgumentException("ZIP does not contain a cartridge ROM")
         }
@@ -104,13 +131,33 @@ internal object RomSource {
             Header(ext, header, hasBattery)
         }
 
-    private class Limited(source: InputStream): FilterInputStream(source) {
+    /** A Neo Geo set copied whole into [target], at most MAX_NEOGEO_BYTES;
+     *  [progress] (the bytes so far) false stops it. The bytes copied. */
+    fun copyNeoGeoSet(source: InputStream, target: java.io.File,
+                      progress: (Long) -> Boolean = { true }): Long {
+        var copied = 0L
+        target.outputStream().buffered().use { output ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val n = source.read(buffer)
+                if (n < 0) break
+                copied += n
+                require(copied <= MAX_NEOGEO_BYTES) { "Neo Geo set exceeds 256 MiB" }
+                output.write(buffer, 0, n)
+                if (!progress(copied)) throw InterruptedException()
+            }
+        }
+        require(copied >= MIN_ROM_BYTES) { "Neo Geo set too small" }
+        return copied
+    }
+
+    private class Limited(source: InputStream, private val limit: Long): FilterInputStream(source) {
         private var received = 0L
         override fun read(): Int {
             val byte = super.read()
             if (byte >= 0) {
                 received++
-                require(received <= MAX_ROM_BYTES) { "ROM exceeds 64 MiB uncompressed" }
+                require(received <= limit) { "ROM exceeds ${limit shr 20} MiB uncompressed" }
             }
             return byte
         }
@@ -118,7 +165,7 @@ internal object RomSource {
             val n = `in`.read(b, off, len)
             if (n > 0) {
                 received += n
-                require(received <= MAX_ROM_BYTES) { "ROM exceeds 64 MiB uncompressed" }
+                require(received <= limit) { "ROM exceeds ${limit shr 20} MiB uncompressed" }
             }
             return n
         }

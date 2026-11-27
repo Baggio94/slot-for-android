@@ -499,6 +499,16 @@ fn await_state_writes() {
 
 /// The cached cart under its game name, for a core that names its own
 /// battery file after the ROM (bsnes). A hard link, or a copy.
+/// Geolith's geolith_system_type for Settings > Systems > Neo Geo > BIOS
+/// (0 Auto, 1 AES, 2 MVS, 3 Universe BIOS): the AES only with aes.zip.
+pub(crate) fn neogeo_system(choice: u8, aes_zip: bool) -> &'static str {
+    match choice {
+        0 | 1 if aes_zip => "aes",
+        3 => "uni",
+        _ => "mvs",
+    }
+}
+
 fn named_rom_alias(storage: &Path, rom: &Path, rom_stem: &str) -> Result<PathBuf, String> {
     let dir = storage.join("RomNames");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot prepare ROM name: {e}"))?;
@@ -743,6 +753,13 @@ impl GameSession {
         // has already staged only allowed BIOS files into this private folder.
         let bios = storage.join("BIOS");
         std::fs::create_dir_all(&bios).map_err(|e| e.to_string())?;
+        // Both Neo Geo cores need a BIOS: neogeo.zip (Geolith's AES can do
+        // with aes.zip alone). Say which, rather than "the core refused".
+        if platform == Platform::NeoGeo && !bios.join("neogeo.zip").is_file()
+            && !(which == Core::Geolith && neogeo_system(crate::settings::CoreExtras::current().neogeo_bios,
+                bios.join("aes.zip").is_file()) == "aes") {
+            return Err("Neo Geo needs neogeo.zip (BIOS folder or next to the games)".into());
+        }
         // Gambatte decides on the boot ROM in retro_init, before the
         // options below are set.
         let init_options = match which {
@@ -916,6 +933,36 @@ impl GameSession {
             // (Settings > Systems > Pokemon mini), and its LCD drawn at the
             // scale that leaves the screen a whole multiple (KPA: 5x, then
             // x2), else 4x as RetroArch.
+            // FinalBurn Neo finds the set's BIOS in neogeo.zip (the game's
+            // folder, then system/); a BIOS it lacks falls back to the
+            // set's own DIP switch (MVS), as in RetroArch.
+            Core::FbNeo => {
+                let aes = bios.join("aes.zip").is_file();
+                core.set_option("fbneo-neogeo-mode", match crate::settings::CoreExtras::current().neogeo_bios {
+                    0 if aes => "AES_EUR",
+                    1 => "AES_EUR",
+                    2 => "MVS_EUR",
+                    3 => "UNIBIOS",
+                    _ => "DIPSWITCH",
+                });
+            }
+            // Geolith reads aes.zip for the AES, neogeo.zip for the MVS and
+            // the Universe BIOS; AES without aes.zip starts on the MVS.
+            Core::Geolith => {
+                let system = neogeo_system(crate::settings::CoreExtras::current().neogeo_bios,
+                    bios.join("aes.zip").is_file());
+                core.set_option("geolith_system_type", system);
+            }
+            // 224 lines, as the SNES and the NES with their overscan hidden
+            // (Siham 2026-11-27).
+            Core::BeetlePceFast => {
+                core.set_option("pce_fast_initial_scanline", "11");
+                core.set_option("pce_fast_last_scanline", "234");
+            }
+            Core::BeetlePce => {
+                core.set_option("pce_initial_scanline", "11");
+                core.set_option("pce_last_scanline", "234");
+            }
             Core::PokeMini => {
                 let scale = crate::video_mode::pokemini_scale(crate::runtime::panel_size());
                 core.set_option("pokemini_video_scale", &format!("{scale}x"));
@@ -943,9 +990,11 @@ impl GameSession {
             primary_id: core.instance_id(),
             native_video: !platform.handheld() || which == Core::PokeDaisy,
         });
-        // A system without RetroAchievements (PICO-8: 0) is never wrapped.
+        // A system slot. has no RetroAchievements for yet (PICO-8: 0, the
+        // Neo Geo and PC Engine until their own step) is never wrapped.
         let mut core: Box<dyn RetroCore> = match achievements {
-            Some(service) if console != 0 => service.wrap_for_console(Box::new(core), console),
+            Some(service) if slot_achievements::supported_console(console) =>
+                service.wrap_for_console(Box::new(core), console),
             _ => Box::new(core),
         };
         // bsnes keeps its battery itself, named after the ROM file and
@@ -968,8 +1017,11 @@ impl GameSession {
                 }
             }
         }
+        // FinalBurn Neo knows a Neo Geo game by its set's file name
+        // (mslug.zip), Geolith names its saves after the file: both get the
+        // cart's own name too.
         let named_rom = if matches!(which, Core::Bsnes | Core::Handy | Core::PokeMini
-                | Core::Neopop | Core::Race | Core::Fake08)
+                | Core::Neopop | Core::Race | Core::Fake08 | Core::FbNeo | Core::Geolith)
             && linked_boot.is_none() {
             Some(named_rom_alias(storage, rom, rom_stem)?)
         } else { None };
@@ -1250,7 +1302,7 @@ impl GameSession {
             gambatte_legacy_export, ring,
             rewind: RewindThread::spawn(REWIND_BYTES), rewind_frames: 0,
             frame_count: 0, palette_live, core_kind: which,
-            full_pad: matches!(platform, Platform::Snes | Platform::Md | Platform::Ws),
+            full_pad: matches!(platform, Platform::Snes | Platform::Md | Platform::Ws | Platform::NeoGeo),
             upright: which == Core::BeetleCygne && ws_upright(rom),
             square_listed: crate::square_games::listed(platform, rom),
             colour: colour_cart(platform, rom),
@@ -3078,5 +3130,21 @@ mod xy_mapping_tests {
         assert!(super::no_game_boy_player(b"V49E"));
         assert!(!super::no_game_boy_player(b"AXVE"));
         assert!(!super::no_game_boy_player(b"M\0\0\0"));
+    }
+}
+
+#[cfg(test)]
+mod neogeo_bios_tests {
+    use super::neogeo_system;
+
+    #[test]
+    fn geolith_starts_the_aes_only_with_aes_zip() {
+        // Auto and AES: the AES with aes.zip, else the MVS.
+        assert_eq!(neogeo_system(0, true), "aes");
+        assert_eq!(neogeo_system(0, false), "mvs");
+        assert_eq!(neogeo_system(1, true), "aes");
+        assert_eq!(neogeo_system(1, false), "mvs");
+        assert_eq!(neogeo_system(2, true), "mvs");
+        assert_eq!(neogeo_system(3, false), "uni");
     }
 }

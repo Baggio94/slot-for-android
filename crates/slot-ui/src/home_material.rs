@@ -10,7 +10,8 @@ use crate::home::HomeMould;
 pub(crate) fn refined(m: HomeMould) -> bool {
     use HomeMould::*;
     matches!(m, NeoGeoPocket | WonderSwan | WonderSwanColor | GameGear | MasterSystem
-        | Lynx | PokemonMini | MasterSystemJp | MasterSystemCard | GameGearCodemasters)
+        | Lynx | PokemonMini | MasterSystemJp | MasterSystemCard | GameGearCodemasters
+        | NeoGeo | Pce)
 }
 
 /// The moulds whose master is a photo of black or white plastic, recalibrated
@@ -41,7 +42,7 @@ fn neutral(m: HomeMould, value: u8, in_well: bool) -> u8 {
                 let middle = match m {
                     NeoGeoPocket => 135.0,
                     WonderSwan | WonderSwanColor => 137.0,
-                    GameGear => 132.0, MasterSystem => 130.0,
+                    GameGear => 132.0, MasterSystem | Pce => 130.0,
                     Lynx => 134.0, PokemonMini => 121.0,
                     _ => 128.0,
                 };
@@ -131,6 +132,8 @@ pub(crate) fn plastic_at(m: HomeMould, x: f32, y: f32) -> bool {
         HomeMould::WonderSwan | HomeMould::WonderSwanColor => y < 147.0 || x < 21.5 || x > 290.5,
         HomeMould::Lynx => y < 286.0,
         HomeMould::MasterSystemCard => y < 330.0,
+        // The HuCard's black panel and its contacts are no plastic.
+        HomeMould::Pce => !(8.0..304.0).contains(&x) || !(337.0..483.0).contains(&y),
         HomeMould::PokemonMini => !mini_screw(x, y),
         _ => true,
     }

@@ -2641,12 +2641,20 @@ class MainActivity : Activity() {
                 // input. Inspect the embedded extension before selecting a
                 // core, a save target or a private cache extension.
                 val splore = rawUri == Systems.SPLORE_URI
-                val ext = if (splore) "p8" else if (RomSource.isContainer(name)) {
-                    contentResolver.openInputStream(uri)?.use { input ->
-                        RomSource.inspect(input, name).extension
-                    } ?: error("Cannot inspect cartridge ZIP")
+                // A Neo Geo set is the whole ZIP: on its shelf FinalBurn Neo
+                // plays it (the native side imposes it), else its first chip
+                // names it.
+                val neoGeoSet = !splore && RomSource.isContainer(name) &&
+                    nativeCoreForUri(rawUri) == "fbneo"
+                val ext = if (splore) "p8" else if (neoGeoSet) Systems.NEOGEO_SET
+                else if (RomSource.isContainer(name)) {
+                    try {
+                        contentResolver.openInputStream(uri)?.use { input ->
+                            RomSource.inspect(input, name).extension
+                        } ?: error("Cannot inspect cartridge ZIP")
+                    } catch (_: RomSource.NeoGeoSet) { Systems.NEOGEO_SET }
                 } else name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
-                require(ext in Systems.ROM_EXTENSIONS) { "Unsupported ROM type" }
+                require(ext in Systems.ROM_EXTENSIONS || ext == Systems.NEOGEO_SET) { "Unsupported ROM type" }
                 // Saves, states and the cache by the game's portable name
                 // (slot. 2.5), its files from 2.4 carried over first.
                 val digest = GameKeys.digest(rawUri)
@@ -2662,7 +2670,10 @@ class MainActivity : Activity() {
                 if (!target.isFile || target.length() < Systems.minRomBytes(ext)) {
                     val temp = File(dir, "$digest.tmp")
                     try {
-                        contentResolver.openInputStream(uri)?.use { input ->
+                        if (ext == Systems.NEOGEO_SET) contentResolver.openInputStream(uri)?.use { input ->
+                            RomSource.copyNeoGeoSet(input, temp)
+                        } ?: error("Cannot read this ROM")
+                        else contentResolver.openInputStream(uri)?.use { input ->
                             RomSource.useRom(input, name) { raw, embeddedExt ->
                                 require(embeddedExt == ext) { "ZIP cartridge type changed" }
                                 temp.outputStream().buffered().use { output ->
@@ -2672,8 +2683,8 @@ class MainActivity : Activity() {
                                         val n = raw.read(buffer)
                                         if (n < 0) break
                                         copied += n
-                                        require(copied <= RomSource.MAX_ROM_BYTES) {
-                                            "ROM exceeds 64 MiB"
+                                        require(copied <= RomSource.maxRomBytes(ext)) {
+                                            "ROM exceeds ${RomSource.maxRomBytes(ext) shr 20} MiB"
                                         }
                                         output.write(buffer, 0, n)
                                     }
@@ -2701,8 +2712,8 @@ class MainActivity : Activity() {
                 val saves = storage.savesRoot?.let(Uri::parse)
                 val states = storage.statesRoot?.let(Uri::parse)
                 val shared = RetroArchStorage.target(this, rawUri, core, saves, states,
-                    scannedFileName = if (splore) "Splore.p8" else if (RomSource.isContainer(name))
-                        RomSource.archiveSaveFilename(name, ext) else null,
+                    scannedFileName = if (splore) "Splore.p8" else if (ext == Systems.NEOGEO_SET) name
+                        else if (RomSource.isContainer(name)) RomSource.archiveSaveFilename(name, ext) else null,
                     shareGbaSaves = storage.shareGbaSaves)
                 // A save folder that can't be read no longer stops the game
                 // (amadeus12, 2026-11-15): it starts with slot.'s own saves,

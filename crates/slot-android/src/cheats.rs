@@ -40,6 +40,8 @@ fn pack(platform: Platform) -> &'static [u8] {
         Platform::Ngp => &[],
         // Handy, Beetle Lynx, PokeMini and fake-08 apply none either.
         Platform::Lynx | Platform::Pokemini | Platform::Pico8 => &[],
+        // No cheat pack yet for the Neo Geo and the PC Engine (3.2.0).
+        Platform::NeoGeo | Platform::Pce => &[],
     }
 }
 
@@ -276,7 +278,8 @@ mod tests {
         assert!(lookup(Platform::Ngp, &[0], "Metal Slug - 1st Mission (World)").is_empty());
         assert!(pack(Platform::Lynx).is_empty() && pack(Platform::Pokemini).is_empty());
         for platform in Platform::ALL.into_iter()
-            .filter(|p| !matches!(p, Platform::Ngp | Platform::Lynx | Platform::Pokemini | Platform::Pico8)) {
+            .filter(|p| !matches!(p, Platform::Ngp | Platform::Lynx | Platform::Pokemini | Platform::Pico8
+                | Platform::NeoGeo | Platform::Pce)) {
             let mut text = String::new();
             flate2::read::ZlibDecoder::new(pack(platform)).read_to_string(&mut text).unwrap();
             assert!(text.starts_with("slot-cheats 1\n"), "{platform:?}");

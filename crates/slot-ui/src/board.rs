@@ -232,6 +232,8 @@ fn preview_mould(core: Core) -> Option<HomeMould> {
         Core::BeetleCygne => Some(HomeMould::WonderSwan),
         Core::PokeMini => Some(HomeMould::PokemonMini),
         Core::Fake08 | Core::Pico8 => Some(HomeMould::Pico8),
+        Core::FbNeo | Core::Geolith => Some(HomeMould::NeoGeo),
+        Core::BeetlePceFast | Core::BeetlePce => Some(HomeMould::Pce),
         _ => None,
     }
 }
@@ -932,11 +934,11 @@ fn name_layout(core: Core, max_w: f32) -> Option<text::Layout> {
     let font = text::label_font()?;
     let tracking = |px: f32| (px * 0.10).round();
     let mut px = NAME_PX;
-    while px > NAME_MIN_PX && text::line_width(font, core.text(), px, tracking(px)) > max_w {
+    while px > NAME_MIN_PX && text::line_width(font, core.chip_text(), px, tracking(px)) > max_w {
         px -= 1.0;
     }
     Some(text::Layout {
-        lines: vec![core.text().to_string()],
+        lines: vec![core.chip_text().to_string()],
         px,
         tracking: tracking(px),
     })
@@ -945,6 +947,16 @@ fn name_layout(core: Core, max_w: f32) -> Option<text::Layout> {
 #[cfg(test)]
 mod three_chip_tests {
     use super::*;
+
+    #[test]
+    fn neo_geo_and_pce_cores_sit_on_their_own_boards_chip() {
+        for (core, m) in [(Core::FbNeo, HomeMould::NeoGeo), (Core::Geolith, HomeMould::NeoGeo),
+                          (Core::BeetlePceFast, HomeMould::Pce), (Core::BeetlePce, HomeMould::Pce)] {
+            let (_, _, w, h) = m.art().footprints[0];
+            let face = pak_chip_face(Some(core));
+            assert_eq!((face.w, face.h), (w as u32 + 2 * TURN_PAD, h as u32 + 2 * TURN_PAD), "{core:?}");
+        }
+    }
 
     #[test]
     fn the_gba_board_loses_only_its_title_chip() {

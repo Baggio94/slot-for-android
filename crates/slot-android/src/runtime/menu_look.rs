@@ -935,6 +935,48 @@ mod render {
         }
     }
 
+    /// $SCRATCH_NEOGEO_PCE (3.2 preview): the Neo Geo's and PC Engine's
+    /// shelves in Dark, Light and Original, and each cart opened on its
+    /// board in Dark (the file's core only: one chip lit).
+    #[test]
+    fn render_neogeo_pce() {
+        let Ok(dir) = std::env::var("SCRATCH_NEOGEO_PCE") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let entries: Vec<RomEntry> = serde_json::from_str(r#"[
+            {"title":"mslug","filename":"mslug.zip","platform":"NEOGEO","uri":"content://roms/0.zip","rom_ext":"zip"},
+            {"title":"kof98","filename":"kof98.neo","platform":"NEOGEO","uri":"content://roms/1.neo","rom_ext":"neo"},
+            {"title":"Bonk's Adventure (USA)","filename":"Bonk's Adventure (USA).pce","platform":"PCE","uri":"content://roms/2.pce","rom_ext":"pce"},
+            {"title":"Daimakaimura (Japan)","filename":"Daimakaimura (Japan).sgx","platform":"PCE","uri":"content://roms/3.sgx","rom_ext":"sgx"}
+        ]"#).unwrap();
+        let _surface = slot_gfx::TestEgl::new();
+        menu_style::set_palette(None);
+        menu_style::set_oled(false);
+        crate::library::LIBRARY.lock().unwrap().entries = Some(entries.clone());
+        let mut engine = Engine::new(1, Some(&entries)).unwrap();
+        engine.settings.show_titles = true;
+        engine.settings.wallpaper = crate::settings::WallpaperPick::Default;
+        for (theme, steps) in [("dark", 0), ("light", 2), ("original", 1)] {
+            for _ in 0..steps { engine.cycle_appearance(true); }
+            engine.reload_wallpaper(None);
+            for platform in [Platform::NeoGeo, Platform::Pce] {
+                let rack = platform as usize;
+                engine.active = rack;
+                for at in 0..engine.shelves[rack].carts.len() {
+                    engine.shelves[rack].select(at);
+                    shoot(&mut engine, &dir, &format!("{theme}_{}_{at}.png", platform.system().dir));
+                    if theme == "dark" {
+                        engine.open_core_picker();
+                        for _ in 0..90 { engine.draw(0, || {}); std::thread::sleep(std::time::Duration::from_millis(16)); }
+                        save(&engine, &dir, &format!("{theme}_{}_{at}_open.png", platform.system().dir));
+                        engine.picker = None;
+                        engine.overlay = ShelfOverlay::None;
+                    }
+                }
+            }
+        }
+    }
+
     /// $SCRATCH_STUDIO (preview): Cart Studio on the panel in
     /// $SCRATCH_PANEL, a row at a time.
     #[test]

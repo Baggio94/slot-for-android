@@ -575,9 +575,19 @@ const POKEMINI: [ConsoleButton; 9] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
 const PICO8: [ConsoleButton; 7] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
     cb("O", bit::B), cb("X", bit::A), cb("Pause", bit::START)];
 
+/// FinalBurn Neo and Geolith read the Neo Geo pad as RetroArch does: A
+/// from B, B from A, C from Y, D from X, Coin from SELECT.
+const NEOGEO: [ConsoleButton; 10] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("A", bit::B), cb("B", bit::A), cb("C", bit::Y), cb("D", bit::X),
+    cb("Coin", bit::SELECT), cb("START", bit::START)];
+/// Beetle PCE Fast and Beetle PCE read the PC Engine pad as RetroArch
+/// does: I from A, II from B, Run from START.
+const PCE: [ConsoleButton; 8] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("I", bit::A), cb("II", bit::B), cb("SELECT", bit::SELECT), cb("Run", bit::START)];
+
 /// Systems, by the names slot. files their controls under.
-pub const SYSTEMS: [&str; 14] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv",
-    "lynx", "pokemini", "pico8"];
+pub const SYSTEMS: [&str; 16] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv",
+    "lynx", "pokemini", "pico8", "neogeo", "pce"];
 
 /// Controls of a WonderSwan game made to be held upright.
 pub const WS_UPRIGHT_SYSTEM: &str = "wsv";
@@ -595,6 +605,8 @@ pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
         "lynx" => &LYNX,
         "pokemini" => &POKEMINI,
         "pico8" => &PICO8,
+        "neogeo" => &NEOGEO,
+        "pce" => &PCE,
         _ => &TWO_BUTTONS,
     }
 }
@@ -611,8 +623,9 @@ pub fn role_label(system: &str, label: &'static str) -> &'static str {
     }
 }
 
-/// Only NES, SNES, Mega Drive and Master System take a second player.
-pub fn takes_port2(system: &str) -> bool { matches!(system, "nes" | "snes" | "md" | "sms") }
+/// Only NES, SNES, Mega Drive, Master System, Neo Geo and PC Engine take a
+/// second player.
+pub fn takes_port2(system: &str) -> bool { matches!(system, "nes" | "snes" | "md" | "sms" | "neogeo" | "pce") }
 
 /// What X and Y do on a console without them (Game Boys, NES).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -681,9 +694,11 @@ impl ShoulderRole {
 
 /// X / Y and L1 / R1 rows: on which systems they are spare.
 pub fn spare_xy(system: &str) -> bool {
-    matches!(system, "gba" | "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp" | "lynx" | "pokemini" | "pico8")
+    matches!(system, "gba" | "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp" | "lynx" | "pokemini" | "pico8" | "pce")
 }
-pub fn spare_shoulders(system: &str) -> bool { matches!(system, "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp") }
+pub fn spare_shoulders(system: &str) -> bool {
+    matches!(system, "gb" | "gbc" | "nes" | "sms" | "gg" | "ngp" | "neogeo" | "pce")
+}
 /// C / Z row: every system but the Mega Drive, whose pad has them.
 pub fn spare_cz(system: &str) -> bool { system != "md" }
 

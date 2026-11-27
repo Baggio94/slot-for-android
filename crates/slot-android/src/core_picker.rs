@@ -111,6 +111,11 @@ impl CorePicker {
         self
     }
 
+    /// The chip can't move (only): the board shows no Swap.
+    pub fn fixed(&self) -> bool {
+        self.only.is_some()
+    }
+
     /// Whether the chip may go to `core`.
     pub fn allows(&self, core: Core) -> bool {
         self.only.is_none_or(|only| only == core)

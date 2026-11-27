@@ -23,6 +23,18 @@ internal object Systems {
     const val LYNX = "LYNX"
     const val POKEMINI = "POKEMINI"
     const val PICO8 = "PICO8"
+    const val NEOGEO = "NEOGEO"
+    const val PCE = "PCE"
+
+    /** A Neo Geo game is a whole .zip set (FinalBurn Neo reads it by its
+     *  name): "zip" is its cartridge extension, the scan's rom_ext. */
+    const val NEOGEO_SET = "zip"
+    /** Neo Geo BIOS sets: read by both cores from the BIOS folder, never a
+     *  cart on the shelf. */
+    val NEOGEO_BIOS_SETS = setOf("neogeo", "aes", "neocdz", "neocd")
+    fun isNeoGeoBios(filename: String): Boolean =
+        filename.substringBeforeLast('.').lowercase(Locale.ROOT) in NEOGEO_BIOS_SETS &&
+            filename.substringAfterLast('.', "").lowercase(Locale.ROOT) == "zip"
 
     /** Splore, PICO-8's cart browser: slot.'s own cart on the PICO-8 shelf
      *  (core_selection::SPLORE_URI), not a file in the ROM folder. */
@@ -71,6 +83,10 @@ internal object Systems {
         SystemRow(POKEMINI, listOf("min"), listOf("pokemini"), listOf("pokemon-mini", "pokemini"), 24, 211, listOf("pokemini", "pokemini"), home = true),
         // PICO-8: .p8 text carts and .p8.png pictures of carts (fake-08 only; no RetroAchievements: 0).
         SystemRow(PICO8, listOf("p8", "png"), listOf("pico8", "pico-8"), listOf("pico-8", "pico"), 0, 234, listOf("fake08", "pico8"), home = true),
+        // Neo Geo: a .zip set is FinalBurn Neo's, a .neo file Geolith's (RetroAchievements: Arcade 27).
+        SystemRow(NEOGEO, listOf("zip", "neo"), listOf("neogeo"), listOf("neogeoaes", "neogeomvs", "neo-geo", "neogeo"), 27, 142, listOf("fbneo", "geolith"), home = true),
+        // PC Engine, TurboGrafx-16 and SuperGrafx on one shelf; a .sgx always on Beetle PCE.
+        SystemRow(PCE, listOf("pce", "sgx"), listOf("pcengine", "tg16", "supergrafx"), listOf("turbografx16--1", "pc-engine", "pcengine", "tg16", "supergrafx"), 8, 31, listOf("mednafen_pce_fast", "mednafen_pce"), home = true),
     )
 
     /** Every shelf key, in the native side's order. */
@@ -87,8 +103,9 @@ internal object Systems {
 
     fun row(platform: String?): SystemRow? = TABLE.firstOrNull { it.platform == platform }
 
-    /** Every cartridge extension, without the .zip container. */
-    val ROM_EXTENSIONS: Set<String> = TABLE.flatMap { it.extensions }.toSet()
+    /** Every cartridge extension, without the .zip container: a Neo Geo
+     *  set's "zip" (NEOGEO_SET) is told apart by RomSource.neoGeoSet. */
+    val ROM_EXTENSIONS: Set<String> = TABLE.flatMap { it.extensions }.toSet() - NEOGEO_SET
 
     val HOME_PLATFORMS: Set<String> = TABLE.filter { it.home }.map { it.platform }.toSet()
 
@@ -137,6 +154,11 @@ internal object Systems {
         "fake08" to "fake-08",
         // PICO-8's second chip: the player's own PICO-8 (cores/pico8real).
         "pico8" to "PICO-8",
+        // The Neo Geo's (FinalBurn Neo: RetroArch's full core's folder) and the PC Engine's.
+        "fbneo" to "FinalBurn Neo",
+        "geolith" to "Geolith",
+        "mednafen_pce_fast" to "Beetle PCE Fast",
+        "mednafen_pce" to "Beetle PCE",
     )
 
     val CORE_FOLDERS: Set<String> = FOLDERS.values.toSet()
@@ -190,8 +212,19 @@ internal object Systems {
         require(cores.isNotEmpty()) { "Unsupported ROM type" }
         // PokeDaisy: the native side only picks it for a Pokemon game.
         val pokeDaisy = if (platform in POKEDAISY_SYSTEMS) listOf("pokedaisy") else emptyList()
+        // The file decides (Core::imposed_by): a Neo Geo set FinalBurn Neo,
+        // a .neo Geolith, a SuperGrafx game Beetle PCE.
+        imposedCore(ext)?.let { return FOLDERS.getValue(it) }
         val chosen = key.lowercase(Locale.ROOT).takeIf { it in cores || it in pokeDaisy } ?: cores.first()
         return FOLDERS.getValue(chosen)
+    }
+
+    /** The core a cartridge extension imposes, as Core::imposed_by. */
+    fun imposedCore(ext: String): String? = when (lower(ext)) {
+        NEOGEO_SET -> "fbneo"
+        "neo" -> "geolith"
+        "sgx" -> "mednafen_pce"
+        else -> null
     }
 
     /** A save flush names its core by key; unknown keys keep the old mGBA fallback. */

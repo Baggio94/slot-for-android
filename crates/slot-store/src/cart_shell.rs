@@ -40,10 +40,13 @@ pub enum Outline {
     GameGearCodemasters,
     /// slot.'s own PICO-8 cart.
     Pico8,
+    /// The Neo Geo AES cart and the HuCard (3.2.0).
+    NeoGeo,
+    Pce,
 }
 
 impl Outline {
-    pub const NAMES: [(Outline, &'static str); 27] = [
+    pub const NAMES: [(Outline, &'static str); 29] = [
         (Outline::Auto, "auto"),
         (Outline::Notched, "notched"),
         (Outline::Rounded, "rounded"),
@@ -71,6 +74,8 @@ impl Outline {
         (Outline::MasterSystemCard, "mastersystem-card"),
         (Outline::GameGearCodemasters, "gamegear-codemasters"),
         (Outline::Pico8, "pico8"),
+        (Outline::NeoGeo, "neogeo"),
+        (Outline::Pce, "pce"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -105,6 +110,8 @@ impl Outline {
             Outline::Lynx => Some(Platform::Lynx),
             Outline::PokemonMini => Some(Platform::Pokemini),
             Outline::Pico8 => Some(Platform::Pico8),
+            Outline::NeoGeo => Some(Platform::NeoGeo),
+            Outline::Pce => Some(Platform::Pce),
         }
     }
 }

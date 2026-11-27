@@ -149,11 +149,11 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           bash scripts/build-gambatte-android.sh
-      - name: Build NES, SNES, Mega Drive, Master System, Game Gear, Neo Geo Pocket, WonderSwan, Lynx, Pokemon mini and PICO-8 arm64 libretro cores
+      - name: Build NES, SNES, Mega Drive, Master System, Game Gear, Neo Geo Pocket, WonderSwan, Lynx, Pokemon mini, PICO-8, Neo Geo and PC Engine arm64 libretro cores
         if: steps.cores.outputs.cache-hit != 'true'
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini fake08; do
+          for core in fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini fake08 fbneo geolith mednafen_pce_fast mednafen_pce; do
             bash scripts/build-home-core-android.sh "$core"
           done
       - name: Build the PICO-8 arm64 libretro core (loads the player's own PICO-8)
@@ -227,7 +227,7 @@ jobs:
           grep -F "package: name='fyi.slot.konkr.diag' versionCode='$VERSION_CODE'" "$RUNNER_TEMP/mac-lab-badging.txt"
           grep -F "versionName='$VERSION_NAME-mac-lab'" "$RUNNER_TEMP/mac-lab-badging.txt"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify "$APK"
-          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro pokedaisy_libretro; do
+          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro pokedaisy_libretro fbneo_libretro geolith_libretro mednafen_pce_fast_libretro mednafen_pce_libretro; do
             unzip -Z -1 "$APK" | grep -Fx "lib/arm64-v8a/lib${core}.so"
           done
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
@@ -252,7 +252,7 @@ jobs:
           grep -F "versionName='$VERSION_NAME'" "$RUNNER_TEMP/konkr-badging.txt"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" |
             grep -Fi '4f42b8f0ac98f6a0102804ab51020ea0e7e2de7685c6ce09400a744de0b0fa2f'
-          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro pokedaisy_libretro; do
+          for core in slot_android mgba_libretro gpsp_libretro gambatte_libretro fceumm_libretro nestopia_libretro snes9x_libretro bsnes_libretro genesis_plus_gx_libretro picodrive_libretro gearsystem_libretro mednafen_ngp_libretro race_libretro mednafen_wswan_libretro handy_libretro mednafen_lynx_libretro pokemini_libretro pokedaisy_libretro fbneo_libretro geolith_libretro mednafen_pce_fast_libretro mednafen_pce_libretro; do
             unzip -Z -1 "$APK" | grep -Fx "lib/arm64-v8a/lib${core}.so"
           done
           if unzip -Z -1 "$APK" | grep -Eq '^lib/(x86_64|x86|armeabi-v7a)/'; then
@@ -283,6 +283,10 @@ jobs:
               "handy": "bc55d462f0b2d6b073ea93dc552ebd73cec60fd1",
               "mednafen_lynx": "fcdefcfb3c11d6d2e71be076a5d3df2e88ab73ed",
               "pokemini": "132111b76343559860532a1ccc094f93f1ed5650",
+              "fbneo": "85c89235d5358aa3282d78d837e7682f77dee82f",
+              "geolith": "f91bfdee1e821c4078cea68187f72d7ee0f59d1b",
+              "mednafen_pce_fast": "4cf066e22533186d0cfad85a0fec2aced93e4e29",
+              "mednafen_pce": "974fe085a9842be2069afc95beaf469a90e9ae44",
               # PokeDaisy 1.6.2.1 (mGBA 0.10.5 inside).
               "pokedaisy": "717f4f49979f4aa5c4c8f4cd64638a0fa935d844",
           }
@@ -293,6 +297,9 @@ jobs:
           with zipfile.ZipFile(sys.argv[1]) as archive:
               gpgx = json.loads(archive.read("assets/core-build-genesis_plus_gx.json"))
           assert "0001-sms-gg-state-load-tile-cache.patch" in gpgx["patches"]
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              fbneo = json.loads(archive.read("assets/core-build-fbneo.json"))
+          assert "neogeo-subset.patch" in fbneo["patches"]
           assert {"flash-bank-survives-mask.patch",
                   "gb-dmg-palette-follows-option.patch",
                   "543a19758-mbc2-sram-bank.patch"} <= set(mgba["patches"])

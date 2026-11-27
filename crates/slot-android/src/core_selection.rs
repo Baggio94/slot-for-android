@@ -87,6 +87,9 @@ fn platform_of(uri: &str) -> Option<Platform> {
 pub fn selected_for(storage: &Path, uri: &str, platform: Platform) -> Core {
     // Splore is the player's own PICO-8 alone: fake-08 has none.
     if platform == Platform::Pico8 && is_splore(uri) { return Core::Pico8; }
+    // A Neo Geo .zip is FinalBurn Neo's, a .neo Geolith's, a SuperGrafx
+    // game Beetle PCE's: the file decides (Siham 2026-11-27).
+    if let Some(core) = imposed(uri, platform) { return core; }
     carry_core(storage, uri);
     // A Pokemon game PokeDaisy plays starts on PokeDaisy unless the player
     // gave it another core (Siham 2026-11-27).
@@ -101,6 +104,17 @@ pub fn selected_for(storage: &Path, uri: &str, platform: Platform) -> Core {
         Core::PokeDaisy if !pokedaisy_plays(uri, platform) => default_core(storage, platform),
         core => core,
     }
+}
+
+/// The core this cart's file imposes (Core::imposed_by), by the extension
+/// the library scan saw: the ROM's own inside a ZIP, else the file's.
+pub fn imposed(uri: &str, platform: Platform) -> Option<Core> {
+    let library = crate::library::LIBRARY.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = library.entries.as_ref()?.iter().find(|entry| entry.uri == uri)?;
+    let ext = if entry.rom_ext.is_empty() {
+        entry.filename.rsplit_once('.').map_or("", |(_, ext)| ext)
+    } else { entry.rom_ext.as_str() };
+    Core::imposed_by(platform, ext)
 }
 
 /// PokeDaisy's chip is on this cart's board: a Pokemon game it plays, by

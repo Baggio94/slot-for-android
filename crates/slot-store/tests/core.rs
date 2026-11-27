@@ -303,3 +303,25 @@ fn pico8_has_fake08_then_the_players_own_pico8() {
     assert_eq!(Core::parse("pico8"), Some(Core::Pico8));
     assert_eq!(Core::Pico8.socket(), 1);
 }
+
+#[test]
+fn the_neo_geo_file_and_the_supergrafx_impose_their_core() {
+    use slot_store::{Core, Platform};
+    assert_eq!(Core::default_for(Platform::NeoGeo), Core::FbNeo);
+    assert_eq!(Core::alternate_for(Platform::NeoGeo), Core::Geolith);
+    assert_eq!(Core::imposed_by(Platform::NeoGeo, "ZIP"), Some(Core::FbNeo));
+    assert_eq!(Core::imposed_by(Platform::NeoGeo, "neo"), Some(Core::Geolith));
+    assert_eq!(Core::default_for(Platform::Pce), Core::BeetlePceFast);
+    assert_eq!(Core::alternate_for(Platform::Pce), Core::BeetlePce);
+    assert_eq!(Core::imposed_by(Platform::Pce, "sgx"), Some(Core::BeetlePce));
+    assert_eq!(Core::imposed_by(Platform::Pce, "pce"), None);
+    assert_eq!(Core::imposed_by(Platform::Md, "zip"), None);
+    // RetroArch's save folders.
+    assert_eq!(Core::FbNeo.text(), "FinalBurn Neo");
+    assert_eq!(Core::Geolith.text(), "Geolith");
+    assert_eq!(Core::BeetlePceFast.text(), "Beetle PCE Fast");
+    assert_eq!(Core::BeetlePce.text(), "Beetle PCE");
+    for core in [Core::FbNeo, Core::Geolith, Core::BeetlePceFast, Core::BeetlePce] {
+        assert_eq!(Core::parse(core.as_str()), Some(core));
+    }
+}

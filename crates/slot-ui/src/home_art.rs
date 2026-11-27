@@ -23,6 +23,8 @@ pub enum HomeSystem {
     Lynx,
     PokemonMini,
     Pico8,
+    NeoGeo,
+    Pce,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -59,6 +61,10 @@ pub enum HomeMould {
     /// slot.'s own PICO-8 cart (tools/pico8-mould): the label well holds
     /// the cart's picture and its title under it.
     Pico8,
+    /// The Neo Geo AES cart (3.2.0): the label at the top, flush.
+    NeoGeo,
+    /// The HuCard: its front lifts off the board but for the contacts.
+    Pce,
 }
 
 /// A mould's art and where things sit on it, in its logical pixels.
@@ -137,7 +143,7 @@ macro_rules! art {
 }
 
 // Printed by nes-megadrive/export_app.py.
-static ARTS: [MouldArt; 24] = [
+static ARTS: [MouldArt; 26] = [
     art!("nes", 352, (126, 0, 145, 239),
         [(40.6, 234.6, 101.0, 46.5), (170.4, 234.6, 101.0, 46.5)],
         (166.3, 103.6, 121.6, 39.5), [126, 126, 128], None),
@@ -248,11 +254,28 @@ static ARTS: [MouldArt; 24] = [
     art!("p8", 400, (36, 66, 240, 296),
         [(40.0, 196.0, 104.0, 52.0), (168.0, 196.0, 104.0, 52.0)],
         (100.0, 120.0, 112.0, 31.0), [52, 52, 56], None),
+    // The Neo Geo AES cart and the HuCard (3.2.0), from Siham's kit and
+    // previews: the AES label is 47% of the face's width and 43% of its
+    // height, at its top. The HuCard's contacts are the board's own
+    // fingers, seen through its face (pce_lid.png), as on the Lynx.
+    art!("neogeo", 226, (84, 1, 145, 97),
+        [(52.1, 89.2, 103.6, 55.9), (164.5, 89.2, 103.6, 55.9)],
+        (153.2, 28.6, 108.6, 33.3), [19, 19, 20],
+        None,
+        Some(include_bytes!("../../../assets/home/neogeo_silhouette.png")),
+        Some(include_bytes!("../../../assets/home/neogeo_opacity.png")), false),
+    art!("pce", 494, (14, 54, 284, 243),
+        [(52.1, 358.9, 103.6, 51.9), (164.5, 358.9, 103.6, 51.9)],
+        (153.2, 302.6, 108.6, 30.9), [236, 234, 225],
+        Some(include_bytes!("../../../assets/home/pce_decal.png")),
+        Some(include_bytes!("../../../assets/home/pce_silhouette.png")),
+        Some(include_bytes!("../../../assets/home/pce_opacity.png")), false,
+        Some(include_bytes!("../../../assets/home/pce_lid.png"))),
 ];
 
 
 impl HomeMould {
-    pub const ALL: [HomeMould; 24] = [
+    pub const ALL: [HomeMould; 26] = [
         HomeMould::Nes,
         HomeMould::Famicom,
         HomeMould::FamicomNamco,
@@ -277,6 +300,8 @@ impl HomeMould {
         HomeMould::MasterSystemCard,
         HomeMould::GameGearCodemasters,
         HomeMould::Pico8,
+        HomeMould::NeoGeo,
+        HomeMould::Pce,
     ];
 
     pub fn index(self) -> usize {
@@ -313,6 +338,8 @@ impl HomeMould {
             HomeMould::Lynx => HomeSystem::Lynx,
             HomeMould::PokemonMini => HomeSystem::PokemonMini,
             HomeMould::Pico8 => HomeSystem::Pico8,
+            HomeMould::NeoGeo => HomeSystem::NeoGeo,
+            HomeMould::Pce => HomeSystem::Pce,
         }
     }
 
@@ -321,7 +348,8 @@ impl HomeMould {
         !matches!(self.system(), HomeSystem::Nes | HomeSystem::Snes | HomeSystem::Md
             | HomeSystem::MasterSystem | HomeSystem::GameGear
             | HomeSystem::NeoGeoPocket | HomeSystem::WonderSwan
-            | HomeSystem::Lynx | HomeSystem::PokemonMini | HomeSystem::Pico8)
+            | HomeSystem::Lynx | HomeSystem::PokemonMini | HomeSystem::Pico8
+            | HomeSystem::NeoGeo | HomeSystem::Pce)
     }
 
     /// The shell a system's carts get when nothing picks another.
@@ -337,6 +365,8 @@ impl HomeMould {
             HomeSystem::Lynx => HomeMould::Lynx,
             HomeSystem::PokemonMini => HomeMould::PokemonMini,
             HomeSystem::Pico8 => HomeMould::Pico8,
+            HomeSystem::NeoGeo => HomeMould::NeoGeo,
+            HomeSystem::Pce => HomeMould::Pce,
         }
     }
 
@@ -367,6 +397,8 @@ impl HomeMould {
             HomeMould::MasterSystemCard => "mastersystem-card",
             HomeMould::GameGearCodemasters => "gamegear-codemasters",
             HomeMould::Pico8 => "pico8",
+            HomeMould::NeoGeo => "neogeo",
+            HomeMould::Pce => "pce",
         }
     }
 

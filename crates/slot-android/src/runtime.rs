@@ -174,7 +174,8 @@ const SCREEN_SIZE_KEY: usize = 40;
 use crate::settings::{CORE_SMS_KEY, CORE_GG_KEY, CORE_NGP_KEY, CORE_LYNX_KEY, CORE_PICO8_KEY,
     SHADER_SMS_KEY, SHADER_GG_KEY, SHADER_NGP_KEY, SHADER_WS_KEY, SHADER_LYNX_KEY,
     SHADER_POKEMINI_KEY, BEZEL_SMS_KEY, BEZEL_GG_KEY, BEZEL_NGP_KEY, BEZEL_WS_KEY,
-    BEZEL_LYNX_KEY, BEZEL_POKEMINI_KEY, POKEMINI_FILTER_KEY, SHADER_PICO8_KEY};
+    BEZEL_LYNX_KEY, BEZEL_POKEMINI_KEY, POKEMINI_FILTER_KEY, SHADER_PICO8_KEY,
+    CORE_PCE_KEY, SHADER_NEOGEO_KEY, SHADER_PCE_KEY, BEZEL_NEOGEO_KEY, BEZEL_PCE_KEY};
 /// "INTEGER", "ORIGINAL RATIO", "STRETCH" in the setting value faces.
 const SCREEN_SIZE_VALUE: usize = 67;
 
@@ -617,7 +618,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 181] = [
+const MENU_TEXT: [&str; 184] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -804,16 +805,20 @@ const MENU_TEXT: [&str; 181] = [
     "Companion",                          // 178, Game Menu: PokeDaisy's companion (X)
     "Quick Menu",                         // 179, Game Menu: PokeDaisy's quick menu (L3)
     "PICO-8",                             // 180, Systems
+    "Neo Geo",                            // 181, Systems (3.2)
+    "PC Engine",                          // 182
+    "BIOS",                               // 183, Neo Geo: AES, MVS or Universe BIOS
 ];
 
 /// Settings > Systems, top to bottom.
-const SYSTEM_ORDER: [Platform; 13] = [
+const SYSTEM_ORDER: [Platform; 15] = [
     Platform::Gba, Platform::Gbc, Platform::Gb,
     Platform::Nes, Platform::Snes, Platform::Md,
     Platform::Sms, Platform::Gg, Platform::Ngp, Platform::Ws,
     Platform::Lynx, Platform::Pokemini, Platform::Pico8,
+    Platform::NeoGeo, Platform::Pce,
 ];
-const SYSTEM_TITLES: [usize; 13] = [91, 92, 93, 121, 122, 123, 157, 158, 159, 160, 161, 162, 180];
+const SYSTEM_TITLES: [usize; 15] = [91, 92, 93, 121, 122, 123, 157, 158, 159, 160, 161, 162, 180, 181, 182];
 // Special racks follow the supported platforms, not hard-coded GB-era indices.
 const RECENTS_RACK: usize = Platform::ALL.len();
 const FAVORITES_RACK: usize = RECENTS_RACK + 1;
@@ -828,7 +833,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 201] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 209] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -897,6 +902,11 @@ const SETTING_VALUE_NAMES: [&str; 201] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                "ZOOM 1", "EXPAND", "ORIGINAL", "ZOOM 2", "ZOOM 3", "ZOOM 4", "ZOOM 5",
                                // 178-179 (PICO8_CORE_VALUES): PICO-8's two cores.
                                "fake-08", "PICO-8",
+                               // 180-183 (NEOGEO_PCE_CORE_VALUES): the Neo Geo's and PC
+                               // Engine's cores; 184-187 (NEOGEO_BIOS_VALUES): the Neo
+                               // Geo's BIOS (AUTO is 66), a choice whose file is missing.
+                               "FinalBurn Neo", "Geolith", "Beetle PCE Fast", "Beetle PCE",
+                               "AES", "MVS", "UNIVERSE BIOS", "NO aes.zip",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -916,6 +926,10 @@ const SHELVES_LAYOUT_VALUES: usize = AUDIO_OPTION_VALUES + 5;
 const POKEDAISY_VIEW_VALUES: usize = SHELVES_LAYOUT_VALUES + 2;
 /// PICO-8's cores' names, after PokeDaisy's seven views.
 const PICO8_CORE_VALUES: usize = POKEDAISY_VIEW_VALUES + 7;
+/// The Neo Geo's and PC Engine's cores, after PICO-8's two.
+const NEOGEO_PCE_CORE_VALUES: usize = PICO8_CORE_VALUES + 2;
+/// The Neo Geo's BIOS: AES, MVS, Universe BIOS, then "NO aes.zip".
+const NEOGEO_BIOS_VALUES: usize = NEOGEO_PCE_CORE_VALUES + 4;
 
 /// A PokeDaisy view's value face.
 fn pokedaisy_view_value(view: crate::pokedaisy_view::View) -> usize {
@@ -1064,6 +1078,13 @@ fn interface_rows() -> (&'static [usize], &'static [usize]) {
     else { (&INTERFACE_ROWS, &INTERFACE_KEYS) }
 }
 
+/// Whether the Neo Geo BIOS `name` (aes.zip, neogeo.zip) is among the BIOS
+/// files Android staged from the ROM and BIOS folders.
+fn neogeo_bios_present(name: &str) -> bool {
+    PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+        .is_some_and(|(root, _)| root.join("BIOS").join(name).is_file())
+}
+
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
 /// test every_settings_row_shows_its_value checks all menus on all screens.
@@ -1153,6 +1174,15 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         crate::settings::SHADER_POKEMINI_KEY => shader(scoped.shader_pokemini),
         crate::settings::SHADER_PICO8_KEY => shader(scoped.shader_pico8),
         crate::settings::SHADER_GG_KEY => shader(scoped.shader_gg),
+        crate::settings::SHADER_NEOGEO_KEY => shader(scoped.shader_neogeo),
+        crate::settings::SHADER_PCE_KEY => shader(scoped.shader_pce),
+        // Auto, AES, MVS, Universe BIOS; AES without aes.zip says so (the
+        // game then starts on the MVS BIOS).
+        crate::settings::NEOGEO_BIOS_KEY => match scoped.neogeo_bios.min(3) {
+            0 => 66,
+            1 if !neogeo_bios_present("aes.zip") => NEOGEO_BIOS_VALUES + 3,
+            n => NEOGEO_BIOS_VALUES + usize::from(n) - 1,
+        },
         22 => if scoped.shader_gba.includes_gba_color() { 42 }
             else if scoped.colour_correction_gba {4}else{5},
         23 => if scoped.colour_correction_gbc {4}else{5},
@@ -1199,7 +1229,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
             {35}else{36},
         29..=31 | 41..=43 | crate::settings::CORE_SMS_KEY | crate::settings::CORE_GG_KEY
         | crate::settings::CORE_NGP_KEY | crate::settings::CORE_LYNX_KEY
-        | crate::settings::CORE_PICO8_KEY =>
+        | crate::settings::CORE_PICO8_KEY | crate::settings::CORE_PCE_KEY =>
             core_value(Engine::core_key_platform(key)
             .map_or(Core::Mgba, |platform| cores[platform as usize])),
         // Frame Blending, LCD Effect and Dither Blending: the game's own in
@@ -1207,7 +1237,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         60..=65 | crate::settings::BLENDING_SMS_KEY | crate::settings::BLENDING_GG_KEY
         | crate::settings::BLENDING_NGP_KEY | crate::settings::BLENDING_WS_KEY
         | crate::settings::BLENDING_LYNX_KEY | crate::settings::BLENDING_POKEMINI_KEY
-        | crate::settings::BLENDING_PICO8_KEY => {
+        | crate::settings::BLENDING_PICO8_KEY | crate::settings::BLENDING_NEOGEO_KEY
+        | crate::settings::BLENDING_PCE_KEY => {
             match scoped.blending_for(Settings::blending_platform(key)?) {
                 crate::settings::Blending::Off => 5,
                 crate::settings::Blending::Mix => 96,
@@ -1342,6 +1373,8 @@ fn core_value(core: Core) -> usize {
         Core::Gearsystem => 135, Core::Neopop => 136, Core::Race => 137,
         Core::Handy => 138, Core::BeetleLynx => 139,
         Core::Fake08 => PICO8_CORE_VALUES, Core::Pico8 => PICO8_CORE_VALUES + 1,
+        Core::FbNeo => NEOGEO_PCE_CORE_VALUES, Core::Geolith => NEOGEO_PCE_CORE_VALUES + 1,
+        Core::BeetlePceFast => NEOGEO_PCE_CORE_VALUES + 2, Core::BeetlePce => NEOGEO_PCE_CORE_VALUES + 3,
         other => 70 + other.index() - Core::Fceumm.index(),
     }
 }
@@ -1419,6 +1452,7 @@ fn settings_rows() -> &'static [usize] {
 const INTERFACE_PAGE_ROWS: [usize; 6] = [85, 83, 86, 87, 177, 58];
 const INTERFACE_PAGE_KEYS: [usize; 6] = [18, usize::MAX, 19, 20, SHELVES_LAYOUT_KEY, usize::MAX];
 /// Interface > Shelves' value.
+/// (161 is the Neo Geo BIOS, settings::NEOGEO_BIOS_KEY.)
 const SHELVES_LAYOUT_KEY: usize = 160;
 /// Interface > 3.0 Test Shelf's value (3.0.0-cartes1).
 const TEST_SHELF_KEY: usize = 107;
@@ -5684,6 +5718,8 @@ impl Engine {
             .map(|(storage, _)| core_selection::selected_for(
                 storage, &selected.rom.to_string_lossy(), selected.platform))
             .unwrap_or_else(|| Core::default_for(selected.platform));
+        // The file's own core, whatever the saved choice (Siham 2026-11-27).
+        let current_core = core_selection::imposed(&uri, selected.platform).unwrap_or(current_core);
         let [primary, alternate] = slot_ui::board_cores(selected);
         // A 3.0 test cart keeps no core: its first chip is seated.
         let current_core = if slot_ui::is_test_cart(selected) { primary } else { current_core };
@@ -5693,6 +5729,11 @@ impl Engine {
         };
         if core_selection::is_splore(&selected.rom.to_string_lossy()) {
             picker = picker.only(Core::Pico8);
+        }
+        // A Neo Geo .zip or .neo, a SuperGrafx game: the file's core only,
+        // the other chip greyed, no swap (Siham 2026-11-27).
+        if let Some(core) = core_selection::imposed(&uri, selected.platform) {
+            picker = picker.only(core);
         }
         self.picker_three = three;
         // A clear cart's lid waits for its plastic without
@@ -6564,6 +6605,12 @@ impl Engine {
             // PICO-8: no overlay, so no Bezel row.
             (Platform::Pico8,_) if fits=>&[124],
             (Platform::Pico8,_)=>&[120,124],
+            // Neo Geo as the Mega Drive, PC Engine as the SNES (Siham
+            // 2026-11-27): Screen Size unless the panel fits, then Shader.
+            (Platform::NeoGeo|Platform::Pce,false) if fits=>&[124],
+            (Platform::NeoGeo|Platform::Pce,true) if fits=>&[124,90],
+            (Platform::NeoGeo|Platform::Pce,false)=>&[120,124],
+            (Platform::NeoGeo|Platform::Pce,true)=>&[120,124,90],
         }
     }
     fn screen_keys(platform: Platform)-> &'static [usize] {
@@ -6609,6 +6656,14 @@ impl Engine {
             (Platform::Pokemini,true)=>&[SCREEN_SIZE_KEY,BEZEL_POKEMINI_KEY],
             (Platform::Pico8,_) if fits=>&[SHADER_PICO8_KEY],
             (Platform::Pico8,_)=>&[SCREEN_SIZE_KEY,SHADER_PICO8_KEY],
+            (Platform::NeoGeo,false) if fits=>&[SHADER_NEOGEO_KEY],
+            (Platform::NeoGeo,true) if fits=>&[SHADER_NEOGEO_KEY,BEZEL_NEOGEO_KEY],
+            (Platform::Pce,false) if fits=>&[SHADER_PCE_KEY],
+            (Platform::Pce,true) if fits=>&[SHADER_PCE_KEY,BEZEL_PCE_KEY],
+            (Platform::NeoGeo,false)=>&[SCREEN_SIZE_KEY,SHADER_NEOGEO_KEY],
+            (Platform::NeoGeo,true)=>&[SCREEN_SIZE_KEY,SHADER_NEOGEO_KEY,BEZEL_NEOGEO_KEY],
+            (Platform::Pce,false)=>&[SCREEN_SIZE_KEY,SHADER_PCE_KEY],
+            (Platform::Pce,true)=>&[SCREEN_SIZE_KEY,SHADER_PCE_KEY,BEZEL_PCE_KEY],
         }
     }
     // Settings > Systems opens with the system's default core, then its
@@ -6654,6 +6709,8 @@ impl Engine {
                 Platform::Nes => { rows.push(176); keys.push(NES_AUDIO_FILTER_KEY); }
                 Platform::Md => { rows.push(169); keys.push(MD_FM_SOUND_KEY); }
                 Platform::Ngp => { rows.push(165); keys.push(NGP_LANGUAGE_KEY); }
+                // Read when the game starts (Siham 2026-11-27).
+                Platform::NeoGeo => { rows.push(183); keys.push(crate::settings::NEOGEO_BIOS_KEY); }
                 Platform::Ws => {
                     rows.push(165); keys.push(WS_LANGUAGE_KEY);
                     rows.push(176); keys.push(WS_AUDIO_FILTER_KEY);
@@ -6801,6 +6858,16 @@ impl Engine {
             // One core, no overlay.
             (Platform::Pico8,true,_)=>&[118,124],
             (Platform::Pico8,false,_)=>&[118,120,124],
+            // The Neo Geo's core is the file's (FinalBurn Neo a .zip,
+            // Geolith a .neo): no Default Core row (Siham 2026-11-27).
+            (Platform::NeoGeo,true,false)=>&[124],
+            (Platform::NeoGeo,true,true)=>&[124,90],
+            (Platform::NeoGeo,false,false)=>&[120,124],
+            (Platform::NeoGeo,false,true)=>&[120,124,90],
+            (Platform::Pce,true,false)=>&[118,124],
+            (Platform::Pce,true,true)=>&[118,124,90],
+            (Platform::Pce,false,false)=>&[118,120,124],
+            (Platform::Pce,false,true)=>&[118,120,124,90],
         }
     }
     fn system_keys(platform: Platform)-> &'static [usize] {
@@ -6848,6 +6915,14 @@ impl Engine {
             (Platform::Pokemini,false,true)=>&[SCREEN_SIZE_KEY,BEZEL_POKEMINI_KEY],
             (Platform::Pico8,true,_)=>&[CORE_PICO8_KEY,SHADER_PICO8_KEY],
             (Platform::Pico8,false,_)=>&[CORE_PICO8_KEY,SCREEN_SIZE_KEY,SHADER_PICO8_KEY],
+            (Platform::NeoGeo,true,false)=>&[SHADER_NEOGEO_KEY],
+            (Platform::NeoGeo,true,true)=>&[SHADER_NEOGEO_KEY,BEZEL_NEOGEO_KEY],
+            (Platform::NeoGeo,false,false)=>&[SCREEN_SIZE_KEY,SHADER_NEOGEO_KEY],
+            (Platform::NeoGeo,false,true)=>&[SCREEN_SIZE_KEY,SHADER_NEOGEO_KEY,BEZEL_NEOGEO_KEY],
+            (Platform::Pce,true,false)=>&[CORE_PCE_KEY,SHADER_PCE_KEY],
+            (Platform::Pce,true,true)=>&[CORE_PCE_KEY,SHADER_PCE_KEY,BEZEL_PCE_KEY],
+            (Platform::Pce,false,false)=>&[CORE_PCE_KEY,SCREEN_SIZE_KEY,SHADER_PCE_KEY],
+            (Platform::Pce,false,true)=>&[CORE_PCE_KEY,SCREEN_SIZE_KEY,SHADER_PCE_KEY,BEZEL_PCE_KEY],
         }
     }
     fn core_key_platform(key:usize)->Option<Platform> {
@@ -6859,6 +6934,7 @@ impl Engine {
             crate::settings::CORE_NGP_KEY=>Some(Platform::Ngp),
             crate::settings::CORE_LYNX_KEY=>Some(Platform::Lynx),
             crate::settings::CORE_PICO8_KEY=>Some(Platform::Pico8),
+            crate::settings::CORE_PCE_KEY=>Some(Platform::Pce),
             _=>None,
         }
     }
@@ -7166,7 +7242,7 @@ impl Engine {
             crate::settings::SHADER_SMS_KEY|crate::settings::SHADER_GG_KEY
             |crate::settings::SHADER_NGP_KEY|crate::settings::SHADER_WS_KEY
             |crate::settings::SHADER_LYNX_KEY|crate::settings::SHADER_POKEMINI_KEY
-            |crate::settings::SHADER_PICO8_KEY) {
+            |crate::settings::SHADER_PICO8_KEY|SHADER_NEOGEO_KEY|SHADER_PCE_KEY) {
             self.apply_game_look();
         }
         // A shader change can switch to/from a preset with its own GBA Color.
@@ -8743,7 +8819,8 @@ impl Engine {
             | WS_PALETTE_KEY
             | POKEMINI_PALETTE_KEY | POKEMINI_FILTER_KEY | POKEMINI_LCD_MODE_KEY)
             || (SHADER_SMS_KEY..=SHADER_GG_KEY).contains(&key)
-            || matches!(key, SHADER_NGP_KEY | SHADER_WS_KEY | SHADER_LYNX_KEY | SHADER_POKEMINI_KEY | SHADER_PICO8_KEY)
+            || matches!(key, SHADER_NGP_KEY | SHADER_WS_KEY | SHADER_LYNX_KEY | SHADER_POKEMINI_KEY | SHADER_PICO8_KEY
+                | SHADER_NEOGEO_KEY | SHADER_PCE_KEY)
     }
     fn screen_page_sizes(&self) -> bool {
         !video_mode::screen_fits(self.current_cart_platform(), panel_size())
@@ -9464,7 +9541,10 @@ impl Engine {
         let legends = if self.shelf_ink().is_some() { self.core_legend_dark } else { self.core_legend_faces };
         let widths = legends.map(|(_, w)| w.saturating_sub(HINT_EDGE));
         let positions = crate::core_legend::positions(widths);
-        for ((tex, w), (x, scale)) in legends.into_iter().zip(positions) {
+        // A chip that can't move (a Neo Geo file's core, Splore): no Swap.
+        let fixed = self.picker.is_some_and(|picker| picker.fixed());
+        for (at, ((tex, w), (x, scale))) in legends.into_iter().zip(positions).enumerate() {
+            if fixed && at == 1 { continue; }
             let height = HINT_H as f32 * scale;
             out.push(Draw::Tex {
                 x: x.round(),
@@ -11104,9 +11184,11 @@ fn core_has_multiplayer(core: Core) -> bool {
 }
 /// Whether the paused game offers Cheats: not where its cores apply none
 /// (NeoPop, RACE, Handy, Beetle Lynx, PokeMini, fake-08, PICO-8: their
-/// retro_cheat_set does nothing).
+/// retro_cheat_set does nothing), nor the Neo Geo and the PC Engine, which
+/// have no cheat pack yet.
 fn cheats_offered(platform: Platform) -> bool {
-    !matches!(platform, Platform::Ngp | Platform::Lynx | Platform::Pokemini | Platform::Pico8)
+    !matches!(platform, Platform::Ngp | Platform::Lynx | Platform::Pokemini | Platform::Pico8
+        | Platform::NeoGeo | Platform::Pce)
 }
 /// A system one of whose cores makes the handheld rumble (mGBA, gpSP,
 /// Gambatte, PokeDaisy, PokeMini ask for rumble; the others never do).

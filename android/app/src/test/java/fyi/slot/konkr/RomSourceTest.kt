@@ -182,4 +182,23 @@ class RomSourceTest {
         }
     }
 
+    @Test fun aNeoGeoSetIsTheWholeZipKnownByItsFirstChip() {
+        val chip = cartridge()
+        for (first in listOf("201-c1.c1", "mslug/201-p1.p1", "k2k4s-p1.bin", "232-m1.M1")) {
+            val zip = archive(first to chip, "201-s1.s1" to chip)
+            try {
+                RomSource.inspect(ByteArrayInputStream(zip), "mslug.zip")
+                throw AssertionError("Expected a Neo Geo set for $first")
+            } catch (_: RomSource.NeoGeoSet) { }
+        }
+        // A cart ZIP with a readme or a cover first is still a cart ZIP.
+        val cart = archive("readme.txt" to byteArrayOf(1), "front.png" to byteArrayOf(2), "game.pce" to chip)
+        assertEquals("pce", RomSource.inspect(ByteArrayInputStream(cart), "game.zip").extension)
+        assertFalse(RomSource.neoGeoChip("notes-p1.txt"))
+        assertTrue(RomSource.neoGeoChip("SETS/262-V1.V1"))
+        // A .neo is a Neo Geo cartridge of its own, past 64 MiB too.
+        assertEquals(RomSource.MAX_NEOGEO_BYTES, RomSource.maxRomBytes("neo"))
+        assertEquals(RomSource.MAX_ROM_BYTES, RomSource.maxRomBytes("pce"))
+    }
+
 }

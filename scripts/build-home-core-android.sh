@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Reproducible arm64 builds of the NES, SNES, Mega Drive, Master System,
-# Game Gear, Neo Geo Pocket, WonderSwan, Lynx, Pokemon mini and PICO-8 libretro cores,
+# Game Gear, Neo Geo Pocket, WonderSwan, Lynx, Pokemon mini, PICO-8, Neo Geo
+# and PC Engine libretro cores,
 # each from a pinned upstream commit with the core's own Android recipe
 # (jni/Android.mk). No BIOS or ROMs. Usage: build-home-core-android.sh CORE
 #   fceumm nestopia snes9x bsnes genesis_plus_gx picodrive gearsystem
 #   mednafen_ngp race mednafen_wswan handy mednafen_lynx pokemini fake08
+#   fbneo geolith mednafen_pce_fast mednafen_pce
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NDK="${ANDROID_NDK_HOME:-${ANDROID_SDK_ROOT:?Set ANDROID_NDK_HOME or ANDROID_SDK_ROOT}/ndk/27.2.12479018}"
@@ -17,6 +19,8 @@ SUBMODULES=0
 SUBMODULE_PINS=()
 OWNER=libretro
 LIBNAME=retro
+# A command run in the jni folder after the patches, before ndk-build.
+PREBUILD=""
 # name | upstream repository | pinned commit | jni folder | licence file
 case "$CORE" in
   fceumm)          REPO=libretro-fceumm;  PIN=ac0d00a7fc01166f84c7bac01d1084ebfd2b865e; JNI=jni;                         LICENCE=Copying ;;
@@ -40,6 +44,15 @@ case "$CORE" in
   # sandbox and chr fixes; jtothebell/fake-08#282 makes the same update).
   fake08)          REPO=fake-08; OWNER=jtothebell; PIN=814991a2571ad3970e386cef48f3b148aa1c27b9; JNI=platform/libretro/jni; LICENCE=LICENSE.MD; SUBMODULES=1; LIBNAME=fake08
                    SUBMODULE_PINS=(libs/z8lua=3f345520341534219d3ba2bb40dd10b6c1f2db9b) ;;
+  # Neo Geo (3.2): FinalBurn Neo's Neo Geo subset (2026-11-26), its driver
+  # list made for the subset as `make SUBSET=neogeo REGEN_HEADERS=1` does;
+  # Geolith (2026-11-25, BSD-3).
+  fbneo)           REPO=FBNeo;                 PIN=85c89235d5358aa3282d78d837e7682f77dee82f; JNI=src/burner/libretro/jni; LICENCE=src/license.txt
+                   PREBUILD='perl ../../../dep/scripts/gamelist.pl -o ../../../dep/generated/driverlist.h -l ../../../../gamelist.txt ../../../burn/drv/neogeo/d_neogeo.cpp' ;;
+  geolith)         REPO=geolith-libretro;      PIN=f91bfdee1e821c4078cea68187f72d7ee0f59d1b; JNI=libretro/jni; LICENCE=LICENSE ;;
+  # PC Engine (3.2): Beetle PCE FAST (2026-11-20), Beetle PCE (2026-11-22).
+  mednafen_pce_fast) REPO=beetle-pce-fast-libretro; PIN=4cf066e22533186d0cfad85a0fec2aced93e4e29; JNI=jni; LICENCE=COPYING ;;
+  mednafen_pce)    REPO=beetle-pce-libretro;   PIN=974fe085a9842be2069afc95beaf469a90e9ae44; JNI=jni;          LICENCE=COPYING ;;
   *) echo "Unknown home console core: $CORE" >&2; exit 1 ;;
 esac
 OUT="$ROOT/.build/$CORE"
@@ -88,6 +101,9 @@ for patch_file in "$ROOT/cores/$CORE"/*.patch; do
   fi
   PATCHES+=("\"$patch\"")
 done
+if [ -n "$PREBUILD" ]; then
+  (cd "$SRC/$JNI" && eval "$PREBUILD")
+fi
 # Only the KONKR ABI, static libc++, 16 KiB pages.
 "$NDK/ndk-build" -C "$SRC/$JNI" -j"$(nproc)" \
   APP_ABI=arm64-v8a APP_PLATFORM=android-31 APP_STL=c++_static \

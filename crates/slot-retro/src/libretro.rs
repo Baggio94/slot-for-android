@@ -1305,14 +1305,27 @@ impl RetroCore for LibretroCore {
 
     fn load(&mut self, rom: &Path) -> Result<(), CoreError> {
         self.unload();
-        self.rom = std::fs::read(rom)?;
+        // A core that reads the file itself gets only its path when the
+        // file is bigger than any cart before the Neo Geo (64 MiB): a Neo
+        // Geo set is up to a hundred MB, never held twice. Smaller files
+        // still come with their data, as every core had them until 3.2.
+        let big = std::fs::metadata(rom).is_ok_and(|m| m.len() > 64 << 20);
+        let fullpath = big && self.api.get_system_info.is_some_and(|info| {
+            let mut out = SystemInfo {
+                library_name: ptr::null(), library_version: ptr::null(),
+                valid_extensions: ptr::null(), need_fullpath: false, block_extract: false,
+            };
+            unsafe { info(&mut out) };
+            out.need_fullpath
+        });
+        self.rom = if fullpath { Vec::new() } else { std::fs::read(rom)? };
         self.rom_path = Some(
             CString::new(rom.as_os_str().as_encoded_bytes())
                 .map_err(|_| CoreError::Load("rom path contains a nul".into()))?,
         );
         let info = GameInfo {
             path: self.rom_path.as_ref().map_or(ptr::null(), |p| p.as_ptr()),
-            data: self.rom.as_ptr() as *const c_void,
+            data: if self.rom.is_empty() { ptr::null() } else { self.rom.as_ptr() as *const c_void },
             size: self.rom.len(),
             meta: ptr::null(),
         };

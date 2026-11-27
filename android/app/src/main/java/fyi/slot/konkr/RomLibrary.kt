@@ -66,7 +66,10 @@ internal object RomLibrary {
     }
     internal fun sameIndex(before: String, after: String): Boolean =
         equivalentEntries(indexEntries(before), indexEntries(after))
-    private data class Directory(val id: String, val depth: Int, val folder: String)
+    /** [neoGeo]: in a Neo Geo folder (neogeo, or under one), where a .zip
+     *  without a cartridge in it is a Neo Geo set. */
+    private data class Directory(val id: String, val depth: Int, val folder: String,
+                                 val neoGeo: Boolean = false)
     /** A cart file listed in the first pass, read in the second. */
     private data class Candidate(val id: String, val name: String, val extension: String,
                                  val size: Long, val modified: Long, val dir: Directory)
@@ -100,7 +103,8 @@ internal object RomLibrary {
         val seen = HashSet<String>()
         // Search the user-selected SAF tree, including custom layouts, but
         // skip folders that ES-DE names after systems slot. does not run.
-        pending.add(Directory(rootId, 0, ""))
+        // The ROM folder may be the Neo Geo's own ("primary:ROMs/neogeo").
+        pending.add(Directory(rootId, 0, "", neoGeoFolder(rootId.substringAfterLast(':').substringAfterLast('/'))))
         android.util.Log.i("SlotKonkr", "ROM scan scope: selected tree without other systems' folders")
         val games = JSONArray()
         var directories = 0
@@ -114,6 +118,7 @@ internal object RomLibrary {
         )
 
         val found = ArrayList<Candidate>()
+        val neoGeoBios = ArrayList<Pair<Uri, String>>()
         while (pending.isNotEmpty()) {
             checkActive()
             if (directories >= MAX_DIRECTORIES || found.size >= MAX_CANDIDATES) {
@@ -141,13 +146,18 @@ internal object RomLibrary {
                     if (name.startsWith(".")) continue
                     if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
                         if (dir.depth < MAX_DEPTH && !ignoredDirectory(name)) {
-                            pending.add(Directory(id, dir.depth + 1, name))
+                            pending.add(Directory(id, dir.depth + 1, name, dir.neoGeo || neoGeoFolder(name)))
                         }
                         continue
                     }
 
                     val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
                     if (!isSupportedRomExtension(extension) || !Systems.acceptsName(name)) continue
+                    // neogeo.zip / aes.zip next to the games: the Neo Geo's BIOS.
+                    if (Systems.isNeoGeoBios(name)) {
+                        neoGeoBios += DocumentsContract.buildDocumentUriUsingTree(treeUri, id) to name
+                        continue
+                    }
                     if (found.size >= MAX_CANDIDATES) {
                         truncated = true
                         break
@@ -160,6 +170,14 @@ internal object RomLibrary {
                 }
             }
             progress?.invoke(found.size, 0)
+        }
+        for ((uri, name) in neoGeoBios) {
+            try {
+                if (BiosLibrary.stageFromRomFolder(context, uri, name))
+                    android.util.Log.i("SlotKonkr", "Neo Geo BIOS staged from the ROM folder: $name")
+            } catch (error: Exception) {
+                android.util.Log.w("SlotKonkr", "Neo Geo BIOS $name not staged", error)
+            }
         }
         val listedAt = android.os.SystemClock.elapsedRealtime()
         // Bound both open SAF streams and in-flight results. Keep listing
@@ -179,7 +197,7 @@ internal object RomLibrary {
                         val (id, name, extension, size, modified, dir) = found[i]
                         val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
                         readEntry(context, uri, name, extension, size, modified,
-                            dir.folder, previous[uri.toString()])
+                            dir.folder, previous[uri.toString()], dir.neoGeo)
                     }
                 }
                 for (job in jobs) {
@@ -260,8 +278,10 @@ internal object RomLibrary {
 
     private fun readEntry(context: Context, fileUri: Uri, name: String, extension: String,
                           size: Long, modified: Long, folder: String,
-                          old: JSONObject?): ReadEntry? {
+                          old: JSONObject?, neoGeo: Boolean = false): ReadEntry? {
         val resolver = context.contentResolver
+        // neogeo.zip and aes.zip are the Neo Geo's BIOS (BiosLibrary), not games.
+        if (Systems.isNeoGeoBios(name)) return null
         // Keep the shelf title identical to the RetroArch save basename.
         val title = Systems.titleOf(name).trim().take(200)
         if (title.isEmpty()) return null
@@ -284,10 +304,21 @@ internal object RomLibrary {
         // by the ZIP's SAF URI and filename. Resolve the embedded
         // ROM header/extension only on cache misses.
         val zipped = extension == "zip"
+        // A Neo Geo set is known by its first chip (RomSource.NeoGeoSet), or
+        // in a Neo Geo folder as a ZIP with no cartridge in it.
+        val neoGeoSet = RomSource.Header(Systems.NEOGEO_SET, ByteArray(0))
         val zipHeader = if (zipped && !reuse) {
             try {
                 resolver.openInputStream(fileUri)?.use { input ->
                     RomSource.inspectWithBattery(input, name)
+                }
+            } catch (_: RomSource.NeoGeoSet) {
+                neoGeoSet
+            } catch (error: IllegalArgumentException) {
+                if (neoGeo) neoGeoSet else {
+                    android.util.Log.w("SlotKonkr",
+                        "Skipping unsupported/corrupt cartridge ZIP: " + name.take(80), error)
+                    null
                 }
             } catch (error: Exception) {
                 android.util.Log.w("SlotKonkr",
@@ -450,7 +481,7 @@ internal object RomLibrary {
             val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
             if (!isSupportedRomExtension(extension) || !Systems.acceptsName(name)) return null
             added += readEntry(context, fileUri, name, extension, size, modified,
-                file.folder, null)?.game ?: return null
+                file.folder, null, neoGeoFolder(file.folder))?.game ?: return null
         }
         return mergeGames(gamesJson, added)
     }
@@ -475,6 +506,10 @@ internal object RomLibrary {
         oldTitle == title && size > 0 && modified > 0 &&
             oldSize == size && oldModified == modified
 
+    /** A folder of Neo Geo games, by an ES-DE name of the system's. */
+    private fun neoGeoFolder(name: String): Boolean =
+        Systems.row(Systems.NEOGEO)?.folders?.contains(name.lowercase(Locale.ROOT)) == true
+
     private fun ignoredDirectory(name: String): Boolean {
         val lower = name.lowercase(Locale.ROOT)
         return lower in IGNORED_DIRECTORIES || lower in OTHER_SYSTEM_DIRECTORIES
@@ -493,7 +528,7 @@ internal object RomLibrary {
      * thousands of files, and listing them through SAF is most of a scan's
      * time. Our own systems' folders (gb, gbc, gba, sgb, nes, famicom, snes,
      * sfc, snesna, megadrive, megadrivejp, genesis, mastersystem, gamegear, ngp, ngpc,
-     * wonderswan, wonderswancolor) and any folder with an
+     * wonderswan, wonderswancolor, neogeo, pcengine, tg16, supergrafx...) and any folder with an
      * unknown name are still searched, so custom layouts keep working.
      */
     internal val OTHER_SYSTEM_DIRECTORIES = setOf(
@@ -509,13 +544,13 @@ internal object RomLibrary {
         "lcdgames", "lowresnx", "lutro", "macintosh", "mame", "mame-advmame",
         "megacd", "megacdjp", "megaduck", "mess", "model2", "model3", "moto", "msx", "msx1",
         "msx2", "msxturbor", "mugen", "multivision", "n3ds", "n64", "n64dd", "naomi",
-        "naomi2", "naomigd", "nds", "neogeo", "neogeocd", "neogeocdjp", "ngage",
+        "naomi2", "naomigd", "nds", "neogeocd", "neogeocdjp", "ngage",
         "odyssey2", "openbor", "oric", "palm", "pc", "pc88", "pc98", "pcarcade",
-        "pcengine", "pcenginecd", "pcfx", "plus4", "ports", "ps2", "ps3",
+        "pcenginecd", "pcfx", "plus4", "ports", "ps2", "ps3",
         "ps4", "psp", "psvita", "psx", "pv1000", "quake", "samcoupe", "saturn", "saturnjp",
         "scummvm", "scv", "sega32x", "sega32xjp", "sega32xna", "segacd", "sg-1000",
-        "solarus", "spectravideo", "steam", "stv", "supergrafx", "supervision", "supracan",
-        "switch", "symbian", "tanodragon", "tg16", "tg-cd", "ti99", "tic80", "to8", "trs-80",
+        "solarus", "spectravideo", "steam", "stv", "supervision", "supracan",
+        "switch", "symbian", "tanodragon", "tg-cd", "ti99", "tic80", "to8", "trs-80",
         "uzebox", "vectrex", "vic20", "videopac", "virtualboy", "vpinball", "vsmile",
         "wasm4", "wii", "wiiu", "windows", "windows3x", "windows9x",
         "x1", "x68000", "xbox", "xbox360", "zmachine", "zx81", "zxnext",

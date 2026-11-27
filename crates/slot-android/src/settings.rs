@@ -326,6 +326,8 @@ impl Bezel {
     pub const POKEMINI: [Bezel; 2] = [Bezel::None, Bezel::PokemonMini];
     /// PICO-8 has no overlay: its square picture keeps the screen's middle.
     pub const PICO8: [Bezel; 1] = [Bezel::None];
+    /// No overlay yet for the Neo Geo and the PC Engine (3.2.0).
+    pub const NONE: [Bezel; 1] = [Bezel::None];
     pub fn list(platform: slot_store::Platform) -> &'static [Bezel] {
         use slot_store::Platform;
         match platform {
@@ -342,6 +344,7 @@ impl Bezel {
             Platform::Lynx => &Self::LYNX,
             Platform::Pokemini => &Self::POKEMINI,
             Platform::Pico8 => &Self::PICO8,
+            Platform::NeoGeo | Platform::Pce => &Self::NONE,
         }
     }
     pub fn step_in(self,list:&[Bezel],right:bool)->Self {
@@ -677,6 +680,12 @@ pub struct Settings {
     pub shader_pokemini: Shader,
     #[serde(default = "shader_off")]
     pub shader_pico8: Shader,
+    /// The Neo Geo as the Mega Drive, the PC Engine as the Super Nintendo:
+    /// zfast-crt (3.2.0).
+    #[serde(default = "shader_sms_default")]
+    pub shader_neogeo: Shader,
+    #[serde(default = "shader_sms_default")]
+    pub shader_pce: Shader,
     // Retain legacy field for old RC1 Settings.json and old desktop Link code;
     // the three platform fields below are authoritative after migration.
     pub colour_correction_gba: bool,
@@ -820,6 +829,10 @@ pub struct Settings {
     pub ws_language: u8,
     #[serde(default)]
     pub pokemini_no_shake: bool,
+    /// Settings > Systems > Neo Geo > BIOS: Auto (AES with aes.zip, else
+    /// MVS), AES, MVS or Universe BIOS (Siham 2026-11-27).
+    #[serde(default)]
+    pub neogeo_bios: u8,
     /// Optional analogue audio colouring per system. Defaults match Libretro.
     #[serde(default)]
     pub nes_audio_filter: bool,
@@ -884,6 +897,10 @@ pub struct Settings {
     pub blending_pokemini: Blending,
     #[serde(default)]
     pub blending_pico8: Blending,
+    #[serde(default)]
+    pub blending_neogeo: Blending,
+    #[serde(default)]
+    pub blending_pce: Blending,
     /// LCD Effect of each supported handheld (Systems > [system] > LCD Effect).
     #[serde(default)]
     pub lcd_effect_gba: LcdEffect,
@@ -942,6 +959,7 @@ impl Default for Settings {
             shader_sms: Shader::ZfastCrt, shader_gg: Shader::Lcd3x,
             shader_ngp: Shader::Lcd3x, shader_ws: Shader::Lcd3x,
             shader_lynx: Shader::Lcd3x, shader_pokemini: Shader::Off, shader_pico8: Shader::Off,
+            shader_neogeo: Shader::ZfastCrt, shader_pce: Shader::ZfastCrt,
             colour_correction_gba: false, colour_correction_gb: false,
             colour_correction_gbc: false,
             bezel_gba: Bezel::None, bezel_gbc: Bezel::Default, bezel_gb: Bezel::Default,
@@ -970,7 +988,7 @@ impl Default for Settings {
             no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
             ws_palette: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
             hide_left_bar_sms: false, hide_left_bar_nes: false, fm_off_sms: false, ws_language: 0,
-            pokemini_no_shake: false,
+            pokemini_no_shake: false, neogeo_bios: 0,
             nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, side_bars_3_0: false,
@@ -981,6 +999,7 @@ impl Default for Settings {
             blending_ngp: Blending::Off, blending_ws: Blending::Mix,
             blending_lynx: Blending::Off, blending_pokemini: Blending::Off,
             blending_pico8: Blending::Off,
+            blending_neogeo: Blending::Off, blending_pce: Blending::Off,
             lcd_effect_gba: LcdEffect::Off, lcd_effect_gbc: LcdEffect::Off, lcd_effect_gb: LcdEffect::Off,
             lcd_effect_gg: LcdEffect::Off, lcd_effect_ngp: LcdEffect::Off,
             lcd_effect_ws: LcdEffect::Off, lcd_effect_lynx: LcdEffect::Off,
@@ -1105,7 +1124,7 @@ impl Settings {
                 if !Shader::DMG.contains(&s.shader_gb) { s.shader_gb = Shader::Off; }
                 if !Shader::GBC.contains(&s.shader_gbc) { s.shader_gbc = Shader::Off; }
                 for shader in [&mut s.shader_nes, &mut s.shader_snes, &mut s.shader_md,
-                    &mut s.shader_sms] {
+                    &mut s.shader_sms, &mut s.shader_neogeo, &mut s.shader_pce] {
                     if !Shader::HOME.contains(shader) { *shader = Shader::ZfastCrt; }
                 }
                 use slot_store::Platform as P;
@@ -1329,6 +1348,8 @@ impl Settings {
             slot_store::Platform::Lynx=>self.shader_lynx,
             slot_store::Platform::Pokemini=>self.shader_pokemini,
             slot_store::Platform::Pico8=>self.shader_pico8,
+            slot_store::Platform::NeoGeo=>self.shader_neogeo,
+            slot_store::Platform::Pce=>self.shader_pce,
         }
     }
     pub fn set_shader_for(&mut self,platform:slot_store::Platform,shader:Shader) {
@@ -1346,6 +1367,8 @@ impl Settings {
             slot_store::Platform::Lynx=>self.shader_lynx=shader,
             slot_store::Platform::Pokemini=>self.shader_pokemini=shader,
             slot_store::Platform::Pico8=>self.shader_pico8=shader,
+            slot_store::Platform::NeoGeo=>self.shader_neogeo=shader,
+            slot_store::Platform::Pce=>self.shader_pce=shader,
         }
     }
     /// The Shader row's key of a home console (47 NES, 48 SNES, 49 MD,
@@ -1363,6 +1386,8 @@ impl Settings {
             slot_store::Platform::Lynx=>Some(SHADER_LYNX_KEY),
             slot_store::Platform::Pokemini=>Some(SHADER_POKEMINI_KEY),
             slot_store::Platform::Pico8=>Some(SHADER_PICO8_KEY),
+            slot_store::Platform::NeoGeo=>Some(SHADER_NEOGEO_KEY),
+            slot_store::Platform::Pce=>Some(SHADER_PCE_KEY),
             _=>None,
         }
     }
@@ -1404,7 +1429,8 @@ impl Settings {
             Sms => BLENDING_SMS_KEY, Gg => BLENDING_GG_KEY,
             Ngp => BLENDING_NGP_KEY, Ws => BLENDING_WS_KEY,
             Lynx => BLENDING_LYNX_KEY, Pokemini => BLENDING_POKEMINI_KEY,
-            Pico8 => BLENDING_PICO8_KEY }
+            Pico8 => BLENDING_PICO8_KEY,
+            NeoGeo => BLENDING_NEOGEO_KEY, Pce => BLENDING_PCE_KEY }
     }
 
     /// The system a Frame Blending key belongs to.
@@ -1421,6 +1447,7 @@ impl Settings {
             Ngp => &mut self.blending_ngp, Ws => &mut self.blending_ws,
             Lynx => &mut self.blending_lynx, Pokemini => &mut self.blending_pokemini,
             Pico8 => &mut self.blending_pico8,
+            NeoGeo => &mut self.blending_neogeo, Pce => &mut self.blending_pce,
         }
     }
 
@@ -1482,6 +1509,7 @@ impl Settings {
             Ngp => self.blending_ngp, Ws => self.blending_ws,
             Lynx => self.blending_lynx, Pokemini => self.blending_pokemini,
             Pico8 => self.blending_pico8,
+            NeoGeo => self.blending_neogeo, Pce => self.blending_pce,
         }
     }
 
@@ -1524,6 +1552,7 @@ impl Settings {
             slot_store::Platform::Lynx=>self.bezel_lynx,
             slot_store::Platform::Pokemini=>self.bezel_pokemini,
             slot_store::Platform::Pico8=>Bezel::None,
+            slot_store::Platform::NeoGeo | slot_store::Platform::Pce=>Bezel::None,
         }
     }
     pub fn set_bezel_for(&mut self,platform:slot_store::Platform,value:Bezel) {
@@ -1541,6 +1570,7 @@ impl Settings {
             slot_store::Platform::Lynx=>self.bezel_lynx=value,
             slot_store::Platform::Pokemini=>self.bezel_pokemini=value,
             slot_store::Platform::Pico8=>{}
+            slot_store::Platform::NeoGeo | slot_store::Platform::Pce=>{}
         }
     }
     /// The Bezel row's settings key for each system.
@@ -1554,6 +1584,8 @@ impl Settings {
             slot_store::Platform::Lynx=>BEZEL_LYNX_KEY,
             slot_store::Platform::Pokemini=>BEZEL_POKEMINI_KEY,
             slot_store::Platform::Pico8=>BEZEL_PICO8_KEY,
+            slot_store::Platform::NeoGeo=>BEZEL_NEOGEO_KEY,
+            slot_store::Platform::Pce=>BEZEL_PCE_KEY,
         }
     }
     /// Once per handheld: a 3.0 system whose overlay would only have thin
@@ -1594,7 +1626,8 @@ impl Settings {
                 !self.colour_correction_gb),
             21 => self.shader_gbc=self.shader_gbc.step(&Shader::GBC,right),
             60..=65 | BLENDING_SMS_KEY | BLENDING_GG_KEY | BLENDING_NGP_KEY | BLENDING_WS_KEY
-            | BLENDING_LYNX_KEY | BLENDING_POKEMINI_KEY | BLENDING_PICO8_KEY => {
+            | BLENDING_LYNX_KEY | BLENDING_POKEMINI_KEY | BLENDING_PICO8_KEY
+            | BLENDING_NEOGEO_KEY | BLENDING_PCE_KEY => {
                 let Some(platform) = Self::blending_platform(key) else { return false };
                 let blending = self.blending_mut(platform);
                 *blending = blending.step(right);
@@ -1650,6 +1683,9 @@ impl Settings {
             SHADER_LYNX_KEY => self.shader_lynx=self.shader_lynx.step(&Shader::LCD,right),
             SHADER_POKEMINI_KEY => self.shader_pokemini=self.shader_pokemini.step(&Shader::POKEMINI,right),
             SHADER_PICO8_KEY => self.shader_pico8=self.shader_pico8.step(&Shader::LCD,right),
+            SHADER_NEOGEO_KEY => self.shader_neogeo=self.shader_neogeo.step(&Shader::HOME,right),
+            SHADER_PCE_KEY => self.shader_pce=self.shader_pce.step(&Shader::HOME,right),
+            NEOGEO_BIOS_KEY => self.neogeo_bios = step_index(self.neogeo_bios, 4, right),
             3 => step_palette(&mut self.gb_palettes, &mut self.gb_palette, right),
             4 => {
                 let at = SPEEDS.iter().position(|x| *x == self.ff_speed).unwrap_or(0);
@@ -1761,6 +1797,17 @@ pub const BLENDING_PICO8_KEY: usize = 150;
 pub const BEZEL_PICO8_KEY: usize = 151;
 /// Settings > Systems > PICO-8 > Default Core: fake-08 or your own PICO-8.
 pub const CORE_PICO8_KEY: usize = 152;
+/// The Neo Geo and the PC Engine (3.2.0): the PC Engine's Default Core
+/// (the Neo Geo's file decides), Shader, Frame Blending, Bezel (no overlay
+/// yet, but every system has one), and the Neo Geo's BIOS.
+pub const CORE_PCE_KEY: usize = 153;
+pub const SHADER_NEOGEO_KEY: usize = 154;
+pub const SHADER_PCE_KEY: usize = 155;
+pub const BLENDING_NEOGEO_KEY: usize = 156;
+pub const BLENDING_PCE_KEY: usize = 157;
+pub const BEZEL_NEOGEO_KEY: usize = 158;
+pub const BEZEL_PCE_KEY: usize = 159;
+pub const NEOGEO_BIOS_KEY: usize = 161;
 
 /// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
 /// grey first, then the three consoles' screens.
@@ -1793,13 +1840,14 @@ pub struct CoreExtras {
     pub nes_audio_filter: bool,
     pub md_fm_nuked: bool,
     pub ws_audio_filter: bool,
+    pub neogeo_bios: u8,
 }
 pub static CORE_EXTRAS: std::sync::Mutex<CoreExtras> = std::sync::Mutex::new(CoreExtras {
     no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
     ws_palette: 0, pokemini_filter: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
     hide_left_bar_sms: false, fm_off_sms: false, ws_language: 0, pokemini_no_shake: false,
     hide_left_bar_nes: false,
-    nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false });
+    nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false, neogeo_bios: 0 });
 
 impl CoreExtras {
     pub fn of(s: &Settings) -> Self {
@@ -1811,7 +1859,7 @@ impl CoreExtras {
             hide_left_bar_nes: s.hide_left_bar_nes,
             nes_audio_filter: s.nes_audio_filter,
             md_fm_nuked: s.md_fm_nuked,
-            ws_audio_filter: s.ws_audio_filter }
+            ws_audio_filter: s.ws_audio_filter, neogeo_bios: s.neogeo_bios }
     }
     pub fn store(s: &Settings) {
         POKEMINI_LCD_FILTER.store(s.pokemini_lcd_filter, std::sync::atomic::Ordering::Release);

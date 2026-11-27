@@ -1,0 +1,17 @@
+diff --git a/src/burner/libretro/jni/Android.mk b/src/burner/libretro/jni/Android.mk
+index edba6fe..adfc7dc 100644
+--- a/src/burner/libretro/jni/Android.mk
++++ b/src/burner/libretro/jni/Android.mk
+@@ -33,8 +33,11 @@ SOURCES_C   :=
+ SOURCES_CXX :=
+ FBNEO_DEFINES :=
+ 
++# slot.: the Neo Geo subset only (Makefile.neogeo, as `make SUBSET=neogeo`);
++# its driverlist.h is generated before ndk-build (build-home-core-android.sh).
++SUBSET := neogeo
+ include $(LOCAL_PATH)/../Makefile.common
+-include $(LOCAL_PATH)/../Makefile.all
++include $(LOCAL_PATH)/../Makefile.neogeo
+ 
+ COMMON_FLAGS := -DUSE_SPEEDHACKS -D__LIBRETRO__ -DANDROID -Wno-write-strings -DLSB_FIRST $(FBNEO_DEFINES)
+ 

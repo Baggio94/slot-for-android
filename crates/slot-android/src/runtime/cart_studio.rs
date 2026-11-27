@@ -268,6 +268,8 @@ fn outlines(platform: Platform) -> Vec<(&'static str, Outline)> {
         Platform::Lynx => &[("Lynx", Outline::Lynx)][..],
         Platform::Pokemini => &[("Pokemon mini", Outline::PokemonMini)][..],
         Platform::Pico8 => &[("PICO-8", Outline::Pico8)][..],
+        Platform::NeoGeo => &[("Neo Geo", Outline::NeoGeo)][..],
+        Platform::Pce => &[("HuCard", Outline::Pce)][..],
         Platform::Gba => &[][..],
     });
     out
@@ -368,6 +370,8 @@ pub(super) fn search_platforms(platform: Platform) -> &'static [&'static str] {
         Platform::Lynx => &["LYNX"],
         Platform::Pokemini => &["POKEMINI"],
         Platform::Pico8 => &["PICO8"],
+        Platform::NeoGeo => &["NEOGEO"],
+        Platform::Pce => &["PCE"],
     }
 }
 

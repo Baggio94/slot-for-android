@@ -132,6 +132,7 @@ impl Engine {
             Platform::Ngp => "ngp", Platform::Ws => "ws",
             Platform::Lynx => "lynx", Platform::Pokemini => "pokemini",
             Platform::Pico8 => "pico8",
+            Platform::NeoGeo => "neogeo", Platform::Pce => "pce",
         }
     }
 

@@ -87,7 +87,8 @@ pub enum Body {
 pub fn gb_shell_of(cart: &Cart) -> Option<GbShell> {
     match cart.platform {
         Platform::Gba | Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
-        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini | Platform::Pico8 => None,
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini | Platform::Pico8
+        | Platform::NeoGeo | Platform::Pce => None,
         Platform::Gb | Platform::Gbc => Some(match cart.shell.map(|c| c.outline) {
             Some(Outline::Notched) => GbShell::Notched,
             Some(Outline::Rounded) => GbShell::Rounded,
@@ -115,7 +116,8 @@ pub fn platform_body(platform: Platform) -> Body {
         Platform::Gba => Body::Gba,
         Platform::Gb | Platform::Gbc => Body::Gb(GbShell::Notched),
         Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms | Platform::Gg
-        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini | Platform::Pico8 => {
+        | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini | Platform::Pico8
+        | Platform::NeoGeo | Platform::Pce => {
             Body::Home(HomeMould::default_for(platform).unwrap_or(HomeMould::Nes))
         }
     }
@@ -209,7 +211,9 @@ pub fn shelf_grow(body: Body) -> f32 {
         }
         // The Mark III's cart, the My Card and Codemasters' Game Gear cart
         // are held to the Game Gear cart's height, so they stay on screen.
-        Body::Home(m @ (HomeMould::MasterSystemJp | HomeMould::MasterSystemCard | HomeMould::GameGearCodemasters)) => {
+        // The HuCard too (3.2.0).
+        Body::Home(m @ (HomeMould::MasterSystemJp | HomeMould::MasterSystemCard | HomeMould::GameGearCodemasters
+            | HomeMould::Pce)) => {
             (HomeMould::GameGear.size().1 as f32 / m.size().1 as f32).min(1.0)
         }
         // The upright PICO-8 cart stands as tall as an NES cart.

@@ -217,8 +217,11 @@ pub fn home_same_picture(platform: Platform, aspect: f32, frame: (u32, u32), squ
     (a.0 - b.0).abs() < 0.5 && (a.1 - b.1).abs() < 0.5
 }
 
+/// The consoles a television showed: the Neo Geo as the Mega Drive, the
+/// PC Engine as the Super Nintendo (3.2.0).
 pub fn home_console(platform: Platform) -> bool {
-    matches!(platform, Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms)
+    matches!(platform, Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms
+        | Platform::NeoGeo | Platform::Pce)
 }
 
 /// Representative gameplay geometry for the system settings, before a core
@@ -296,7 +299,7 @@ fn narrow(panel: (u32, u32)) -> bool {
 /// is overscale (the next whole multiple up, a few pixels cut at the
 /// edges), then Original Ratio and Stretch (Siham, 2026-11-03).
 pub fn square_pixels(platform: Platform, panel: (u32, u32)) -> bool {
-    matches!(platform, Platform::Nes | Platform::Snes) && narrow(panel)
+    matches!(platform, Platform::Nes | Platform::Snes | Platform::Pce) && narrow(panel)
 }
 
 /// A frame 256 pixels wide (248 with the Master System's left bar hidden):
@@ -351,7 +354,11 @@ pub fn home_aspect(platform: Platform, core: f32, frame: (u32, u32), square: boo
         // columns left keep their width, the picture narrows.
         Platform::Nes | Platform::Sms if !square && (240..256).contains(&frame.0) =>
             4.0 / 3.0 * frame.0 as f32 / 256.0,
-        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms if !square => 4.0 / 3.0,
+        // The Neo Geo games FinalBurn Neo shows 304 wide: 320's 4:3, its
+        // 8 columns each side cut (Geolith is given all 320).
+        Platform::NeoGeo if (288..320).contains(&frame.0) => 4.0 / 3.0 * frame.0 as f32 / 320.0,
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms
+        | Platform::NeoGeo | Platform::Pce if !square => 4.0 / 3.0,
         Platform::Md | Platform::Sms => square_shape(platform, frame),
         // The Game Gear's LCD: its 160x144 pixels are square.
         Platform::Gg => 10.0 / 9.0,
@@ -368,7 +375,8 @@ pub fn home_aspect(platform: Platform, core: f32, frame: (u32, u32), square: boo
 /// WonderSwan game at 5x on the Retroid Pocket Classic, 4 lines cut).
 pub fn crop_limit(platform: Platform) -> f32 {
     match platform {
-        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms => 8.0,
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::Sms
+        | Platform::NeoGeo | Platform::Pce => 8.0,
         _ => 4.0,
     }
 }
@@ -380,6 +388,8 @@ pub fn logical_frame(platform: Platform, frame: (u32, u32)) -> (u32, u32) {
         Platform::Pokemini => platform.picture(),
         Platform::Snes => (if frame.0 >= 400 { frame.0 / 2 } else { frame.0 },
             if frame.1 >= 400 { frame.1 / 2 } else { frame.1 }),
+        // The PC Engine's 512-wide modes: two samples a dot.
+        Platform::Pce => (if frame.0 >= 400 { frame.0 / 2 } else { frame.0 }, frame.1),
         _ => frame,
     }
 }
@@ -624,8 +634,8 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
         // Their own overlays, above.
         Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
         | Platform::Lynx | Platform::Pokemini => None,
-        // No overlay for PICO-8.
-        Platform::Pico8 => None,
+        // No overlay for PICO-8, nor yet for the Neo Geo and the PC Engine.
+        Platform::Pico8 | Platform::NeoGeo | Platform::Pce => None,
     }
 }
 
@@ -640,7 +650,7 @@ pub fn bezel_offered(platform: Platform, panel: (u32, u32)) -> bool {
         Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
         | Platform::Lynx | Platform::Pokemini => own_aspects(platform).iter().any(|&aspect|
             own_place(aspect, platform.picture(), VideoMode::Aspect, panel, crop_limit(platform)).is_some()),
-        Platform::Pico8 => false,
+        Platform::Pico8 | Platform::NeoGeo | Platform::Pce => false,
     }
 }
 

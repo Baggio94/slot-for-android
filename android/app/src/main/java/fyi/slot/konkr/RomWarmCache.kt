@@ -17,8 +17,11 @@ internal object RomWarmCache {
     private const val TAG = "SlotRomWarm"
     private const val MAX_ROM = 64L * 1024 * 1024
     private const val MAX_TOTAL = 256L * 1024 * 1024
-    // Home-console ROMs share the same 256 MiB eviction budget as GB/GBA.
-    private val CACHE_NAME = Regex("[a-f0-9]{64}\\.(${Systems.ROM_EXTENSIONS.joinToString("|")})")
+    /** A Neo Geo set or .neo warmed: up to half the budget. */
+    private const val MAX_NEOGEO = MAX_TOTAL / 2
+    // Home-console ROMs share the same 256 MiB eviction budget as GB/GBA;
+    // a Neo Geo set is kept whole, as its .zip.
+    private val CACHE_NAME = Regex("[a-f0-9]{64}\\.(${(Systems.ROM_EXTENSIONS + Systems.NEOGEO_SET).joinToString("|")})")
     /** A key stops the reading for this long; a launch of the same ROM
      *  takes the copy over meanwhile (A is a key too). */
     private const val PAUSE_MS = 700L
@@ -66,8 +69,10 @@ internal object RomWarmCache {
                 context.contentResolver.openInputStream(uri)?.use {
                     RomSource.inspect(it, name).extension
                 } ?: return
+            } catch (_: RomSource.NeoGeoSet) { Systems.NEOGEO_SET
             } catch (_: Exception) { return }
         } else name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
+        val limit = if (Systems.platformFor(ext) == Systems.NEOGEO) MAX_NEOGEO else MAX_ROM
         val digest = GameKeys.digest(rawUri)
         val dir = File(context.cacheDir, "rom-cache").apply { mkdirs() }
         val target = File(dir, "$digest.$ext")
@@ -92,7 +97,13 @@ internal object RomWarmCache {
             if (!goOn()) return
             val source = context.contentResolver.openInputStream(uri) ?: return
             var count = 0L
-            source.use { input ->
+            if (ext == Systems.NEOGEO_SET) source.use { input ->
+                count = RomSource.copyNeoGeoSet(input, temporary) { bytes ->
+                    copied = bytes
+                    require(bytes <= limit) { "ROM exceeds cache size limit" }
+                    if (Thread.currentThread().isInterrupted) false else goOn()
+                }
+            } else source.use { input ->
                 RomSource.useRom(input, name) { raw, embeddedExt ->
                     require(embeddedExt == ext) { "Cartridge archive entry changed" }
                     temporary.outputStream().buffered().use { output ->
@@ -104,7 +115,7 @@ internal object RomWarmCache {
                             if (n < 0) break
                             count += n
                             copied = count
-                            require(count <= MAX_ROM) { "ROM exceeds cache size limit" }
+                            require(count <= limit) { "ROM exceeds cache size limit" }
                             output.write(buffer, 0, n)
                             // Yield gently to core, audio, UI and cartridge
                             // artwork; not when a launch is waiting.

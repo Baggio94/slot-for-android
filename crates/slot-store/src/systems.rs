@@ -32,7 +32,7 @@ pub struct System {
     pub handheld: bool,
 }
 
-pub const SYSTEMS: [System; 13] = [
+pub const SYSTEMS: [System; 15] = [
     System {
         platform: Platform::Gba, name: "Game Boy Advance", dir: "GBA",
         extensions: &["gba"], folders: &["gba"], romm: &["gba"],
@@ -130,6 +130,27 @@ pub const SYSTEMS: [System; 13] = [
         romm: &["pico-8", "pico"],
         retroachievements: 0, screenscraper: 234,
         cores: [Core::Fake08, Core::Pico8], picture: (128, 128), handheld: false,
+    },
+    // The file decides the core: a .zip set is FinalBurn Neo's (it reads
+    // the game by the set's name), a .neo file Geolith's. RetroAchievements
+    // files the Neo Geo under Arcade (27), FinalBurn Neo's sets only.
+    // ScreenScraper's Neo-Geo is 142.
+    System {
+        platform: Platform::NeoGeo, name: "Neo Geo", dir: "NEOGEO",
+        extensions: &["zip", "neo"], folders: &["neogeo"],
+        romm: &["neogeoaes", "neogeomvs", "neo-geo", "neogeo"],
+        retroachievements: 27, screenscraper: 142,
+        cores: [Core::FbNeo, Core::Geolith], picture: (320, 224), handheld: false,
+    },
+    // PC Engine, TurboGrafx-16 and SuperGrafx on one shelf. Beetle PCE
+    // FAST doesn't play the SuperGrafx: a .sgx always goes to Beetle PCE.
+    // ScreenScraper: PC Engine 31 (SuperGrafx 105).
+    System {
+        platform: Platform::Pce, name: "PC Engine", dir: "PCE",
+        extensions: &["pce", "sgx"], folders: &["pcengine", "tg16", "supergrafx"],
+        romm: &["turbografx16--1", "pc-engine", "pcengine", "tg16", "supergrafx"],
+        retroachievements: 8, screenscraper: 31,
+        cores: [Core::BeetlePceFast, Core::BeetlePce], picture: (256, 224), handheld: false,
     },
 ];
 

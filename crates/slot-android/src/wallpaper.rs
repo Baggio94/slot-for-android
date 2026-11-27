@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 /// GBA Video (upstream's GBAV).
 pub const SHELF_KEYS: [&str; slot_store::Platform::ALL.len() + 3] = [
     "GBA", "GB", "GBC", "NES", "SNES", "MD", "SMS", "GG", "NGP", "WS", "LYNX", "POKEMINI", "PICO8",
+    "NEOGEO", "PCE",
     "Recents", "Favorites", "GBAV",
 ];
 
@@ -156,9 +157,11 @@ mod tests {
         assert_eq!(for_shelf(&root, 10), None, "Lynx");
         assert_eq!(for_shelf(&root, 11), None, "Pokemon mini");
         assert_eq!(for_shelf(&root, 12), None, "PICO-8");
-        assert_eq!(for_shelf(&root, 13), None, "Recents");
-        assert_eq!(for_shelf(&root, 14).as_deref(), Some("Favorites.png"));
-        assert_eq!(for_shelf(&root, 15), None);
+        assert_eq!(for_shelf(&root, 13), None, "Neo Geo");
+        assert_eq!(for_shelf(&root, 14), None, "PC Engine");
+        assert_eq!(for_shelf(&root, 15), None, "Recents");
+        assert_eq!(for_shelf(&root, 16).as_deref(), Some("Favorites.png"));
+        assert_eq!(for_shelf(&root, 17), None);
         assert_eq!(list(&root), vec!["user.png".to_string()]);
         assert_eq!(shelf_target(1).as_deref(), Some("GB.png"));
         assert_eq!(shelf_target(3).as_deref(), Some("NES.png"));
@@ -168,8 +171,10 @@ mod tests {
         assert_eq!(shelf_target(10).as_deref(), Some("LYNX.png"));
         assert_eq!(shelf_target(11).as_deref(), Some("POKEMINI.png"));
         assert_eq!(shelf_target(12).as_deref(), Some("PICO8.png"));
-        assert_eq!(shelf_target(13).as_deref(), Some("Recents.png"));
-        assert_eq!(shelf_target(14).as_deref(), Some("Favorites.png"));
+        assert_eq!(shelf_target(13).as_deref(), Some("NEOGEO.png"));
+        assert_eq!(shelf_target(14).as_deref(), Some("PCE.png"));
+        assert_eq!(shelf_target(15).as_deref(), Some("Recents.png"));
+        assert_eq!(shelf_target(16).as_deref(), Some("Favorites.png"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
