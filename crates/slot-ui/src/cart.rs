@@ -469,6 +469,17 @@ pub fn label_size(cart: &Cart) -> (u32, u32) {
 /// keeps its memory and performance behavior while matching the visible face.
 /// Separate animated board/chrome layering remains part of the U1 follow-up.
 pub fn cart_face_with_material(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
+    cart_face_and_layers(cart, art).0
+}
+
+/// A cart's face and, for a clear cart, the three layers it is made of
+/// (interior, backing, plastic: cart_interior, cart_backing, cart_face),
+/// each drawn once (3.2 perf: the selected clear cart's were drawn twice).
+pub fn clear_cart_faces(cart: &Cart) -> (CartFace, Option<[CartFace; 3]>) {
+    cart_face_and_layers(cart, None)
+}
+
+fn cart_face_and_layers(cart: &Cart, art: Option<Vec<u8>>) -> (CartFace, Option<[CartFace; 3]>) {
     let artwork = art.or_else(|| {
         let (w, h) = label_size(cart);
         label_art(cart, px(w), px(h))
@@ -477,7 +488,7 @@ pub fn cart_face_with_material(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
     let by_hand = !home::is_test_cart(cart) && artwork.as_deref().is_none_or(mostly_clear);
     let plastic = cart_face_with(cart, artwork);
     if !is_clear(cart) {
-        return plastic;
+        return (plastic, None);
     }
     let backing = cart_backing(cart);
     let interior = cart_interior(cart);
@@ -490,7 +501,8 @@ pub fn cart_face_with_material(cart: &Cart, art: Option<Vec<u8>>) -> CartFace {
         frost_well(&spec(shape_of(cart)), &mut pixels, &plastic.rgba);
     }
     blend_over(&mut pixels, &plastic.rgba);
-    CartFace { rgba: pixels, w: plastic.w, h: plastic.h }
+    let face = CartFace { rgba: pixels, w: plastic.w, h: plastic.h };
+    (face, Some([interior, backing, plastic]))
 }
 
 /// Under a title written by hand, a clear cart's label well is frosted

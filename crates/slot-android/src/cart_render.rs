@@ -9,7 +9,7 @@ use std::thread;
 
 use slot_store::Cart;
 use slot_ui::{cart_face_with_material, cart_face, cart_interior, cart_backing,
-    is_clear, CartFace};
+    clear_cart_faces, is_clear, CartFace};
 
 /// A cart face in panel texels, the size the GL thread uploads. Dense faces
 /// were drawn for the panel already; 1x faces are filtered up as before.
@@ -132,19 +132,26 @@ impl CartRender {
                         };
                         let needs_write=cached.is_none();
                         if !needs_write { crate::frame_watch::label_from_disk(face_at.elapsed()); }
-                        let pixels=cached.unwrap_or_else(|| {
-                            let face=panel_face(cart_face_with_material(&cart,None));
-                            crate::frame_watch::label_drawn(face_at.elapsed());
-                            face
-                        });
-                        let layers = if include_material && is_clear(&cart) {
-                            let original = [
+                        let material = include_material && is_clear(&cart);
+                        // A clear cart drawn with its layers: each drawn
+                        // once, the face made of them (3.2 perf).
+                        let (pixels, layers) = match cached {
+                            Some(face) => (face, material.then(|| [
                                 cart_interior(&cart),
                                 cart_backing(&cart),
                                 cart_face(&cart),
-                            ];
-                            Some(original.map(panel_face))
-                        } else {None};
+                            ].map(panel_face))),
+                            None if material => {
+                                let (face, layers) = clear_cart_faces(&cart);
+                                crate::frame_watch::label_drawn(face_at.elapsed());
+                                (panel_face(face), layers.map(|layers| layers.map(panel_face)))
+                            }
+                            None => {
+                                let face=panel_face(cart_face_with_material(&cart,None));
+                                crate::frame_watch::label_drawn(face_at.elapsed());
+                                (face, None)
+                            }
+                        };
                         // Clone only on cache miss. Hand the face to the GL
                         // uploader before best-effort persistence is queued.
                         let save=if needs_write {

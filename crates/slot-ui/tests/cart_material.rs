@@ -78,3 +78,19 @@ fn u1_clear_material_is_drawn_in_exact_original_slot_depth_order() {
         Draw::Tex{tex,..}=>Some(*tex),_=>None,
     }).collect::<Vec<_>>(),vec![labels[0]]);
 }
+
+#[test]
+fn a_clear_cart_drawn_with_its_layers_is_the_same_as_drawn_apart() {
+    use slot_ui::{cart_backing, cart_face, cart_interior, clear_cart_faces};
+    let cart = cartridge("U3IE", "Boktai - The Sun Is in Your Hand");
+    let (face, layers) = clear_cart_faces(&cart);
+    assert_eq!(face.rgba, cart_face_with_material(&cart, None).rgba);
+    let [interior, backing, plastic] = layers.expect("a clear cart has layers");
+    assert_eq!(interior.rgba, cart_interior(&cart).rgba);
+    assert_eq!(backing.rgba, cart_backing(&cart).rgba);
+    assert_eq!(plastic.rgba, cart_face(&cart).rgba);
+    let solid = cartridge("AW2E", "Advance Wars 2 - Black Hole Rising (USA)");
+    let (face, layers) = clear_cart_faces(&solid);
+    assert!(layers.is_none());
+    assert_eq!(face.rgba, cart_face_with_material(&solid, None).rgba);
+}
