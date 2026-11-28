@@ -843,6 +843,8 @@ fn test_carts() -> Vec<slot_store::Cart> {
     Vec::new()
 }
 
+/// SETTING_VALUE_NAMES' "OFF".
+const OFF_VALUE: usize = 5;
 /// Every Settings value face, by index: setting_face gives these indices.
 const SETTING_VALUE_NAMES: [&str; 217] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
@@ -1192,6 +1194,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         },
         19 => if settings.show_recents {4}else{5},
         20 => if settings.show_titles {4}else{5},
+        SHELVES_LAYOUT_KEY if settings.shelves_off => OFF_VALUE,
         SHELVES_LAYOUT_KEY => SHELVES_LAYOUT_VALUES + usize::from(settings.shelves_grid),
         TEST_SHELF_KEY => if settings.test_shelf {4}else{5},
         21 => shader(scoped.shader_gbc),
@@ -1493,7 +1496,7 @@ fn settings_rows() -> &'static [usize] {
 }
 
 /// Settings > Interface: Theme, Wallpaper (its page), Recents, Game Titles,
-/// Shelves (Scroll or Grid), Status Bar (its page).
+/// Shelves (Scroll, Grid or Off), Status Bar (its page).
 /// 3.0 Test Shelf (156) left it in 3.0.0-lynxmini1: no test cart is left.
 const INTERFACE_PAGE_ROWS: [usize; 6] = [85, 83, 86, 87, 177, 58];
 const INTERFACE_PAGE_KEYS: [usize; 6] = [18, usize::MAX, 19, 20, SHELVES_LAYOUT_KEY, usize::MAX];
@@ -5677,7 +5680,7 @@ impl Engine {
                             }
                             return;
                         }
-                        97 if !self.inserted && self.progress <= 0.0
+                        97 if !self.inserted && self.progress <= 0.0 && !self.settings.shelves_off
                             && self.triggers.hold.is_none() && self.triggers.ejecting.is_none()
                             && !self.lid_covered && self.lid_t <= 0.0 => {
                             self.open_shelves();
@@ -8059,7 +8062,14 @@ impl Engine {
                 self.persist_settings();
             }
             177 => {
-                self.settings.shelves_grid=!self.settings.shelves_grid;
+                // SCROLL -> GRID -> OFF -> SCROLL.
+                let (grid, off) = match (self.settings.shelves_off, self.settings.shelves_grid) {
+                    (true, _) => (false, false),
+                    (false, false) => (true, false),
+                    (false, true) => (true, true),
+                };
+                self.settings.shelves_grid = grid && !off;
+                self.settings.shelves_off = off;
                 self.persist_settings();
             }
             87 => {
@@ -12140,6 +12150,20 @@ mod settings_value_tests {
     fn face(settings: &Settings, key: usize, cart: Platform, video: VideoMode) -> Option<usize> {
         setting_face(key, settings, settings, &EmulationProfile::from_settings(settings),
             cart, video, &Platform::ALL.map(Core::default_for))
+    }
+
+    #[test]
+    fn interface_shelves_reads_scroll_grid_or_off() {
+        let mut s = Settings::default();
+        let name = |s: &Settings| SETTING_VALUE_NAMES[face(s, SHELVES_LAYOUT_KEY, Platform::Gba, VideoMode::Aspect).unwrap()];
+        assert_eq!(name(&s), "SCROLL");
+        s.shelves_grid = true;
+        assert_eq!(name(&s), "GRID");
+        s.shelves_grid = false;
+        s.shelves_off = true;
+        assert_eq!(name(&s), "OFF");
+        let old: Settings = serde_json::from_str(r#"{"shelves_grid":true}"#).unwrap();
+        assert!(old.shelves_grid && !old.shelves_off);
     }
 
     #[test]

@@ -809,6 +809,10 @@ pub struct Settings {
     /// sideways (Scroll, the default) or down as a grid.
     #[serde(default)]
     pub shelves_grid: bool,
+    /// Interface > Shelves OFF (3.2.0-neogeo-pce2): B on the shelf no
+    /// longer opens the shelves page.
+    #[serde(default)]
+    pub shelves_off: bool,
     /// Interface > 3.0 Test Shelf (3.0.0-cartes1): the 3.0 systems' carts
     /// on a shelf of their own, to put in and take out without a game.
     #[serde(default)]
@@ -1025,7 +1029,7 @@ impl Default for Settings {
             wallpaper_look: WallpaperLook::default(),
             wallpaper_shelf_looks: Default::default(),
             wallpaper_tint: WallpaperTint::Off, appearance: Appearance::Dark,
-            show_recents: false, show_titles: false, shelves_grid: false, test_shelf: false, touchscreen: true, home_bezel_three_two: false,
+            show_recents: false, show_titles: false, shelves_grid: false, shelves_off: false, test_shelf: false, touchscreen: true, home_bezel_three_two: false,
             pokemini_lcd_filter: 0,
             no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
             ws_palette: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
