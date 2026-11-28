@@ -1,6 +1,8 @@
 package fyi.slot.konkr
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -11,6 +13,13 @@ class RaSmartCacheTest {
         modified = 123456789L,
         md5 = "abcdef0123456789abcdef0123456789"
     )
+
+    @Test fun neoGeoSetsAreKnownByTheirName() {
+        // md5("mslug"), as rcheevos hashes an Arcade game.
+        assertEquals("b43c8b4ec999588c04dad79bb8bcc745", RaSmartCache.arcadeHash("mslug.zip"))
+        assertEquals(RaSmartCache.arcadeHash("mslug.zip"), RaSmartCache.arcadeHash("roms/mslug.ZIP"))
+        assertNull(RaSmartCache.arcadeHash("mslug.neo"))
+    }
 
     @Test fun unchangedFileReusesMd5() {
         assertTrue(RaSmartCache.canReuse(valid, valid.size, valid.modified))

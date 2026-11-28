@@ -34,14 +34,29 @@ internal object RaSmartCache {
             cached.size == size && cached.modified == modified &&
             cached.md5.length == 32 && cached.md5.all { it in '0'..'9' || it in 'a'..'f' }
 
+    /** RetroAchievements' Arcade id: a Neo Geo set on FinalBurn Neo. */
+    private const val ARCADE_CONSOLE = 27
+
+    /** An arcade set's RetroAchievements hash: its name's (mslug for
+     *  mslug.zip), as rcheevos hashes Arcade games. Null for a Geolith .neo. */
+    internal fun arcadeHash(filename: String): String? {
+        val name = filename.substringAfterLast('/')
+        if (!name.endsWith(".zip", ignoreCase = true)) return null
+        val stem = name.dropLast(4).ifEmpty { return null }
+        return MessageDigest.getInstance("MD5").digest(stem.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    }
+
     private fun hashRom(context: Context, uri: Uri, filename: String, console: Int): String {
+        if (console == ARCADE_CONSOLE) return arcadeHash(filename) ?: error("Not an arcade set")
         val digest = MessageDigest.getInstance("MD5") // RA's ROM identity, not for security
         // RetroAchievements hashes NES carts without their iNES header and Super
         // Nintendo carts without a 512-byte copier header, as the native rcheevos
         // hash at launch does; every other cart whole. Whether a Super Nintendo
         // dump carries a copier header is only known from its unpacked size, so
         // that cart is hashed both ways and the right one kept at the end.
-        val copier = if (console == 3) MessageDigest.getInstance("MD5") else null
+        // A HuCard (PC Engine, 8) may carry the same 512-byte copier header.
+        val copier = if (console == 3 || console == 8) MessageDigest.getInstance("MD5") else null
         var consumed = 0L
         context.contentResolver.openInputStream(uri)?.use { source ->
             RomSource.useRom(source, filename) { input, _ ->

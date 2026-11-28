@@ -1020,10 +1020,12 @@ impl GameSession {
             primary_id: core.instance_id(),
             native_video: !platform.handheld() || which == Core::PokeDaisy,
         });
-        // A system slot. has no RetroAchievements for yet (PICO-8: 0, the
-        // Neo Geo and PC Engine until their own step) is never wrapped.
+        // A system slot. has no RetroAchievements for (PICO-8: 0) is never
+        // wrapped. The Neo Geo's sets are RetroAchievements' Arcade ones,
+        // made on FinalBurn Neo's memory: not on Geolith (a .neo file).
+        let ra_core = console != 27 || which == Core::FbNeo;
         let mut core: Box<dyn RetroCore> = match achievements {
-            Some(service) if slot_achievements::supported_console(console) =>
+            Some(service) if slot_achievements::supported_console(console) && ra_core =>
                 service.wrap_for_console(Box::new(core), console),
             _ => Box::new(core),
         };

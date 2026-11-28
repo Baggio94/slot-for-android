@@ -1104,7 +1104,7 @@ fn home_console_hashes_skip_dump_headers_like_rcheevos() {
     assert_eq!(library::content_hash(&root.path().join("a.md")).unwrap(),
         format!("{:x}", md5::compute(&snes)));
     assert!(supported_console(7) && supported_console(3) && supported_console(1));
-    assert!(!supported_console(2) && !supported_console(8));
+    assert!(!supported_console(2) && !supported_console(9));
     // A .lnx Lynx cart without its 64-byte header; a raw .lyx, a Game Gear,
     // Master System, Neo Geo Pocket, WonderSwan or Pokemon mini cart whole.
     let mut lnx = b"LYNX\0".to_vec();
@@ -1119,7 +1119,20 @@ fn home_console_hashes_skip_dump_headers_like_rcheevos() {
         std::fs::write(&path, &lnx).unwrap();
         assert_eq!(library::content_hash(&path).unwrap(), format!("{:x}", md5::compute(&lnx)), "{ext}");
     }
-    for console in [11, 13, 14, 15, 24, 53] {
+    for console in [8, 11, 13, 14, 15, 24, 27, 53] {
         assert!(supported_console(console), "{console}");
     }
+    // A HuCard without a copier's 512-byte header, else whole; a Neo Geo
+    // set by its name.
+    let mut hucard = vec![0u8; 512];
+    hucard.extend_from_slice(&vec![7u8; 0x2000]);
+    std::fs::write(root.path().join("a.pce"), &hucard).unwrap();
+    assert_eq!(library::content_hash(&root.path().join("a.pce")).unwrap(),
+        format!("{:x}", md5::compute(&hucard[512..])));
+    std::fs::write(root.path().join("b.pce"), &hucard[512..]).unwrap();
+    assert_eq!(library::content_hash(&root.path().join("b.pce")).unwrap(),
+        format!("{:x}", md5::compute(&hucard[512..])));
+    std::fs::write(root.path().join("mslug.zip"), b"PK").unwrap();
+    assert_eq!(library::content_hash(&root.path().join("mslug.zip")).unwrap(),
+        format!("{:x}", md5::compute(b"mslug")));
 }

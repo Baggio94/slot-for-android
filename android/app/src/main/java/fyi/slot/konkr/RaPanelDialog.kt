@@ -242,7 +242,8 @@ internal class RaPanelDialog(
         row("Super Nintendo", ready(snapshot.cachedSnes, snapshot.indexedSnes))
         row("Mega Drive", ready(snapshot.cachedMd, snapshot.indexedMd))
         for ((name, console) in listOf("Master System" to 11, "Game Gear" to 15,
-                "Neo Geo Pocket" to 14, "WonderSwan" to 53, "Lynx" to 13, "Pokemon mini" to 24)) {
+                "Neo Geo Pocket" to 14, "WonderSwan" to 53, "Lynx" to 13, "Pokemon mini" to 24,
+                "PC Engine" to 8, "Neo Geo" to 27)) {
             row(name, ready(snapshot.cachedBy?.get(console), snapshot.indexedBy?.get(console)))
         }
         row("With achievements", snapshot.recognizedGames?.toString() ?: "Checking…")

@@ -1201,6 +1201,11 @@ fn home_map(console: u32) -> Option<HomeMap> {
         // WonderSwan: 64 KiB RAM, cart RAM at 0x10000 (as far as the
         // 256 KiB window reaches: 192 KiB).
         53 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0x30000, bus: 0 }),
+        // PC Engine HuCards: 8 KiB RAM (bank 0xf8 on the bus), nothing after.
+        8 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0, bus: 0x1f0000 }),
+        // Arcade (FinalBurn Neo's Neo Geo): its 64 KiB 68000 RAM, as the
+        // core hands it to RetroArch.
+        27 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0, bus: 0 }),
         _ => None,
     }
 }
@@ -1932,7 +1937,7 @@ mod tests {
 
     #[test]
     fn every_home_map_fits_the_achievement_window() {
-        for console in [1, 3, 7, 11, 13, 14, 15, 24, 53] {
+        for console in [1, 3, 7, 8, 11, 13, 14, 15, 24, 27, 53] {
             let map = home_map(console).expect("mapped console");
             assert!(map.ram <= map.mirror_to && map.mirror_to <= map.save_at, "{console}");
             assert!(map.save_at + map.save_max <= 0x40000, "{console}");

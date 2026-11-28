@@ -107,12 +107,19 @@ pub(crate) fn content_hash(path: &Path) -> Result<String, String> {
     if size == 0 || size > 64 * 1024 * 1024 {
         return Err("Unsupported GBA ROM size".into());
     }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    // An arcade set (a Neo Geo game on FinalBurn Neo) is known by its
+    // name: mslug for mslug.zip (rcheevos rc_hash, Arcade).
+    if ext == "zip" {
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if stem.is_empty() { return Err("Unnamed arcade set".into()); }
+        return Ok(format!("{:x}", md5::compute(stem.as_bytes())));
+    }
     let mut file = std::fs::File::open(path).map_err(|_| "Cannot open ROM")?;
     let mut buffer = [0; 64 * 1024];
     let mut md5 = md5::Context::new();
     // RetroAchievements hashes NES carts without their iNES/FDS header and
     // SNES carts without a 512-byte copier header (rcheevos rc_hash).
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let skip = match ext.as_str() {
         "nes" | "fc" | "unf" | "unif" => {
             let mut head = [0u8; 4];
@@ -121,6 +128,8 @@ pub(crate) fn content_hash(path: &Path) -> Result<String, String> {
             if read == 4 && (&head == b"NES\x1a" || &head == b"FDS\x1a") { 16 } else { 0 }
         }
         "sfc" | "smc" if size % 0x2000 == 512 => 512,
+        // A HuCard with a copier's 512-byte header (rc_hash: size % 1024).
+        "pce" | "sgx" if size % 1024 == 512 => 512,
         // A .lnx Lynx cart carries a 64-byte "LYNX" header RetroAchievements
         // leaves out (rc_hash), as No-Intro does.
         "lnx" | "lyx" => {

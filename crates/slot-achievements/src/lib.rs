@@ -29,8 +29,9 @@ const COVERAGE_SIZE: usize = 0x40000;
 pub fn supported_console(console: u32) -> bool {
     // Mega Drive, SNES, GB, GBA, GBC, NES, then the 3.0 systems: Master
     // System 11, Lynx 13, Neo Geo Pocket 14, Game Gear 15, Pokemon mini 24,
-    // WonderSwan 53.
-    matches!(console, 1 | 3 | 4..=7 | 11 | 13 | 14 | 15 | 24 | 53)
+    // WonderSwan 53, then 3.2's: PC Engine 8, Arcade 27 (Neo Geo sets on
+    // FinalBurn Neo).
+    matches!(console, 1 | 3 | 4..=8 | 11 | 13 | 14 | 15 | 24 | 27 | 53)
 }
 
 /// Whether a ROM run as `rom` can play `game`'s set: the same console, or a
