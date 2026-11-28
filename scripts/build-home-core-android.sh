@@ -23,14 +23,14 @@ LIBNAME=retro
 PREBUILD=""
 # name | upstream repository | pinned commit | jni folder | licence file
 case "$CORE" in
-  fceumm)          REPO=libretro-fceumm;  PIN=ac0d00a7fc01166f84c7bac01d1084ebfd2b865e; JNI=jni;                         LICENCE=Copying ;;
+  fceumm)          REPO=libretro-fceumm;  PIN=fb919fb6fa881aaa6279b765d480220579e5c606; JNI=jni;                         LICENCE=Copying ;;
   nestopia)        REPO=nestopia;         PIN=f1e02d12664834536edbf7352995a3d0cd1caef4; JNI=libretro/jni;                LICENCE=COPYING ;;
   snes9x)          REPO=snes9x;           PIN=204ea1c0b851f960cbf223075eb1c25641cb483c; JNI=libretro/jni;                LICENCE=LICENSE ;;
   bsnes)           REPO=bsnes;            PIN=63ee22f7af8f5d1ada295c2c98fd7bf261fa62a7; JNI=bsnes/target-libretro/jni;  LICENCE=LICENSE.txt ;;
   genesis_plus_gx) REPO=Genesis-Plus-GX;  PIN=b9c2316441978d4015ba30e9a95d9b0e6f8ee981; JNI=libretro/jni;                LICENCE=LICENSE.txt ;;
   picodrive)       REPO=picodrive;        PIN=1890c2932234c9d30f4cd3851d02228baae8f09e; JNI=jni;                         LICENCE=COPYING; SUBMODULES=1 ;;
-  # Gearsystem 3.9.25+ (2026-11-18), from its author's repository.
-  gearsystem)      REPO=Gearsystem;       PIN=4b3b1b266e536848ab23b8733f783ae17f0126a6; JNI=platforms/libretro/jni;      LICENCE=LICENSE; OWNER=drhelius ;;
+  # Gearsystem 3.9.26+ (2026-11-28), from its author's repository.
+  gearsystem)      REPO=Gearsystem;       PIN=bcf7408f1b6872016d1492536ec9c9cab7ce7b10; JNI=platforms/libretro/jni;      LICENCE=LICENSE; OWNER=drhelius ;;
   # Beetle NeoPop (2026-06-14), RACE (2026-11-16), Beetle Cygne (2026-07-31).
   mednafen_ngp)    REPO=beetle-ngp-libretro;   PIN=a50d5ac288a81f2104ddf43195a4efdd15c72227; JNI=jni;          LICENCE=COPYING ;;
   race)            REPO=RACE;                  PIN=c660d9ab5aafb47aefff90182ca90d319ad9b077; JNI=jni;          LICENCE=license.txt ;;
