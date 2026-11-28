@@ -511,6 +511,44 @@ pub(crate) fn neogeo_system(choice: u8, aes_zip: bool) -> &'static str {
     }
 }
 
+/// Geolith's region (geolith_region) for Settings > Systems > Neo Geo >
+/// Region (0 Europe, 1 USA, 2 Japan).
+pub(crate) fn geolith_region(region: u8) -> &'static str {
+    match region { 1 => "us", 2 => "jp", _ => "eu" }
+}
+
+/// Whether a BIOS archive holds the AES's own BIOS for a region (neo-po.bin
+/// in Japan, neo-epo.bin elsewhere) and the 000-lo.lo every BIOS needs, as
+/// FinalBurn Neo's neogeo.zip does. A ZIP keeps its file names in plain
+/// text in its directory.
+pub(crate) fn holds_aes_bios(zip: &[u8], japan: bool) -> bool {
+    let has = |name: &[u8]| zip.windows(name.len()).any(|w| w.eq_ignore_ascii_case(name));
+    has(b"000-lo.lo") && has(if japan { b"neo-po.bin" } else { b"neo-epo.bin" })
+}
+
+/// The system folder handed to Geolith: links to the BIOS folder's
+/// neogeo.zip and aes.zip, aes.zip being neogeo.zip itself when only that
+/// one is there and it holds the AES BIOS (Siham's: Geolith starts on the
+/// AES and found no aes.zip, 2026-11-28). Returns it and whether it has an
+/// AES BIOS.
+fn geolith_system_dir(storage: &Path, bios: &Path, japan: bool) -> std::io::Result<(PathBuf, bool)> {
+    let dir = storage.join("CoreLinks").join("geolith-system");
+    std::fs::create_dir_all(&dir)?;
+    let neogeo = bios.join("neogeo.zip");
+    let own_aes = bios.join("aes.zip");
+    let aes_from = if own_aes.is_file() { Some(own_aes) }
+        else if std::fs::read(&neogeo).is_ok_and(|zip| holds_aes_bios(&zip, japan)) { Some(neogeo.clone()) }
+        else { None };
+    for (name, target) in [("neogeo.zip", neogeo.is_file().then_some(neogeo.clone())), ("aes.zip", aes_from.clone())] {
+        let link = dir.join(name);
+        let _ = std::fs::remove_file(&link);
+        if let Some(target) = target {
+            std::os::unix::fs::symlink(std::fs::canonicalize(&target)?, &link)?;
+        }
+    }
+    Ok((dir, aes_from.is_some()))
+}
+
 /// The save directory handed to FinalBurn Neo: a folder whose "fbneo" is
 /// a link to the core's own Saves folder (outside Saves, so nothing that
 /// copies saves walks it twice).
@@ -776,15 +814,26 @@ impl GameSession {
         std::fs::create_dir_all(&bios).map_err(|e| e.to_string())?;
         // Both Neo Geo cores need a BIOS: neogeo.zip (Geolith's AES can do
         // with aes.zip alone). Say which, rather than "the core refused".
+        // Geolith reads its system and region in retro_init, before the
+        // options below are set: they go with the core's opening, and its
+        // AES BIOS may be neogeo.zip's own.
+        let extras = crate::settings::CoreExtras::current();
+        let (system_dir, geolith_aes) = if which == Core::Geolith {
+            geolith_system_dir(storage, &bios, extras.neogeo_region == 2)
+                .map_err(|e| format!("Cannot prepare the Neo Geo BIOS: {e}"))?
+        } else { (bios.clone(), false) };
         if platform == Platform::NeoGeo && !bios.join("neogeo.zip").is_file()
-            && !(which == Core::Geolith && neogeo_system(crate::settings::CoreExtras::current().neogeo_bios,
-                bios.join("aes.zip").is_file()) == "aes") {
+            && !(which == Core::Geolith && neogeo_system(extras.neogeo_bios, geolith_aes) == "aes") {
             return Err("Neo Geo needs neogeo.zip (BIOS folder or next to the games)".into());
         }
         // Gambatte decides on the boot ROM in retro_init, before the
         // options below are set.
         let init_options = match which {
             Core::Gambatte => vec![("gambatte_gb_bootloader".to_string(), "enabled".to_string())],
+            Core::Geolith => vec![
+                ("geolith_system_type".to_string(), neogeo_system(extras.neogeo_bios, geolith_aes).to_string()),
+                ("geolith_region".to_string(), geolith_region(extras.neogeo_region).to_string()),
+            ],
             _ => Vec::new(),
         };
         // FinalBurn Neo keeps a game's NVRAM (<set>.fs) and memory card
@@ -794,7 +843,7 @@ impl GameSession {
         let save_dir = if which == Core::FbNeo && linked_boot.is_none() {
             fbneo_save_dir(storage, &core_root).unwrap_or_else(|_| core_root.clone())
         } else { core_root.clone() };
-        let mut core = LibretroCore::open_with_options(core_file, &bios, &save_dir, &init_options)
+        let mut core = LibretroCore::open_with_options(core_file, &system_dir, &save_dir, &init_options)
             .map_err(|e| e.to_string())?;
         // Home consoles hand over frames of varying size (SNES hi-res, MD
         // H32/H40): keep each as it is instead of the GBA canvas.
@@ -979,9 +1028,8 @@ impl GameSession {
             // Geolith reads aes.zip for the AES, neogeo.zip for the MVS and
             // the Universe BIOS; AES without aes.zip starts on the MVS.
             Core::Geolith => {
-                let system = neogeo_system(crate::settings::CoreExtras::current().neogeo_bios,
-                    bios.join("aes.zip").is_file());
-                core.set_option("geolith_system_type", system);
+                core.set_option("geolith_system_type", neogeo_system(extras.neogeo_bios, geolith_aes));
+                core.set_option("geolith_region", geolith_region(extras.neogeo_region));
             }
             // 224 lines, as the SNES and the NES with their overscan hidden
             // (Siham 2026-11-27).
@@ -3210,7 +3258,44 @@ mod neogeo_bios_tests {
         let _ = std::fs::remove_dir_all(&storage);
     }
 
+    #[test]
+    fn geolith_takes_the_aes_bios_from_neogeo_zip() {
+        let storage = std::env::temp_dir().join(format!("slot-geolith-sys-{}", std::process::id()));
+        let bios = storage.join("BIOS");
+        std::fs::create_dir_all(&bios).unwrap();
+        std::fs::write(bios.join("neogeo.zip"), b"PK..neo-epo.bin..000-lo.lo..").unwrap();
+        let (dir, aes) = super::geolith_system_dir(&storage, &bios, false).unwrap();
+        assert!(aes);
+        assert_eq!(std::fs::read(dir.join("aes.zip")).unwrap(), b"PK..neo-epo.bin..000-lo.lo..");
+        assert!(dir.join("neogeo.zip").is_file());
+        // The player's own aes.zip wins.
+        std::fs::write(bios.join("aes.zip"), b"own").unwrap();
+        let (dir, aes) = super::geolith_system_dir(&storage, &bios, true).unwrap();
+        assert!(aes);
+        assert_eq!(std::fs::read(dir.join("aes.zip")).unwrap(), b"own");
+        // An MVS-only neogeo.zip gives no AES.
+        std::fs::remove_file(bios.join("aes.zip")).unwrap();
+        std::fs::write(bios.join("neogeo.zip"), b"PK..sp-s2.sp1..000-lo.lo..").unwrap();
+        let (dir, aes) = super::geolith_system_dir(&storage, &bios, false).unwrap();
+        assert!(!aes);
+        assert!(!dir.join("aes.zip").exists());
+        let _ = std::fs::remove_dir_all(&storage);
+    }
+
     use super::neogeo_system;
+
+    #[test]
+    fn finalburn_neo_s_neogeo_zip_holds_the_aes_bios() {
+        // Names as a ZIP's directory keeps them.
+        let fbneo = b"PK\x01\x02....sp-s2.sp1....neo-epo.bin....neo-po.bin....000-lo.lo....sfix.sfix";
+        assert!(super::holds_aes_bios(fbneo, false));
+        assert!(super::holds_aes_bios(fbneo, true));
+        let mvs_only = b"PK\x01\x02....sp-s2.sp1....000-lo.lo....sfix.sfix";
+        assert!(!super::holds_aes_bios(mvs_only, false));
+        assert!(!super::holds_aes_bios(b"PK....NEO-EPO.BIN", false));
+        assert_eq!(super::geolith_region(2), "jp");
+        assert_eq!(super::geolith_region(0), "eu");
+    }
 
     #[test]
     fn geolith_starts_the_aes_only_with_aes_zip() {

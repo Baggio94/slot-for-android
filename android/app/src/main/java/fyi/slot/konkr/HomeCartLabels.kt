@@ -639,9 +639,15 @@ internal object HomeCartLabels {
             }
         }
 
+    /** The set the art knows: the file's set ("Title (set).neo" too), else
+     *  its parent in FinalBurn Neo's dat, else a parent by name. */
     private fun neoGeoKey(context: Context, rom: Rom): String {
-        val stem = (rom.filename.ifBlank { rom.title }).substringBeforeLast('.')
-        return SlotArtSet.neoGeoSet(context, stem) ?: stem.lowercase(Locale.ROOT)
+        val set = NeoGeoSets.setOf(context, rom.filename.ifBlank { rom.title })
+        if (SlotArtSet.neoGeoSet(context, set) == set) return set
+        NeoGeoSets.parentOf(context, set)?.let { parent ->
+            SlotArtSet.neoGeoSet(context, parent)?.let { return it }
+        }
+        return SlotArtSet.neoGeoSet(context, set) ?: set
     }
 
     private fun prefetch(context: Context, roms: List<Rom>,

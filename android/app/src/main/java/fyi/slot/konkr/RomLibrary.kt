@@ -42,7 +42,8 @@ internal object RomLibrary {
         val gbJapan: Boolean = false, val gbCgbFlag: Int = -1,
         val homeTitle: String = "", val homeRegion: String = "",
         val homeBattery: Boolean = false, val homeMaker: String = "",
-        val displayTitle: String = ""
+        val displayTitle: String = "",
+        val neoSet: String = ""
     )
     internal fun equivalentEntries(left: List<IndexEntry>, right: List<IndexEntry>): Boolean {
         if (left.size != right.size) return false
@@ -63,7 +64,7 @@ internal object RomLibrary {
                 obj.optBoolean("gb_japan"), obj.optInt("gb_cgb_flag", -1),
                 obj.optString("home_title"), obj.optString("home_region"),
                 obj.optBoolean("home_battery"), obj.optString("home_maker"),
-                obj.optString("display_title"))
+                obj.optString("display_title"), obj.optString("neo_set"))
         }
     }
     internal fun sameIndex(before: String, after: String): Boolean =
@@ -426,6 +427,8 @@ internal object RomLibrary {
         // Neo needs it): "Metal Slug" for mslug.zip.
         if (platform == Systems.NEOGEO) {
             NeoGeoSets.title(context, name).takeIf { it.isNotEmpty() }?.let { game.put("display_title", it) }
+            // The set pairs a .zip and a .neo of one game in one cart.
+            game.put("neo_set", NeoGeoSets.setOf(context, name))
         }
         if (home) {
             // The home console shells, labels and battery read

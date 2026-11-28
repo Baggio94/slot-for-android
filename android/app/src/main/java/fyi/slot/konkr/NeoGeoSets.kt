@@ -28,15 +28,29 @@ internal object NeoGeoSets {
         } catch (_: Exception) { emptyMap() }.also { sets = it }
     }
 
-    /** The set a file names: its name without the extension, lower case. */
-    internal fun setOf(filename: String): String =
-        filename.substringBeforeLast('.').trim().lowercase(Locale.ROOT)
+    private val TRAILING_SET = Regex("""\(([a-z0-9_]+)\)\s*$""")
 
-    fun isSet(context: Context, filename: String): Boolean = setOf(filename) in all(context)
+    /** The set a file names: its name without the extension, lower case;
+     *  or, when that is no set, the known set it ends with in brackets:
+     *  "Stakes Winner 2 (stakwin2).neo" (Siham 2026-11-28). */
+    internal fun setIn(sets: Map<String, Entry>, filename: String): String {
+        val stem = filename.substringAfterLast('/').substringBeforeLast('.').trim().lowercase(Locale.ROOT)
+        if (stem in sets) return stem
+        val named = TRAILING_SET.find(stem)?.groupValues?.get(1)
+        return if (named != null && named in sets) named else stem
+    }
+
+    fun setOf(context: Context, filename: String): String = setIn(all(context), filename)
+
+    fun isSet(context: Context, filename: String): Boolean = setOf(context, filename) in all(context)
+
+    /** The set's parent in the dat (a clone's original), or null. */
+    fun parentOf(context: Context, set: String): String? =
+        all(context)[set]?.parent?.takeIf { it.isNotBlank() && it != set }
 
     /** The shelf name of a Neo Geo set's file, or "" when the dat has none. */
     fun title(context: Context, filename: String): String =
-        all(context)[setOf(filename)]?.title?.let(::shelfTitle).orEmpty()
+        all(context)[setOf(context, filename)]?.title?.let(::shelfTitle).orEmpty()
 
     /** "Samurai Shodown / Samurai Spirits (NGM-045)": its first name. */
     internal fun shelfTitle(title: String): String =

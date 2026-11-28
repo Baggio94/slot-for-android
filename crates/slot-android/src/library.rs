@@ -56,17 +56,26 @@ pub struct RomEntry {
     /// the .neo's address, which Geolith plays (pair_neo_geo_twins).
     #[serde(default)]
     pub twin_uri: String,
+    /// A Neo Geo file's set, read by the scan from its name: "stakwin2" for
+    /// "Stakes Winner 2 (stakwin2).neo" too (NeoGeoSets.setOf).
+    #[serde(default)]
+    pub neo_set: String,
 }
 
 /// A Neo Geo game both as a .zip set and as a .neo is one cart, its .zip's
 /// (FinalBurn Neo by default, Geolith on its .neo by SELECT: Siham
 /// 2026-11-28). The .neo leaves the list and its address goes with the
-/// .zip's entry. Games are paired by file name, wherever their folders.
+/// .zip's entry. Games are paired by their set (the scan's neo_set, else the
+/// file name), wherever their folders.
 pub fn pair_neo_geo_twins(entries: &mut Vec<RomEntry>) {
     use std::collections::HashMap;
     let ext_of = |entry: &RomEntry| {
         let name = if entry.filename.trim().is_empty() { file_name_of(&entry.uri) } else { entry.filename.clone() };
-        name.rsplit_once('.').map(|(stem, ext)| (stem.trim().to_lowercase(), ext.to_ascii_lowercase()))
+        name.rsplit_once('.').map(|(stem, ext)| {
+            let set = entry.neo_set.trim();
+            let key = if set.is_empty() { stem.trim().to_lowercase() } else { set.to_lowercase() };
+            (key, ext.to_ascii_lowercase())
+        })
     };
     let mut zips: HashMap<String, usize> = HashMap::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -268,7 +277,7 @@ pub fn remote_shell(platform: Platform, title: &str, gb: Option<RemoteGbHeader>)
         title: title.to_owned(), platform: String::new(), uri: String::new(), code: String::new(),
         color_only: gb.cgb_flag == Some(0xc0), shell_override: None, gb_title: gb.title,
         gb_code: gb.code, gb_japan: gb.japan, gb_cgb_flag: gb.cgb_flag, home_title: String::new(),
-        home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
+        home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), neo_set: String::new(), filename: String::new(),
     };
     auto_shell(&entry, platform)
 }
@@ -425,7 +434,7 @@ mod tests {
             code: String::new(), color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(), gb_japan: false, gb_cgb_flag: None,
             home_title: String::new(), home_region: String::new(), home_battery: false,
-            home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: filename.into(),
+            home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), neo_set: String::new(), filename: filename.into(),
         }
     }
 
@@ -450,6 +459,23 @@ mod tests {
         let neo_geo = &carts[Platform::NeoGeo as usize];
         let mslug = neo_geo.iter().find(|c| c.stem == "mslug.zip").unwrap();
         assert_eq!(slot_ui::label_text(mslug), "Metal Slug Super Vehicle-001");
+    }
+
+    #[test]
+    fn a_neo_named_after_its_title_pairs_by_its_set() {
+        // Siham's .neo files: "Spin Master (spinmast).neo" beside spinmast.zip.
+        let mut entries = vec![
+            named("NEOGEO", "spinmast.zip", "content://t/document/arcade%2Fspinmast.zip"),
+            named("NEOGEO", "Spin Master (spinmast).neo", "content://t/document/neogeo%2Fspin.neo"),
+            named("NEOGEO", "Stakes Winner 2 (stakwin2).neo", "content://t/document/neogeo%2Fstak.neo"),
+        ];
+        entries[0].neo_set = "spinmast".into();
+        entries[1].neo_set = "spinmast".into();
+        entries[2].neo_set = "stakwin2".into();
+        pair_neo_geo_twins(&mut entries);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].twin_uri, "content://t/document/neogeo%2Fspin.neo");
+        assert!(entries[1].twin_uri.is_empty());
     }
 
     #[test]
@@ -531,7 +557,7 @@ mod tests {
             code: String::new(), color_only: false, shell_override: Some("old".into()),
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), neo_set: String::new(), filename: String::new(),
         };
         let mut entries = vec![entry("content://roms/studio-test"), entry("content://roms/other")];
         keep_saved_shells(&mut entries);
@@ -546,7 +572,7 @@ mod tests {
             code: String::new(), color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), neo_set: String::new(), filename: String::new(),
         };
         let grouped = carts_by_platform(&[
             example("GBA", "Zelda", "content://roms/z"),
@@ -568,7 +594,7 @@ mod tests {
             color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), neo_set: String::new(), filename: String::new(),
         };
         let grouped = carts_by_platform(&[
             entry("GBA", "gba"), entry("GB", "gb"), entry("GBC", "gbc"),
@@ -604,7 +630,7 @@ mod tests {
                 color_only: flag == 0xc0, shell_override: None,
                 gb_title: title.into(), gb_code: code.into(),
                 gb_japan: false, gb_cgb_flag: Some(flag),
-                home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
+                home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), neo_set: String::new(), filename: String::new(),
             }
         };
         let mut manual = entry("GB", "Manual", "POKEMON RED", "", 0);
