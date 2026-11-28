@@ -689,9 +689,8 @@ mod tests {
             }
             let mut view = globals.clone();
             profile.apply_visual_and_gameplay(&mut view, platform);
-            // Right from OFF: crt-royale's +1 (code 11); Curvature, with no
-            // crt-royale side yet, round to GDV's -10 (code 10).
-            assert_eq!((view.crt_look(platform, false), view.crt_look(platform, true)), (11, 10));
+            // Right from OFF: crt-royale's +1 (code 11), on both lines.
+            assert_eq!((view.crt_look(platform, false), view.crt_look(platform, true)), (11, 11));
             assert_eq!(globals.crt_look(platform, false), 0);
         }
         for (platform, shader, bezel, blending) in [

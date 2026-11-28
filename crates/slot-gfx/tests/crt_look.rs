@@ -48,7 +48,8 @@ fn vignette_and_curvature_darken_and_bend_every_home_shader() {
         let plain = shot(&mut gpu, 0.0, 0.0);
         let dark = shot(&mut gpu, -1.0, 0.0);
         let border = shot(&mut gpu, 1.0, 0.0);
-        let bent = shot(&mut gpu, 0.0, 1.0);
+        let bent = shot(&mut gpu, 0.0, -1.0);
+        let sphere = shot(&mut gpu, 0.0, 0.5);
         // Vignette (GDV, below 0): the picture's edge darker, its centre as
         // it was.
         assert!(rows(&dark, x0 + 2) * 2 < rows(&plain, x0 + 2), "{effect:?}: vignette edge");
@@ -61,6 +62,9 @@ fn vignette_and_curvature_darken_and_bend_every_home_shader() {
         // Curvature: the picture's corner falls outside the tube (black).
         let corner = luma(&bent, x0 + 1, 1);
         assert!(corner < 10, "{effect:?}: curved corner {corner}");
+        // crt-royale's sphere (above 0) curves it too.
+        let corner = luma(&sphere, x0 + 1, 1);
+        assert!(corner < 10, "{effect:?}: sphere corner {corner}");
         // Geom Deluxe rounds its own corners.
         assert!(effect == ScreenEffect::CrtGeomDeluxe || luma(&plain, x0 + 1, 1) > 100, "{effect:?}: flat corner");
         // Outside the picture: black either way.

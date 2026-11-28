@@ -6584,9 +6584,10 @@ impl Engine {
             let (view, platform) = (self.game_settings(), self.current_cart_platform());
             (view.crt_look(platform, false), view.crt_look(platform, true))
         };
-        // The line's level: below 0 GDV Mini Ultra's, above crt-royale's.
+        // The line's level: Vignette below 0 GDV Mini Ultra's, Curvature
+        // crt-pi's barrel; above 0 crt-royale's (+5 its own look).
         let (vignette, curvature) = (crate::settings::crt_level(crt.0), crate::settings::crt_level(crt.1));
-        self.gpu.set_crt(f32::from(vignette) / 10.0, f32::from(curvature.min(0).unsigned_abs()) / 10.0);
+        self.gpu.set_crt(f32::from(vignette) / 10.0, f32::from(curvature) / 10.0);
         let sunlight = lcd == crate::settings::LcdEffect::Sunlight && self.game.is_some();
         if sunlight != self.tilt_on {
             self.tilt_on = sunlight;

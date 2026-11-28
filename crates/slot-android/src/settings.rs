@@ -1781,7 +1781,7 @@ impl Settings {
             PCE_PAD_KEY => self.pce_six_buttons = !self.pce_six_buttons,
             VIGNETTE_NES_KEY..=CURVATURE_PCE_KEY => {
                 let Some((platform, curve)) = Self::crt_platform(key) else { return false };
-                let next = step_crt_level(crt_level(self.crt_look(platform, curve)), curve, right);
+                let next = step_crt_level(crt_level(self.crt_look(platform, curve)), right);
                 self.set_crt_look(platform, curve, crt_code(next));
             }
             3 => step_palette(&mut self.gb_palettes, &mut self.gb_palette, right),
@@ -2093,13 +2093,13 @@ pub fn crt_code(level: i8) -> u8 {
     }
 }
 
-/// One step along the line, round: Curvature has no crt-royale side yet.
-fn step_crt_level(level: i8, curve: bool, right: bool) -> i8 {
-    let top = if curve { 0 } else { 10 };
-    let level = level.clamp(-10, top);
+/// One step along the line, round: -10 .. OFF .. +10, Vignette and
+/// Curvature alike (Curvature's crt-royale side, 3.2.0).
+fn step_crt_level(level: i8, right: bool) -> i8 {
+    let level = level.clamp(-10, 10);
     match (right, level) {
-        (true, l) if l >= top => -10,
-        (false, -10) => top,
+        (true, 10) => -10,
+        (false, -10) => 10,
         (true, l) => l + 1,
         (false, l) => l - 1,
     }
@@ -2221,8 +2221,8 @@ mod tests {
         assert_eq!(fbneo_neogeo_mode(1, 1, true), "AES_EUR");
         assert_eq!(fbneo_neogeo_mode(2, 2, true), "MVS_JAP");
         assert_eq!(fbneo_neogeo_mode(3, 1, true), "UNIBIOS");
-        // Vignette: one line, -10 (GDV) .. OFF .. +10 (crt-royale), round;
-        // Curvature: -10 .. OFF for now. Per system.
+        // Vignette and Curvature: one line each, -10 (GDV / crt-pi) .. OFF ..
+        // +10 (crt-royale), round. Per system.
         for platform in CRT_PLATFORMS {
             for curve in [false, true] {
                 let key = Settings::crt_key(platform, curve).unwrap();
@@ -2232,18 +2232,13 @@ mod tests {
                 assert!(s.change(key, false) && level(&s) == -1);
                 assert_eq!(s.crt_look(platform, curve), 1, "GDV keeps its pre-3.2 code");
                 assert!(s.change(key, true) && level(&s) == 0);
-                if curve {
-                    assert!(s.change(key, true) && level(&s) == -10);
-                    assert!(s.change(key, false) && level(&s) == 0);
-                } else {
-                    assert!(s.change(key, true) && level(&s) == 1);
-                    assert_eq!(s.crt_look(platform, curve), 11);
-                    for _ in 0..9 { s.change(key, true); }
-                    assert_eq!(level(&s), 10);
-                    assert!(s.change(key, true) && level(&s) == -10);
-                    assert!(s.change(key, false) && level(&s) == 10);
-                    s.set_crt_look(platform, curve, 0);
-                }
+                assert!(s.change(key, true) && level(&s) == 1);
+                assert_eq!(s.crt_look(platform, curve), 11);
+                for _ in 0..9 { s.change(key, true); }
+                assert_eq!(level(&s), 10);
+                assert!(s.change(key, true) && level(&s) == -10);
+                assert!(s.change(key, false) && level(&s) == 10);
+                s.set_crt_look(platform, curve, 0);
             }
         }
         for code in 0..=20 { assert_eq!(crt_code(crt_level(code)), code); }
