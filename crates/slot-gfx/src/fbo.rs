@@ -288,6 +288,11 @@ impl Compositor {
         self.game.set_lcd_effect(lcd);
     }
 
+    /// Vignette and Curvature of a home console's picture, 0 to 1.
+    pub fn set_crt(&mut self, vignette: f32, curvature: f32) {
+        self.game.set_crt(vignette, curvature);
+    }
+
     /// Screen > Upscaler (GBA Video carts).
     pub fn set_upscaler(&mut self, upscaler: crate::Upscaler) {
         self.game.set_upscaler(upscaler);

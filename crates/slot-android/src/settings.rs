@@ -854,6 +854,21 @@ pub struct Settings {
     /// MVS), AES, MVS or Universe BIOS (Siham 2026-11-27).
     #[serde(default)]
     pub neogeo_bios: u8,
+    /// Settings > Systems > Neo Geo > Region: Europe (English, as before),
+    /// USA or Japan (Siham 2026-11-27).
+    #[serde(default)]
+    pub neogeo_region: u8,
+    /// Settings > Systems > PC Engine > Pad: the 6-button Avenue Pad 6
+    /// (III, IV, V, VI on Y, X, L1, R1) instead of the console's 2 buttons.
+    #[serde(default)]
+    pub pce_six_buttons: bool,
+    /// Vignette and Curvature of the home consoles' picture, in tens of
+    /// percent (0 off, 10 = 100%), one per CRT_PLATFORMS system, over every
+    /// shader (Siham 2026-11-27).
+    #[serde(default)]
+    pub crt_vignette: [u8; 6],
+    #[serde(default)]
+    pub crt_curvature: [u8; 6],
     /// Optional analogue audio colouring per system. Defaults match Libretro.
     #[serde(default)]
     pub nes_audio_filter: bool,
@@ -1015,7 +1030,8 @@ impl Default for Settings {
             no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
             ws_palette: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
             hide_left_bar_sms: false, hide_left_bar_nes: false, fm_off_sms: false, ws_language: 0,
-            pokemini_no_shake: false, neogeo_bios: 0,
+            pokemini_no_shake: false, neogeo_bios: 0, neogeo_region: 0, pce_six_buttons: false,
+            crt_vignette: [0; 6], crt_curvature: [0; 6],
             nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, side_bars_3_0: false,
@@ -1401,6 +1417,30 @@ impl Settings {
     /// The Shader row's key of a home console (47 NES, 48 SNES, 49 MD,
     /// 110 Master System, 111 Game Gear, 115 Neo Geo Pocket, 116 WonderSwan,
     /// 120 Lynx, 121 Pokemon mini).
+    /// A home console's Vignette (`curve` false) or Curvature row key.
+    pub fn crt_key(platform: slot_store::Platform, curve: bool) -> Option<usize> {
+        let at = CRT_PLATFORMS.iter().position(|p| *p == platform)?;
+        Some(if curve { CURVATURE_NES_KEY } else { VIGNETTE_NES_KEY } + at)
+    }
+    pub fn crt_platform(key: usize) -> Option<(slot_store::Platform, bool)> {
+        match key {
+            VIGNETTE_NES_KEY..=CURVATURE_PCE_KEY => {
+                let at = key - VIGNETTE_NES_KEY;
+                Some((CRT_PLATFORMS[at % 6], at >= 6))
+            }
+            _ => None,
+        }
+    }
+    /// Vignette or Curvature in tens of percent (0 off .. 10).
+    pub fn crt_look(&self, platform: slot_store::Platform, curve: bool) -> u8 {
+        let Some(at) = CRT_PLATFORMS.iter().position(|p| *p == platform) else { return 0 };
+        (if curve { self.crt_curvature[at] } else { self.crt_vignette[at] }).min(10)
+    }
+    pub fn set_crt_look(&mut self, platform: slot_store::Platform, curve: bool, value: u8) {
+        let Some(at) = CRT_PLATFORMS.iter().position(|p| *p == platform) else { return };
+        let value = value.min(10);
+        if curve { self.crt_curvature[at] = value } else { self.crt_vignette[at] = value }
+    }
     pub fn home_shader_key(platform:slot_store::Platform)->Option<usize> {
         match platform {
             slot_store::Platform::Nes=>Some(47),
@@ -1731,6 +1771,13 @@ impl Settings {
             SHADER_NEOGEO_KEY => self.shader_neogeo=self.shader_neogeo.step(&Shader::HOME,right),
             SHADER_PCE_KEY => self.shader_pce=self.shader_pce.step(&Shader::HOME,right),
             NEOGEO_BIOS_KEY => self.neogeo_bios = step_index(self.neogeo_bios, 4, right),
+            NEOGEO_REGION_KEY => self.neogeo_region = step_index(self.neogeo_region, 3, right),
+            PCE_PAD_KEY => self.pce_six_buttons = !self.pce_six_buttons,
+            VIGNETTE_NES_KEY..=CURVATURE_PCE_KEY => {
+                let Some((platform, curve)) = Self::crt_platform(key) else { return false };
+                let next = step_index(self.crt_look(platform, curve), 11, right);
+                self.set_crt_look(platform, curve, next);
+            }
             3 => step_palette(&mut self.gb_palettes, &mut self.gb_palette, right),
             4 => {
                 let at = SPEEDS.iter().position(|x| *x == self.ff_speed).unwrap_or(0);
@@ -1853,6 +1900,18 @@ pub const BLENDING_PCE_KEY: usize = 157;
 pub const BEZEL_NEOGEO_KEY: usize = 158;
 pub const BEZEL_PCE_KEY: usize = 159;
 pub const NEOGEO_BIOS_KEY: usize = 162;
+/// The Neo Geo's Region and the PC Engine's Pad (3.2.0).
+pub const NEOGEO_REGION_KEY: usize = 163;
+pub const PCE_PAD_KEY: usize = 164;
+/// Vignette of NES, SNES, Mega Drive, Master System, Neo Geo, PC Engine
+/// (CRT_PLATFORMS order), then their Curvature.
+pub const VIGNETTE_NES_KEY: usize = 165;
+pub const CURVATURE_NES_KEY: usize = 171;
+pub const CURVATURE_PCE_KEY: usize = 176;
+/// The home consoles whose picture takes Vignette and Curvature.
+pub const CRT_PLATFORMS: [slot_store::Platform; 6] = [slot_store::Platform::Nes,
+    slot_store::Platform::Snes, slot_store::Platform::Md, slot_store::Platform::Sms,
+    slot_store::Platform::NeoGeo, slot_store::Platform::Pce];
 
 /// Beetle Cygne's palettes for black-and-white WonderSwan games: its own
 /// grey first, then the three consoles' screens.
@@ -1886,13 +1945,16 @@ pub struct CoreExtras {
     pub md_fm_nuked: bool,
     pub ws_audio_filter: bool,
     pub neogeo_bios: u8,
+    pub neogeo_region: u8,
+    pub pce_six_buttons: bool,
 }
 pub static CORE_EXTRAS: std::sync::Mutex<CoreExtras> = std::sync::Mutex::new(CoreExtras {
     no_sprite_limit_sms: false, no_sprite_limit_gg: false, ngp_language: 0,
     ws_palette: 0, pokemini_filter: 0, pokemini_palette: 0, pokemini_lcd_mode: 0,
     hide_left_bar_sms: false, fm_off_sms: false, ws_language: 0, pokemini_no_shake: false,
     hide_left_bar_nes: false,
-    nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false, neogeo_bios: 0 });
+    nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false, neogeo_bios: 0,
+    neogeo_region: 0, pce_six_buttons: false });
 
 impl CoreExtras {
     pub fn of(s: &Settings) -> Self {
@@ -1904,7 +1966,8 @@ impl CoreExtras {
             hide_left_bar_nes: s.hide_left_bar_nes,
             nes_audio_filter: s.nes_audio_filter,
             md_fm_nuked: s.md_fm_nuked,
-            ws_audio_filter: s.ws_audio_filter, neogeo_bios: s.neogeo_bios }
+            ws_audio_filter: s.ws_audio_filter, neogeo_bios: s.neogeo_bios,
+            neogeo_region: s.neogeo_region, pce_six_buttons: s.pce_six_buttons }
     }
     pub fn store(s: &Settings) {
         POKEMINI_LCD_FILTER.store(s.pokemini_lcd_filter, std::sync::atomic::Ordering::Release);
@@ -1962,8 +2025,37 @@ impl CoreExtras {
                 ("pokemini_lcdmode", pick(&POKEMINI_LCD_MODES, self.pokemini_lcd_mode)),
                 ("pokemini_screen_shake_lv", if self.pokemini_no_shake { "0" } else { "3" }),
             ],
+            // The Neo Geo's Region: FinalBurn Neo's is its BIOS (game.rs).
+            (Platform::NeoGeo, Core::Geolith) =>
+                vec![("geolith_region", pick(&["eu", "us", "jp"], self.neogeo_region))],
+            (Platform::Pce, Core::BeetlePceFast) => {
+                let pad = if self.pce_six_buttons { "6 Buttons" } else { "2 Buttons" };
+                vec![("pce_fast_default_joypad_type_p1", pad), ("pce_fast_default_joypad_type_p2", pad)]
+            }
+            (Platform::Pce, Core::BeetlePce) => {
+                let pad = if self.pce_six_buttons { "6 Buttons" } else { "2 Buttons" };
+                vec![("pce_default_joypad_type_p1", pad), ("pce_default_joypad_type_p2", pad)]
+            }
             _ => Vec::new(),
         }
+    }
+}
+
+/// FinalBurn Neo's Neo-Geo mode for a BIOS choice (0 Auto, 1 AES, 2 MVS,
+/// 3 Universe BIOS) and Region (0 Europe, 1 USA, 2 Japan). FinalBurn Neo
+/// has no American AES BIOS: the AES in English is its Europe/Asia one.
+/// Auto without aes.zip keeps the set's own BIOS switch in Europe, as
+/// before, else the MVS of that region.
+pub fn fbneo_neogeo_mode(bios: u8, region: u8, aes: bool) -> &'static str {
+    let aes_mode = if region == 2 { "AES_JAP" } else { "AES_EUR" };
+    let mvs_mode = match region { 1 => "MVS_USA", 2 => "MVS_JAP", _ => "MVS_EUR" };
+    match bios {
+        0 if aes => aes_mode,
+        0 if region == 0 => "DIPSWITCH",
+        0 => mvs_mode,
+        1 => aes_mode,
+        2 => mvs_mode,
+        _ => "UNIBIOS",
     }
 }
 
@@ -2072,6 +2164,43 @@ mod device_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn neo_geo_region_pce_pad_vignette_and_curvature() {
+        use slot_store::{Core, Platform as P};
+        let mut s = Settings::default();
+        assert_eq!((s.neogeo_region, s.pce_six_buttons), (0, false));
+        assert!(s.change(NEOGEO_REGION_KEY, true) && s.neogeo_region == 1);
+        assert!(s.change(NEOGEO_REGION_KEY, true) && s.change(NEOGEO_REGION_KEY, true) && s.neogeo_region == 0);
+        assert!(s.change(PCE_PAD_KEY, true) && s.pce_six_buttons);
+        let extras = CoreExtras::of(&s);
+        assert_eq!(extras.options(P::Pce, Core::BeetlePceFast)[0], ("pce_fast_default_joypad_type_p1", "6 Buttons"));
+        assert_eq!(extras.options(P::Pce, Core::BeetlePce)[1], ("pce_default_joypad_type_p2", "6 Buttons"));
+        assert_eq!(extras.options(P::NeoGeo, Core::Geolith), vec![("geolith_region", "eu")]);
+        // FinalBurn Neo: its Region is its BIOS.
+        assert_eq!(fbneo_neogeo_mode(0, 0, false), "DIPSWITCH");
+        assert_eq!(fbneo_neogeo_mode(0, 1, false), "MVS_USA");
+        assert_eq!(fbneo_neogeo_mode(0, 2, true), "AES_JAP");
+        assert_eq!(fbneo_neogeo_mode(1, 1, true), "AES_EUR");
+        assert_eq!(fbneo_neogeo_mode(2, 2, true), "MVS_JAP");
+        assert_eq!(fbneo_neogeo_mode(3, 1, true), "UNIBIOS");
+        // Vignette and Curvature: OFF, 10% .. 100%, round, per system.
+        for platform in CRT_PLATFORMS {
+            for curve in [false, true] {
+                let key = Settings::crt_key(platform, curve).unwrap();
+                assert_eq!(Settings::crt_platform(key), Some((platform, curve)));
+                assert_eq!(s.crt_look(platform, curve), 0);
+                assert!(s.change(key, true) && s.crt_look(platform, curve) == 1);
+                assert!(s.change(key, false) && s.change(key, false) && s.crt_look(platform, curve) == 10);
+                assert!(s.change(key, true) && s.crt_look(platform, curve) == 0);
+            }
+        }
+        assert_eq!(Settings::crt_key(P::Gba, false), None);
+        s.set_crt_look(P::Snes, true, 3);
+        assert_eq!((s.crt_look(P::Snes, true), s.crt_look(P::Nes, true), s.crt_look(P::Snes, false)), (3, 0, 0));
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.crt_curvature, s.crt_curvature);
+    }
 
     #[test]
     fn watomsk_master_system_by_default_and_thin_3_2_overlays_start_off() {

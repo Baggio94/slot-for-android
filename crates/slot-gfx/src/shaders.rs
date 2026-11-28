@@ -228,6 +228,8 @@ uniform float u_paper_size;
 uniform vec4 u_rect;
 uniform vec2 u_fbo;
 uniform vec4 u_pic;
+uniform float u_vignette;  // home consoles: darker edges, 0 to 1
+uniform float u_curve;     // home consoles: a curved tube, 0 to 1
 varying vec2 v_uv;
 const vec3 offsets = vec3(3.141592654) * vec3(1.0 / 2.0, 1.0 / 2.0 - 2.0 / 3.0, 1.0 / 2.0 - 4.0 / 3.0);
 const vec3 luma_coeff = vec3(0.2126, 0.7152, 0.0722);
@@ -1157,8 +1159,32 @@ void main() {
     }
 }
 #else
+/* Curvature: davej crt-pi's barrel distortion (CURVATURE_X 0.10,
+   CURVATURE_Y 0.15 at 100%), over the picture's own rect (u_pic) so the
+   side bands never bend. */
+vec2 crt_curve(vec2 uv) {
+    vec2 size = u_pic.zw - u_pic.xy;
+    vec2 c = (uv - u_pic.xy) / size - vec2(0.5);
+    vec2 d = vec2(0.10, 0.15) * u_curve;
+    c += c * (d * dot(c, c));
+    c *= vec2(1.0) - 0.23 * d;
+    return u_pic.xy + (c + vec2(0.5)) * size;
+}
+/* Vignette: crt-guest-dr-venom's (vignette size 1.0), strength u_vignette,
+   the bands as wide on screen across as down. */
+float crt_vignette(vec2 uv) {
+    vec2 size = u_pic.zw - u_pic.xy;
+    vec2 shown = size / max(u_uv.zw, vec2(1e-5)) * u_rect.zw;
+    vec2 b = vec2(1.0, shown.x / max(shown.y, 1.0)) * 0.125;
+    vec2 pos = abs(2.0 * (clamp((uv - u_pic.xy) / size, 0.0, 1.0) - vec2(0.5)));
+    // GDV's smoothstep(1, 1 - b, x), with its edges in order for GLES.
+    vec2 res = vec2(1.0) - smoothstep(vec2(1.0) - b, vec2(1.0), sqrt(pos));
+    res = pow(res, vec2(0.30));
+    return max(mix(1.0, sqrt(res.x * res.y), u_vignette), 0.0);
+}
 void main() {
     vec2 uv = u_uv.xy + v_uv * u_uv.zw;
+    if (u_curve > 0.0) uv = crt_curve(uv);
     vec2 f = fract(uv * u_src);
     vec3 c;
     // The LCD shaders (LCD3x, Grid, Dot, Simpletex, zfast LCD, LCD1x,
@@ -1295,6 +1321,7 @@ void main() {
         c *= yfactor * xfactors;
     }
     if (inside) c = lcd_effect(c, uv);
+    if (inside && u_vignette > 0.0) c *= crt_vignette(uv);
     // Grid V2 + GBA already contains GBA Color. Never unintentionally
     // apply the global correction twice.
     if (u_colour_correct > 0.5 && inside &&

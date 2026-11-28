@@ -943,13 +943,9 @@ impl GameSession {
             // set's own DIP switch (MVS), as in RetroArch.
             Core::FbNeo => {
                 let aes = bios.join("aes.zip").is_file();
-                core.set_option("fbneo-neogeo-mode", match crate::settings::CoreExtras::current().neogeo_bios {
-                    0 if aes => "AES_EUR",
-                    1 => "AES_EUR",
-                    2 => "MVS_EUR",
-                    3 => "UNIBIOS",
-                    _ => "DIPSWITCH",
-                });
+                let extras = crate::settings::CoreExtras::current();
+                core.set_option("fbneo-neogeo-mode",
+                    crate::settings::fbneo_neogeo_mode(extras.neogeo_bios, extras.neogeo_region, aes));
             }
             // Geolith reads aes.zip for the AES, neogeo.zip for the MVS and
             // the Universe BIOS; AES without aes.zip starts on the MVS.

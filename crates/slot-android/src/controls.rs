@@ -584,10 +584,17 @@ const NEOGEO: [ConsoleButton; 10] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
 /// does: I from A, II from B, Run from START.
 const PCE: [ConsoleButton; 8] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
     cb("I", bit::A), cb("II", bit::B), cb("SELECT", bit::SELECT), cb("Run", bit::START)];
+/// The 6-button Avenue Pad 6 (Settings > Systems > PC Engine > Pad), as
+/// RetroArch reads it: III from Y, IV from X, V from L1, VI from R1.
+const PCE6: [ConsoleButton; 12] = [DPAD[0], DPAD[1], DPAD[2], DPAD[3],
+    cb("I", bit::A), cb("II", bit::B), cb("III", bit::Y), cb("IV", bit::X),
+    cb("V", bit::L), cb("VI", bit::R), cb("SELECT", bit::SELECT), cb("Run", bit::START)];
+/// The PC Engine's controls with the 6-button pad.
+pub const PCE6_SYSTEM: &str = "pce6";
 
 /// Systems, by the names slot. files their controls under.
-pub const SYSTEMS: [&str; 16] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv",
-    "lynx", "pokemini", "pico8", "neogeo", "pce"];
+pub const SYSTEMS: [&str; 17] = ["gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp", "ws", "wsv",
+    "lynx", "pokemini", "pico8", "neogeo", "pce", "pce6"];
 
 /// Controls of a WonderSwan game made to be held upright.
 pub const WS_UPRIGHT_SYSTEM: &str = "wsv";
@@ -607,6 +614,7 @@ pub fn console_buttons(system: &str) -> &'static [ConsoleButton] {
         "pico8" => &PICO8,
         "neogeo" => &NEOGEO,
         "pce" => &PCE,
+        "pce6" => &PCE6,
         _ => &TWO_BUTTONS,
     }
 }
@@ -625,7 +633,7 @@ pub fn role_label(system: &str, label: &'static str) -> &'static str {
 
 /// Only NES, SNES, Mega Drive, Master System, Neo Geo and PC Engine take a
 /// second player.
-pub fn takes_port2(system: &str) -> bool { matches!(system, "nes" | "snes" | "md" | "sms" | "neogeo" | "pce") }
+pub fn takes_port2(system: &str) -> bool { matches!(system, "nes" | "snes" | "md" | "sms" | "neogeo" | "pce" | "pce6") }
 
 /// What X and Y do on a console without them (Game Boys, NES).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1307,6 +1315,19 @@ mod tests {
         assert_eq!(resolved.apply(bit::Z, 0), bit::R, "Z");
         assert_eq!(slot_button_name(bit::C), "C");
         assert_eq!(slot_button_name(bit::Z), "Z");
+    }
+
+    #[test]
+    fn the_pc_engine_six_button_pad_plays_iii_to_vi_on_y_x_l_r() {
+        let controls = Controls::default();
+        let six = controls.resolve(PCE6_SYSTEM, None, 0, XyRole::TurboAB);
+        assert_eq!(six.xy, None, "X and Y are III and IV, not turbo");
+        assert_eq!(six.apply(bit::Y | bit::X | bit::L | bit::R, 0), bit::Y | bit::X | bit::L | bit::R);
+        assert!(takes_port2(PCE6_SYSTEM));
+        // The 2-button pad keeps X / Y as Turbo I / II.
+        let two = controls.resolve("pce", None, 0, XyRole::TurboAB);
+        assert_eq!(two.xy, Some(XyRole::TurboAB));
+        assert_eq!(two.apply(bit::X, 0), bit::A);
     }
 
     #[test]

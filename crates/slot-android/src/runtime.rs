@@ -624,7 +624,7 @@ enum ShelfOverlay {
     Romm,
 }
 
-const MENU_TEXT: [&str; 185] = [
+const MENU_TEXT: [&str; 189] = [
     "MENU",                             // 0
     "Library",                          // 1
     "Cart Studio",                      // 2
@@ -815,6 +815,10 @@ const MENU_TEXT: [&str; 185] = [
     "Neo Geo",                            // 182, Systems (3.2)
     "PC Engine",                          // 183
     "BIOS",                               // 184, Neo Geo: AES, MVS or Universe BIOS
+    "Region",                             // 185, Neo Geo: Europe, USA or Japan
+    "Pad",                                // 186, PC Engine: 2 or 6 buttons
+    "Vignette",                           // 187, home consoles: darker edges
+    "Curvature",                          // 188, home consoles: a curved tube
 ];
 
 /// Settings > Systems, top to bottom.
@@ -840,7 +844,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 212] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 217] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -917,6 +921,9 @@ const SETTING_VALUE_NAMES: [&str; 212] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                // WATOMSK_3_2_VALUES: Watomsk's Neo Geo,
                                // PC Engine and TurboGrafx-16 overlays.
                                "NEO GEO", "PC ENGINE", "TURBOGRAFX-16",
+                               // SPECIFIC_3_2_VALUES: the Neo Geo's Region, the PC
+                               // Engine's Pad.
+                               "EUROPE", "USA", "JAPAN", "2 BUTTONS", "6 BUTTONS",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -942,6 +949,8 @@ const NEOGEO_PCE_CORE_VALUES: usize = PICO8_CORE_VALUES + 2;
 const NEOGEO_BIOS_VALUES: usize = NEOGEO_PCE_CORE_VALUES + 4;
 /// Watomsk's Neo Geo, PC Engine and TurboGrafx-16 overlays' names.
 const WATOMSK_3_2_VALUES: usize = NEOGEO_BIOS_VALUES + 4;
+/// The Neo Geo's Region and the PC Engine's Pad in SETTING_VALUE_NAMES.
+const SPECIFIC_3_2_VALUES: usize = WATOMSK_3_2_VALUES + 3;
 
 /// A PokeDaisy view's value face.
 /// A game's screen settings, read before its screen goes on.
@@ -1216,6 +1225,12 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         crate::settings::BEZEL_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY
         | crate::settings::BEZEL_NEOGEO_KEY | crate::settings::BEZEL_PCE_KEY =>
             bezel_value(scoped.bezel_for(Settings::bezel_platform(key)?)),
+        crate::settings::NEOGEO_REGION_KEY => SPECIFIC_3_2_VALUES + usize::from(scoped.neogeo_region.min(2)),
+        crate::settings::PCE_PAD_KEY => SPECIFIC_3_2_VALUES + 3 + usize::from(scoped.pce_six_buttons),
+        crate::settings::VIGNETTE_NES_KEY..=crate::settings::CURVATURE_PCE_KEY => {
+            let (platform, curve) = Settings::crt_platform(key)?;
+            percent_value(scoped.crt_look(platform, curve) * 10)
+        }
         crate::settings::POKEMINI_FILTER_KEY => match scoped.pokemini_lcd_filter {
             1 => 149, 2 => 17, _ => 105,
         },
@@ -6504,6 +6519,12 @@ impl Engine {
             crate::settings::LcdEffect::Off
         } else { self.game_lcd_effect(self.current_cart_platform()) };
         self.gpu.set_lcd_effect(lcd.gpu());
+        // A home console's Vignette and Curvature, over every shader.
+        let crt = if self.playing_video() || self.pokedaisy_running() { (0, 0) } else {
+            let (view, platform) = (self.game_settings(), self.current_cart_platform());
+            (view.crt_look(platform, false), view.crt_look(platform, true))
+        };
+        self.gpu.set_crt(f32::from(crt.0) / 10.0, f32::from(crt.1) / 10.0);
         let sunlight = lcd == crate::settings::LcdEffect::Sunlight && self.game.is_some();
         if sunlight != self.tilt_on {
             self.tilt_on = sunlight;
@@ -6854,6 +6875,11 @@ impl Engine {
     fn look_rows(platform: Platform) -> (Vec<usize>, Vec<usize>) {
         let mut rows = Vec::new();
         let mut keys = Vec::new();
+        // Vignette and Curvature, moved under Shader (crt_after_shader).
+        if let (Some(vignette), Some(curve)) = (Settings::crt_key(platform, false), Settings::crt_key(platform, true)) {
+            rows.extend([187, 188]);
+            keys.extend([vignette, curve]);
+        }
         if let Some(key) = Settings::look_key(platform) {
             rows.push(if platform == Platform::Md { 132 } else { 131 });
             keys.push(key);
@@ -6888,7 +6914,11 @@ impl Engine {
                 Platform::Md => { rows.push(169); keys.push(MD_FM_SOUND_KEY); }
                 Platform::Ngp => { rows.push(165); keys.push(NGP_LANGUAGE_KEY); }
                 // Read when the game starts (Siham 2026-11-27).
-                Platform::NeoGeo => { rows.push(184); keys.push(crate::settings::NEOGEO_BIOS_KEY); }
+                Platform::NeoGeo => {
+                    rows.push(184); keys.push(crate::settings::NEOGEO_BIOS_KEY);
+                    rows.push(185); keys.push(crate::settings::NEOGEO_REGION_KEY);
+                }
+                Platform::Pce => { rows.push(186); keys.push(crate::settings::PCE_PAD_KEY); }
                 Platform::Ws => {
                     rows.push(165); keys.push(WS_LANGUAGE_KEY);
                     rows.push(176); keys.push(WS_AUDIO_FILTER_KEY);
@@ -6917,6 +6947,7 @@ impl Engine {
         // games (Siham 2026-11-22).
         Self::palette_after_shader(&mut rows, &mut keys);
         Self::lcd_after_shader(platform, &mut rows, &mut keys);
+        Self::crt_after_shader(platform, &mut rows, &mut keys);
         Self::blending_before_shake(&mut rows, &mut keys);
         rows.push(125);
         keys.push(usize::MAX);
@@ -6964,6 +6995,7 @@ impl Engine {
             }
             Self::palette_after_shader(&mut rows, &mut keys);
             Self::lcd_after_shader(platform, &mut rows, &mut keys);
+            Self::crt_after_shader(platform, &mut rows, &mut keys);
             Self::blending_before_shake(&mut rows, &mut keys);
         }
         (rows, keys)
@@ -6998,6 +7030,21 @@ impl Engine {
     /// The new LCD handhelds put LCD Effect directly after Shader, before
     /// the optional bezel and (on WonderSwan) the palette. Keep the original
     /// Game Boy and Mega Drive layouts unchanged.
+    /// A home console's Vignette and Curvature straight under its Shader
+    /// (Siham 2026-11-27).
+    fn crt_after_shader(platform: Platform, rows: &mut Vec<usize>, keys: &mut Vec<usize>) {
+        let Some(shader) = Settings::home_shader_key(platform) else { return };
+        for curve in [false, true] {
+            let Some(key) = Settings::crt_key(platform, curve) else { return };
+            let Some(from) = keys.iter().position(|&k| k == key) else { continue };
+            let (row, key) = (rows.remove(from), keys.remove(from));
+            let Some(at) = keys.iter().position(|&k| k == shader) else {
+                rows.insert(from, row); keys.insert(from, key); continue
+            };
+            let to = at + 1 + usize::from(curve);
+            rows.insert(to.min(rows.len()), row); keys.insert(to.min(keys.len()), key);
+        }
+    }
     fn lcd_after_shader(platform: Platform, rows: &mut Vec<usize>, keys: &mut Vec<usize>) {
         let shader = match platform {
             Platform::Gg => SHADER_GG_KEY, Platform::Ngp => SHADER_NGP_KEY,
@@ -7389,7 +7436,8 @@ impl Engine {
         // never change input, save states, emulation speed or rewind in Link.
         if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70
             |crate::settings::SHADER_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY
-            |crate::settings::SHADER_NEOGEO_KEY..=crate::settings::BEZEL_PCE_KEY)
+            |crate::settings::SHADER_NEOGEO_KEY..=crate::settings::BEZEL_PCE_KEY
+            |crate::settings::VIGNETTE_NES_KEY..=crate::settings::CURVATURE_PCE_KEY)
             && Settings::lcd_effect_platform(key) != Some(platform)) {
             set_message("Not available during Multiplayer.".into());
             return;
@@ -7433,7 +7481,8 @@ impl Engine {
             crate::settings::SHADER_SMS_KEY|crate::settings::SHADER_GG_KEY
             |crate::settings::SHADER_NGP_KEY|crate::settings::SHADER_WS_KEY
             |crate::settings::SHADER_LYNX_KEY|crate::settings::SHADER_POKEMINI_KEY
-            |crate::settings::SHADER_PICO8_KEY|SHADER_NEOGEO_KEY|SHADER_PCE_KEY) {
+            |crate::settings::SHADER_PICO8_KEY|SHADER_NEOGEO_KEY|SHADER_PCE_KEY)
+            || Settings::crt_platform(key).is_some() {
             self.apply_game_look();
         }
         // A shader change can switch to/from a preset with its own GBA Color.
@@ -12091,6 +12140,27 @@ mod settings_value_tests {
     fn face(settings: &Settings, key: usize, cart: Platform, video: VideoMode) -> Option<usize> {
         setting_face(key, settings, settings, &EmulationProfile::from_settings(settings),
             cart, video, &Platform::ALL.map(Core::default_for))
+    }
+
+    #[test]
+    fn home_consoles_show_vignette_and_curvature_under_their_shader() {
+        for platform in crate::settings::CRT_PLATFORMS {
+            let (rows, keys) = Engine::system_page(platform);
+            let shader = keys.iter().position(|&k| Some(k) == Settings::home_shader_key(platform)).unwrap();
+            assert_eq!(&rows[shader + 1..shader + 3], &[187, 188], "{platform:?}: {rows:?}");
+            assert_eq!(keys[shader + 1], Settings::crt_key(platform, false).unwrap());
+            assert_eq!(keys[shader + 2], Settings::crt_key(platform, true).unwrap());
+        }
+        let (rows, _) = Engine::system_page(Platform::Gba);
+        assert!(!rows.contains(&187) && !rows.contains(&188));
+        let (rows, keys) = Engine::system_page(Platform::NeoGeo);
+        assert!(rows.contains(&185) && keys.contains(&crate::settings::NEOGEO_REGION_KEY));
+        let (rows, keys) = Engine::system_page(Platform::Pce);
+        assert!(rows.contains(&186) && keys.contains(&crate::settings::PCE_PAD_KEY));
+        let s = Settings::default();
+        assert_eq!(SETTING_VALUE_NAMES[face(&s, crate::settings::NEOGEO_REGION_KEY, Platform::NeoGeo, VideoMode::Aspect).unwrap()], "EUROPE");
+        assert_eq!(SETTING_VALUE_NAMES[face(&s, crate::settings::PCE_PAD_KEY, Platform::Pce, VideoMode::Aspect).unwrap()], "2 BUTTONS");
+        assert_eq!(SETTING_VALUE_NAMES[face(&s, crate::settings::VIGNETTE_NES_KEY, Platform::Nes, VideoMode::Aspect).unwrap()], "OFF");
     }
 
     #[test]

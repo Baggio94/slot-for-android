@@ -53,6 +53,12 @@ pub struct EmulationProfile {
     pub pokemini_filter_override: Option<u8>,
     pub pokemini_lcd_mode_override: Option<u8>,
     pub pokemini_shake_override: Option<bool>,
+    /// A home console game's Vignette and Curvature (tens of percent),
+    /// changed in game (Siham 2026-11-27).
+    #[serde(default)]
+    pub vignette_override: Option<u8>,
+    #[serde(default)]
+    pub curvature_override: Option<u8>,
 }
 
 pub const MOTION_MIN: u8 = 1;
@@ -149,7 +155,8 @@ impl EmulationProfile {
             upscaler_override: None,
             sprite_limit_override: None, left_bar_override: None, ws_palette_override: None,
             pokemini_palette_override: None, pokemini_filter_override: None,
-            pokemini_lcd_mode_override: None, pokemini_shake_override: None }
+            pokemini_lcd_mode_override: None, pokemini_shake_override: None,
+            vignette_override: None, curvature_override: None }
     }
     /// Materialise the *current* game's per-ROM settings without mutating
     /// Settings.json or any other game's configured defaults.
@@ -200,6 +207,8 @@ impl EmulationProfile {
         if platform==Platform::Ws {
             if let Some(value)=self.ws_palette_override { settings.ws_palette=value; }
         }
+        if let Some(value)=self.vignette_override { settings.set_crt_look(platform,false,value); }
+        if let Some(value)=self.curvature_override { settings.set_crt_look(platform,true,value); }
         if platform==Platform::Pokemini {
             if let Some(value)=self.pokemini_palette_override { settings.pokemini_palette=value; }
             if let Some(value)=self.pokemini_filter_override { settings.pokemini_lcd_filter=value; }
@@ -239,10 +248,12 @@ impl EmulationProfile {
             1|21|47..=49|settings::SHADER_SMS_KEY|settings::SHADER_GG_KEY
             |settings::SHADER_NGP_KEY|settings::SHADER_WS_KEY
             |settings::SHADER_LYNX_KEY|settings::SHADER_POKEMINI_KEY
-            |settings::SHADER_PICO8_KEY if platform!=Platform::Gba =>
+            |settings::SHADER_PICO8_KEY|settings::SHADER_NEOGEO_KEY|settings::SHADER_PCE_KEY
+                if platform!=Platform::Gba =>
                 self.screen_shader=Some(view.shader_for(platform)),
             2|22|23|24 => self.colour_correction_override=Some(view.colour_for(platform)),
-            25..=27|44..=46|settings::BEZEL_SMS_KEY..=settings::BEZEL_POKEMINI_KEY =>
+            25..=27|44..=46|settings::BEZEL_SMS_KEY..=settings::BEZEL_POKEMINI_KEY
+            |settings::BEZEL_NEOGEO_KEY|settings::BEZEL_PCE_KEY =>
                 self.screen_bezel=Some(view.bezel_for(platform)),
             3 if platform==Platform::Gb =>
                 self.gb_palettes_override=Some(view.gb_palettes),
@@ -261,11 +272,16 @@ impl EmulationProfile {
             60..=65|settings::BLENDING_SMS_KEY|settings::BLENDING_GG_KEY
             |settings::BLENDING_NGP_KEY|settings::BLENDING_WS_KEY
             |settings::BLENDING_LYNX_KEY|settings::BLENDING_POKEMINI_KEY
-            |settings::BLENDING_PICO8_KEY =>
+            |settings::BLENDING_PICO8_KEY|settings::BLENDING_NEOGEO_KEY|settings::BLENDING_PCE_KEY =>
                 self.blending_override=Some(view.blending_for(platform)),
             k if Settings::lcd_effect_platform(k) == Some(platform) =>
                 self.lcd_effect_override=Some(view.lcd_effect_for(platform)),
             69 if platform==Platform::Md => self.dither_override=Some(view.dither_blend_md),
+            k if Settings::crt_platform(k).is_some_and(|(p, _)| p == platform) => {
+                let (_, curve) = Settings::crt_platform(k).unwrap_or((platform, false));
+                let value = view.crt_look(platform, curve);
+                if curve { self.curvature_override=Some(value) } else { self.vignette_override=Some(value) }
+            }
             70 if platform==Platform::Gba => self.upscaler_override=Some(view.upscaler_gbav),
             settings::SPRITE_LIMIT_SMS_KEY|settings::SPRITE_LIMIT_GG_KEY
                 if matches!(platform,Platform::Sms|Platform::Gg) =>
@@ -661,6 +677,32 @@ mod tests {
         assert!(profile.change(11, false) && !profile.responsive_loop);
     }
 
+    #[test]
+    fn home_vignette_curvature_and_neo_geo_pce_looks_are_per_game() {
+        let globals = Settings::first_install_defaults();
+        for platform in settings::CRT_PLATFORMS {
+            let mut profile = EmulationProfile::from_settings(&globals);
+            for curve in [false, true] {
+                let key = Settings::crt_key(platform, curve).unwrap();
+                assert!(profile.change_visual_and_gameplay(&globals, platform, key, true), "{platform:?}");
+                assert!(!profile.change_visual_and_gameplay(&globals, Platform::Gba, key, true));
+            }
+            let mut view = globals.clone();
+            profile.apply_visual_and_gameplay(&mut view, platform);
+            assert_eq!((view.crt_look(platform, false), view.crt_look(platform, true)), (1, 1));
+            assert_eq!(globals.crt_look(platform, false), 0);
+        }
+        for (platform, shader, bezel, blending) in [
+            (Platform::NeoGeo, settings::SHADER_NEOGEO_KEY, settings::BEZEL_NEOGEO_KEY, settings::BLENDING_NEOGEO_KEY),
+            (Platform::Pce, settings::SHADER_PCE_KEY, settings::BEZEL_PCE_KEY, settings::BLENDING_PCE_KEY)]
+        {
+            let mut profile = EmulationProfile::from_settings(&globals);
+            assert!(profile.change_visual_and_gameplay(&globals, platform, shader, true), "{platform:?} shader");
+            assert!(profile.change_visual_and_gameplay(&globals, platform, bezel, true), "{platform:?} bezel");
+            assert!(profile.change_visual_and_gameplay(&globals, platform, blending, true), "{platform:?} blending");
+            assert!(profile.screen_shader.is_some() && profile.screen_bezel.is_some() && profile.blending_override.is_some());
+        }
+    }
     #[test]
     fn new_handheld_lcd_effect_overrides_are_per_game() {
         let globals = Settings::first_install_defaults();

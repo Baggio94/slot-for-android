@@ -35,6 +35,8 @@ struct GameProgram {
     u_dm_bgc: gl::types::GLint,
     u_dm_lum: gl::types::GLint,
     u_cached: gl::types::GLint,
+    u_vignette: gl::types::GLint,
+    u_curve: gl::types::GLint,
 }
 
 impl GameProgram {
@@ -84,6 +86,8 @@ impl GameProgram {
             u_dm_bgc: at("u_dm_bgc"),
             u_dm_lum: at("u_dm_lum"),
             u_cached: at("u_cached"),
+            u_vignette: at("u_vignette"),
+            u_curve: at("u_curve"),
         })
     }
 }
@@ -257,6 +261,8 @@ pub struct GamePass {
     /// A home console picture at the top of the screen, not centred (a
     /// Watomsk logo sits in the band under it).
     top: bool,
+    /// Vignette and Curvature over the picture, 0 (off) to 1.
+    crt: [f32; 2],
 }
 
 impl GamePass {
@@ -280,6 +286,7 @@ impl GamePass {
 
     pub(crate) fn restore_settings_into(&self, target: &mut Self) {
         target.colour_correct = self.colour_correct;
+        target.crt = self.crt;
         target.fbo_scale = self.fbo_scale;
         target.pic = self.pic;
         target.lcd = self.lcd;
@@ -349,7 +356,14 @@ impl GamePass {
             royale_failed: Cell::new(false),
             fit: Fit::Canvas,
             top: false,
+            crt: [0.0, 0.0],
         })
+    }
+
+    /// A home console's Vignette and Curvature, 0 (off) to 1, over every
+    /// shader: worked out in the screen pass itself, no extra pass.
+    pub fn set_crt(&mut self, vignette: f32, curvature: f32) {
+        self.crt = [vignette.clamp(0.0, 1.0), curvature.clamp(0.0, 1.0)];
     }
 
     pub fn set_power(&mut self, t: f32) {
@@ -722,6 +736,15 @@ impl GamePass {
             let (_, _, w, h) = screen_rect_in(area, self.power);
             let shown = (w * self.fbo_scale[0], h * self.fbo_scale[1]);
             let window = crate::royale::pixel_window(src, shown, view);
+            // Curvature bends crt-royale's finished picture: read between
+            // its texels, or its mask's columns and rows skip one here and
+            // there (dark seams).
+            let filter = if self.crt[1] > 0.0 { gl::LINEAR } else { gl::NEAREST } as i32;
+            unsafe {
+                gl::BindTexture(gl::TEXTURE_2D, royale);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, filter);
+                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, filter);
+            }
             self.draw_program(effect, false, royale, quad, window, view, pic, area, readout);
             return;
         }
@@ -807,6 +830,8 @@ impl GamePass {
             gl::Uniform3f(p.u_dm_bgc, bg[0], bg[1], bg[2]);
             gl::Uniform2f(p.u_dm_lum, luma(light), luma(dark));
             gl::Uniform1f(p.u_cached, if cache.cached { 1.0 } else { 0.0 });
+            gl::Uniform1f(p.u_vignette, self.crt[0]);
+            gl::Uniform1f(p.u_curve, self.crt[1]);
             self.caches.borrow().bind(effect);
             gl::ActiveTexture(gl::TEXTURE2);
             gl::BindTexture(gl::TEXTURE_2D, self.dot_bg);

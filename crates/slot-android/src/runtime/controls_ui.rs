@@ -140,7 +140,14 @@ impl Engine {
     /// WonderSwan game's are filed apart, its buttons turned with it.
     fn game_system_key(&self, platform: Platform) -> &'static str {
         let upright = platform == Platform::Ws && self.game.as_ref().is_some_and(GameSession::upright);
-        if upright { controls::WS_UPRIGHT_SYSTEM } else { Self::system_key(platform) }
+        if upright { controls::WS_UPRIGHT_SYSTEM } else { self.pad_system_key(platform) }
+    }
+
+    /// The PC Engine's Controls with the 6-button pad are filed apart, its
+    /// III to VI on Y, X, L1 and R1.
+    fn pad_system_key(&self, platform: Platform) -> &'static str {
+        if platform == Platform::Pce && self.settings.pce_six_buttons { controls::PCE6_SYSTEM }
+        else { Self::system_key(platform) }
     }
 
     /// The game being played, as its Controls are filed: its portable name
@@ -150,7 +157,7 @@ impl Engine {
     }
 
     fn layout_scope(&self, platform: Platform, game: bool) -> Scope {
-        let system = if game { self.game_system_key(platform) } else { Self::system_key(platform) };
+        let system = if game { self.game_system_key(platform) } else { self.pad_system_key(platform) };
         match self.game_key().filter(|_| game) {
             Some(game) => Scope::Game { system, game },
             None => Scope::System(system),
