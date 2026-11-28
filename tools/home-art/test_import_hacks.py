@@ -15,7 +15,11 @@ HERE = Path(__file__).parent
 class HackLabelTests(unittest.TestCase):
     def setUp(self):
         manifest = json.loads((HERE / 'hack-labels' / 'manifest.json').read_text(encoding='utf-8'))
-        self.titles = {h['key']: h['title'] for h in manifest['hacks']}
+        self.titles = {}
+        for source in manifest['sources']:
+            for h in source.get('hacks', []):
+                for key in [h['key']] + h.get('aliases', []):
+                    self.titles[key] = h['title']
 
     def test_keys_are_their_own_words(self):
         for key in self.titles:
@@ -32,6 +36,14 @@ class HackLabelTests(unittest.TestCase):
             'Pokemon R.O.W.E. v1.2.gba': 'rowe',
             "Pokemon Let's Go Pikachu.gba": 'lets go pikachu',
             'Super Mariomon.gba': 'mariomon',
+            'Pokemon MonoMyth v1.1.gba': 'monomyth',
+            'Pokemon - Hyper Emerald Lost Artifacts.gba': 'lost artifacts',
+            'Pokemon Super Dark Worship.gba': 'super dark worship',
+            'Pokemon Picross (Japan) [T-En].gbc': 'picross',
+            'Balloon Fight GB (Japan) [T-En].gb': 'balloon fight',
+            'Kaeru no Tame ni Kane wa Naru (Japan) [T-En].gb': 'kaeru no tame ni kane wa naru',
+            'Pokemon Card GB2 (Japan) [T-En].gbc': 'card gb2',
+            'Mega Man World 5 DX.gbc': 'mega man 5 dx',
             'Pokemon - FireRed Version (USA).gba': None,
             'Peach Adventure.gba': None,  # a Pokémon hack's key needs the word Pokémon
         }
@@ -46,6 +58,37 @@ class HackLabelTests(unittest.TestCase):
         with Image.open(io.BytesIO(import_hacks.prepare(buf.getvalue()))) as out:
             self.assertEqual((960, 480), out.size)
             self.assertEqual('RGB', out.mode)
+
+
+class ExtraKeyTests(unittest.TestCase):
+    def test_search_entries_are_reserved_stable_and_replaced(self):
+        manifest = {'sources': [{
+            'name': 'local', 'source': 'local:hack-labels/own', 'permission': 'p', 'credits': 'c',
+            'hacks': [{'key': 'monomyth', 'title': 'Pokémon MonoMyth', 'platform': 'GBA',
+                       'files': [{'file': 'pokemon-monomyth.jpg', 'sha1': None}]}]}]}
+        own = HERE / 'hack-labels' / 'own' / 'pokemon-monomyth.jpg'
+        import hashlib
+        manifest['sources'][0]['hacks'][0]['files'][0]['sha1'] = hashlib.sha1(own.read_bytes()).hexdigest()
+        with tempfile.TemporaryDirectory() as out:
+            out = Path(out)
+            path = HERE / 'hack-labels' / 'test-manifest.json'
+            try:
+                path.write_text(json.dumps(manifest))
+                taken = import_hacks.extra_key('GBA', 'local', 'pokemon-monomyth.jpg', set())
+                (out / 'GBA.json').write_text(json.dumps({taken: [], '12345678': []}))
+                import_hacks.build(out, path)
+                index = json.loads((out / 'GBA.json').read_text())
+                names = json.loads((out / 'GBA.names.json').read_text())
+                extra = json.loads((out / 'HACKS.extra.json').read_text())['GBA']
+                self.assertEqual(1, len(extra))
+                self.assertNotEqual(taken, extra[0])  # a real dump's key is never taken
+                self.assertRegex(extra[0], '^[0-9A-F]{8}$')
+                self.assertEqual('Pokémon MonoMyth (hack)', names[extra[0]])
+                import_hacks.build(out, path)  # a second run keeps the same key, once
+                self.assertEqual(extra, json.loads((out / 'HACKS.extra.json').read_text())['GBA'])
+                self.assertEqual(3, len(json.loads((out / 'GBA.json').read_text())))
+            finally:
+                path.unlink()
 
 
 class LabelFixTests(unittest.TestCase):

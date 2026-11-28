@@ -38,13 +38,19 @@ A published set carries both attributions.
 
 ## ROM hacks and cleaned labels
 
-- `import_hacks.py` adds the ROM hack labels listed in `hack-labels/manifest.json` (from
-  [Ddaretrogamer's ROM-Hack-Labels](https://github.com/Ddaretrogamer/ROM-Hack-Labels), used with
-  his permission; art by Ddaretrogamer, Oom, yosoo5000, Jaizu, PacoScarso, PurrfectDoodle,
-  Phantonomy, Replay Modding and BearlyApple). A hack has no fixed CRC32, so these are found by
-  name: `HACKS.json` maps a key such as `radical red` to its labels, `HACKS.names.json` to its
-  title, `HACKS.about.json` holds the credits. The app looks there when a cart's CRC32 is in no
-  index, with `import_hacks.key_of` as the rule.
+- `import_hacks.py` adds the labels listed in `hack-labels/manifest.json`, each source with its
+  permission and credits:
+  [Ddaretrogamer's ROM-Hack-Labels](https://github.com/Ddaretrogamer/ROM-Hack-Labels) (art by
+  Ddaretrogamer, Oom, yosoo5000, Jaizu, PacoScarso, PurrfectDoodle, Phantonomy, Replay Modding
+  and BearlyApple), [krizdingus' Game Boy labels](https://github.com/krizdingus/gameboy-cartridge-labels)
+  (CC BY-NC 4.0, kept whole with their Reproduction marking) and labels made for slot. by
+  Baggio94 (`hack-labels/own`). A hack has no fixed CRC32, so these are found by name:
+  `HACKS.json` maps a key such as `radical red` to its labels, `HACKS.names.json` to its title,
+  `HACKS.platforms.json` to its system, `HACKS.about.json` holds the credits. The app looks
+  there when a cart's CRC32 is in no index, with `import_hacks.key_of` as the rule.
+  Every label, and the alternative labels of official games, also joins GB/GBC/GBA.json under
+  a reserved eight-digit key no dump has (listed in `HACKS.extra.json`), so Cart Studio's
+  Search finds it by name.
 - `fix_labels.py` swaps published labels for cleaned copies kept in `label-fixes/` (a scan that
   kept the white paper around its corners, cleared with `label-fixes/clear_border.py`).
 
