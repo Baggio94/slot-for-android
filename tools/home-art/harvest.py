@@ -478,6 +478,28 @@ def extra_systems(platform, local=None):
     return out
 
 
+# The Neo Geo sets FinalBurn Neo plays, a copy of the list the app reads (tools/neogeo-sets
+# makes it, android/app/src/main/assets/neogeo-sets.tsv in the 3.2 app): libretro's
+# dat lists one dump per game, often a hack (savagereb, sdodgebh) and not every game (totc,
+# columnsn), so every parent set in it is asked about too, by its own name (Siham 2026-11-28).
+NEOGEO_SETS = Path(__file__).resolve().parent / 'neogeo-sets.tsv'
+# Homebrew FinalBurn Neo doesn't list, asked by its set name all the same.
+NEOGEO_MORE = {'neofight': 'Neo Fight'}
+
+
+def fbneo_sets(text=None):
+    """Set name -> (title, 0) for every parent set of the FinalBurn Neo list, and NEOGEO_MORE."""
+    text = NEOGEO_SETS.read_text('utf-8') if text is None else text
+    out = {}
+    for line in text.splitlines():
+        parts = line.split('\t')
+        if len(parts) == 3 and parts[0].strip() and not parts[1].strip():
+            out[parts[0].strip().lower()] = (parts[2].strip(), 0)
+    for name, title in NEOGEO_MORE.items():
+        out.setdefault(name, (title, 0))
+    return out
+
+
 def by_set(entries, stems):
     """CRC32-keyed entries and stems re-keyed by set name (the rom's file stem, lower case),
     for a platform in BY_SET. The first dump of a set name wins."""
@@ -793,6 +815,12 @@ def main():
                     stems.setdefault(crc, stem)
             if platform in BY_SET:
                 entries, stems = by_set(entries, stems), {}
+                if platform == 'NEOGEO' and not args.dat:
+                    sets = fbneo_sets()
+                    fresh = [name for name in sets if name not in entries]
+                    for name in fresh:
+                        entries[name] = sets[name]
+                    print(f'NEOGEO: {len(fresh)} FinalBurn Neo sets not in the dat', flush=True)
             extra = extra_systems(platform, args.dat)
             index_path = out / f'{platform}.json'
             index = load(index_path, {})
