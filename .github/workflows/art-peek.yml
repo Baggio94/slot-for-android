@@ -1,0 +1,32 @@
+name: art-peek
+on:
+  push:
+    branches: [tools/art-peek]
+    paths: [tools/art-peek/**, .github/workflows/art-peek.yml]
+permissions:
+  contents: write
+jobs:
+  peek:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Peek
+        run: |
+          set -euo pipefail
+          ep="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+          mkdir -p art out
+          for f in GBA.json GBA.names.json; do aws s3 cp "s3://$R2_BUCKET/$f" art/$f --endpoint-url "$ep" --only-show-errors; done
+          python3 tools/art-peek/peek.py art out 'FireRed|LeafGreen' GBA | grep '^files/' | sort -u > list.txt
+          while read -r f; do mkdir -p "out/$(dirname "$f")"; aws s3 cp "s3://$R2_BUCKET/$f" "out/$f" --endpoint-url "$ep" --only-show-errors; done < list.txt
+          cd out
+          git init -q -b tools/art-peek-data
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com add -A
+          git -c user.name=Baggio94 -c user.email=sahbito@gmail.com commit -q -m "Published labels to look at"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" tools/art-peek-data
