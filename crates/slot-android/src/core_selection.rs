@@ -111,6 +111,8 @@ pub fn selected_for(storage: &Path, uri: &str, platform: Platform) -> Core {
 pub fn imposed(uri: &str, platform: Platform) -> Option<Core> {
     let library = crate::library::LIBRARY.lock().unwrap_or_else(|e| e.into_inner());
     let entry = library.entries.as_ref()?.iter().find(|entry| entry.uri == uri)?;
+    // A Neo Geo game both as a .zip and a .neo: either core (pair_neo_geo_twins).
+    if !entry.twin_uri.is_empty() { return None; }
     let ext = if entry.rom_ext.is_empty() {
         entry.filename.rsplit_once('.').map_or("", |(_, ext)| ext)
     } else { entry.rom_ext.as_str() };

@@ -645,6 +645,18 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeCoreForUri(
     env.new_string(name).map_or(std::ptr::null_mut(), |s| s.into_raw())
 }
 
+/// A Neo Geo cart's .neo when its game is also a .zip set (Geolith plays
+/// it), else "": MainActivity.loadGameFromSaf.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeTwinUri(
+    mut env: JNIEnv<'_>, _this: JObject<'_>, uri: JString<'_>,
+) -> jni::sys::jstring {
+    let twin = env.get_string(&uri).ok()
+        .and_then(|uri| crate::library::twin_of(&uri.to_string_lossy()))
+        .unwrap_or_default();
+    env.new_string(twin).map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
 /// Readable from the GL renderer without consulting Android preferences.
 /// Android persists the opt-in first and then updates this display flag.
 #[unsafe(no_mangle)]

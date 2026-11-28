@@ -238,6 +238,8 @@ class MainActivity : Activity() {
     external fun nativeSensorsWanted(): Int
     external fun nativeSensorEvent(sensor: Int, x: Float, y: Float, z: Float, timestampNs: Long)
     external fun nativeCoreForUri(uri: String): String
+    /** A Neo Geo cart's .neo, when its game is also a .zip set, else "". */
+    external fun nativeTwinUri(uri: String): String
     external fun nativePlayOnPico8(filename: String)
     external fun nativePollSaveFlush(): String?
     external fun nativeSetShareSaves(enabled: Boolean)
@@ -2710,7 +2712,15 @@ class MainActivity : Activity() {
                 // Document-provider IDs may contain the complete tree path:
                 // keep only the terminal basename before using it for a
                 // RetroArch save target, never a provider path or colon prefix.
-                val name = uri.lastPathSegment.orEmpty().substringAfterLast('/')
+                // A Neo Geo game found both as a set (.zip) and as a .neo is
+                // one cart, its .zip's (Siham 2026-11-28): on Geolith the
+                // .neo is read, everything else stays the cart's.
+                val twin = if (rawUri != Systems.SPLORE_URI && nativeCoreForUri(rawUri) == "geolith")
+                    nativeTwinUri(rawUri).takeIf { it.isNotEmpty() }?.let { text ->
+                        try { Uri.parse(text) } catch (_: Exception) { null }
+                    } else null
+                val source = twin ?: uri
+                val name = source.lastPathSegment.orEmpty().substringAfterLast('/')
                 // SAF ZIPs contain an actual cartridge, not a libretro ZIP
                 // input. Inspect the embedded extension before selecting a
                 // core, a save target or a private cache extension.
@@ -2737,7 +2747,7 @@ class MainActivity : Activity() {
                 val ext = if (splore) "p8" else if (neoGeoSet) Systems.NEOGEO_SET
                 else if (noted != null) noted else if (RomSource.isContainer(name)) {
                     try {
-                        contentResolver.openInputStream(uri)?.use { input ->
+                        contentResolver.openInputStream(source)?.use { input ->
                             RomSource.inspect(input, name).extension
                         }?.also { found ->
                             try { romDir.mkdirs(); zipNote.writeText(found) } catch (_: java.io.IOException) { }
@@ -2764,14 +2774,14 @@ class MainActivity : Activity() {
                 // Splore is no file: PICO-8 opens it with -splore, and the
                 // cart it is given only names it.
                 if (splore && !target.isFile) target.writeText(Systems.SPLORE_CART)
-                if (!target.isFile || target.length() < Systems.minRomBytes(ext)) RomWarmCache.awaitCopy(rawUri, target)
+                if (twin == null && (!target.isFile || target.length() < Systems.minRomBytes(ext))) RomWarmCache.awaitCopy(rawUri, target)
                 if (!target.isFile || target.length() < Systems.minRomBytes(ext)) {
                     val temp = File(dir, "$digest.tmp")
                     try {
-                        if (ext == Systems.NEOGEO_SET) contentResolver.openInputStream(uri)?.use { input ->
+                        if (ext == Systems.NEOGEO_SET) contentResolver.openInputStream(source)?.use { input ->
                             RomSource.copyNeoGeoSet(input, temp)
                         } ?: error("Cannot read this ROM")
-                        else contentResolver.openInputStream(uri)?.use { input ->
+                        else contentResolver.openInputStream(source)?.use { input ->
                             RomSource.useRom(input, name) { raw, embeddedExt ->
                                 require(embeddedExt == ext) { "ZIP cartridge type changed" }
                                 temp.outputStream().buffered().use { output ->
@@ -2810,7 +2820,7 @@ class MainActivity : Activity() {
                 val saves = storage.savesRoot?.let(Uri::parse)
                 val states = storage.statesRoot?.let(Uri::parse)
                 val shared = RetroArchStorage.target(this, rawUri, core, saves, states,
-                    scannedFileName = if (splore) "Splore.p8" else if (ext == Systems.NEOGEO_SET) name
+                    scannedFileName = if (splore) "Splore.p8" else if (ext == Systems.NEOGEO_SET || twin != null) name
                         else if (RomSource.isContainer(name)) RomSource.archiveSaveFilename(name, ext) else null,
                     shareGbaSaves = storage.shareGbaSaves)
                 // A save folder that can't be read no longer stops the game

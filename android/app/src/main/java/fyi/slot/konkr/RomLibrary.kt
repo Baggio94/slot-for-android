@@ -41,7 +41,8 @@ internal object RomLibrary {
         val gbTitle: String = "", val gbCode: String = "",
         val gbJapan: Boolean = false, val gbCgbFlag: Int = -1,
         val homeTitle: String = "", val homeRegion: String = "",
-        val homeBattery: Boolean = false, val homeMaker: String = ""
+        val homeBattery: Boolean = false, val homeMaker: String = "",
+        val displayTitle: String = ""
     )
     internal fun equivalentEntries(left: List<IndexEntry>, right: List<IndexEntry>): Boolean {
         if (left.size != right.size) return false
@@ -61,15 +62,18 @@ internal object RomLibrary {
                 obj.optString("gb_title"), obj.optString("gb_code"),
                 obj.optBoolean("gb_japan"), obj.optInt("gb_cgb_flag", -1),
                 obj.optString("home_title"), obj.optString("home_region"),
-                obj.optBoolean("home_battery"), obj.optString("home_maker"))
+                obj.optBoolean("home_battery"), obj.optString("home_maker"),
+                obj.optString("display_title"))
         }
     }
     internal fun sameIndex(before: String, after: String): Boolean =
         equivalentEntries(indexEntries(before), indexEntries(after))
     /** [neoGeo]: in a Neo Geo folder (neogeo, or under one), where a .zip
-     *  without a cartridge in it is a Neo Geo set. */
+     *  without a cartridge in it is a Neo Geo set. [arcade]: in an arcade
+     *  folder (arcade, fbneo, fba, mame, or under one), where only the Neo
+     *  Geo sets FinalBurn Neo knows are carts (NeoGeoSets). */
     private data class Directory(val id: String, val depth: Int, val folder: String,
-                                 val neoGeo: Boolean = false)
+                                 val neoGeo: Boolean = false, val arcade: Boolean = false)
     /** A cart file listed in the first pass, read in the second. */
     private data class Candidate(val id: String, val name: String, val extension: String,
                                  val size: Long, val modified: Long, val dir: Directory)
@@ -104,7 +108,9 @@ internal object RomLibrary {
         // Search the user-selected SAF tree, including custom layouts, but
         // skip folders that ES-DE names after systems slot. does not run.
         // The ROM folder may be the Neo Geo's own ("primary:ROMs/neogeo").
-        pending.add(Directory(rootId, 0, "", neoGeoFolder(rootId.substringAfterLast(':').substringAfterLast('/'))))
+        val rootName = rootId.substringAfterLast(':').substringAfterLast('/')
+        pending.add(Directory(rootId, 0, "", neoGeoFolder(rootName) || arcadeFolder(rootName),
+            arcadeFolder(rootName)))
         android.util.Log.i("SlotKonkr", "ROM scan scope: selected tree without other systems' folders")
         val games = JSONArray()
         var directories = 0
@@ -145,8 +151,10 @@ internal object RomLibrary {
                     val mime = cursor.getString(mimeIndex) ?: continue
                     if (name.startsWith(".")) continue
                     if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                        if (dir.depth < MAX_DEPTH && !ignoredDirectory(name)) {
-                            pending.add(Directory(id, dir.depth + 1, name, dir.neoGeo || neoGeoFolder(name)))
+                        val arcade = dir.arcade || arcadeFolder(name)
+                        if (dir.depth < MAX_DEPTH && (arcadeFolder(name) || !ignoredDirectory(name))) {
+                            pending.add(Directory(id, dir.depth + 1, name,
+                                dir.neoGeo || neoGeoFolder(name) || arcade, arcade))
                         }
                         continue
                     }
@@ -158,6 +166,8 @@ internal object RomLibrary {
                         neoGeoBios += DocumentsContract.buildDocumentUriUsingTree(treeUri, id) to name
                         continue
                     }
+                    // An arcade folder's other games (CPS, MAME...) are no Neo Geo carts.
+                    if (dir.arcade && (extension !in NEOGEO_FILES || !NeoGeoSets.isSet(context, name))) continue
                     if (found.size >= MAX_CANDIDATES) {
                         truncated = true
                         break
@@ -197,7 +207,7 @@ internal object RomLibrary {
                         val (id, name, extension, size, modified, dir) = found[i]
                         val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
                         readEntry(context, uri, name, extension, size, modified,
-                            dir.folder, previous[uri.toString()], dir.neoGeo)
+                            dir.folder, previous[uri.toString()], dir.neoGeo, dir.arcade)
                     }
                 }
                 for (job in jobs) {
@@ -278,7 +288,8 @@ internal object RomLibrary {
 
     private fun readEntry(context: Context, fileUri: Uri, name: String, extension: String,
                           size: Long, modified: Long, folder: String,
-                          old: JSONObject?, neoGeo: Boolean = false): ReadEntry? {
+                          old: JSONObject?, neoGeo: Boolean = false,
+                          arcade: Boolean = false): ReadEntry? {
         val resolver = context.contentResolver
         // neogeo.zip and aes.zip are the Neo Geo's BIOS (BiosLibrary), not games.
         if (Systems.isNeoGeoBios(name)) return null
@@ -307,7 +318,8 @@ internal object RomLibrary {
         // A Neo Geo set is known by its first chip (RomSource.NeoGeoSet), or
         // in a Neo Geo folder as a ZIP with no cartridge in it.
         val neoGeoSet = RomSource.Header(Systems.NEOGEO_SET, ByteArray(0))
-        val zipHeader = if (zipped && !reuse) {
+        val zipHeader = if (zipped && !reuse && arcade) neoGeoSet
+        else if (zipped && !reuse) {
             try {
                 resolver.openInputStream(fileUri)?.use { input ->
                     RomSource.inspectWithBattery(input, name)
@@ -410,6 +422,11 @@ internal object RomLibrary {
             .put("color_only", colorOnly)
             .put("size", size)
             .put("modified", modified)
+        // A Neo Geo set's real name, its file keeping the set's (FinalBurn
+        // Neo needs it): "Metal Slug" for mslug.zip.
+        if (platform == Systems.NEOGEO) {
+            NeoGeoSets.title(context, name).takeIf { it.isNotEmpty() }?.let { game.put("display_title", it) }
+        }
         if (home) {
             // The home console shells, labels and battery read
             // these; rom_ext lets a cached ZIP keep its system.
@@ -509,6 +526,13 @@ internal object RomLibrary {
     /** A folder of Neo Geo games, by an ES-DE name of the system's. */
     private fun neoGeoFolder(name: String): Boolean =
         Systems.row(Systems.NEOGEO)?.folders?.contains(name.lowercase(Locale.ROOT)) == true
+
+    /** ES-DE's arcade folders, searched for Neo Geo sets (Siham 2026-11-28). */
+    internal val NEOGEO_ARCADE_DIRECTORIES = setOf("arcade", "fbneo", "fba", "mame")
+    private val NEOGEO_FILES = setOf("zip", "neo")
+
+    private fun arcadeFolder(name: String): Boolean =
+        name.lowercase(Locale.ROOT) in NEOGEO_ARCADE_DIRECTORIES
 
     private fun ignoredDirectory(name: String): Boolean {
         val lower = name.lowercase(Locale.ROOT)

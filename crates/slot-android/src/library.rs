@@ -48,6 +48,57 @@ pub struct RomEntry {
     /// The ROM's own extension inside a ZIP (the scan's rom_ext).
     #[serde(default)]
     pub rom_ext: String,
+    /// The shelf name when it isn't the file's: a Neo Geo set's real title
+    /// ("Metal Slug" for mslug.zip), its file keeping the set's name.
+    #[serde(default)]
+    pub display_title: String,
+    /// A Neo Geo game found both as a set (.zip, this cart) and as a .neo:
+    /// the .neo's address, which Geolith plays (pair_neo_geo_twins).
+    #[serde(default)]
+    pub twin_uri: String,
+}
+
+/// A Neo Geo game both as a .zip set and as a .neo is one cart, its .zip's
+/// (FinalBurn Neo by default, Geolith on its .neo by SELECT: Siham
+/// 2026-11-28). The .neo leaves the list and its address goes with the
+/// .zip's entry. Games are paired by file name, wherever their folders.
+pub fn pair_neo_geo_twins(entries: &mut Vec<RomEntry>) {
+    use std::collections::HashMap;
+    let ext_of = |entry: &RomEntry| {
+        let name = if entry.filename.trim().is_empty() { file_name_of(&entry.uri) } else { entry.filename.clone() };
+        name.rsplit_once('.').map(|(stem, ext)| (stem.trim().to_lowercase(), ext.to_ascii_lowercase()))
+    };
+    let mut zips: HashMap<String, usize> = HashMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        if Platform::parse(&entry.platform) != Some(Platform::NeoGeo) { continue; }
+        if let Some((stem, ext)) = ext_of(entry) {
+            if ext == "zip" { zips.entry(stem).or_insert(i); }
+        }
+    }
+    if zips.is_empty() { return; }
+    let mut twins: Vec<(usize, String)> = Vec::new();
+    let mut paired = std::collections::HashSet::new();
+    let mut drop = vec![false; entries.len()];
+    for (i, entry) in entries.iter().enumerate() {
+        if Platform::parse(&entry.platform) != Some(Platform::NeoGeo) { continue; }
+        let Some((stem, ext)) = ext_of(entry) else { continue };
+        if ext != "neo" { continue; }
+        let Some(&zip) = zips.get(&stem) else { continue };
+        if !paired.insert(zip) { continue; }
+        twins.push((zip, entry.uri.clone()));
+        drop[i] = true;
+    }
+    for (zip, uri) in twins { entries[zip].twin_uri = uri; }
+    let mut i = 0;
+    entries.retain(|_| { let keep = !drop[i]; i += 1; keep });
+}
+
+/// The .neo Geolith plays for this Neo Geo cart, when it has one.
+pub fn twin_of(uri: &str) -> Option<String> {
+    let library = LIBRARY.lock().unwrap_or_else(|e| e.into_inner());
+    library.entries.as_ref()?.iter()
+        .find(|entry| entry.uri == uri && !entry.twin_uri.is_empty())
+        .map(|entry| entry.twin_uri.clone())
 }
 
 pub struct LibraryState {
@@ -217,7 +268,7 @@ pub fn remote_shell(platform: Platform, title: &str, gb: Option<RemoteGbHeader>)
         title: title.to_owned(), platform: String::new(), uri: String::new(), code: String::new(),
         color_only: gb.cgb_flag == Some(0xc0), shell_override: None, gb_title: gb.title,
         gb_code: gb.code, gb_japan: gb.japan, gb_cgb_flag: gb.cgb_flag, home_title: String::new(),
-        home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
+        home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
     };
     auto_shell(&entry, platform)
 }
@@ -317,10 +368,12 @@ pub fn carts_by_platform(entries: &[RomEntry]) -> [Vec<Cart>; Platform::ALL.len(
         let group = platform as usize;
         let shell = chosen_shell(platform, auto_shell(entry, platform),
             entry.shell_override.as_deref().and_then(ShellChoice::parse));
+        let title = if entry.display_title.trim().is_empty() { entry.title.trim() }
+            else { entry.display_title.trim() };
         groups[group].push(Cart {
             platform,
             stem: entry.title.trim().to_owned(),
-            title: entry.title.trim().to_owned(),
+            title: title.to_owned(),
             code: entry.code.clone(),
             // Kept as opaque URI for the planned Android ContentResolver bridge.
             // Never pass this through std::fs::File or libc open().
@@ -333,7 +386,7 @@ pub fn carts_by_platform(entries: &[RomEntry]) -> [Vec<Cart>; Platform::ALL.len(
     for shelf in &mut groups {
         // Unicode casefold keys are allocated once per cart instead of on
         // every comparator call (thousands of extra allocations at startup).
-        shelf.sort_by_cached_key(|cart| sort_key(&cart.stem));
+        shelf.sort_by_cached_key(|cart| sort_key(&cart.title));
     }
     groups
 }
@@ -350,6 +403,7 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetLibrary(
     let Ok(mut entries) = serde_json::from_str::<Vec<RomEntry>>(&input.to_string_lossy()) else { return -1 };
     if entries.len() > MAX_ROMS { return -1; }
     keep_saved_shells(&mut entries);
+    pair_neo_geo_twins(&mut entries);
     let count = entries.len() as i32;
     let keys = game_keys(&entries);
     let mut state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
@@ -371,8 +425,31 @@ mod tests {
             code: String::new(), color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(), gb_japan: false, gb_cgb_flag: None,
             home_title: String::new(), home_region: String::new(), home_battery: false,
-            home_maker: String::new(), rom_ext: String::new(), filename: filename.into(),
+            home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: filename.into(),
         }
+    }
+
+    #[test]
+    fn a_neo_geo_game_as_zip_and_neo_is_one_cart_its_zips() {
+        let mut entries = vec![
+            named("NEOGEO", "mslug.neo", "content://t/document/neogeo%2Fmslug.neo"),
+            named("NEOGEO", "mslug.zip", "content://t/document/fbneo%2Fmslug.zip"),
+            named("NEOGEO", "kof98.neo", "content://t/document/neogeo%2Fkof98.neo"),
+            named("NEOGEO", "garou.zip", "content://t/document/arcade%2Fgarou.zip"),
+            named("GBA", "mslug.neo", "content://t/document/gba%2Fmslug.neo"),
+        ];
+        entries[1].display_title = "Metal Slug - Super Vehicle-001".into();
+        pair_neo_geo_twins(&mut entries);
+        let uris: Vec<&str> = entries.iter().map(|e| e.uri.as_str()).collect();
+        assert_eq!(uris, ["content://t/document/fbneo%2Fmslug.zip", "content://t/document/neogeo%2Fkof98.neo",
+            "content://t/document/arcade%2Fgarou.zip", "content://t/document/gba%2Fmslug.neo"]);
+        assert_eq!(entries[0].twin_uri, "content://t/document/neogeo%2Fmslug.neo");
+        assert!(entries[1..].iter().all(|e| e.twin_uri.is_empty()));
+        // Its shelf name is the set's real title; the file keeps its own.
+        let carts = carts_by_platform(&entries);
+        let neo_geo = &carts[Platform::NeoGeo as usize];
+        let mslug = neo_geo.iter().find(|c| c.stem == "mslug.zip").unwrap();
+        assert_eq!(slot_ui::label_text(mslug), "Metal Slug Super Vehicle-001");
     }
 
     #[test]
@@ -454,7 +531,7 @@ mod tests {
             code: String::new(), color_only: false, shell_override: Some("old".into()),
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
         };
         let mut entries = vec![entry("content://roms/studio-test"), entry("content://roms/other")];
         keep_saved_shells(&mut entries);
@@ -469,7 +546,7 @@ mod tests {
             code: String::new(), color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
         };
         let grouped = carts_by_platform(&[
             example("GBA", "Zelda", "content://roms/z"),
@@ -491,7 +568,7 @@ mod tests {
             color_only: false, shell_override: None,
             gb_title: String::new(), gb_code: String::new(),
             gb_japan: false, gb_cgb_flag: None,
-            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
+            home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
         };
         let grouped = carts_by_platform(&[
             entry("GBA", "gba"), entry("GB", "gb"), entry("GBC", "gbc"),
@@ -527,7 +604,7 @@ mod tests {
                 color_only: flag == 0xc0, shell_override: None,
                 gb_title: title.into(), gb_code: code.into(),
                 gb_japan: false, gb_cgb_flag: Some(flag),
-                home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), filename: String::new(),
+                home_title: String::new(), home_region: String::new(), home_battery: false, home_maker: String::new(), rom_ext: String::new(), display_title: String::new(), twin_uri: String::new(), filename: String::new(),
             }
         };
         let mut manual = entry("GB", "Manual", "POKEMON RED", "", 0);

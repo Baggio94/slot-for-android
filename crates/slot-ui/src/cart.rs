@@ -786,7 +786,10 @@ pub fn label_colour(title: &str) -> [u8; 3] {
 }
 
 pub fn label_text(cart: &Cart) -> String {
-    clean_label(&cart.stem)
+    // A Neo Geo set shows its real title ("Metal Slug" for mslug.zip, from
+    // FinalBurn Neo's dat); every other cart its file's name.
+    let neo_geo = cart.platform == Platform::NeoGeo && !cart.title.trim().is_empty();
+    clean_label(if neo_geo { &cart.title } else { &cart.stem })
 }
 
 pub fn clean_label(stem: &str) -> String {
