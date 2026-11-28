@@ -46,11 +46,18 @@ fn vignette_and_curvature_darken_and_bend_every_home_shader() {
         };
         let rows = |s: &[u8], x: usize| (h / 2 - 4..h / 2 + 4).map(|y| luma(s, x, y)).sum::<u32>();
         let plain = shot(&mut gpu, 0.0, 0.0);
-        let dark = shot(&mut gpu, 1.0, 0.0);
+        let dark = shot(&mut gpu, -1.0, 0.0);
+        let border = shot(&mut gpu, 1.0, 0.0);
         let bent = shot(&mut gpu, 0.0, 1.0);
-        // Vignette: the picture's edge darker, its centre as it was.
+        // Vignette (GDV, below 0): the picture's edge darker, its centre as
+        // it was.
         assert!(rows(&dark, x0 + 2) * 2 < rows(&plain, x0 + 2), "{effect:?}: vignette edge");
         assert!(rows(&dark, w / 2) * 10 >= rows(&plain, w / 2) * 9, "{effect:?}: vignette centre");
+        // crt-royale's border (above 0): a dark rim, the picture inside it
+        // untouched.
+        assert!(rows(&border, x0 + 2) * 2 < rows(&plain, x0 + 2), "{effect:?}: border edge");
+        assert_eq!(rows(&border, x0 + 60), rows(&plain, x0 + 60), "{effect:?}: inside the border");
+        assert_eq!(rows(&border, w / 2), rows(&plain, w / 2), "{effect:?}: border centre");
         // Curvature: the picture's corner falls outside the tube (black).
         let corner = luma(&bent, x0 + 1, 1);
         assert!(corner < 10, "{effect:?}: curved corner {corner}");

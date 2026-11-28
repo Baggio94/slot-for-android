@@ -360,10 +360,12 @@ impl GamePass {
         })
     }
 
-    /// A home console's Vignette and Curvature, 0 (off) to 1, over every
-    /// shader: worked out in the screen pass itself, no extra pass.
+    /// A home console's Vignette and Curvature over every shader, worked
+    /// out in the screen pass itself, no extra pass. Vignette from -1 (GDV
+    /// Mini Ultra's at its strongest) through 0 (off) to 1 (crt-royale's
+    /// border at twice its own size); Curvature 0 (off) to 1.
     pub fn set_crt(&mut self, vignette: f32, curvature: f32) {
-        self.crt = [vignette.clamp(0.0, 1.0), curvature.clamp(0.0, 1.0)];
+        self.crt = [vignette.clamp(-1.0, 1.0), curvature.clamp(0.0, 1.0)];
     }
 
     pub fn set_power(&mut self, t: f32) {

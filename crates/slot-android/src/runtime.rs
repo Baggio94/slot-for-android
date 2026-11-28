@@ -846,7 +846,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 /// SETTING_VALUE_NAMES' "OFF".
 const OFF_VALUE: usize = 5;
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 217] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 237] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -926,6 +926,10 @@ const SETTING_VALUE_NAMES: [&str; 217] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                // SPECIFIC_3_2_VALUES: the Neo Geo's Region, the PC
                                // Engine's Pad.
                                "EUROPE", "USA", "JAPAN", "2 BUTTONS", "6 BUTTONS",
+                               // CRT_LINE_VALUES: Vignette and Curvature's line,
+                               // GDV's -10 .. -1, crt-royale's +1 .. +10 (OFF is 5).
+                               "-10", "-9", "-8", "-7", "-6", "-5", "-4", "-3", "-2", "-1",
+                               "+1", "+2", "+3", "+4", "+5", "+6", "+7", "+8", "+9", "+10",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -953,6 +957,16 @@ const NEOGEO_BIOS_VALUES: usize = NEOGEO_PCE_CORE_VALUES + 4;
 const WATOMSK_3_2_VALUES: usize = NEOGEO_BIOS_VALUES + 4;
 /// The Neo Geo's Region and the PC Engine's Pad in SETTING_VALUE_NAMES.
 const SPECIFIC_3_2_VALUES: usize = WATOMSK_3_2_VALUES + 3;
+/// Vignette and Curvature's -10 .. -1, +1 .. +10.
+const CRT_LINE_VALUES: usize = SPECIFIC_3_2_VALUES + 5;
+
+fn crt_line_value(code: u8) -> usize {
+    match crate::settings::crt_level(code) {
+        0 => 5,
+        l if l < 0 => CRT_LINE_VALUES + (l + 10) as usize,
+        l => CRT_LINE_VALUES + 9 + l as usize,
+    }
+}
 
 /// A PokeDaisy view's value face.
 /// A game's screen settings, read before its screen goes on.
@@ -1118,6 +1132,24 @@ fn neogeo_bios_present(name: &str) -> bool {
         .is_some_and(|(root, _)| root.join("BIOS").join(name).is_file())
 }
 
+/// An AES BIOS for the Neo Geo: aes.zip, or neogeo.zip holding the AES's
+/// own (FinalBurn Neo's does), read once per change of the file.
+fn neogeo_aes_present(japan: bool) -> bool {
+    static SEEN: std::sync::Mutex<Option<(std::time::SystemTime, u64, bool, bool)>> = std::sync::Mutex::new(None);
+    if neogeo_bios_present("aes.zip") { return true; }
+    let Some(zip) = PATHS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
+        .map(|(root, _)| root.join("BIOS").join("neogeo.zip")) else { return false };
+    let Ok(meta) = std::fs::metadata(&zip) else { return false };
+    let stamp = (meta.modified().unwrap_or(std::time::UNIX_EPOCH), meta.len());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, len, jp, has)) = *seen {
+        if (at, len, jp) == (stamp.0, stamp.1, japan) { return has; }
+    }
+    let has = std::fs::read(&zip).is_ok_and(|bytes| crate::game::holds_aes_bios(&bytes, japan));
+    *seen = Some((stamp.0, stamp.1, japan, has));
+    has
+}
+
 /// The value face (an index in SETTING_VALUE_NAMES) a Settings key shows,
 /// None for an action-only row. Every key a menu lists must have one: the
 /// test every_settings_row_shows_its_value checks all menus on all screens.
@@ -1214,7 +1246,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         // game then starts on the MVS BIOS).
         crate::settings::NEOGEO_BIOS_KEY => match scoped.neogeo_bios.min(3) {
             0 => 66,
-            1 if !neogeo_bios_present("aes.zip") => NEOGEO_BIOS_VALUES + 3,
+            1 if !neogeo_aes_present(scoped.neogeo_region == 2) => NEOGEO_BIOS_VALUES + 3,
             n => NEOGEO_BIOS_VALUES + usize::from(n) - 1,
         },
         22 => if scoped.shader_gba.includes_gba_color() { 42 }
@@ -1232,7 +1264,7 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         crate::settings::PCE_PAD_KEY => SPECIFIC_3_2_VALUES + 3 + usize::from(scoped.pce_six_buttons),
         crate::settings::VIGNETTE_NES_KEY..=crate::settings::CURVATURE_PCE_KEY => {
             let (platform, curve) = Settings::crt_platform(key)?;
-            percent_value(scoped.crt_look(platform, curve) * 10)
+            crt_line_value(scoped.crt_look(platform, curve))
         }
         crate::settings::POKEMINI_FILTER_KEY => match scoped.pokemini_lcd_filter {
             1 => 149, 2 => 17, _ => 105,
@@ -6552,7 +6584,9 @@ impl Engine {
             let (view, platform) = (self.game_settings(), self.current_cart_platform());
             (view.crt_look(platform, false), view.crt_look(platform, true))
         };
-        self.gpu.set_crt(f32::from(crt.0) / 10.0, f32::from(crt.1) / 10.0);
+        // The line's level: below 0 GDV Mini Ultra's, above crt-royale's.
+        let (vignette, curvature) = (crate::settings::crt_level(crt.0), crate::settings::crt_level(crt.1));
+        self.gpu.set_crt(f32::from(vignette) / 10.0, f32::from(curvature.min(0).unsigned_abs()) / 10.0);
         let sunlight = lcd == crate::settings::LcdEffect::Sunlight && self.game.is_some();
         if sunlight != self.tilt_on {
             self.tilt_on = sunlight;

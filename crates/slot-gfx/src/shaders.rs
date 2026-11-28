@@ -228,7 +228,7 @@ uniform float u_paper_size;
 uniform vec4 u_rect;
 uniform vec2 u_fbo;
 uniform vec4 u_pic;
-uniform float u_vignette;  // home consoles: darker edges, 0 to 1
+uniform float u_vignette;  // home consoles: darker edges, -1 (GDV) .. 0 .. 1 (crt-royale)
 uniform float u_curve;     // home consoles: a curved tube, 0 to 1
 varying vec2 v_uv;
 const vec3 offsets = vec3(3.141592654) * vec3(1.0 / 2.0, 1.0 / 2.0 - 2.0 / 3.0, 1.0 / 2.0 - 4.0 / 3.0);
@@ -1170,18 +1170,30 @@ vec2 crt_curve(vec2 uv) {
     c *= vec2(1.0) - 0.23 * d;
     return u_pic.xy + (c + vec2(0.5)) * size;
 }
-/* Vignette: crt-guest-dr-venom's, at its size 2.0 and up to its strongest
-   (strength 2.0 at u_vignette 1: Siham 2026-11-28, size 1.0 and strength
-   1.0 hardly showed), the bands as wide on screen across as down. */
+/* Vignette, one line (Siham 2026-11-28). Below 0, crt-guest-dr-venom's, at
+   its size 2.0 and up to its strongest (strength 2.0 at -1: size 1.0 and
+   strength 1.0 hardly showed), the bands as wide on screen across as down.
+   Above 0, crt-royale's border dim (its geometry-aa last pass): darkness
+   2.0, compress 2.5, its own border_size 0.015 at 0.5 (+5) and twice that
+   at 1 (+10), as wide on screen across as down, its corners rounded. */
 float crt_vignette(vec2 uv) {
     vec2 size = u_pic.zw - u_pic.xy;
     vec2 shown = size / max(u_uv.zw, vec2(1e-5)) * u_rect.zw;
+    vec2 video = clamp((uv - u_pic.xy) / size, 0.0, 1.0);
+    if (u_vignette > 0.0) {
+        vec2 aspect = normalize(max(shown, vec2(1.0)));
+        vec2 edge = min(video, vec2(1.0) - video) * aspect;
+        float border = 0.03 * u_vignette;
+        vec2 pen = max(vec2(border) - edge, vec2(0.0));
+        float escape = max(1.0 - length(pen) / border, 0.0);
+        return min(pow(escape, 2.0) * 2.5, 1.0);
+    }
     vec2 b = vec2(1.0, shown.x / max(shown.y, 1.0)) * 0.125 * 2.0;
-    vec2 pos = abs(2.0 * (clamp((uv - u_pic.xy) / size, 0.0, 1.0) - vec2(0.5)));
+    vec2 pos = abs(2.0 * (video - vec2(0.5)));
     // GDV's smoothstep(1, 1 - b, x), with its edges in order for GLES.
     vec2 res = vec2(1.0) - smoothstep(vec2(1.0) - b, vec2(1.0), sqrt(pos));
     res = pow(res, vec2(0.30));
-    return max(mix(1.0, sqrt(res.x * res.y), 2.0 * u_vignette), 0.0);
+    return max(mix(1.0, sqrt(res.x * res.y), -2.0 * u_vignette), 0.0);
 }
 void main() {
     vec2 uv = u_uv.xy + v_uv * u_uv.zw;
@@ -1322,7 +1334,7 @@ void main() {
         c *= yfactor * xfactors;
     }
     if (inside) c = lcd_effect(c, uv);
-    if (inside && u_vignette > 0.0) c *= crt_vignette(uv);
+    if (inside && u_vignette != 0.0) c *= crt_vignette(uv);
     // Grid V2 + GBA already contains GBA Color. Never unintentionally
     // apply the global correction twice.
     if (u_colour_correct > 0.5 && inside &&

@@ -866,9 +866,11 @@ pub struct Settings {
     /// (III, IV, V, VI on Y, X, L1, R1) instead of the console's 2 buttons.
     #[serde(default)]
     pub pce_six_buttons: bool,
-    /// Vignette and Curvature of the home consoles' picture, in tens of
-    /// percent (0 off, 10 = 100%), one per CRT_PLATFORMS system, over every
-    /// shader (Siham 2026-11-27).
+    /// Vignette and Curvature of the home consoles' picture, one per
+    /// CRT_PLATFORMS system, over every shader (Siham 2026-11-27): a code
+    /// (crt_level) for one line from -10 to +10, 0 off, 1-10 GDV's at
+    /// -1..-10 (as saved before 3.2), 11-20 crt-royale's at +1..+10
+    /// (Siham 2026-11-28).
     #[serde(default)]
     pub crt_vignette: [u8; 6],
     #[serde(default)]
@@ -1435,14 +1437,14 @@ impl Settings {
             _ => None,
         }
     }
-    /// Vignette or Curvature in tens of percent (0 off .. 10).
+    /// Vignette or Curvature's saved code (crt_level reads it).
     pub fn crt_look(&self, platform: slot_store::Platform, curve: bool) -> u8 {
         let Some(at) = CRT_PLATFORMS.iter().position(|p| *p == platform) else { return 0 };
-        (if curve { self.crt_curvature[at] } else { self.crt_vignette[at] }).min(10)
+        (if curve { self.crt_curvature[at] } else { self.crt_vignette[at] }).min(20)
     }
     pub fn set_crt_look(&mut self, platform: slot_store::Platform, curve: bool, value: u8) {
         let Some(at) = CRT_PLATFORMS.iter().position(|p| *p == platform) else { return };
-        let value = value.min(10);
+        let value = value.min(20);
         if curve { self.crt_curvature[at] = value } else { self.crt_vignette[at] = value }
     }
     pub fn home_shader_key(platform:slot_store::Platform)->Option<usize> {
@@ -1779,8 +1781,8 @@ impl Settings {
             PCE_PAD_KEY => self.pce_six_buttons = !self.pce_six_buttons,
             VIGNETTE_NES_KEY..=CURVATURE_PCE_KEY => {
                 let Some((platform, curve)) = Self::crt_platform(key) else { return false };
-                let next = step_index(self.crt_look(platform, curve), 11, right);
-                self.set_crt_look(platform, curve, next);
+                let next = step_crt_level(crt_level(self.crt_look(platform, curve)), curve, right);
+                self.set_crt_look(platform, curve, crt_code(next));
             }
             3 => step_palette(&mut self.gb_palettes, &mut self.gb_palette, right),
             4 => {
@@ -2072,6 +2074,37 @@ pub fn pokemini_lcd_filter_option(choice: u8) -> &'static str {
 pub const ROTATE_DIM_S: [u16; 4] = [5, 10, 15, 30];
 pub const ROTATE_SLEEP_S: [u16; 5] = [30, 60, 120, 300, 0];
 
+/// A Vignette or Curvature code's place on its line: 0 off, -1..-10
+/// GDV Mini Ultra's (codes 1-10, as saved before 3.2), +1..+10
+/// crt-royale's (codes 11-20).
+pub fn crt_level(code: u8) -> i8 {
+    match code.min(20) {
+        0 => 0,
+        c @ 1..=10 => -(c as i8),
+        c => c as i8 - 10,
+    }
+}
+
+pub fn crt_code(level: i8) -> u8 {
+    match level.clamp(-10, 10) {
+        0 => 0,
+        l if l < 0 => (-l) as u8,
+        l => l as u8 + 10,
+    }
+}
+
+/// One step along the line, round: Curvature has no crt-royale side yet.
+fn step_crt_level(level: i8, curve: bool, right: bool) -> i8 {
+    let top = if curve { 0 } else { 10 };
+    let level = level.clamp(-10, top);
+    match (right, level) {
+        (true, l) if l >= top => -10,
+        (false, -10) => top,
+        (true, l) => l + 1,
+        (false, l) => l - 1,
+    }
+}
+
 /// The next of `count` choices, round.
 fn step_index(value: u8, count: u8, right: bool) -> u8 {
     let value = value.min(count - 1);
@@ -2188,17 +2221,32 @@ mod tests {
         assert_eq!(fbneo_neogeo_mode(1, 1, true), "AES_EUR");
         assert_eq!(fbneo_neogeo_mode(2, 2, true), "MVS_JAP");
         assert_eq!(fbneo_neogeo_mode(3, 1, true), "UNIBIOS");
-        // Vignette and Curvature: OFF, 10% .. 100%, round, per system.
+        // Vignette: one line, -10 (GDV) .. OFF .. +10 (crt-royale), round;
+        // Curvature: -10 .. OFF for now. Per system.
         for platform in CRT_PLATFORMS {
             for curve in [false, true] {
                 let key = Settings::crt_key(platform, curve).unwrap();
+                let level = |s: &Settings| crt_level(s.crt_look(platform, curve));
                 assert_eq!(Settings::crt_platform(key), Some((platform, curve)));
-                assert_eq!(s.crt_look(platform, curve), 0);
-                assert!(s.change(key, true) && s.crt_look(platform, curve) == 1);
-                assert!(s.change(key, false) && s.change(key, false) && s.crt_look(platform, curve) == 10);
-                assert!(s.change(key, true) && s.crt_look(platform, curve) == 0);
+                assert_eq!(level(&s), 0);
+                assert!(s.change(key, false) && level(&s) == -1);
+                assert_eq!(s.crt_look(platform, curve), 1, "GDV keeps its pre-3.2 code");
+                assert!(s.change(key, true) && level(&s) == 0);
+                if curve {
+                    assert!(s.change(key, true) && level(&s) == -10);
+                    assert!(s.change(key, false) && level(&s) == 0);
+                } else {
+                    assert!(s.change(key, true) && level(&s) == 1);
+                    assert_eq!(s.crt_look(platform, curve), 11);
+                    for _ in 0..9 { s.change(key, true); }
+                    assert_eq!(level(&s), 10);
+                    assert!(s.change(key, true) && level(&s) == -10);
+                    assert!(s.change(key, false) && level(&s) == 10);
+                    s.set_crt_look(platform, curve, 0);
+                }
             }
         }
+        for code in 0..=20 { assert_eq!(crt_code(crt_level(code)), code); }
         assert_eq!(Settings::crt_key(P::Gba, false), None);
         s.set_crt_look(P::Snes, true, 3);
         assert_eq!((s.crt_look(P::Snes, true), s.crt_look(P::Nes, true), s.crt_look(P::Snes, false)), (3, 0, 0));
