@@ -23,6 +23,22 @@ class FolderSaveMarkTest {
         }
     }
 
+    @Test fun retroArchsStateKeptWithTheFolderSaveResumes() {
+        val files = Files.createTempDirectory("slot-files").toFile()
+        try {
+            RetroArchStorage.markFolderSave(files, "Beetle WonderSwan", "Battle Spirit")
+            assertTrue(RetroArchStorage.applyFolderSaveMark(files, "Beetle WonderSwan",
+                "Battle Spirit", "ws1"))
+            val stale = java.io.File(files, "Saves/ws1.${RetroArchStorage.coreLower("Beetle WonderSwan")}.state-stale.once")
+            assertTrue(stale.isFile)
+            assertTrue(RetroArchStorage.keepFolderState(files, "ws1", "Beetle WonderSwan"))
+            assertFalse("game.rs resumes RetroArch's state", stale.exists())
+            assertFalse("nothing left to lift", RetroArchStorage.keepFolderState(files, "ws1", "Beetle WonderSwan"))
+        } finally {
+            files.deleteRecursively()
+        }
+    }
+
     @Test fun otherGamesAndCoresAreLeftAlone() {
         val files = Files.createTempDirectory("slot-files").toFile()
         try {

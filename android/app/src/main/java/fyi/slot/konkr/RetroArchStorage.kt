@@ -170,6 +170,13 @@ internal object RetroArchStorage {
         return true
     }
 
+    /** The kept folder save came with RetroArch's own auto-state, played to
+     *  the same point: that state resumes, and only slot.'s older states stay
+     *  aside (WonderSwan, 2026-11-28: a cold start otherwise, then each app
+     *  copied the other's fresh state). True if the guard was lifted. */
+    internal fun keepFolderState(files: File, romIdentity: String, stateCore: String): Boolean =
+        File(files, "Saves/$romIdentity.${coreLower(stateCore)}.state-stale.once").delete()
+
     /** The folder's save was changed outside slot. while slot. has its own
      *  place to resume from: the player chooses (issue #116). */
     class FolderSaveChanged : IllegalStateException("The save folder has a different save")
@@ -468,6 +475,10 @@ internal object RetroArchStorage {
                 } catch (_: Exception) {
                     false
                 })
+        }
+        if (folderKept && stateTree != null && stateOutside.value &&
+            keepFolderState(files, target.romIdentity, target.core)) {
+            SlotLog.i(TAG, "Folder state for ${target.core}/${target.stem} is RetroArch's: resuming it with its save")
         }
         // The original implementation enumerated the entire save/state
         // directory SIX times per game launch. Large ROM collections with
