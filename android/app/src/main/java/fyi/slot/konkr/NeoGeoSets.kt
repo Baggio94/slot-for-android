@@ -8,21 +8,21 @@ import java.util.Locale
  *  an arcade folder (arcade, fbneo, fba, mame) is a Neo Geo cart, and its
  *  shelf name is the dat's title (Siham 2026-11-28). */
 internal object NeoGeoSets {
-    internal class Set(val parent: String, val title: String)
+    internal class Entry(val parent: String, val title: String)
 
-    @Volatile private var sets: Map<String, Set>? = null
+    @Volatile private var sets: Map<String, Entry>? = null
 
-    internal fun parse(lines: Sequence<String>): Map<String, Set> {
-        val out = HashMap<String, Set>(1024)
+    internal fun parse(lines: Sequence<String>): Map<String, Entry> {
+        val out = HashMap<String, Entry>(1024)
         for (line in lines) {
             val parts = line.split('\t')
             if (parts.size != 3 || parts[0].isBlank() || parts[2].isBlank()) continue
-            out[parts[0].trim().lowercase(Locale.ROOT)] = Set(parts[1].trim().lowercase(Locale.ROOT), parts[2].trim())
+            out[parts[0].trim().lowercase(Locale.ROOT)] = Entry(parts[1].trim().lowercase(Locale.ROOT), parts[2].trim())
         }
         return out
     }
 
-    private fun all(context: Context): Map<String, Set> = sets ?: synchronized(this) {
+    private fun all(context: Context): Map<String, Entry> = sets ?: synchronized(this) {
         sets ?: try {
             context.assets.open("neogeo-sets.tsv").bufferedReader().useLines { parse(it) }
         } catch (_: Exception) { emptyMap() }.also { sets = it }
