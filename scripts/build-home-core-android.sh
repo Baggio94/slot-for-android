@@ -27,7 +27,9 @@ case "$CORE" in
   fceumm)          REPO=libretro-fceumm;  PIN=fb919fb6fa881aaa6279b765d480220579e5c606; JNI=jni;                         LICENCE=Copying ;;
   nestopia)        REPO=nestopia;         PIN=f1e02d12664834536edbf7352995a3d0cd1caef4; JNI=libretro/jni;                LICENCE=COPYING ;;
   snes9x)          REPO=snes9x;           PIN=204ea1c0b851f960cbf223075eb1c25641cb483c; JNI=libretro/jni;                LICENCE=LICENSE ;;
-  bsnes)           REPO=bsnes;            PIN=63ee22f7af8f5d1ada295c2c98fd7bf261fa62a7; JNI=bsnes/target-libretro/jni;  LICENCE=LICENSE.txt ;;
+  # bsnes from its author's tree, as RetroArch builds it (save state format
+  # 115.1; libretro's own copy stopped at 115, so neither read the other's).
+  bsnes)           REPO=bsnes;            PIN=d217a2c6a465959876c142076a526dac3c9329f4; JNI=bsnes/target-libretro/jni;  LICENCE=LICENSE.txt; OWNER=bsnes-emu ;;
   genesis_plus_gx) REPO=Genesis-Plus-GX;  PIN=b9c2316441978d4015ba30e9a95d9b0e6f8ee981; JNI=libretro/jni;                LICENCE=LICENSE.txt ;;
   picodrive)       REPO=picodrive;        PIN=1890c2932234c9d30f4cd3851d02228baae8f09e; JNI=jni;                         LICENCE=COPYING; SUBMODULES=1 ;;
   # Gearsystem 3.9.26+ (2026-11-28), from its author's repository.
@@ -66,6 +68,8 @@ if [ ! -d "$SRC/.git" ]; then
   git init -q "$SRC"
   git -C "$SRC" remote add origin "https://github.com/$OWNER/$REPO.git"
 fi
+# A cached tree from a core's former home follows it to the new one.
+git -C "$SRC" remote set-url origin "https://github.com/$OWNER/$REPO.git"
 # Start from clean trees: the last build's patches would block a checkout, and
 # patches that touch the same file only apply in order, onto the one before
 # (fake08's input and save state patches).
