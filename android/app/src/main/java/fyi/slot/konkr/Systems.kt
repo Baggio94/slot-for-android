@@ -190,6 +190,19 @@ internal object Systems {
         else -> "srm"
     }
 
+    /** The other files a core keeps beside its in-game save, synced with
+     *  it: FinalBurn Neo's memory card, Geolith's MVS NVRAM and cartridge
+     *  RAM (RetroArch's names, the core's own). */
+    fun saveCompanions(folder: String): List<String> = when (folder) {
+        "FinalBurn Neo" -> listOf("memcard")
+        "Geolith" -> listOf("nv", "srm")
+        else -> emptyList()
+    }
+
+    /** The folder below the core's own where RetroArch finds a core's save:
+     *  FinalBurn Neo writes <saves>/fbneo/<set>.fs and .memcard. */
+    fun saveSubfolder(folder: String): String? = if (folder == "FinalBurn Neo") "fbneo" else null
+
     private val SAVE_SUFFIXES = listOf(".srm", ".eeprom", ".eep", ".flash", ".ngf", ".p8d.txt",
         ".fs", ".memcard", ".mcr", ".nv")
 

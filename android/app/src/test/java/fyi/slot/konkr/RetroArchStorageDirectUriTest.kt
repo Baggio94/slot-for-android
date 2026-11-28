@@ -18,6 +18,21 @@ class RetroArchStorageDirectUriTest {
                 "mGBA", "Advance Wars 2 - Black Hole Rising (USA).state.auto"))
     }
 
+    @Test fun finalBurnNeoSavesSitInRetroArchsFbneoSubfolder() {
+        assertEquals("primary:RetroArch/saves/FinalBurn Neo/fbneo/mslug.fs",
+            RetroArchStorage.directDocumentId("primary:RetroArch/saves", "FinalBurn Neo", "mslug.fs"))
+        assertEquals("primary:RetroArch/saves/FinalBurn Neo/fbneo/mslug.memcard",
+            RetroArchStorage.directDocumentId("primary:RetroArch/saves", "FinalBurn Neo", "mslug.memcard"))
+        // States stay in the core's own folder.
+        assertEquals("primary:RetroArch/states/FinalBurn Neo/mslug.state.auto",
+            RetroArchStorage.directDocumentId("primary:RetroArch/states", "FinalBurn Neo", "mslug.state.auto"))
+        assertEquals("primary:RetroArch/saves/Geolith/mslug.nv",
+            RetroArchStorage.directDocumentId("primary:RetroArch/saves", "Geolith", "mslug.nv"))
+        assertEquals(listOf("memcard"), Systems.saveCompanions("FinalBurn Neo"))
+        assertEquals(listOf("nv", "srm"), Systems.saveCompanions("Geolith"))
+        assertTrue(Systems.saveCompanions("mGBA").isEmpty())
+    }
+
     @Test fun removableStorageAndAlternativeCoreWork() {
         assertEquals("ABCD-1234:My Saves/gpSP/Game.rtc",
             RetroArchStorage.directDocumentId("ABCD-1234:My Saves", "gpSP", "Game.rtc"))

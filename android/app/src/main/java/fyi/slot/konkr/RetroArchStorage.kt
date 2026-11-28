@@ -54,6 +54,10 @@ internal object RetroArchStorage {
     ) {
         /** The in-game save's name: <rom>.srm, .eeprom (Handy) or .eep (PokeMini). */
         val saveName: String get() = "$stem.${Systems.saveExtension(saveCore)}"
+        /** The files the core keeps beside the save (Neo Geo), by name. */
+        val companions: List<Pair<String, File>> get() = Systems.saveCompanions(saveCore).map { ext ->
+            "$stem.$ext" to File(saveLocal.parentFile, "$stem.$ext")
+        }
     }
 
     fun target(context: Context, rawUri: String, core: String, savesTree: Uri?, statesTree: Uri?,
@@ -176,8 +180,11 @@ internal object RetroArchStorage {
 
     /** What slot. last read from or wrote to the folder for one file, in
      *  that folder: a file that differs was changed outside slot. */
+    /** What slot. last left in the folder, by where it is there: a save
+     *  that moved to RetroArch's subfolder (FinalBurn Neo, 3.2) starts
+     *  without a print, never as one the player deleted. */
     internal fun syncPrint(files: File, core: String, name: String): File =
-        File(files, "FolderSync/$core/$name.seen")
+        File(files, "FolderSync/$core/" + (saveSubfolder(core, name)?.let { "$it/" } ?: "") + "$name.seen")
 
     internal fun digestOf(bytes: ByteArray): String =
         java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
@@ -351,6 +358,10 @@ internal object RetroArchStorage {
             for (core in cores) {
                 folders += Triple(target.savesTree, core, target.stem + "." + Systems.saveExtension(core))
                 folders += Triple(target.savesTree, core, target.stem + ".rtc")
+            }
+            for ((name, local) in target.companions) {
+                retire(local, target.saveCore)
+                folders += Triple(target.savesTree, target.saveCore, name)
             }
         }
         if (SaveDeletes.Kind.STATE in kinds) {
@@ -544,6 +555,11 @@ internal object RetroArchStorage {
                     require(bytes.isNotEmpty()) { "Empty RetroArch RTC" }
                     stage(target.rtcLocal, bytes)
                 }
+            // The Neo Geo's other saves, as RetroArch left them.
+            for ((name, local) in target.companions) {
+                readNamed(context, root, target.saveCore, name, MAX_SAVE)
+                    ?.takeIf { it.isNotEmpty() }?.let { stage(local, it) }
+            }
         }
         // RetroArch's manual slots, whatever happens to its auto-state.
         val manualAt = SystemClock.elapsedRealtime()
@@ -648,6 +664,18 @@ internal object RetroArchStorage {
             } catch (e: Exception) {
                 SlotLog.e(TAG, "RetroArch RTC export failed for ${target.core}/${target.stem}", e)
                 failures.add("RTC sync failed (${target.core}): " + (e.message ?: "access denied"))
+            }
+        }
+        if (target.savesTree != null) for ((name, local) in target.companions) {
+            if (!local.isFile) continue
+            try {
+                val data = local.readBytes()
+                if (data.isNotEmpty() && data.size <= MAX_SAVE) {
+                    writeSaf(context, target.savesTree, target.saveCore, name, data, isState = false)
+                }
+            } catch (e: Exception) {
+                SlotLog.e(TAG, "RetroArch $name export failed for ${target.core}", e)
+                failures.add("Save sync failed (${target.core}): " + (e.message ?: "access denied"))
             }
         }
         // A core switch that chose shared SRAM intentionally did NOT
@@ -1436,6 +1464,18 @@ internal object RetroArchStorage {
         return names
     }
 
+    private fun coreFolder(context: Context, root: Uri, core: String, create: Boolean,
+                           name: String? = null): Uri? {
+        val folder = coreFolder(context, root, core, create) ?: return null
+        val sub = name?.let { saveSubfolder(core, it) } ?: return folder
+        val id = DocumentsContract.getDocumentId(folder)
+        children(context, root, id).firstOrNull { it.first == sub }?.second?.let { return it }
+        if (!create) return null
+        return DocumentsContract.createDocument(context.contentResolver, folder,
+            DocumentsContract.Document.MIME_TYPE_DIR, sub)
+            ?: error("Cannot create RetroArch folder: $core/$sub")
+    }
+
     private fun coreFolder(context: Context, root: Uri, core: String, create: Boolean): Uri? {
         val rootId = DocumentsContract.getTreeDocumentId(root)
         val existing = children(context, root, rootId).firstOrNull { it.first == core }?.second
@@ -1468,8 +1508,13 @@ internal object RetroArchStorage {
         }
         if (treeId.any { it == '\\' || it.code < 32 } ||
             treeId.split('/').any { it == "." || it == ".." }) return null
-        return "$treeId/$core/$name"
+        return "$treeId/$core/" + (saveSubfolder(core, name)?.let { "$it/" } ?: "") + name
     }
+
+    /** The folder below the core's that holds `name` in RetroArch's saves
+     *  (FinalBurn Neo's fbneo/); never a state's. */
+    internal fun saveSubfolder(core: String, name: String): String? =
+        Systems.saveSubfolder(core)?.takeIf { !name.contains(".state") }
 
     /** Whether a directly addressed document exists; null when the
      *  provider does not say, and the caller lists the folder instead. */
@@ -1544,7 +1589,7 @@ internal object RetroArchStorage {
     }
 
     private fun find(context: Context, root: Uri, core: String, name: String): Uri? {
-        val dir = coreFolder(context, root, core, create = false) ?: return null
+        val dir = coreFolder(context, root, core, create = false, name = name) ?: return null
         val id = DocumentsContract.getDocumentId(dir)
         return children(context, root, id).firstOrNull { it.first == name }?.second
     }
@@ -1702,7 +1747,7 @@ internal object RetroArchStorage {
                 DocumentsContract.getDocumentId(it).substringBeforeLast('/'))
         }
         val folderDirect = directFolder != null && directExists(context, directFolder) == true
-        val folder = (if (folderDirect) directFolder else coreFolder(context, root, core, create = true))
+        val folder = (if (folderDirect) directFolder else coreFolder(context, root, core, create = true, name = name))
             ?: error("Cannot access RetroArch core folder")
         val dirId = DocumentsContract.getDocumentId(folder)
         fun lookup(child: String): Uri? {
