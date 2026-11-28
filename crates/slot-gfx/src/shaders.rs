@@ -1170,17 +1170,18 @@ vec2 crt_curve(vec2 uv) {
     c *= vec2(1.0) - 0.23 * d;
     return u_pic.xy + (c + vec2(0.5)) * size;
 }
-/* Vignette: crt-guest-dr-venom's (vignette size 1.0), strength u_vignette,
-   the bands as wide on screen across as down. */
+/* Vignette: crt-guest-dr-venom's, at its size 2.0 and up to its strongest
+   (strength 2.0 at u_vignette 1: Siham 2026-11-28, size 1.0 and strength
+   1.0 hardly showed), the bands as wide on screen across as down. */
 float crt_vignette(vec2 uv) {
     vec2 size = u_pic.zw - u_pic.xy;
     vec2 shown = size / max(u_uv.zw, vec2(1e-5)) * u_rect.zw;
-    vec2 b = vec2(1.0, shown.x / max(shown.y, 1.0)) * 0.125;
+    vec2 b = vec2(1.0, shown.x / max(shown.y, 1.0)) * 0.125 * 2.0;
     vec2 pos = abs(2.0 * (clamp((uv - u_pic.xy) / size, 0.0, 1.0) - vec2(0.5)));
     // GDV's smoothstep(1, 1 - b, x), with its edges in order for GLES.
     vec2 res = vec2(1.0) - smoothstep(vec2(1.0) - b, vec2(1.0), sqrt(pos));
     res = pow(res, vec2(0.30));
-    return max(mix(1.0, sqrt(res.x * res.y), u_vignette), 0.0);
+    return max(mix(1.0, sqrt(res.x * res.y), 2.0 * u_vignette), 0.0);
 }
 void main() {
     vec2 uv = u_uv.xy + v_uv * u_uv.zw;
