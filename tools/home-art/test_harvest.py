@@ -613,6 +613,20 @@ class PlatformTests(unittest.TestCase):
         self.assertIn('NEOGEO', harvest.BY_SET)
         self.assertIn('NEOGEO', harvest.DAT_BASE)
 
+    def test_neo_geo_asks_every_finalburn_neo_parent_set(self):
+        text = ("savagere\t\tSavage Reign / Fu'un Mokushiroku - Kakutou Sousei\n"
+                'savagereb\tsavagere\tSavage Reign (Boss Hack)\n'
+                'totc\t\tTreasure of the Caribbean\n')
+        sets = harvest.fbneo_sets(text)
+        self.assertEqual(('Treasure of the Caribbean', 0), sets['totc'])
+        self.assertIn('savagere', sets)
+        self.assertNotIn('savagereb', sets)
+        self.assertEqual(('Neo Fight', 0), sets['neofight'])
+        every = harvest.fbneo_sets()
+        self.assertIn('twsoc96', every)
+        self.assertIn('columnsn', every)
+        self.assertGreater(len(every), 250)
+
     def test_supergrafx_cards_join_the_pc_engine(self):
         names = [extra for extra, _, _ in harvest.EXTRA_DATS['PCE']]
         self.assertEqual(['NEC - PC Engine SuperGrafx'], names)
