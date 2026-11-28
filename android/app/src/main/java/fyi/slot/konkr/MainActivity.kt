@@ -165,6 +165,7 @@ class MainActivity : Activity() {
     external fun nativeSetShelfStatus(code: Int)
     external fun nativeSetScanProgress(done: Int, total: Int)
     external fun nativeSetLibrary(json: String): Int
+    external fun nativeTouchLibrary(): Boolean
     external fun nativeConfigure(dataDir: String, libraryDir: String,
         isRetroidPocketClassic: Boolean)
     external fun nativePollLaunchUri(): String?
@@ -4155,6 +4156,9 @@ class MainActivity : Activity() {
             try {
                 val imported = BiosLibrary.importFrom(this, uri, allowEmpty = !persistSelection)
                 SlotLog.i(TAG, "BIOS imported (${imported.size}): ${imported.joinToString()}")
+                // PICO-8 staged: its shelf and Splore show now, not at the
+                // next start (Siham 2026-11-28). The same carts: nothing moves.
+                if ("PICO-8" in imported) nativeTouchLibrary()
                 // Restoring the already selected BIOS at startup stays silent.
                 val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
                 if (persistSelection) {

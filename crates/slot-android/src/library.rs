@@ -424,6 +424,25 @@ pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeSetLibrary(
     count
 }
 
+/// Something the shelves read besides the ROMs changed (PICO-8 just
+/// staged from the BIOS folder: Splore's cart, 3.2.0): the same library,
+/// read again at the next safe frame, its carts kept in place.
+pub fn touch_library() -> bool {
+    let mut state = LIBRARY.lock().unwrap_or_else(|err| err.into_inner());
+    if state.entries.is_none() { return false; }
+    state.version = state.version.wrapping_add(1);
+    true
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_fyi_slot_konkr_MainActivity_nativeTouchLibrary(
+    _env: jni::JNIEnv<'_>,
+    _this: jni::objects::JObject<'_>,
+) -> jni::sys::jboolean {
+    jni::sys::jboolean::from(touch_library())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
