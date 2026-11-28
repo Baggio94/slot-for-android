@@ -35,3 +35,17 @@ last answer (`--retry-after 30`), and publishes new files and indexes to the R2 
 Images come from [ScreenScraper](https://www.screenscraper.fr/) (CC BY-NC-SA 4.0); game names
 and CRCs from [libretro-database](https://github.com/libretro/libretro-database) (CC BY-SA 4.0).
 A published set carries both attributions.
+
+## ROM hacks and cleaned labels
+
+- `import_hacks.py` adds the ROM hack labels listed in `hack-labels/manifest.json` (from
+  [Ddaretrogamer's ROM-Hack-Labels](https://github.com/Ddaretrogamer/ROM-Hack-Labels), used with
+  his permission; art by Ddaretrogamer, Oom, yosoo5000, Jaizu, PacoScarso, PurrfectDoodle,
+  Phantonomy, Replay Modding and BearlyApple). A hack has no fixed CRC32, so these are found by
+  name: `HACKS.json` maps a key such as `radical red` to its labels, `HACKS.names.json` to its
+  title, `HACKS.about.json` holds the credits. The app looks there when a cart's CRC32 is in no
+  index, with `import_hacks.key_of` as the rule.
+- `fix_labels.py` swaps published labels for cleaned copies kept in `label-fixes/` (a scan that
+  kept the white paper around its corners, cleared with `label-fixes/clear_border.py`).
+
+Both run on every publishing run and on a push to main that changes them.
