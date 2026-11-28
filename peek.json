@@ -1,0 +1,152 @@
+{
+ "0A48556B": [
+  "Pocket Monsters - LeafGreen (Japan)",
+  [
+   [
+    "support-texture",
+    "jp",
+    "files/2b/2b1dfb92b295f333b9ac18b09dd25bad11b3f434.png"
+   ],
+   [
+    "wheel",
+    "jp",
+    "files/df/dfb576ce523dd33fb5a2a281b5403aaa71c8b3d4.webp"
+   ]
+  ]
+ ],
+ "31554C22": [
+  "Pokemon - FireRed Version (USA, Europe) (Rev 10) (Switch)",
+  [
+   [
+    "support-texture",
+    "us",
+    "files/e1/e1ae616f570850e42950429c9f907db00032af89.webp"
+   ],
+   [
+    "wheel",
+    "wor",
+    "files/bc/bc64047b4695d39195ebcc1dfeb337bc4699e7f9.webp"
+   ]
+  ]
+ ],
+ "3B2056E9": [
+  "Pocket Monsters - FireRed (Japan)",
+  [
+   [
+    "support-texture",
+    "jp",
+    "files/99/993228690dc06ca282c46e065c3526a7c58fd467.png"
+   ],
+   [
+    "wheel",
+    "jp",
+    "files/4f/4fdfc43dcfc43b6fd5e80b7686aa2de173b17f8f.webp"
+   ]
+  ]
+ ],
+ "49DDF652": [
+  "Pokemon - LeafGreen Version (USA, Europe) (Rev 10) (Switch)",
+  [
+   [
+    "support-texture",
+    "us",
+    "files/41/416aa8b4b9863aaa89a340de6244b765a26afb3f.webp"
+   ],
+   [
+    "wheel",
+    "wor",
+    "files/4a/4af43bef37fb4826a5a7c2a97942a095351ff8ea.webp"
+   ]
+  ]
+ ],
+ "84EE4776": [
+  "Pokemon - FireRed Version (USA, Europe) (Rev 1)",
+  [
+   [
+    "support-texture",
+    "us",
+    "files/e1/e1ae616f570850e42950429c9f907db00032af89.webp"
+   ],
+   [
+    "wheel",
+    "wor",
+    "files/bc/bc64047b4695d39195ebcc1dfeb337bc4699e7f9.webp"
+   ]
+  ]
+ ],
+ "8DA4601A": [
+  "Pocket Monsters - LeafGreen (Japan) (Rev 1)",
+  [
+   [
+    "support-texture",
+    "jp",
+    "files/2b/2b1dfb92b295f333b9ac18b09dd25bad11b3f434.png"
+   ],
+   [
+    "wheel",
+    "jp",
+    "files/df/dfb576ce523dd33fb5a2a281b5403aaa71c8b3d4.webp"
+   ]
+  ]
+ ],
+ "BB640DF7": [
+  "Pocket Monsters - FireRed (Japan) (Rev 1)",
+  [
+   [
+    "support-texture",
+    "jp",
+    "files/99/993228690dc06ca282c46e065c3526a7c58fd467.png"
+   ],
+   [
+    "wheel",
+    "jp",
+    "files/4f/4fdfc43dcfc43b6fd5e80b7686aa2de173b17f8f.webp"
+   ]
+  ]
+ ],
+ "D69C96CC": [
+  "Pokemon - LeafGreen Version (USA, Europe)",
+  [
+   [
+    "support-texture",
+    "us",
+    "files/41/416aa8b4b9863aaa89a340de6244b765a26afb3f.webp"
+   ],
+   [
+    "wheel",
+    "wor",
+    "files/4a/4af43bef37fb4826a5a7c2a97942a095351ff8ea.webp"
+   ]
+  ]
+ ],
+ "DAFFECEC": [
+  "Pokemon - LeafGreen Version (USA, Europe) (Rev 1)",
+  [
+   [
+    "support-texture",
+    "us",
+    "files/41/416aa8b4b9863aaa89a340de6244b765a26afb3f.webp"
+   ],
+   [
+    "wheel",
+    "wor",
+    "files/4a/4af43bef37fb4826a5a7c2a97942a095351ff8ea.webp"
+   ]
+  ]
+ ],
+ "DD88761C": [
+  "Pokemon - FireRed Version (USA, Europe)",
+  [
+   [
+    "support-texture",
+    "us",
+    "files/e1/e1ae616f570850e42950429c9f907db00032af89.webp"
+   ],
+   [
+    "wheel",
+    "wor",
+    "files/bc/bc64047b4695d39195ebcc1dfeb337bc4699e7f9.webp"
+   ]
+  ]
+ ]
+}
