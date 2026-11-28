@@ -1183,31 +1183,44 @@ struct HomeMap {
     /// The work RAM's address on the console bus, for cores that only
     /// describe it through a memory map.
     bus: usize,
+    /// RetroAchievements reads this RAM in 16-bit words of the host's byte
+    /// order (Arcade: as FinalBurn Neo keeps it). A core that keeps it in
+    /// the console's own order and says so (RETRO_MEMDESC_BIGENDIAN:
+    /// Geolith) has each word's two bytes swapped, as RetroArch does.
+    host_words: bool,
 }
+
+/// libretro.h: RETRO_MEMDESC_BIGENDIAN.
+const MEMDESC_BIGENDIAN: u64 = 1 << 1;
 
 fn home_map(console: u32) -> Option<HomeMap> {
     match console {
-        7 => Some(HomeMap { ram: 0x800, mirror_to: 0x2000, save_at: 0x6000, save_max: 0x2000, bus: 0 }),
-        3 => Some(HomeMap { ram: 0x20000, mirror_to: 0x20000, save_at: 0x20000, save_max: 0x20000, bus: 0x7e0000 }),
-        1 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0x10000, bus: 0xff0000 }),
+        7 => Some(HomeMap { ram: 0x800, mirror_to: 0x2000, save_at: 0x6000, save_max: 0x2000, bus: 0, host_words: false }),
+        3 => Some(HomeMap { ram: 0x20000, mirror_to: 0x20000, save_at: 0x20000, save_max: 0x20000, bus: 0x7e0000, host_words: false }),
+        1 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0x10000, bus: 0xff0000, host_words: false }),
         // Master System and Game Gear: 8 KiB RAM, cart RAM at 0x2000 (32 KiB).
-        11 | 15 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0x8000, bus: 0xc000 }),
+        11 | 15 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0x8000, bus: 0xc000, host_words: false }),
         // Neo Geo Pocket: 16 KiB RAM (0x4000 on the bus), nothing after.
-        14 => Some(HomeMap { ram: 0x4000, mirror_to: 0x4000, save_at: 0x4000, save_max: 0, bus: 0x4000 }),
+        14 => Some(HomeMap { ram: 0x4000, mirror_to: 0x4000, save_at: 0x4000, save_max: 0, bus: 0x4000, host_words: false }),
         // Lynx: its 64 KiB RAM.
-        13 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0, bus: 0 }),
+        13 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0, bus: 0, host_words: false }),
         // Pokemon mini: 8 KiB, as RetroArch lays PokeMini's RAM.
-        24 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0, bus: 0 }),
+        24 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0, bus: 0, host_words: false }),
         // WonderSwan: 64 KiB RAM, cart RAM at 0x10000 (as far as the
         // 256 KiB window reaches: 192 KiB).
-        53 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0x30000, bus: 0 }),
+        53 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0x30000, bus: 0, host_words: false }),
         // PC Engine HuCards: 8 KiB RAM (bank 0xf8 on the bus), nothing after.
-        8 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0, bus: 0x1f0000 }),
+        8 => Some(HomeMap { ram: 0x2000, mirror_to: 0x2000, save_at: 0x2000, save_max: 0, bus: 0x1f0000, host_words: false }),
         // Arcade (FinalBurn Neo's Neo Geo): its 64 KiB 68000 RAM, as the
         // core hands it to RetroArch.
-        27 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0, bus: 0 }),
+        27 => Some(HomeMap { ram: 0x10000, mirror_to: 0x10000, save_at: 0x10000, save_max: 0, bus: 0, host_words: true }),
         _ => None,
     }
+}
+
+/// Each 16-bit word's two bytes swapped (big-endian RAM read as the host's).
+fn swap_words(ram: &mut [u8]) {
+    for pair in ram.chunks_exact_mut(2) { pair.swap(0, 1); }
 }
 
 /// Copy `len` bytes to `at`, marking them as mapped. Returns newly covered bytes.
@@ -1246,6 +1259,14 @@ impl LibretroCore {
         while at < map.mirror_to {
             filled += cover(source, size, at, ram, coverage);
             at += map.ram;
+        }
+        let big = self.host.memory.iter().any(|d| {
+            d.flags & MEMDESC_BIGENDIAN != 0 && !d.ptr.is_null()
+                && unsafe { (d.ptr as *const u8).add(d.offset) } == source
+        });
+        if map.host_words && big {
+            let end = map.mirror_to.min(ram.len());
+            swap_words(&mut ram[..end]);
         }
         let save = unsafe { (self.api.get_memory_data)(MEMORY_SAVE_RAM) } as *const u8;
         let save_size = unsafe { (self.api.get_memory_size)(MEMORY_SAVE_RAM) }.min(map.save_max);
@@ -1933,6 +1954,14 @@ mod tests {
         assert_eq!(ram[0x8000 + 0x8000], 0xEE);
         let malformed = test_ra_descriptor(&mut ewram, 0x03000000, usize::MAX - 2, 0x8000);
         assert_eq!(copy_gba_achievement_map(&[malformed], &mut ram), [0, 0, 0]);
+    }
+
+    #[test]
+    fn arcade_ram_in_big_endian_words_reads_as_finalburn_neo_keeps_it() {
+        let mut ram = [0x12, 0x34, 0x56, 0x78];
+        swap_words(&mut ram);
+        assert_eq!(ram, [0x34, 0x12, 0x78, 0x56]);
+        assert!(home_map(27).unwrap().host_words && !home_map(1).unwrap().host_words);
     }
 
     #[test]

@@ -1022,8 +1022,10 @@ impl GameSession {
         });
         // A system slot. has no RetroAchievements for (PICO-8: 0) is never
         // wrapped. The Neo Geo's sets are RetroAchievements' Arcade ones,
-        // made on FinalBurn Neo's memory: not on Geolith (a .neo file).
-        let ra_core = console != 27 || which == Core::FbNeo;
+        // made on FinalBurn Neo's memory; Geolith's .neo (rcheevos 12.4
+        // hash) reads the same RAM once its words are swapped (slot-retro
+        // home_map 27), softcore as everywhere (Siham 2026-11-28).
+        let ra_core = console != 27 || matches!(which, Core::FbNeo | Core::Geolith);
         let mut core: Box<dyn RetroCore> = match achievements {
             Some(service) if slot_achievements::supported_console(console) && ra_core =>
                 service.wrap_for_console(Box::new(core), console),

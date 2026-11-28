@@ -99,15 +99,40 @@ pub(crate) fn checked(dir: &Path, path: &Path, now: u64) {
     let _ = storage::write(&index_path, &index);
 }
 
+fn neo_hash(path: &Path, size: u64) -> Result<String, String> {
+    const HEADER: u64 = 4096;
+    let mut file = std::fs::File::open(path).map_err(|_| "Cannot open ROM")?;
+    let mut magic = [0u8; 4];
+    if size <= HEADER || file.read_exact(&mut magic).is_err() || &magic != b"NEO\x01" {
+        return Err("Not a valid .neo file".into());
+    }
+    file.seek(SeekFrom::Start(HEADER)).map_err(|_| "Cannot read ROM")?;
+    let mut left = (size - HEADER).min(64 * 1024 * 1024);
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut md5 = md5::Context::new();
+    while left > 0 {
+        let want = left.min(buffer.len() as u64) as usize;
+        file.read_exact(&mut buffer[..want]).map_err(|_| "Cannot read ROM")?;
+        md5.consume(&buffer[..want]);
+        left -= want as u64;
+    }
+    Ok(format!("{:x}", md5.compute()))
+}
+
 pub(crate) fn content_hash(path: &Path) -> Result<String, String> {
     let size = path
         .metadata()
         .map_err(|_| "Cannot read ROM metadata")?
         .len();
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    // A Geolith .neo: its ROM data after the 4 KiB header (rcheevos 12.4
+    // rc_hash_neogeo_cart), the first 64 MiB of it for the biggest sets.
+    if ext == "neo" {
+        return neo_hash(path, size);
+    }
     if size == 0 || size > 64 * 1024 * 1024 {
         return Err("Unsupported GBA ROM size".into());
     }
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     // An arcade set (a Neo Geo game on FinalBurn Neo) is known by its
     // name: mslug for mslug.zip (rcheevos rc_hash, Arcade).
     if ext == "zip" {

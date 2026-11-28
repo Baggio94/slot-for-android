@@ -47,7 +47,42 @@ internal object RaSmartCache {
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
+    /** A Geolith .neo's RetroAchievements hash (rcheevos 12.4
+     *  rc_hash_neogeo_cart): its ROM data after the 4 KiB header, the first
+     *  64 MiB of it. */
+    internal fun neoHash(input: java.io.InputStream): String {
+        val header = ByteArray(NEO_HEADER)
+        var got = 0
+        while (got < NEO_HEADER) {
+            val n = input.read(header, got, NEO_HEADER - got)
+            if (n < 0) break
+            got += n
+        }
+        require(got == NEO_HEADER && header[0] == 'N'.code.toByte() && header[1] == 'E'.code.toByte() &&
+            header[2] == 'O'.code.toByte() && header[3] == 1.toByte()) { "Not a valid .neo file" }
+        val digest = MessageDigest.getInstance("MD5") // RA's ROM identity, not for security
+        val buffer = ByteArray(64 * 1024)
+        var left = NEO_HASHED_BYTES
+        var any = false
+        while (left > 0) {
+            if (Thread.currentThread().isInterrupted) throw InterruptedException()
+            val n = input.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
+            if (n < 0) break
+            digest.update(buffer, 0, n)
+            left -= n
+            any = any || n > 0
+        }
+        require(any) { "Not a valid .neo file" }
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    }
+    private const val NEO_HEADER = 4096
+    private const val NEO_HASHED_BYTES = 64L * 1024 * 1024
+
     private fun hashRom(context: Context, uri: Uri, filename: String, console: Int): String {
+        if (console == ARCADE_CONSOLE && filename.endsWith(".neo", ignoreCase = true)) {
+            return context.contentResolver.openInputStream(uri)?.use { neoHash(it) }
+                ?: error("Cannot open ROM through Android SAF")
+        }
         if (console == ARCADE_CONSOLE) return arcadeHash(filename) ?: error("Not an arcade set")
         val digest = MessageDigest.getInstance("MD5") // RA's ROM identity, not for security
         // RetroAchievements hashes NES carts without their iNES header and Super

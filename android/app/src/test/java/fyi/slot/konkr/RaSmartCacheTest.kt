@@ -21,6 +21,21 @@ class RaSmartCacheTest {
         assertNull(RaSmartCache.arcadeHash("mslug.neo"))
     }
 
+    @Test fun aGeolithNeoIsHashedAfterItsHeader() {
+        val body = ByteArray(0x4000) { (it * 7).toByte() }
+        val neo = ByteArray(4096 + body.size)
+        "NEO".toByteArray().copyInto(neo); neo[3] = 1
+        for (i in 4 until 4096) neo[i] = 0x55
+        body.copyInto(neo, 4096)
+        val expected = java.security.MessageDigest.getInstance("MD5").digest(body)
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        assertEquals(expected, RaSmartCache.neoHash(java.io.ByteArrayInputStream(neo)))
+        try {
+            RaSmartCache.neoHash(java.io.ByteArrayInputStream(body))
+            throw AssertionError("A file without the NEO magic was hashed")
+        } catch (_: IllegalArgumentException) { }
+    }
+
     @Test fun unchangedFileReusesMd5() {
         assertTrue(RaSmartCache.canReuse(valid, valid.size, valid.modified))
     }

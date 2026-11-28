@@ -94,8 +94,8 @@ has a route to the internet. It does not configure radios, interfaces, softAP, o
 
 ## Implementation and verification
 
-`slot-achievements` vendors the official rcheevos 12.2.1 evaluator at the same revision used
-by NextUI. The REST protocol and GBA memory layout follow that revision's API helpers and
+`slot-achievements` vendors the official rcheevos 12.5.0 evaluator (12.2.1 until slot. 3.2,
+the revision used by NextUI). The REST protocol and GBA memory layout follow that revision's API helpers and
 console definitions. Account authentication uses `login2`; preparation uses `gameid`,
 `patch`, and `unlocks`; play uses `startsession` and periodic `ping`. Deferred
 `awardachievement` requests include the original unlock age and the corresponding signature.

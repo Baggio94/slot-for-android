@@ -1135,4 +1135,12 @@ fn home_console_hashes_skip_dump_headers_like_rcheevos() {
     std::fs::write(root.path().join("mslug.zip"), b"PK").unwrap();
     assert_eq!(library::content_hash(&root.path().join("mslug.zip")).unwrap(),
         format!("{:x}", md5::compute(b"mslug")));
+    // A Geolith .neo: its ROM data after the 4 KiB header (rcheevos 12.4).
+    let mut neo = b"NEO\x01".to_vec();
+    neo.resize(4096, 0x55);
+    neo.extend_from_slice(&body);
+    std::fs::write(root.path().join("mslug.neo"), &neo).unwrap();
+    assert_eq!(library::content_hash(&root.path().join("mslug.neo")).unwrap(), digest);
+    std::fs::write(root.path().join("bad.neo"), &body).unwrap();
+    assert!(library::content_hash(&root.path().join("bad.neo")).is_err());
 }

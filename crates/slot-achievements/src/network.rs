@@ -10,7 +10,7 @@ use crate::storage::{self, Auth, Config, Game, Store, Unlock};
 use crate::{same_console, wake_evaluator, Notice, Status, SyncDetail, SyncStatus};
 
 const API: &str = "https://retroachievements.org/dorequest.php";
-const VERSION: &str = "12.2.1";
+const VERSION: &str = "12.5.0";
 
 pub(crate) struct Load {
     pub generation: u64,
@@ -67,7 +67,7 @@ impl Http {
                 .user_agent(concat!(
                     "slot/",
                     env!("CARGO_PKG_VERSION"),
-                    " rcheevos/12.2.1"
+                    " rcheevos/12.5.0"
                 ))
                 .build()
                 .into(),
