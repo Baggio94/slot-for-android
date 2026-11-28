@@ -34,7 +34,10 @@ internal object SlotArtSet {
     private const val HACK_NAMES = "HACKS.names"
     private const val HACK_PLATFORMS = "HACKS.platforms"
     private val hackIndexes = listOf(HACKS, HACK_NAMES, HACK_PLATFORMS)
-    private val platforms = Systems.PLATFORMS.flatMap { Systems.artKeys(it) }.toSet() + hackIndexes
+    // Every shelf with a label base: PICO-8's labels are its carts' own
+    // pictures, so the art set has no PICO8 index to ask for.
+    private val platforms = Systems.PLATFORMS.filter { it != Systems.PICO8 }
+        .flatMap { Systems.artKeys(it) }.toSet() + hackIndexes
 
     class Entry(val type: String, val region: String, val file: String) {
         val url: String get() = BASE + file
@@ -144,7 +147,8 @@ internal object SlotArtSet {
     @Synchronized
     fun hasFreshIndexes(context: Context, shelves: List<String>): Boolean {
         val now = System.currentTimeMillis()
-        return shelves.none { failedNames.containsKey(it) } && shelves.flatMap { Systems.artKeys(it) }.distinct().all { key ->
+        return shelves.none { failedNames.containsKey(it) } && shelves.flatMap { Systems.artKeys(it) }
+                .filter { it in platforms }.distinct().all { key ->
             !failedIndexes.containsKey(key) && loaded[key]?.let { now - it.at in 0 until INDEX_FRESH_MS } == true
         }
     }
