@@ -647,7 +647,13 @@ internal object HomeCartLabels {
         NeoGeoSets.parentOf(context, set)?.let { parent ->
             SlotArtSet.neoGeoSet(context, parent)?.let { return it }
         }
-        return SlotArtSet.neoGeoSet(context, set) ?: set
+        SlotArtSet.neoGeoSet(context, set)?.let { return it }
+        // An original the art set only has as a clone or hack (libretro's
+        // savagereb for savagere, 3.2.0).
+        for (clone in NeoGeoSets.clonesOf(context, set)) {
+            if (SlotArtSet.neoGeoSet(context, clone) == clone) return clone
+        }
+        return set
     }
 
     private fun prefetch(context: Context, roms: List<Rom>,

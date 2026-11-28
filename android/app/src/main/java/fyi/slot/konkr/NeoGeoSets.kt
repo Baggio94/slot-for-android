@@ -36,9 +36,36 @@ internal object NeoGeoSets {
     internal fun setIn(sets: Map<String, Entry>, filename: String): String {
         val stem = filename.substringAfterLast('/').substringBeforeLast('.').trim().lowercase(Locale.ROOT)
         if (stem in sets) return stem
-        val named = TRAILING_SET.find(stem)?.groupValues?.get(1)
-        return if (named != null && named in sets) named else stem
+        val named = TRAILING_SET.find(stem) ?: return stem
+        val set = named.groupValues[1]
+        if (set in sets) return set
+        // A set name the dat doesn't know ("Tecmo World Soccer '96
+        // (tws96).neo"): the game whose title the name before it has.
+        return byTitle(sets, stem.substring(0, named.range.first)) ?: stem
     }
+
+    private val BRACKETS = Regex("""\([^)]*\)|\[[^\]]*\]""")
+
+    /** A title to compare: its first name, no brackets, ", The" first,
+     *  letters and digits only. */
+    internal fun titleKey(title: String): String {
+        var t = title.substringBefore(" / ").replace(BRACKETS, " ").trim().lowercase(Locale.ROOT)
+        if (t.endsWith(", the")) t = "the " + t.removeSuffix(", the")
+        return t.filter { it.isLetterOrDigit() }
+    }
+
+    /** The set whose dat title is `title`, a parent before its clones. */
+    internal fun byTitle(sets: Map<String, Entry>, title: String): String? {
+        val key = titleKey(title)
+        if (key.length < 3) return null
+        val found = sets.filter { titleKey(it.value.title) == key }
+        return found.entries.sortedWith(compareBy({ it.value.parent.isNotBlank() }, { it.key }))
+            .firstOrNull()?.key
+    }
+
+    /** The sets made from `set` (its clones), parents' labels' last resort. */
+    fun clonesOf(context: Context, set: String): List<String> =
+        all(context).filter { it.value.parent == set }.keys.sorted()
 
     fun setOf(context: Context, filename: String): String = setIn(all(context), filename)
 
