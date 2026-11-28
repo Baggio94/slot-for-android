@@ -840,7 +840,7 @@ fn test_carts() -> Vec<slot_store::Cart> {
 }
 
 /// Every Settings value face, by index: setting_face gives these indices.
-const SETTING_VALUE_NAMES: [&str; 209] = ["2×", "3×", "4×", "6×", "ON", "OFF",
+const SETTING_VALUE_NAMES: [&str; 212] = ["2×", "3×", "4×", "6×", "ON", "OFF",
                               "LCD3x", "Grid", "Dot", "Simpletex",
                               "STANDARD", "RESPONSIVE", "1 FRAME", "2 FRAMES",
                               "DISPLAY SYNC", "TURBO A/B", "A/B",
@@ -914,6 +914,9 @@ const SETTING_VALUE_NAMES: [&str; 209] = ["2×", "3×", "4×", "6×", "ON", "OFF
                                // Geo's BIOS (AUTO is 66), a choice whose file is missing.
                                "FinalBurn Neo", "Geolith", "Beetle PCE Fast", "Beetle PCE",
                                "AES", "MVS", "UNIVERSE BIOS", "NO aes.zip",
+                               // WATOMSK_3_2_VALUES: Watomsk's Neo Geo,
+                               // PC Engine and TurboGrafx-16 overlays.
+                               "NEO GEO", "PC ENGINE", "TURBOGRAFX-16",
                                // RG Rotate (ROTATE_VALUES on): keep these 21 last.
                                "INSERTED CART", "FULL CART", "LAST FRAME",
                                "DRIFTING SHELF", "LAST PLAYED", "RANDOM CART", "BLACK",
@@ -937,6 +940,8 @@ const PICO8_CORE_VALUES: usize = POKEDAISY_VIEW_VALUES + 7;
 const NEOGEO_PCE_CORE_VALUES: usize = PICO8_CORE_VALUES + 2;
 /// The Neo Geo's BIOS: AES, MVS, Universe BIOS, then "NO aes.zip".
 const NEOGEO_BIOS_VALUES: usize = NEOGEO_PCE_CORE_VALUES + 4;
+/// Watomsk's Neo Geo, PC Engine and TurboGrafx-16 overlays' names.
+const WATOMSK_3_2_VALUES: usize = NEOGEO_BIOS_VALUES + 4;
 
 /// A PokeDaisy view's value face.
 /// A game's screen settings, read before its screen goes on.
@@ -1208,7 +1213,8 @@ fn setting_face(key: usize, settings: &Settings, scoped: &Settings,
         44 => bezel_value(scoped.bezel_nes),
         45 => bezel_value(scoped.bezel_snes),
         46 => bezel_value(scoped.bezel_md),
-        crate::settings::BEZEL_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY =>
+        crate::settings::BEZEL_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY
+        | crate::settings::BEZEL_NEOGEO_KEY | crate::settings::BEZEL_PCE_KEY =>
             bezel_value(scoped.bezel_for(Settings::bezel_platform(key)?)),
         crate::settings::POKEMINI_FILTER_KEY => match scoped.pokemini_lcd_filter {
             1 => 149, 2 => 17, _ => 105,
@@ -1448,11 +1454,16 @@ fn bezel_value(bezel: crate::settings::Bezel) -> usize {
         GenesisClassic => 87, Genesis => 88, MegaDrive => 89,
         // slot.'s own 3.0 overlays: OWN_BEZEL_VALUES on, AUTO is 66.
         NgpAuto | WsAuto => 66,
-        MasterSystem => OWN_BEZEL_VALUES, GameGear => OWN_BEZEL_VALUES + 1,
+        MasterSystem => 46, GameGear => OWN_BEZEL_VALUES + 1,
         Ngp => OWN_BEZEL_VALUES + 2, NgpColor => OWN_BEZEL_VALUES + 3,
         Ws => OWN_BEZEL_VALUES + 4, WsColor => OWN_BEZEL_VALUES + 5,
         Lynx => OWN_BEZEL_VALUES + 6, LynxGold => OWN_BEZEL_VALUES + 7,
         PokemonMini => OWN_BEZEL_VALUES + 8,
+        // 3.2: Watomsk's Master System takes the name, slot.'s own is SLOT.
+        WatomskMasterSystem => OWN_BEZEL_VALUES,
+        PceAuto => 66,
+        NeoGeo => WATOMSK_3_2_VALUES, PcEngine => WATOMSK_3_2_VALUES + 1,
+        TurboGrafx => WATOMSK_3_2_VALUES + 2,
     }
 }
 
@@ -2092,6 +2103,7 @@ impl Engine {
             .as_ref().map(|(root, _)| Settings::load_for_device(root, device))
             .unwrap_or_else(|| Settings::first_install_defaults_for_device(device));
         settings.own_bezels_by_room(size);
+        settings.bezels_3_2_by_room(size);
         crate::settings::CoreExtras::store(&settings);
         // General's wallpaper too (a blur takes a moment): Default's mosaic
         // follows the shelf on screen, not known yet, and is made once the
@@ -6281,6 +6293,14 @@ impl Engine {
             cheats_offered(self.current_cart_platform()))
     }
 
+    /// The cart played is an American release: (USA) or (U) in its name,
+    /// or a TurboGrafx-16 folder.
+    fn american_cart(&self) -> bool {
+        self.shelves[self.active].carts.get(self.shelves[self.active].index)
+            .is_some_and(|cart| video_mode::american_name(&cart.stem)
+                || cart.rom.to_string_lossy().to_ascii_lowercase().contains("tg16"))
+    }
+
     fn current_cart_platform(&self) -> Platform {
         self.shelves[self.active].carts
             .get(self.shelves[self.active].index)
@@ -6651,6 +6671,8 @@ impl Engine {
         let bezel=match self.game_settings().bezel_for(platform) {
             Bezel::NgpAuto=>if colour {Bezel::NgpColor} else {Bezel::Ngp},
             Bezel::WsAuto=>if colour {Bezel::WsColor} else {Bezel::Ws},
+            // PC Engine AUTO: TurboGrafx-16 for an American HuCard.
+            Bezel::PceAuto=>if self.american_cart() {Bezel::TurboGrafx} else {Bezel::PcEngine},
             bezel=>bezel,
         };
         let panel=panel_size();
@@ -7366,7 +7388,8 @@ impl Engine {
         // Shader and color-correction are display-only and safe while linked;
         // never change input, save states, emulation speed or rewind in Link.
         if relaunch || (linked && !matches!(key,0|1|2|21|22|23|24|25|26|27|44|45|46|47|48|49|60..=70
-            |crate::settings::SHADER_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY)
+            |crate::settings::SHADER_SMS_KEY..=crate::settings::BEZEL_POKEMINI_KEY
+            |crate::settings::SHADER_NEOGEO_KEY..=crate::settings::BEZEL_PCE_KEY)
             && Settings::lcd_effect_platform(key) != Some(platform)) {
             set_message("Not available during Multiplayer.".into());
             return;

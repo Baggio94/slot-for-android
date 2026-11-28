@@ -5,8 +5,8 @@
 
 use crate::fit_overlay::{BandArt, OverlayArt};
 
-/// One of his designs. The Game Boy ones are drawn beside the picture;
-/// GBA and Mega Drive also have a logo for the band under the picture.
+/// One of his designs, drawn beside the picture, each with a logo for the
+/// band under the picture on screens narrower than it (Siham 2026-11-27).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Design {
     Gb, Pocket, Color,
@@ -14,6 +14,8 @@ pub enum Design {
     Nes, NesGrayLogo,
     Snes, SnesAlt, SnesGrayLogo, SnesGrayLogoAlt,
     GenesisClassic, Genesis, MegaDrive,
+    // 3.2: the Neo Geo, the Master System, the PC Engine and TurboGrafx-16.
+    NeoGeo, MasterSystem, PcEngine, TurboGrafx,
 }
 
 /// The screen shape a side frame was drawn for.
@@ -46,6 +48,7 @@ files!(
         "gb-16x9",
         "gb-3x2",
         "gb-4x3",
+        "gb-band",
         "gba-16x9",
         "gba-alt-16x9",
         "gba-alt-band",
@@ -57,9 +60,11 @@ files!(
         "gbc-16x9",
         "gbc-3x2",
         "gbc-4x3",
+        "gbc-band",
         "gbp-16x9",
         "gbp-3x2",
         "gbp-4x3",
+        "gbp-band",
         "genesis-16x9",
         "genesis-3x2",
         "genesis-band",
@@ -69,18 +74,36 @@ files!(
         "megadrive-16x9",
         "megadrive-3x2",
         "megadrive-band",
+        "mastersystem-16x9",
+        "mastersystem-3x2",
+        "mastersystem-band",
+        "neogeo-16x9",
+        "neogeo-3x2",
+        "neogeo-band",
         "nes-16x9",
         "nes-3x2",
+        "nes-band",
         "nes-graylogo-16x9",
         "nes-graylogo-3x2",
+        "nes-graylogo-band",
+        "pce-16x9",
+        "pce-3x2",
+        "pce-band",
         "snes-16x9",
         "snes-3x2",
+        "snes-band",
         "snes-alt-16x9",
         "snes-alt-3x2",
+        "snes-alt-band",
         "snes-graylogo-16x9",
         "snes-graylogo-3x2",
+        "snes-graylogo-band",
         "snes-graylogo-alt-16x9",
         "snes-graylogo-alt-3x2",
+        "snes-graylogo-alt-band",
+        "tg16-16x9",
+        "tg16-3x2",
+        "tg16-band",
 );
 
 fn key(design: Design) -> &'static str {
@@ -92,6 +115,7 @@ fn key(design: Design) -> &'static str {
         Snes => "snes", SnesAlt => "snes-alt", SnesGrayLogo => "snes-graylogo",
         SnesGrayLogoAlt => "snes-graylogo-alt",
         GenesisClassic => "genesis-classic", Genesis => "genesis", MegaDrive => "megadrive",
+        NeoGeo => "neogeo", MasterSystem => "mastersystem", PcEngine => "pce", TurboGrafx => "tg16",
     }
 }
 
@@ -191,12 +215,13 @@ pub fn has_band(design: Design) -> bool {
 mod tests {
     use super::*;
 
-    const ALL: [Design; 16] = [
+    const ALL: [Design; 20] = [
         Design::Gb, Design::Pocket, Design::Color,
         Design::GbaClassic, Design::Gba, Design::GbaSp, Design::GbaAlt,
         Design::Nes, Design::NesGrayLogo,
         Design::Snes, Design::SnesAlt, Design::SnesGrayLogo, Design::SnesGrayLogoAlt,
         Design::GenesisClassic, Design::Genesis, Design::MegaDrive,
+        Design::NeoGeo, Design::MasterSystem, Design::PcEngine, Design::TurboGrafx,
     ];
 
     #[test]
@@ -212,9 +237,8 @@ mod tests {
                     assert_eq!(side.rgba[((cy * w + cx) * 4 + 3) as usize], 0, "{design:?}");
                     assert!((shape.aspect() - w as f32 / h as f32).abs() < 0.01, "{design:?}");
                 }
-                let wants_band = matches!(design, Design::GbaClassic | Design::Gba | Design::GbaSp
-                    | Design::GbaAlt | Design::GenesisClassic | Design::Genesis | Design::MegaDrive);
-                assert_eq!(band(design).is_some(), wants_band, "{design:?}");
+                // Every design has its band logo (Siham 2026-11-27).
+                assert!(band(design).is_some(), "{design:?}");
             }
         }
     }

@@ -305,6 +305,11 @@ pub enum Bezel {
     WsAuto, Ws, WsColor,
     Lynx, LynxGold,
     PokemonMini,
+    // 3.2: Watomsk's Neo Geo, Master System (the Master System's default,
+    // slot.'s own staying a choice), PC Engine and TurboGrafx-16. PCE AUTO:
+    // TurboGrafx-16 for an American game, PC Engine otherwise.
+    NeoGeo, WatomskMasterSystem,
+    PceAuto, PcEngine, TurboGrafx,
 }
 impl Bezel {
     /// GB and GBC also keep the slot. bezel; every system's own Watomsk
@@ -318,7 +323,7 @@ impl Bezel {
         Bezel::SnesGrayLogo, Bezel::SnesGrayLogoAlt];
     pub const MD: [Bezel; 4] = [Bezel::None, Bezel::GenesisClassic, Bezel::Genesis,
         Bezel::MegaDrive];
-    pub const SMS: [Bezel; 2] = [Bezel::None, Bezel::MasterSystem];
+    pub const SMS: [Bezel; 3] = [Bezel::None, Bezel::WatomskMasterSystem, Bezel::MasterSystem];
     pub const GG: [Bezel; 2] = [Bezel::None, Bezel::GameGear];
     pub const NGP: [Bezel; 4] = [Bezel::None, Bezel::NgpAuto, Bezel::Ngp, Bezel::NgpColor];
     pub const WS: [Bezel; 4] = [Bezel::None, Bezel::WsAuto, Bezel::Ws, Bezel::WsColor];
@@ -326,8 +331,8 @@ impl Bezel {
     pub const POKEMINI: [Bezel; 2] = [Bezel::None, Bezel::PokemonMini];
     /// PICO-8 has no overlay: its square picture keeps the screen's middle.
     pub const PICO8: [Bezel; 1] = [Bezel::None];
-    /// No overlay yet for the Neo Geo and the PC Engine (3.2.0).
-    pub const NONE: [Bezel; 1] = [Bezel::None];
+    pub const NEOGEO: [Bezel; 2] = [Bezel::None, Bezel::NeoGeo];
+    pub const PCE: [Bezel; 4] = [Bezel::None, Bezel::PceAuto, Bezel::PcEngine, Bezel::TurboGrafx];
     pub fn list(platform: slot_store::Platform) -> &'static [Bezel] {
         use slot_store::Platform;
         match platform {
@@ -344,7 +349,8 @@ impl Bezel {
             Platform::Lynx => &Self::LYNX,
             Platform::Pokemini => &Self::POKEMINI,
             Platform::Pico8 => &Self::PICO8,
-            Platform::NeoGeo | Platform::Pce => &Self::NONE,
+            Platform::NeoGeo => &Self::NEOGEO,
+            Platform::Pce => &Self::PCE,
         }
     }
     pub fn step_in(self,list:&[Bezel],right:bool)->Self {
@@ -368,6 +374,11 @@ impl Bezel {
             Bezel::SnesGrayLogo => D::SnesGrayLogo, Bezel::SnesGrayLogoAlt => D::SnesGrayLogoAlt,
             Bezel::GenesisClassic => D::GenesisClassic, Bezel::Genesis => D::Genesis,
             Bezel::MegaDrive => D::MegaDrive,
+            Bezel::NeoGeo => D::NeoGeo,
+            Bezel::WatomskMasterSystem => D::MasterSystem,
+            // AUTO is resolved for the game played (runtime game_bezel).
+            Bezel::PceAuto | Bezel::PcEngine => D::PcEngine,
+            Bezel::TurboGrafx => D::TurboGrafx,
         })
     }
     /// Which of slot.'s own 3.0 overlays; `colour`: the game is a Neo Geo
@@ -395,12 +406,14 @@ fn bezel_nes_default() -> Bezel { Bezel::Nes }
 fn bezel_snes_default() -> Bezel { Bezel::Snes }
 fn bezel_md_default() -> Bezel { Bezel::GenesisClassic }
 // The 3.0 systems start with their overlay, where it has room.
-fn bezel_sms_default() -> Bezel { Bezel::MasterSystem }
+fn bezel_sms_default() -> Bezel { Bezel::WatomskMasterSystem }
 fn bezel_gg_default() -> Bezel { Bezel::GameGear }
 fn bezel_ngp_default() -> Bezel { Bezel::NgpAuto }
 fn bezel_ws_default() -> Bezel { Bezel::WsAuto }
 fn bezel_lynx_default() -> Bezel { Bezel::Lynx }
 fn bezel_pokemini_default() -> Bezel { Bezel::PokemonMini }
+fn bezel_neogeo_default() -> Bezel { Bezel::NeoGeo }
+fn bezel_pce_default() -> Bezel { Bezel::PceAuto }
 
 pub const REWIND_SPEEDS: [u8; 4] = [1, 2, 3, 5];
 
@@ -583,7 +596,10 @@ struct DeviceSettings {
     #[serde(default="bezel_ws_default")] bezel_ws: Bezel,
     #[serde(default="bezel_lynx_default")] bezel_lynx: Bezel,
     #[serde(default="bezel_pokemini_default")] bezel_pokemini: Bezel,
+    #[serde(default="bezel_neogeo_default")] bezel_neogeo: Bezel,
+    #[serde(default="bezel_pce_default")] bezel_pce: Bezel,
     #[serde(default)] own_bezels_room: bool,
+    #[serde(default)] bezels_3_2: bool,
     home_bezel_three_two: bool,
     responsive_loop: bool, run_ahead_frames: u8,
     rotate_game_cover: u8, rotate_shelf_cover: u8, rotate_dim: u8, rotate_sleep: u8,
@@ -598,7 +614,8 @@ impl DeviceSettings {
             bezel_nes: s.bezel_nes, bezel_snes: s.bezel_snes, bezel_md: s.bezel_md,
             bezel_sms: s.bezel_sms, bezel_gg: s.bezel_gg, bezel_ngp: s.bezel_ngp,
             bezel_ws: s.bezel_ws, bezel_lynx: s.bezel_lynx, bezel_pokemini: s.bezel_pokemini,
-            own_bezels_room: s.own_bezels_room,
+            bezel_neogeo: s.bezel_neogeo, bezel_pce: s.bezel_pce,
+            own_bezels_room: s.own_bezels_room, bezels_3_2: s.bezels_3_2,
             home_bezel_three_two: s.home_bezel_three_two,
             responsive_loop: s.responsive_loop, run_ahead_frames: s.run_ahead_frames,
             rotate_game_cover: s.rotate_game_cover, rotate_shelf_cover: s.rotate_shelf_cover,
@@ -710,6 +727,10 @@ pub struct Settings {
     pub bezel_lynx: Bezel,
     #[serde(default="bezel_pokemini_default")]
     pub bezel_pokemini: Bezel,
+    #[serde(default="bezel_neogeo_default")]
+    pub bezel_neogeo: Bezel,
+    #[serde(default="bezel_pce_default")]
+    pub bezel_pce: Bezel,
     pub gb_palettes: bool, pub gb_palette: u8, pub rewind: bool,
     // Number of historical rewind snapshots restored per 100 ms of game time.
     // Prior Android builds captured 10/s and replayed 10/s (1x). Original
@@ -868,6 +889,11 @@ pub struct Settings {
     /// were started without it (Siham 2026-11-21).
     #[serde(default)]
     pub own_bezels_room: bool,
+    /// Set once Watomsk's Master System overlay replaced slot.'s own as the
+    /// default and the Neo Geo, PC Engine and Master System overlays with
+    /// thin bars on this screen were started OFF (Siham 2026-11-27, 3.2).
+    #[serde(default)]
+    pub bezels_3_2: bool,
     /// Frame Blending of each system (Systems > [system] > Frame Blending).
     #[serde(default)]
     pub blending_gba: Blending,
@@ -964,8 +990,9 @@ impl Default for Settings {
             colour_correction_gbc: false,
             bezel_gba: Bezel::None, bezel_gbc: Bezel::Default, bezel_gb: Bezel::Default,
             bezel_nes: Bezel::Nes, bezel_snes: Bezel::Snes, bezel_md: Bezel::GenesisClassic,
-            bezel_sms: Bezel::MasterSystem, bezel_gg: Bezel::GameGear, bezel_ngp: Bezel::NgpAuto,
+            bezel_sms: Bezel::WatomskMasterSystem, bezel_gg: Bezel::GameGear, bezel_ngp: Bezel::NgpAuto,
             bezel_ws: Bezel::WsAuto, bezel_lynx: Bezel::Lynx, bezel_pokemini: Bezel::PokemonMini,
+            bezel_neogeo: Bezel::NeoGeo, bezel_pce: Bezel::PceAuto,
             gb_palettes: false, gb_palette: 1, rewind: true,
             rewind_speed: 2,
             turbo: true, eject_save: true,
@@ -992,7 +1019,7 @@ impl Default for Settings {
             nes_audio_filter: false, md_fm_nuked: false, ws_audio_filter: false,
             gb_palette_twb64: false, gb_overlays_watomsk: false,
             simpletex_gba_colour: false, lcd_3_0: false, lcd3x_3_0: false, side_bars_3_0: false,
-            own_bezels_room: false,
+            own_bezels_room: false, bezels_3_2: false,
             blending_gba: Blending::Off, blending_gbc: Blending::Off, blending_gb: Blending::Off,
             blending_nes: Blending::Off, blending_snes: Blending::Off, blending_md: Blending::Off,
             blending_sms: Blending::Off, blending_gg: Blending::Off,
@@ -1552,7 +1579,8 @@ impl Settings {
             slot_store::Platform::Lynx=>self.bezel_lynx,
             slot_store::Platform::Pokemini=>self.bezel_pokemini,
             slot_store::Platform::Pico8=>Bezel::None,
-            slot_store::Platform::NeoGeo | slot_store::Platform::Pce=>Bezel::None,
+            slot_store::Platform::NeoGeo=>self.bezel_neogeo,
+            slot_store::Platform::Pce=>self.bezel_pce,
         }
     }
     pub fn set_bezel_for(&mut self,platform:slot_store::Platform,value:Bezel) {
@@ -1570,7 +1598,8 @@ impl Settings {
             slot_store::Platform::Lynx=>self.bezel_lynx=value,
             slot_store::Platform::Pokemini=>self.bezel_pokemini=value,
             slot_store::Platform::Pico8=>{}
-            slot_store::Platform::NeoGeo | slot_store::Platform::Pce=>{}
+            slot_store::Platform::NeoGeo=>self.bezel_neogeo=value,
+            slot_store::Platform::Pce=>self.bezel_pce=value,
         }
     }
     /// The Bezel row's settings key for each system.
@@ -1600,6 +1629,22 @@ impl Settings {
             }
         }
         self.own_bezels_room = true;
+    }
+    /// Once per handheld (3.2): the Master System takes Watomsk's overlay
+    /// in place of slot.'s own, and the Neo Geo, PC Engine and Master
+    /// System overlays whose bars are thin on this screen start OFF.
+    pub fn bezels_3_2_by_room(&mut self, panel: (u32, u32)) {
+        if self.bezels_3_2 { return; }
+        use slot_store::Platform as P;
+        if self.bezel_sms == Bezel::MasterSystem { self.bezel_sms = Bezel::WatomskMasterSystem; }
+        for platform in [P::NeoGeo, P::Pce, P::Sms] {
+            let bezel = self.bezel_for(platform);
+            if bezel != Bezel::None
+                && crate::video_mode::home_room(bezel, platform, panel) < crate::video_mode::OWN_ROOM_ON {
+                self.set_bezel_for(platform, Bezel::None);
+            }
+        }
+        self.bezels_3_2 = true;
     }
     /// The system a Bezel row's key belongs to.
     pub fn bezel_platform(key:usize)->Option<slot_store::Platform> {
@@ -1669,7 +1714,7 @@ impl Settings {
             WS_AUDIO_FILTER_KEY => self.ws_audio_filter = !self.ws_audio_filter,
             WS_LANGUAGE_KEY => self.ws_language = step_index(self.ws_language, 2, right),
             POKEMINI_SHAKE_KEY => self.pokemini_no_shake = !self.pokemini_no_shake,
-            BEZEL_SMS_KEY..=BEZEL_POKEMINI_KEY => {
+            BEZEL_SMS_KEY..=BEZEL_POKEMINI_KEY | BEZEL_NEOGEO_KEY | BEZEL_PCE_KEY => {
                 let Some(platform) = Self::bezel_platform(key) else { return false };
                 self.step_bezel(platform,right);
             }
@@ -2027,6 +2072,33 @@ mod device_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watomsk_master_system_by_default_and_thin_3_2_overlays_start_off() {
+        use slot_store::Platform as P;
+        let fresh = Settings::default();
+        assert_eq!((fresh.bezel_sms, fresh.bezel_neogeo, fresh.bezel_pce),
+            (Bezel::WatomskMasterSystem, Bezel::NeoGeo, Bezel::PceAuto));
+        // An older handheld: slot.'s own SMS overlay moves to Watomsk's.
+        let mut wide = Settings { bezel_sms: Bezel::MasterSystem, ..Settings::default() };
+        wide.bezels_3_2_by_room((1920, 1080));
+        assert_eq!((wide.bezel_sms, wide.bezel_neogeo, wide.bezel_pce),
+            (Bezel::WatomskMasterSystem, Bezel::NeoGeo, Bezel::PceAuto));
+        // On 3:2 the bars are thin: offered, but OFF at start, once.
+        let mut kpa = Settings::default();
+        kpa.bezels_3_2_by_room((960, 640));
+        for p in [P::Sms, P::NeoGeo, P::Pce] { assert_eq!(kpa.bezel_for(p), Bezel::None, "{p:?}"); }
+        kpa.set_bezel_for(P::NeoGeo, Bezel::NeoGeo);
+        kpa.bezels_3_2_by_room((960, 640));
+        assert_eq!(kpa.bezel_for(P::NeoGeo), Bezel::NeoGeo, "her choice stays");
+        // The RG Rotate: under the picture.
+        let mut square = Settings::default();
+        square.bezels_3_2_by_room((720, 720));
+        assert_eq!((square.bezel_neogeo, square.bezel_pce), (Bezel::NeoGeo, Bezel::PceAuto));
+        // Every Watomsk variant is a choice.
+        assert_eq!(Bezel::list(P::Pce), &[Bezel::None, Bezel::PceAuto, Bezel::PcEngine, Bezel::TurboGrafx]);
+        assert_eq!(Bezel::list(P::Sms), &[Bezel::None, Bezel::WatomskMasterSystem, Bezel::MasterSystem]);
+    }
 
     #[test]
     fn clock_formats_midnight_noon_and_day_boundaries() {

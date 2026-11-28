@@ -497,9 +497,13 @@ pub enum WatomskFit {
     Own(Place, [f32; 4]),
 }
 
-/// Under 4% of the panel on each side (or under it) a frame would only
-/// cover the picture's edge: no overlay there.
+/// Under 4% of the panel on each side a frame would only cover the
+/// picture's edge: no overlay there.
 const ROOM: f32 = 0.04;
+/// A band under the picture moved to the top needs 8% of the screen's
+/// height, as the 3.0 systems' own (Siham 2026-11-27: every system, every
+/// screen).
+const BAND_ROOM: f32 = slot_ui::own_overlay::MIN_BAR;
 
 fn panel_aspect(panel: (u32, u32)) -> f32 {
     panel.0.max(1) as f32 / panel.1.max(1) as f32
@@ -602,10 +606,15 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
         .then(|| WatomskFit::Side(watomsk::nearest_shape(design, panel), window));
     let band = |mut pic: [f32; 4]| {
         pic[1] = 0.0;
-        (ph - pic[3] >= ROOM * ph).then_some(WatomskFit::Band(pic))
+        (watomsk::has_band(design) && ph - pic[3] >= BAND_ROOM * ph).then_some(WatomskFit::Band(pic))
     };
     match platform {
-        Platform::Gb | Platform::Gbc => side(picture_rect(platform, VideoMode::Aspect, panel)),
+        // Beside the picture; on a screen narrower than it, at the bottom
+        // under the picture moved to the top (the RG Rotate).
+        Platform::Gb | Platform::Gbc => {
+            let full = picture_rect(platform, VideoMode::Aspect, panel);
+            if full[3] >= ph - 0.5 { side(full) } else { band(picture_rect(platform, mode, panel)) }
+        }
         Platform::Gba => {
             if screen_fits(platform, panel) { return None; }
             if a > 1.5 && mode == VideoMode::Aspect {
@@ -614,7 +623,9 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
                 band(picture_rect(platform, mode, panel))
             }
         }
-        Platform::Nes | Platform::Snes | Platform::Md => {
+        // Watomsk's Master System (slot.'s own is above).
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::NeoGeo | Platform::Pce
+        | Platform::Sms => {
             if a > 4.0 / 3.0 * 1.01 {
                 // Around the picture of the mode played: in Integer, the
                 // overscaled picture's own (no frame over the game), or none
@@ -623,34 +634,61 @@ pub fn watomsk_fit(bezel: Bezel, platform: Platform, mode: VideoMode, panel: (u3
                     4.0 / 3.0, home.1, panel, false, crop_limit(platform));
                 if pic[1] < -0.5 || pic[3] > ph + 0.5 { return None; }
                 side(pic)
-            } else if a < 4.0 / 3.0 * 0.99 && watomsk::has_band(design)
-                && (home.0 - 4.0 / 3.0).abs() < 0.01 {
-                // Not over a 256x224 game's 8:7 picture, which fills the screen.
+            } else if a < home.0 * 0.99 {
+                // Under the picture of its own shape (an 8:7 one too) when
+                // it leaves a band of 8% of the height.
                 band(home_rect(mode, home.0, home.1, panel, true, crop_limit(platform)))
             } else {
                 None
             }
         }
         // Their own overlays, above.
-        Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
-        | Platform::Lynx | Platform::Pokemini => None,
-        // No overlay for PICO-8, nor yet for the Neo Geo and the PC Engine.
-        Platform::Pico8 | Platform::NeoGeo | Platform::Pce => None,
+        Platform::Gg | Platform::Ngp | Platform::Ws | Platform::Lynx | Platform::Pokemini => None,
+        // No overlay for PICO-8.
+        Platform::Pico8 => None,
     }
+}
+
+/// The room `bezel` has on `panel` at Original Ratio, as a share of the
+/// screen's height: its side bar or its band; 0 where it has none. Under
+/// OWN_ROOM_ON it starts OFF (bezels_3_2_by_room).
+pub fn home_room(bezel: Bezel, platform: Platform, panel: (u32, u32)) -> f32 {
+    let ph = panel.1.max(1) as f32;
+    let home = (4.0 / 3.0, platform.picture());
+    match watomsk_fit(bezel, platform, VideoMode::Aspect, panel, home) {
+        Some(WatomskFit::Side(_, window)) => window[0] / ph,
+        Some(WatomskFit::Band(pic)) => (ph - pic[3]) / ph,
+        Some(WatomskFit::Own(..)) => own_room(platform, panel),
+        None => 0.0,
+    }
+}
+
+/// An American release by its name: (USA), (U), (USA, Europe)...
+pub fn american_name(stem: &str) -> bool {
+    let s = stem.to_ascii_lowercase();
+    s.contains("(usa") || s.contains("(u)") || s.contains(", usa") || s.contains("turbografx")
 }
 
 /// Whether a system's Bezel row means anything on this panel.
 pub fn bezel_offered(platform: Platform, panel: (u32, u32)) -> bool {
     let a = panel_aspect(panel);
     match platform {
-        Platform::Gb | Platform::Gbc =>
-            picture_rect(platform, VideoMode::Aspect, panel)[0] >= ROOM * panel.0 as f32,
-        Platform::Gba | Platform::Md => !screen_fits(platform, panel),
-        Platform::Nes | Platform::Snes => a > 4.0 / 3.0 * 1.01,
-        Platform::Sms | Platform::Gg | Platform::Ngp | Platform::Ws
+        Platform::Gb | Platform::Gbc => {
+            let pic = picture_rect(platform, VideoMode::Aspect, panel);
+            pic[0] >= ROOM * panel.0 as f32 || panel.1 as f32 - pic[3] >= BAND_ROOM * panel.1 as f32
+        }
+        Platform::Gba => !screen_fits(platform, panel),
+        // Beside a 4:3 picture, or under it on a narrower screen.
+        Platform::Nes | Platform::Snes | Platform::Md | Platform::NeoGeo | Platform::Pce => {
+            a > 4.0 / 3.0 * 1.01 || 1.0 - a / (4.0 / 3.0) >= BAND_ROOM
+        }
+        // Watomsk's beside or under, or slot.'s own.
+        Platform::Sms => a > 4.0 / 3.0 * 1.01 || 1.0 - a / (4.0 / 3.0) >= BAND_ROOM
+            || own_place(4.0 / 3.0, platform.picture(), VideoMode::Aspect, panel, crop_limit(platform)).is_some(),
+        Platform::Gg | Platform::Ngp | Platform::Ws
         | Platform::Lynx | Platform::Pokemini => own_aspects(platform).iter().any(|&aspect|
             own_place(aspect, platform.picture(), VideoMode::Aspect, panel, crop_limit(platform)).is_some()),
-        Platform::Pico8 | Platform::NeoGeo | Platform::Pce => false,
+        Platform::Pico8 => false,
     }
 }
 
@@ -742,11 +780,11 @@ mod tests {
         use VideoMode::*;
         let nes = (4.0 / 3.0, (256, 240));
         let gb = |b, p, m, panel| watomsk_fit(b, p, m, panel, nes);
-        // GB/GBC: beside the picture on 3:2, 4:3, 16:9; not on squares.
+        // GB/GBC: beside the picture on 3:2, 4:3, 16:9; under it on squares.
         assert!(matches!(gb(Bezel::Gb, Platform::Gb, Aspect, (960, 640)), Some(Side(Shape::ThreeTwo, _))));
         assert!(matches!(gb(Bezel::Pocket, Platform::Gb, Actual, (1024, 768)), Some(Side(Shape::FourThree, _))));
         assert!(matches!(gb(Bezel::Color, Platform::Gbc, Aspect, (1920, 1080)), Some(Side(Shape::SixteenNine, _))));
-        assert_eq!(gb(Bezel::Gb, Platform::Gb, Aspect, (720, 720)), None);
+        assert_eq!(gb(Bezel::Gb, Platform::Gb, Aspect, (720, 720)), Some(Band([0.0, 0.0, 720.0, 648.0])));
         assert_eq!(gb(Bezel::Gb, Platform::Gb, Aspect, (1240, 1080)), None);
         assert_eq!(gb(Bezel::Gb, Platform::Gb, Stretch, (960, 640)), None);
         assert_eq!(gb(Bezel::Color, Platform::Gb, Aspect, (960, 640)), None, "not a GB frame");
@@ -760,20 +798,54 @@ mod tests {
         assert_eq!(gb(gba, Platform::Gba, Aspect, (1024, 768)), Some(Band([0.0, 0.0, 1024.0, 682.6667])));
         assert_eq!(gb(gba, Platform::Gba, Actual, (1240, 1080)), Some(Band([20.0, 0.0, 1200.0, 800.0])));
         assert_eq!(gb(gba, Platform::Gba, Actual, (720, 720)), Some(Band([0.0, 0.0, 720.0, 480.0])));
-        // NES/SNES: beside on 3:2 and 16:9, nothing on 4:3 or squares.
+        // NES/SNES: beside on 3:2 and 16:9, nothing on 4:3, under the
+        // picture on narrower screens (Siham 2026-11-27: every system).
         assert!(matches!(gb(Bezel::Nes, Platform::Nes, Aspect, (960, 640)),
             Some(Side(Shape::ThreeTwo, [x, 0.0, _, 640.0])) if (x - 53.33).abs() < 0.1));
         assert!(matches!(gb(Bezel::SnesAlt, Platform::Snes, Actual, (1920, 1080)), Some(Side(Shape::SixteenNine, _))));
         assert_eq!(gb(Bezel::Nes, Platform::Nes, Aspect, (1024, 768)), None);
-        assert_eq!(gb(Bezel::Snes, Platform::Snes, Aspect, (1240, 1080)), None);
+        assert_eq!(gb(Bezel::Snes, Platform::Snes, Aspect, (1240, 1080)), Some(Band([0.0, 0.0, 1240.0, 930.0])));
+        assert_eq!(gb(Bezel::Nes, Platform::Nes, Aspect, (720, 720)), Some(Band([0.0, 0.0, 720.0, 540.0])));
         // Mega Drive: and at the bottom of squares.
         let md = (4.0 / 3.0, (320, 224));
         assert_eq!(watomsk_fit(Bezel::GenesisClassic, Platform::Md, Aspect, (720, 720), md),
             Some(Band([0.0, 0.0, 720.0, 540.0])));
         assert_eq!(watomsk_fit(Bezel::MegaDrive, Platform::Md, Aspect, (1024, 768), md), None);
-        assert!(bezel_offered(Platform::Md, (720, 720)) && !bezel_offered(Platform::Snes, (720, 720)));
+        assert!(bezel_offered(Platform::Md, (720, 720)) && bezel_offered(Platform::Snes, (720, 720)));
+        assert!(!bezel_offered(Platform::Snes, (1024, 768)) && !bezel_offered(Platform::NeoGeo, (1024, 768)));
         assert!(!bezel_offered(Platform::Gba, (960, 640)) && bezel_offered(Platform::Nes, (960, 640)));
         assert!(!bezel_offered(Platform::Gb, (1240, 1080)));
+    }
+
+    #[test]
+    fn neo_geo_pc_engine_and_master_system_take_watomsk_overlays() {
+        use WatomskFit::*;
+        use VideoMode::*;
+        let home = (4.0 / 3.0, (320, 224));
+        for (bezel, platform) in [(Bezel::NeoGeo, Platform::NeoGeo), (Bezel::PceAuto, Platform::Pce),
+            (Bezel::PcEngine, Platform::Pce), (Bezel::TurboGrafx, Platform::Pce),
+            (Bezel::WatomskMasterSystem, Platform::Sms)]
+        {
+            assert!(matches!(watomsk_fit(bezel, platform, Aspect, (960, 640), home),
+                Some(Side(Shape::ThreeTwo, _))), "{bezel:?}");
+            assert!(matches!(watomsk_fit(bezel, platform, Aspect, (1920, 1080), home),
+                Some(Side(Shape::SixteenNine, _))), "{bezel:?}");
+            assert_eq!(watomsk_fit(bezel, platform, Aspect, (720, 720), home),
+                Some(Band([0.0, 0.0, 720.0, 540.0])), "{bezel:?}");
+            assert_eq!(watomsk_fit(bezel, platform, Aspect, (1024, 768), home), None);
+            assert_eq!(watomsk_fit(bezel, platform, Stretch, (960, 640), home), None);
+            // Thin on 3:2 (8.3% of the height): offered, but OFF at start.
+            assert!(home_room(bezel, platform, (960, 640)) < OWN_ROOM_ON);
+            assert!(home_room(bezel, platform, (1920, 1080)) >= OWN_ROOM_ON);
+            assert!(home_room(bezel, platform, (720, 720)) >= OWN_ROOM_ON);
+        }
+        // Not each other's: a PC Engine frame is not a Neo Geo one.
+        assert_eq!(watomsk_fit(Bezel::NeoGeo, Platform::Pce, Aspect, (960, 640), home), None);
+        // slot.'s own Master System overlay stays a choice.
+        assert!(matches!(watomsk_fit(Bezel::MasterSystem, Platform::Sms, Aspect, (1920, 1080), home),
+            Some(Own(..))));
+        assert!(american_name("Bonk's Adventure (USA)") && american_name("Neutopia (U)")
+            && !american_name("PC Genjin (Japan)"));
     }
 
     #[test]
