@@ -1,0 +1,41 @@
+diff --git a/bsnes/target-libretro/jni/Android.mk b/bsnes/target-libretro/jni/Android.mk
+index da07e7c..5c5cd59 100644
+--- a/bsnes/target-libretro/jni/Android.mk
++++ b/bsnes/target-libretro/jni/Android.mk
+@@ -4,7 +4,11 @@ SRCDIR := $(LOCAL_PATH)/../../..
+ 
+ INCFLAGS  := -I$(SRCDIR) -I$(SRCDIR)/bsnes
+ COREFLAGS := -fomit-frame-pointer -ffast-math -D__LIBRETRO__ $(INCFLAGS)
+-COREFLAGS += -DGB_INTERNAL -DDISABLE_DEBUGGER -DPLATFORM_ANDROID
++COREFLAGS += -DPLATFORM_ANDROID -Wno-narrowing -Wno-multichar
++# SameBoy's own flags, as bsnes/gb/GNUmakefile gives them (its version names
++# the BESS block of its states).
++GBFLAGS := -DGB_INTERNAL -DGB_DISABLE_DEBUGGER -DGB_DISABLE_CHEATS -D_GNU_SOURCE \
++	-DGB_VERSION=\"1.0.2\" -DNDEBUG
+ 
+ GIT_VERSION := " $(shell git rev-parse --short HEAD || echo unknown)"
+ ifneq ($(GIT_VERSION)," unknown")
+@@ -39,10 +43,10 @@ SRCFILES := $(SRCDIR)/bsnes/target-libretro/libretro.cpp \
+ 				$(SRCDIR)/bsnes/gb/Core/printer.c \
+ 				$(SRCDIR)/bsnes/gb/Core/random.c \
+ 				$(SRCDIR)/bsnes/gb/Core/rewind.c \
++				$(SRCDIR)/bsnes/gb/Core/rumble.c \
+ 				$(SRCDIR)/bsnes/gb/Core/save_state.c \
+ 				$(SRCDIR)/bsnes/gb/Core/sgb.c \
+ 				$(SRCDIR)/bsnes/gb/Core/sm83_cpu.c \
+-				$(SRCDIR)/bsnes/gb/Core/symbol_hash.c \
+ 				$(SRCDIR)/bsnes/gb/Core/timing.c \
+ 				$(SRCDIR)/bsnes/processor/arm7tdmi/arm7tdmi.cpp \
+ 				$(SRCDIR)/bsnes/processor/spc700/spc700.cpp \
+@@ -51,8 +55,9 @@ SRCFILES := $(SRCDIR)/bsnes/target-libretro/libretro.cpp \
+ include $(CLEAR_VARS)
+ LOCAL_MODULE       := retro
+ LOCAL_SRC_FILES    := $(SRCFILES)
+-LOCAL_CPPFLAGS     := -std=c++17 $(COREFLAGS)
+-LOCAL_CFLAGS       := $(COREFLAGS)
++LOCAL_CPPFLAGS     := -std=c++17
++LOCAL_CFLAGS       := $(COREFLAGS) $(GBFLAGS)
++LOCAL_CONLYFLAGS   := -std=gnu11
+ LOCAL_LDFLAGS      := -Wl,-version-script=$(SRCDIR)/bsnes/target-libretro/link.T
+ LOCAL_CPP_FEATURES := exceptions rtti
+ include $(BUILD_SHARED_LIBRARY)
