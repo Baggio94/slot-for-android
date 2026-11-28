@@ -111,6 +111,11 @@ impl CorePicker {
         self
     }
 
+    /// The one core this cart runs on, when it has only one.
+    pub fn only_core(&self) -> Option<Core> {
+        self.only
+    }
+
     /// The chip can't move (only): the board shows no Swap.
     pub fn fixed(&self) -> bool {
         self.only.is_some()
@@ -270,5 +275,31 @@ impl CorePicker {
         let hop = self.hop?;
         let q = now.saturating_sub(hop.started) as f32 / HOP_MS as f32;
         (q < 1.0).then_some(q)
+    }
+}
+
+/// Why the chip can't go to the other socket, for the one core this cart
+/// runs on (Siham 2026-11-28: a Neo Geo game told about Splore).
+pub fn refusal_message(only: Core) -> String {
+    match only {
+        Core::Pico8 => crate::pico8::SPLORE_ONLY.to_string(),
+        Core::FbNeo => "Only this game's .zip set is here: FinalBurn Neo plays it. Geolith needs its .neo.".to_string(),
+        Core::Geolith => "Only this game's .neo is here: Geolith plays it. FinalBurn Neo needs its .zip set.".to_string(),
+        Core::BeetlePce => "SuperGrafx games run on Beetle PCE only.".to_string(),
+        other => format!("Only {} can play this game.", other.text()),
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    #[test]
+    fn each_lone_core_says_why() {
+        assert_eq!(refusal_message(Core::Pico8), crate::pico8::SPLORE_ONLY);
+        assert!(refusal_message(Core::FbNeo).contains(".zip"));
+        assert!(refusal_message(Core::Geolith).contains(".neo"));
+        assert!(refusal_message(Core::BeetlePce).contains("SuperGrafx"));
+        assert!(!refusal_message(Core::FbNeo).contains("Splore"));
     }
 }

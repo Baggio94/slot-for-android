@@ -1918,6 +1918,10 @@ struct Engine {
     /// The three-chip pak board's shorter chips: PokeDaisy, mGBA, Gambatte
     /// and blank, made the first time one opens.
     pak_three_textures: Option<[slot_gfx::TexId; 4]>,
+    /// The opened home cart's chips at its own mould's footprints (its two
+    /// cores' and the blank one in a hop): each mould's are not one size.
+    picker_mould_chips: Option<[slot_gfx::TexId; 3]>,
+    picker_mould_cores: Option<[Core; 2]>,
     /// The front that lifts off a cart that leaves its contacts on the board
     /// (the Lynx), and whether the open picker's cart has one.
     picker_lid: (Option<slot_gfx::TexId>, bool),
@@ -2760,6 +2764,8 @@ impl Engine {
             board_texture: None,
             picker_three: None,
             pak_three_textures: None,
+            picker_mould_chips: None,
+            picker_mould_cores: None,
             picker_lid: (None, false),
             picker: None,
             picker_auto_seat: None,
@@ -5555,11 +5561,13 @@ impl Engine {
                                     match code {
                                         21 | 22 => {
                                             let press = if code == 21 { Press::Left } else { Press::Right };
-                                            // Splore's chip stays on PICO-8: say why.
+                                            // A chip that stays on its one core: say why.
                                             let to = if code == 21 { picker.left() } else { picker.right() };
                                             if picker.press(press, now) == crate::core_picker::Outcome::Refused
                                                 && !picker.allows(to) {
-                                                set_message(crate::pico8::SPLORE_ONLY.to_string());
+                                                if let Some(only) = picker.only_core() {
+                                                    set_message(crate::core_picker::refusal_message(only));
+                                                }
                                             }
                                         }
                                         19 if column => { picker.press(Press::To(0), now); }
@@ -5806,6 +5814,23 @@ impl Engine {
             picker = picker.only(core);
         }
         self.picker_three = three;
+        // The chips drawn to this mould's footprints, not stretched from
+        // the system's standard mould's (Siham 2026-11-28).
+        self.picker_mould_cores = None;
+        if let (slot_ui::Body::Home(mould), None) = (slot_ui::body_of(selected), three) {
+            let faces = [Some(primary), Some(alternate), None]
+                .map(|core| slot_ui::home_mould_chip_face(mould, core));
+            match self.picker_mould_chips {
+                Some(textures) => for (texture, face) in textures.into_iter().zip(&faces) {
+                    self.gpu.update_face(texture, face);
+                },
+                None => {
+                    let gpu = &mut self.gpu;
+                    self.picker_mould_chips = Some([0, 1, 2].map(|i| gpu.create_face(&faces[i])));
+                }
+            }
+            self.picker_mould_cores = Some([primary, alternate]);
+        }
         // A clear cart's lid waits for its plastic without
         // the board (start_waiting_picker), or the shelf
         // face would lift with the board drawn on it.
@@ -9747,6 +9772,10 @@ impl Engine {
             (&self.pak_chip_textures, blank)
         };
         let mut tex = chip.seated.map(|core| chips[core.index()]).unwrap_or(blank);
+        if let (Some(cores), Some(mould)) = (self.picker_mould_cores, self.picker_mould_chips) {
+            tex = chip.seated.and_then(|core| cores.iter().position(|c| *c == core))
+                .map_or(mould[2], |at| mould[at]);
+        }
         // The three-chip pak board's shorter chips.
         if let (Some(three), Some(short)) = (self.picker_three.filter(|t| t.socket.is_none()), self.pak_three_textures) {
             tex = chip.seated.and_then(|core| three.cores.iter().position(|c| *c == core))
