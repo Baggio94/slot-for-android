@@ -365,7 +365,7 @@ impl GamePass {
     /// Mini Ultra's at its strongest) through 0 (off) to 1 (crt-royale's
     /// border at twice its own size); Curvature 0 (off) to 1.
     pub fn set_crt(&mut self, vignette: f32, curvature: f32) {
-        self.crt = [vignette.clamp(-1.0, 1.0), curvature.clamp(0.0, 1.0)];
+        self.crt = [vignette.clamp(-1.0, 1.0), curvature.clamp(-1.0, 1.0)];
     }
 
     pub fn set_power(&mut self, t: f32) {
@@ -741,7 +741,7 @@ impl GamePass {
             // Curvature bends crt-royale's finished picture: read between
             // its texels, or its mask's columns and rows skip one here and
             // there (dark seams).
-            let filter = if self.crt[1] > 0.0 { gl::LINEAR } else { gl::NEAREST } as i32;
+            let filter = if self.crt[1] != 0.0 { gl::LINEAR } else { gl::NEAREST } as i32;
             unsafe {
                 gl::BindTexture(gl::TEXTURE_2D, royale);
                 gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, filter);

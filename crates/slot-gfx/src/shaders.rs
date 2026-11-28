@@ -229,7 +229,7 @@ uniform vec4 u_rect;
 uniform vec2 u_fbo;
 uniform vec4 u_pic;
 uniform float u_vignette;  // home consoles: darker edges, -1 (GDV) .. 0 .. 1 (crt-royale)
-uniform float u_curve;     // home consoles: a curved tube, 0 to 1
+uniform float u_curve;     // home consoles: a curved tube, -1 (crt-pi barrel) .. 0 .. 1 (crt-royale sphere)
 varying vec2 v_uv;
 const vec3 offsets = vec3(3.141592654) * vec3(1.0 / 2.0, 1.0 / 2.0 - 2.0 / 3.0, 1.0 / 2.0 - 4.0 / 3.0);
 const vec3 luma_coeff = vec3(0.2126, 0.7152, 0.0722);
@@ -1165,7 +1165,32 @@ void main() {
 vec2 crt_curve(vec2 uv) {
     vec2 size = u_pic.zw - u_pic.xy;
     vec2 c = (uv - u_pic.xy) / size - vec2(0.5);
-    vec2 d = vec2(0.10, 0.15) * u_curve;
+    if (u_curve > 0.0) {
+        /* crt-royale's sphere (geom_mode 1, geometry-functions.h): seen
+           from geom_view_dist 2.0 before the picture's centre, a sphere of
+           geom_radius 2.0 at 0.5 (+5), 1.0 at 1 (+10), 10 at 0.1 (+1);
+           the picture laid on it by arc length. */
+        vec2 shown = size / max(u_uv.zw, vec2(1e-5)) * u_rect.zw;
+        vec2 aspect = normalize(max(shown, vec2(1.0)));
+        float radius = 1.0 / u_curve;
+        float view_dist = 2.0;
+        vec2 view_uv = c * aspect;
+        vec3 view_vec = vec3(view_uv.x, -view_uv.y, -view_dist);
+        vec3 eye = vec3(0.0, 0.0, radius + view_dist);
+        float a = dot(view_vec, view_vec);
+        float b_over_2 = dot(view_vec, eye);
+        float cc = dot(eye, eye) - radius * radius;
+        float discriminant = b_over_2 * b_over_2 - a * cc;
+        if (discriminant <= 0.005) return u_pic.xy + vec2(1.5) * size;
+        float t = cc / (-b_over_2 + sqrt(discriminant));
+        vec3 hit = eye + view_vec * t;
+        vec3 centre = vec3(0.0, 0.0, radius);
+        float angle = atan(length(cross(hit, centre)), dot(hit, centre));
+        vec2 unit = normalize(vec2(hit.x, -hit.y) + vec2(1e-9, 0.0));
+        vec2 video = angle * radius * unit / aspect;
+        return u_pic.xy + (video + vec2(0.5)) * size;
+    }
+    vec2 d = vec2(0.10, 0.15) * -u_curve;
     c += c * (d * dot(c, c));
     c *= vec2(1.0) - 0.23 * d;
     return u_pic.xy + (c + vec2(0.5)) * size;
@@ -1197,7 +1222,7 @@ float crt_vignette(vec2 uv) {
 }
 void main() {
     vec2 uv = u_uv.xy + v_uv * u_uv.zw;
-    if (u_curve > 0.0) uv = crt_curve(uv);
+    if (u_curve != 0.0) uv = crt_curve(uv);
     vec2 f = fract(uv * u_src);
     vec3 c;
     // The LCD shaders (LCD3x, Grid, Dot, Simpletex, zfast LCD, LCD1x,
