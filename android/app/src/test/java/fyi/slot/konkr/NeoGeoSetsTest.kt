@@ -13,6 +13,7 @@ class NeoGeoSetsTest {
         "kof94\t\tThe King of Fighters '94 (NGM-055)(NGH-055)",
         "savagere\t\tSavage Reign / Fu'un Mokushiroku - Kakutou Sousei",
         "savagereb\tsavagere\tSavage Reign / Fu'un Mokushiroku - Kakutou Sousei (Boss Hack)",
+        "lasthope\t\tLast Hope (bootleg AES to MVS conversion, no coin support)",
     ))
 
     @Test fun aSetIsReadFromItsFileName() {
@@ -37,5 +38,7 @@ class NeoGeoSetsTest {
         // A title shared with a hack: the parent.
         assertEquals("savagere", NeoGeoSets.setIn(sets, "Savage Reign (savagerx).neo"))
         assertEquals("unknown game (zz9)", NeoGeoSets.setIn(sets, "Unknown Game (zz9).neo"))
+        // A Neo Geo CD conversion: the cartridge game.
+        assertEquals("lasthope", NeoGeoSets.setIn(sets, "Last Hope CD (lasthpcd).neo"))
     }
 }

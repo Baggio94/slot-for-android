@@ -41,7 +41,10 @@ internal object NeoGeoSets {
         if (set in sets) return set
         // A set name the dat doesn't know ("Tecmo World Soccer '96
         // (tws96).neo"): the game whose title the name before it has.
-        return byTitle(sets, stem.substring(0, named.range.first)) ?: stem
+        // A Neo Geo CD conversion ("Last Hope CD (lasthpcd).neo") wears
+        // the cartridge game's label.
+        val title = stem.substring(0, named.range.first).trim()
+        return byTitle(sets, title) ?: byTitle(sets, title.removeSuffix(" cd")) ?: stem
     }
 
     private val BRACKETS = Regex("""\([^)]*\)|\[[^\]]*\]""")
