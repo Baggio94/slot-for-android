@@ -511,6 +511,11 @@ pub(crate) fn neogeo_system(choice: u8, aes_zip: bool) -> &'static str {
     }
 }
 
+/// Geolith's colours (geolith_palette, its declared default). Geolith only
+/// builds its colour tables when this option is answered: unanswered, every
+/// colour stays 0 and the picture is black (RetroArch always answers it).
+pub(crate) const GEOLITH_PALETTE: &str = "resnet";
+
 /// Geolith's region (geolith_region) for Settings > Systems > Neo Geo >
 /// Region (0 Europe, 1 USA, 2 Japan).
 pub(crate) fn geolith_region(region: u8) -> &'static str {
@@ -833,6 +838,7 @@ impl GameSession {
             Core::Geolith => vec![
                 ("geolith_system_type".to_string(), neogeo_system(extras.neogeo_bios, geolith_aes).to_string()),
                 ("geolith_region".to_string(), geolith_region(extras.neogeo_region).to_string()),
+                ("geolith_palette".to_string(), GEOLITH_PALETTE.to_string()),
             ],
             _ => Vec::new(),
         };
@@ -1030,6 +1036,7 @@ impl GameSession {
             Core::Geolith => {
                 core.set_option("geolith_system_type", neogeo_system(extras.neogeo_bios, geolith_aes));
                 core.set_option("geolith_region", geolith_region(extras.neogeo_region));
+                core.set_option("geolith_palette", GEOLITH_PALETTE);
             }
             // 224 lines, as the SNES and the NES with their overscan hidden
             // (Siham 2026-11-27).

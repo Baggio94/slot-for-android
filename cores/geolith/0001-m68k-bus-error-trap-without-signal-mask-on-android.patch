@@ -1,0 +1,25 @@
+diff --git a/src/m68k/m68kcpu.h b/src/m68k/m68kcpu.h
+index 38d5804..e46a7f0 100644
+--- a/src/m68k/m68kcpu.h
++++ b/src/m68k/m68kcpu.h
+@@ -1855,8 +1855,9 @@ extern jmp_buf m68ki_bus_error_jmp_buf;
+    5.2x speedup. _setjmp()/_longjmp() are the POSIX variants that skip the
+    mask; the pairing must match, so both sites are switched together.
+    The same gotcha is already worked around for the address error trap
+-   above, via sigsetjmp(..., 0). */
+-#ifdef _BSD_SETJMP_H
++   above, via sigsetjmp(..., 0). Android's bionic setjmp() saves the mask
++   too (bionic/libc/include/setjmp.h), so it takes the same path. */
++#if defined(_BSD_SETJMP_H) || defined(__ANDROID__)
+ #define m68ki_check_bus_error_trap() _setjmp(m68ki_bus_error_jmp_buf)
+ #else
+ #define m68ki_check_bus_error_trap() setjmp(m68ki_bus_error_jmp_buf)
+@@ -1892,7 +1893,7 @@ m68k_read_memory_8(0x00ffff01);
+ 	m68ki_jump_vector(EXCEPTION_BUS_ERROR);
+ 	/* Must pair with whichever variant m68ki_check_bus_error_trap() used:
+ 	   mixing setjmp() with _longjmp() is undefined. */
+-#ifdef _BSD_SETJMP_H
++#if defined(_BSD_SETJMP_H) || defined(__ANDROID__)
+ 	_longjmp(m68ki_bus_error_jmp_buf, 1);
+ #else
+ 	longjmp(m68ki_bus_error_jmp_buf, 1);
