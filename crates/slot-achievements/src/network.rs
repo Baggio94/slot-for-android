@@ -198,6 +198,12 @@ pub(crate) fn now() -> u64 {
         .as_secs()
 }
 
+/// Unlocks not sent yet that never cut a wait short: true once for each.
+pub(crate) fn new_unlocks(unlocks: &std::collections::BTreeMap<u32, crate::storage::Unlock>,
+                          hurried: &mut BTreeSet<u32>) -> bool {
+    unlocks.values().filter(|u| !u.synced && hurried.insert(u.id)).count() > 0
+}
+
 /// Matches rc_api_init_award_achievement_request, including the original unlock age.
 pub(crate) fn award(
     http: &mut impl Transport,
@@ -432,6 +438,9 @@ pub(crate) fn run(
     let mut delay = 30;
     let mut warned = false;
     let mut last_award = 0;
+    // Unlocks that already cut a wait short: each new one is sent at once,
+    // even while the worker waits after an error, but only once.
+    let mut hurried: BTreeSet<u32> = BTreeSet::new();
     let mut library = crate::library::pending(&root, &dir, now());
     let mut library_total = library.len();
     let mut library_failed = false;
@@ -545,7 +554,9 @@ pub(crate) fn run(
             next_attempt = Instant::now();
         }
         if Instant::now() < next_attempt {
-            continue;
+            if !new_unlocks(&store.lock().unwrap().unlocks, &mut hurried) { continue; }
+            crate::log("new unlock: sending it now");
+            next_attempt = Instant::now();
         }
         if rescanned.elapsed() >= Duration::from_secs(300) {
             library = crate::library::pending(&root, &dir, now());
@@ -601,7 +612,14 @@ pub(crate) fn run(
             };
             if let Some(unlock) = pending {
                 last_award = unlock.id;
-                match award(&mut http, auth, &unlock, now()) {
+                let result = award(&mut http, auth, &unlock, now());
+                crate::log(&match &result {
+                    Ok(()) => format!("unlock {} sent, {} s after it was earned",
+                        unlock.id, now().saturating_sub(unlock.earned_at)),
+                    Err(error) => format!("unlock {} not sent yet ({error:?}), {} s after it was earned",
+                        unlock.id, now().saturating_sub(unlock.earned_at)),
+                });
+                match result {
                     Ok(()) => {
                         let mut store = store.lock().unwrap();
                         store.ack(unlock.id).map_err(|_| Failure::Invalid)?;
@@ -1000,6 +1018,20 @@ mod tests {
         let mut http = Fake { reply, fields: vec![] };
         assert!(prefetch(&mut http, &auth, dir, hash, 5).is_err());
     }
+    #[test]
+    fn a_new_unlock_cuts_the_wait_after_an_error_once() {
+        let unlock = |id, synced| (id, crate::storage::Unlock {
+            id, hash: "abcdef".into(), earned_at: 1000, synced });
+        let mut unlocks: std::collections::BTreeMap<_, _> = [unlock(1, true)].into();
+        let mut hurried = BTreeSet::new();
+        assert!(!new_unlocks(&unlocks, &mut hurried), "nothing to send");
+        unlocks.extend([unlock(2, false), unlock(3, false)]);
+        assert!(new_unlocks(&unlocks, &mut hurried));
+        assert!(!new_unlocks(&unlocks, &mut hurried), "the same unlocks wait for the retry");
+        unlocks.extend([unlock(4, false)]);
+        assert!(new_unlocks(&unlocks, &mut hurried));
+    }
+
     #[test]
     fn delayed_awards_use_original_time_and_softcore_signature() {
         let mut http = Fake {

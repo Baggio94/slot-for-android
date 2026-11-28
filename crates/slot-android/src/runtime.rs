@@ -6205,6 +6205,8 @@ impl Engine {
             // Explicit opt-in from the Android account login. Never start RA
             // until an actual private config exists.
             if root.join("Config/retroachievements.toml").is_file() {
+                // Unlocks and their sending, in the player's exported logs.
+                slot_achievements::journal_to(|line| crate::journal('I', line));
                 self.ra_service = Some(slot_achievements::Service::start(root));
             }
         }

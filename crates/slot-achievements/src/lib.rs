@@ -58,8 +58,20 @@ unsafe extern "C" {
         text: *const std::ffi::c_char) -> i32;
 }
 
+/// Where the app keeps its own journal (the player's exported logs): Android
+/// keeps only minutes of logcat on some handhelds.
+static JOURNAL: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// The app's journal also gets these diagnostics, from then on.
+pub fn journal_to(write: fn(&str)) {
+    let _ = JOURNAL.set(write);
+}
+
 /// Diagnostics reach logcat on the device (tag SlotKONKR), stderr elsewhere.
 fn log(message: &str) {
+    if let Some(write) = JOURNAL.get() {
+        write(&format!("slot-ra: {message}"));
+    }
     #[cfg(target_os = "android")]
     if let Ok(text) = std::ffi::CString::new(format!("slot-ra: {message}")) {
         unsafe {
@@ -758,6 +770,7 @@ fn evaluate(
                     };
                     match store.lock().unwrap().record(unlock.clone()) {
                         Ok(true) => {
+                            log(&format!("unlock {id} earned"));
                             let _ = notices.send(notice);
                         }
                         Ok(false) => {}
