@@ -81,6 +81,21 @@ class HomeCartLabelsTest {
     }
 
     @Test
+    fun hucardsAndNeoGeoCartsTakeLabelsAndCloneSetsTheirParents() {
+        assertTrue(Systems.PCE in HomeCartLabels.LABEL_PLATFORMS && Systems.NEOGEO in HomeCartLabels.LABEL_PLATFORMS)
+        assertEquals("pce", HomeCartLabels.shell(rom(Systems.PCE, "Bonk's Adventure (USA)")))
+        assertEquals("neogeo", HomeCartLabels.shell(rom(Systems.NEOGEO, "mslug.zip")))
+        assertEquals("jp", HomeCartLabels.labelRegions(rom(Systems.PCE, "PC Genjin (Japan)")).first())
+        assertEquals("us", HomeCartLabels.labelRegions(rom(Systems.PCE, "Bonk's Adventure (USA)")).first())
+        val sets = setOf("mslug", "kof98", "samsho5")
+        assertEquals("mslug", SlotArtSet.parentSet("mslugh") { it in sets })
+        assertEquals("kof98", SlotArtSet.parentSet("kof98ka") { it in sets })
+        assertEquals("samsho5", SlotArtSet.parentSet("samsho5x") { it in sets })
+        assertNull(SlotArtSet.parentSet("garou") { it in sets })
+        assertNull("never itself", SlotArtSet.parentSet("mslug") { it in sets })
+    }
+
+    @Test
     fun labelsComeFromTheShellsRegion() {
         assertEquals(listOf("jp"), HomeCartLabels.labelRegions(rom(Systems.NES, "Dig Dug (Japan)")))
         assertEquals("us", HomeCartLabels.labelRegions(rom(Systems.NES, "Metroid (USA)")).first())

@@ -66,7 +66,8 @@ internal object HomeCartLabels {
     /** The 3.0 systems. Most share label shapes across regions; Master
      *  System's western, Japanese and card moulds are selected separately. */
     private val NEW_LABEL_PLATFORMS = setOf(
-        Systems.SMS, Systems.GG, Systems.NGP, Systems.WS, Systems.LYNX, Systems.POKEMINI)
+        Systems.SMS, Systems.GG, Systems.NGP, Systems.WS, Systems.LYNX, Systems.POKEMINI,
+        Systems.PCE, Systems.NEOGEO)
 
     /** The home systems whose real labels slot. fetches. */
     internal val LABEL_PLATFORMS = setOf(Systems.NES, Systems.SNES, Systems.MD) + NEW_LABEL_PLATFORMS
@@ -181,6 +182,9 @@ internal object HomeCartLabels {
             Systems.WS -> "ws"
             Systems.LYNX -> "lynx"
             Systems.POKEMINI -> "pokemini"
+            // HuCards and the Neo Geo's AES carts (Siham 2026-11-27).
+            Systems.PCE -> "pce"
+            Systems.NEOGEO -> "neogeo"
             else -> ""
         }
     }
@@ -580,6 +584,7 @@ internal object HomeCartLabels {
         } catch (error: Exception) {
             Log.w(TAG, "Own art set lookup failed for Cart Studio", error)
         }
+        if (platform == Systems.NEOGEO) return null
         val creds = credentials() ?: return null
         if (android.os.SystemClock.elapsedRealtime() < closedUntil) return null
         val rom = Rom("", platform, name, name, -1, -1, "", "")
@@ -623,13 +628,21 @@ internal object HomeCartLabels {
     }
 
     private fun fingerprints(context: Context, rom: Rom): Pair<String, String?> =
-        HomeFingerprintCache.get(context, rom.uri, rom.size, rom.modified) {
+        // A Neo Geo game is a set of chips: the art set knows it by its name
+        // (or its parent's, for a clone), never by a checksum.
+        if (rom.platform == Systems.NEOGEO) neoGeoKey(context, rom) to null
+        else HomeFingerprintCache.get(context, rom.uri, rom.size, rom.modified) {
             RomReads.read(rom.uri) {
                 val stream = context.contentResolver.openInputStream(Uri.parse(rom.uri))
                     ?: throw IllegalStateException("ROM unreadable")
                 RomSource.useRom(stream, rom.filename.ifBlank { rom.title }) { input, _ -> checksums(input) }
             }
         }
+
+    private fun neoGeoKey(context: Context, rom: Rom): String {
+        val stem = (rom.filename.ifBlank { rom.title }).substringBeforeLast('.')
+        return SlotArtSet.neoGeoSet(context, stem) ?: stem.lowercase(Locale.ROOT)
+    }
 
     private fun prefetch(context: Context, roms: List<Rom>,
                          shouldContinue: () -> Boolean, ownOnly: Boolean): Map<String, java.util.concurrent.Future<Prefetched?>> {
@@ -744,6 +757,9 @@ internal object HomeCartLabels {
                 var imageBytes: ByteArray? = own?.second
                 if (own == null) {
                     if (ownOnly) { outcome = "DEFERRED"; continue }
+                    // ScreenScraper knows a Neo Geo game by its chips' checksums,
+                    // not by its set: the art set holds every set it lists.
+                    if (rom.platform == Systems.NEOGEO) { outcome = "NOT_FOUND"; continue }
                     val auth = creds ?: continue
                     asks++
                     asked = true

@@ -53,7 +53,8 @@ internal object SlotArtSet {
     @Synchronized
     fun entries(context: Context, platform: String, crc: String): List<Entry>? {
         val list = Systems.artKeys(platform).firstNotNullOfOrNull { key ->
-            index(context, key)?.optJSONArray(crc.uppercase())
+            // The Neo Geo's are keyed by set name, in lower case.
+            index(context, key)?.let { it.optJSONArray(crc.uppercase()) ?: it.optJSONArray(crc.lowercase()) }
         } ?: return null
         return (0 until list.length()).mapNotNull { i ->
             val e = list.optJSONArray(i) ?: return@mapNotNull null
@@ -61,6 +62,24 @@ internal object SlotArtSet {
             if (e.length() < 3 || !filePath.matches(file)) null
             else Entry(e.optString(0), e.optString(1), file)
         }
+    }
+
+    /** A Neo Geo set's own name, else the set it is a clone of as FinalBurn
+     *  Neo names clones (the parent's name and a letter or two: mslugh is
+     *  mslug's), as the set knows it: the longest such name it lists. */
+    @Synchronized
+    fun neoGeoSet(context: Context, stem: String): String? {
+        val name = stem.lowercase(java.util.Locale.ROOT)
+        if (entries(context, Systems.NEOGEO, name) != null) return name
+        return parentSet(name) { entries(context, Systems.NEOGEO, it) != null }
+    }
+
+    internal fun parentSet(name: String, known: (String) -> Boolean): String? {
+        for (end in name.length - 1 downTo maxOf(3, name.length - 3)) {
+            val parent = name.substring(0, end)
+            if (known(parent)) return parent
+        }
+        return null
     }
 
     /** Whether the set's index for a platform could be read (fresh or
