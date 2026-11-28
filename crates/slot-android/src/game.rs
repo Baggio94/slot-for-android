@@ -1012,7 +1012,14 @@ impl GameSession {
             // with it: both cores' own Auto, as RetroArch starts them.
             // SELECT turns the screen by hand in Beetle Lynx's Manual
             // mode only; slot. never maps SELECT for the Lynx.
-            Core::Handy => core.set_option("handy_rot", "Auto"),
+            // Handy at 60 Hz, as RetroArch starts it, unless the screen
+            // itself runs at the Lynx's 75 Hz (left unset, Handy takes 75).
+            Core::Handy => {
+                core.set_option("handy_rot", "Auto");
+                core.set_option("handy_refresh_rate", if crate::runtime::handheld_core_60hz(75.0) {
+                    "60"
+                } else { "75" });
+            }
             Core::BeetleLynx => core.set_option("lynx_rot_screen", "auto"),
             // PokeMini runs on its own defaults, as RetroArch starts it (the
             // cart's rumble on the device), its LCD Filter the player's
@@ -1030,6 +1037,12 @@ impl GameSession {
                 // Each game its own memory card, as Geolith's (the AES saves
                 // its games there).
                 core.set_option("fbneo-memcard-mode", "per-game");
+                // RetroArch's defaults, which FinalBurn Neo only takes when
+                // asked: 4-point sound and FM, 32-bit colours, high scores.
+                core.set_option("fbneo-sample-interpolation", "4-point 3rd order");
+                core.set_option("fbneo-fm-interpolation", "4-point 3rd order");
+                core.set_option("fbneo-allow-depth-32", "enabled");
+                core.set_option("fbneo-hiscores", "enabled");
             }
             // Geolith reads aes.zip for the AES, neogeo.zip for the MVS and
             // the Universe BIOS; AES without aes.zip starts on the MVS.
@@ -1054,6 +1067,8 @@ impl GameSession {
                 core.set_option("pokemini_60hz_mode", if crate::runtime::handheld_core_60hz(72.0) {
                     "enabled"
                 } else { "disabled" });
+                // The cart's rumble at RetroArch's level (left unset: 0, none).
+                core.set_option("pokemini_rumble_lv", "10");
             }
         }
         // The 3.0 systems' own options from Settings > Systems (sprite
