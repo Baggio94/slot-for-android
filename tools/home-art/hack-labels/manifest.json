@@ -1,0 +1,699 @@
+{
+ "source": "https://github.com/Ddaretrogamer/ROM-Hack-Labels",
+ "commit": "b4279f136b015e0b202274f67259cca25376909e",
+ "permission": "Ddaretrogamer agreed on 2026-11-28 to slot. using these labels, with credit.",
+ "credits": "Labels collected by Ddaretrogamer; art by Ddaretrogamer, Oom, yosoo5000, Jaizu, PacoScarso, PurrfectDoodle, Phantonomy, Replay Modding and BearlyApple.",
+ "hacks": [
+  {
+   "key": "celias stupid romhack",
+   "title": "Celia's Stupid Romhack",
+   "files": [
+    {
+     "file": "Celia-s-Stupid-Romhack.png",
+     "sha1": "b5eaecac5cddda227a84cb570d8db81efdbc6712"
+    }
+   ]
+  },
+  {
+   "key": "elite redux",
+   "title": "Pokémon Elite Redux",
+   "files": [
+    {
+     "file": "Elite Redux.png",
+     "sha1": "b3ae265394ff764df4d015c203132b6bb1bfc238"
+    }
+   ]
+  },
+  {
+   "key": "emerald legacy",
+   "title": "Pokémon Emerald Legacy",
+   "files": [
+    {
+     "file": "Pok-mon-Emerald-Legacy.png",
+     "sha1": "2f9c2e739f982a6d04aaf4cc3873ebebb5a1d46d"
+    },
+    {
+     "file": "Emerald Legacy.png",
+     "sha1": "0ab6781044a3a5928a16d55936dac0ae106eef24"
+    }
+   ]
+  },
+  {
+   "key": "emerald seaglass",
+   "title": "Pokémon Emerald Seaglass",
+   "files": [
+    {
+     "file": "emerald seaglass label.png",
+     "sha1": "1edb9d3ac247e09c85df68e07d861f18c96d78e7"
+    },
+    {
+     "file": "pokemon_emerald_seaglass_custom_label_by_yosoo5000_di3erps (1).png",
+     "sha1": "efb97ca0038a8620e692f6e7222b17c79956d39a"
+    },
+    {
+     "file": "Emerald Seaglass.png",
+     "sha1": "a7ee9bd4443f85d91d749371da6e437c8d987d9d"
+    }
+   ]
+  },
+  {
+   "key": "gaia",
+   "title": "Pokémon Gaia",
+   "files": [
+    {
+     "file": "pokemon_gaia_version_custom_label_by_yosoo5000_de6hp1w for print.png",
+     "sha1": "8ebe69954a3904902696be93fe7a243f74449e05"
+    },
+    {
+     "file": "GAIA.png",
+     "sha1": "bbf629f79c41974d3e1a67cdb6627f7932ebcfd2"
+    }
+   ],
+   "artist": "yosoo5000"
+  },
+  {
+   "key": "heart and soul",
+   "title": "Pokémon Heart & Soul",
+   "files": [
+    {
+     "file": "HeartAndSoul_label.png",
+     "sha1": "7e528fbf705f6c514b93ba9f93d26cb464879f21"
+    },
+    {
+     "file": "Pok-mon-Heart-and-Soul-Version.png",
+     "sha1": "50c8befbbf7cf2aba9c0311310882230f2009aab"
+    }
+   ]
+  },
+  {
+   "key": "cerulean",
+   "title": "Pokémon Cerulean",
+   "files": [
+    {
+     "file": "IMG-2028.png",
+     "sha1": "4f704f3db01da7963ab3e699d8aba36686d42c8c"
+    }
+   ]
+  },
+  {
+   "key": "emerald imperium",
+   "title": "Pokémon Emerald Imperium",
+   "files": [
+    {
+     "file": "emeraldimperium.png",
+     "sha1": "86c5c674a3bb38bef38699cf10a51d410b217d48"
+    },
+    {
+     "file": "emeraldimperium blue blue pokemonv2.png",
+     "sha1": "8d505100d9338dcea37497050787c16417e1fa57"
+    },
+    {
+     "file": "emeraldimperium title screen label v2.png",
+     "sha1": "30de09e8335a12e377c5ef175dd11b4f7e0ba6ac"
+    },
+    {
+     "file": "emeraldimperium white blue pokemon.png",
+     "sha1": "5d30115fe996eb07b708033eefc9a22666b68e18"
+    },
+    {
+     "file": "emeraldimperium white.png",
+     "sha1": "d5bc543d8bf39e1a3c11186298254ae4be5a5957"
+    },
+    {
+     "file": "Imperium Emerald.png",
+     "sha1": "b1fcb1bd5fef5a372e402c18d701aa4fd28eca3a"
+    }
+   ]
+  },
+  {
+   "key": "liquid crystal",
+   "title": "Pokémon Liquid Crystal",
+   "files": [
+    {
+     "file": "Liquid Crystal.png",
+     "sha1": "08db58b35c02bf878469bb5eb7bed9800ff21777"
+    }
+   ]
+  },
+  {
+   "key": "advanced adventure",
+   "title": "Pokémon Advanced Adventure",
+   "files": [
+    {
+     "file": "Pok-mon-Advanced-Adventure-Version.png",
+     "sha1": "438a7745849b0b1d4cdf56549cc0106ad707a7d8"
+    }
+   ]
+  },
+  {
+   "key": "aesthetic red",
+   "title": "Pokémon Aesthetic Red",
+   "files": [
+    {
+     "file": "Pok-mon-Aesthetic-Red-Version.png",
+     "sha1": "a9e80b5cca4a7a0efb75b278920d75350fb121f6"
+    }
+   ]
+  },
+  {
+   "key": "altered red",
+   "title": "Pokémon AlteRed",
+   "files": [
+    {
+     "file": "Pok-mon-Alte-Red-Version.png",
+     "sha1": "29fb7ef0cff3917f488d73e5ec88cdd2d1a83e15"
+    }
+   ]
+  },
+  {
+   "key": "amethyst",
+   "title": "Pokémon Amethyst",
+   "files": [
+    {
+     "file": "Pok-mon-Amethyst-Version.png",
+     "sha1": "2c3eef7cc64d5ccd264e958135f5dae515794b42"
+    }
+   ]
+  },
+  {
+   "key": "classic",
+   "title": "Pokémon Classic",
+   "files": [
+    {
+     "file": "Pok-mon-Classic-Version.png",
+     "sha1": "b6bff7c2205d2a2bc6dce8a7f6e3584c00a14658"
+    }
+   ]
+  },
+  {
+   "key": "crippling medical debt",
+   "title": "Pokémon Crippling Medical Debt",
+   "files": [
+    {
+     "file": "Pok-mon-Crippling-Medical-Debt.png",
+     "sha1": "50ab1690e926fe6a7fbcf167d6b4c7ed7a4009f6"
+    }
+   ]
+  },
+  {
+   "key": "firered and leafgreen plus",
+   "title": "Pokémon FireRed & LeafGreen+",
+   "files": [
+    {
+     "file": "Pok-mon-Fire-Red-Leaf-Green-Plus-Version.png",
+     "sha1": "7404516ed4d65a1765a51ef7a30b92f6eb17bcae"
+    }
+   ]
+  },
+  {
+   "key": "fire of sky",
+   "title": "Pokémon Fire of Sky",
+   "files": [
+    {
+     "file": "Pok-mon-Fire-of-Sky.png",
+     "sha1": "4efeedbdaa0ad17a37f42f45648ca0aa553b502a"
+    }
+   ]
+  },
+  {
+   "key": "ghost grey",
+   "title": "Pokémon Ghost Grey",
+   "files": [
+    {
+     "file": "Pok-mon-Ghost-Grey-Version.png",
+     "sha1": "f60fe9c686dd89619ebb56bdbccc43e440e12544"
+    },
+    {
+     "file": "Pok-mon-Ghost-Grey-Version-White-Text.png",
+     "sha1": "b84c2695a3cae976ff1d926938a41493225bf7a5"
+    }
+   ]
+  },
+  {
+   "key": "hearth",
+   "title": "Pokémon Hearth",
+   "files": [
+    {
+     "file": "Pok-mon-Hearth.png",
+     "sha1": "adfa245fff7007a0d3723fe71e48c188b582ac3b"
+    }
+   ]
+  },
+  {
+   "key": "homestead",
+   "title": "Pokémon Homestead",
+   "files": [
+    {
+     "file": "Pok-mon-Homestead.png",
+     "sha1": "a095115e3b8ed566d6e4b61f37ff51ab9283dbf4"
+    }
+   ]
+  },
+  {
+   "key": "lets go eevee",
+   "title": "Pokémon Let's Go Eevee (GBA)",
+   "files": [
+    {
+     "file": "Pok-mon-Let-s-Go-Eevee-Version.png",
+     "sha1": "931623681cf10ae345bd276334d75cafd0f4bf78"
+    }
+   ]
+  },
+  {
+   "key": "lets go pikachu",
+   "title": "Pokémon Let's Go Pikachu (GBA)",
+   "files": [
+    {
+     "file": "Pok-mon-Let-s-Go-Pikachu-Version.png",
+     "sha1": "78ffda29c05a1b5e21991578603a0a2c34fec6aa"
+    }
+   ]
+  },
+  {
+   "key": "sirius",
+   "title": "Pokémon Sirius",
+   "files": [
+    {
+     "file": "Pok-mon-Sirius-Version.png",
+     "sha1": "9e1f11091e09f60cb22c6993d437d1ce8d93af73"
+    }
+   ]
+  },
+  {
+   "key": "soul gold",
+   "title": "Pokémon Soul Gold",
+   "files": [
+    {
+     "file": "Pok-mon-Soul-Gold-Version.png",
+     "sha1": "ded687c87e75f0967aa8ac97d969d3d9dcefb5b7"
+    }
+   ]
+  },
+  {
+   "key": "too many types 2",
+   "title": "Pokémon Too Many Types 2",
+   "files": [
+    {
+     "file": "Pok-mon-Too-Many-Types-2.png",
+     "sha1": "f05b842bfb3afdc4f009cd9e787249bf4c965176"
+    }
+   ]
+  },
+  {
+   "key": "too many types",
+   "title": "Pokémon Too Many Types",
+   "files": [
+    {
+     "file": "Pok-mon-Too-Many-Types.png",
+     "sha1": "e19a95ec1902c498d3a44f52f5aee440cbd75fc6"
+    }
+   ]
+  },
+  {
+   "key": "ultra eclipse",
+   "title": "Pokémon Ultra Eclipse",
+   "files": [
+    {
+     "file": "Pok-mon-Ultra-Eclipse-Version.png",
+     "sha1": "d67b0cce62f40c2f990eb861cb069f8edc05ff72"
+    },
+    {
+     "file": "Pok-mon-Ultra-Eclipse-Version-Gen-3-Style-Label.png",
+     "sha1": "ef9117cdbddd7e68db1f6f1c69d452159633f8fd"
+    }
+   ]
+  },
+  {
+   "key": "ultra violet",
+   "title": "Pokémon Ultra Violet",
+   "files": [
+    {
+     "file": "Pok-mon-Ultra-Violet-Version-png.png",
+     "sha1": "e848646621f3a890138f97150f830849ab34e4bd"
+    }
+   ]
+  },
+  {
+   "key": "unbound",
+   "title": "Pokémon Unbound",
+   "files": [
+    {
+     "file": "Pok-mon-Unbound.png",
+     "sha1": "2a9340a696d7aa9edb014ee5db276597c567adff"
+    },
+    {
+     "file": "pokemon_unbound_custom_label_by_yosoo5000_df9dqp0.png",
+     "sha1": "a305860103fe5ceb76e06ffe39915dc39d5ca185"
+    },
+    {
+     "file": "Pok-mon-Unbound-Version.png",
+     "sha1": "76241871f461e3431248010e291d9c189b394715"
+    },
+    {
+     "file": "Unbound.png",
+     "sha1": "81835363ba59d89860352d934939878606557ba4"
+    }
+   ]
+  },
+  {
+   "key": "vega",
+   "title": "Pokémon Vega",
+   "files": [
+    {
+     "file": "Pok-mon-Vega-Version.png",
+     "sha1": "080bdb97223368bfebc88cf977b171405f0d84c9"
+    }
+   ]
+  },
+  {
+   "key": "wild indigo",
+   "title": "Pokémon Wild Indigo",
+   "files": [
+    {
+     "file": "Pok-mon-Wild-Indigo-Version.png",
+     "sha1": "951b5a47a18603ddb2d85ff1a12ae5857cf93b62"
+    },
+    {
+     "file": "Pok-mon-Wild-Indigo-Version (1).png",
+     "sha1": "cdc9da43485630e0b85f4645e9c18fa8afae2b27"
+    }
+   ]
+  },
+  {
+   "key": "emerald rogue",
+   "title": "Pokémon Emerald Rogue",
+   "files": [
+    {
+     "file": "Pokemon Emerald Rogue og Label for print.png",
+     "sha1": "6b036660bd26131d0f941aeabb58e55891d6947a"
+    },
+    {
+     "file": "emerald rogue wob.png",
+     "sha1": "49f6a2bb5c34b89b3bb0f7a26d62618a8e2d20fa"
+    }
+   ]
+  },
+  {
+   "key": "lime",
+   "title": "Pokémon Lime",
+   "files": [
+    {
+     "file": "PokemonLimeSticker.png",
+     "sha1": "ffe6bfb5dc8d15b15012c66e0ecf75747a0a35f6"
+    }
+   ]
+  },
+  {
+   "key": "peach",
+   "title": "Pokémon Peach",
+   "files": [
+    {
+     "file": "PokemonPeachSticker.png",
+     "sha1": "f232c564a3d13b12bd2405f505ea53724c52e12a"
+    }
+   ]
+  },
+  {
+   "key": "radical red",
+   "title": "Pokémon Radical Red",
+   "files": [
+    {
+     "file": "radicalred.png",
+     "sha1": "5a89e082421c6df269b6cd7d53464c8e7074f40c"
+    },
+    {
+     "file": "Radical Red.png",
+     "sha1": "9c371bbac37ae1affc6de5892836d8a92c0426fc"
+    }
+   ]
+  },
+  {
+   "key": "recharged emerald",
+   "title": "Pokémon Recharged Emerald",
+   "files": [
+    {
+     "file": "Recharged Emerald.png",
+     "sha1": "f3c0f2ad804d457b8f9a79a109f11a31365e6985"
+    }
+   ]
+  },
+  {
+   "key": "recharged yellow",
+   "title": "Pokémon Recharged Yellow",
+   "files": [
+    {
+     "file": "recharged yellow.jpg",
+     "sha1": "f56570512af94067fce1ad6fb14c5f82f0e754dc"
+    },
+    {
+     "file": "Recharged Yellow.png",
+     "sha1": "f11115f24a103158e5d17ed9cd07573af459a11d"
+    }
+   ]
+  },
+  {
+   "key": "rowe",
+   "title": "Pokémon R.O.W.E.",
+   "files": [
+    {
+     "file": "Rowe.png",
+     "sha1": "37792acc54402e563782b7cf7795b1d36fc5acbb"
+    }
+   ]
+  },
+  {
+   "key": "saiph 2",
+   "title": "Pokémon Saiph 2",
+   "files": [
+    {
+     "file": "saiph2 label.png",
+     "sha1": "54ede4cef7478b570e689544044bc6e0a38f0ebe"
+    },
+    {
+     "file": "SAIPH2.png",
+     "sha1": "edae9964d34cfc66f5f831e5aceaa844528612ae"
+    }
+   ]
+  },
+  {
+   "key": "saiph",
+   "title": "Pokémon Saiph",
+   "files": [
+    {
+     "file": "pokemon saiph label.png",
+     "sha1": "78614cd7d9ddd0eb4ef798a16227f04ee5cd0ee5"
+    },
+    {
+     "file": "SAIPH.png",
+     "sha1": "f113609dd62a051c76f44b104b848b42add9d8a6"
+    }
+   ]
+  },
+  {
+   "key": "sors 2",
+   "title": "Pokémon Sors 2",
+   "files": [
+    {
+     "file": "sors2 labl.png",
+     "sha1": "37b1ff3aa2b7dcb6f10c5dae80c52163cc3d1184"
+    }
+   ]
+  },
+  {
+   "key": "sors",
+   "title": "Pokémon Sors",
+   "files": [
+    {
+     "file": "pokemon sors label.png",
+     "sha1": "540257480479983483aa3edaa8102b3295e45c09"
+    },
+    {
+     "file": "SORS.png",
+     "sha1": "a0ad50a360ea76aa8bffb41013cc1a884d8d6421"
+    }
+   ]
+  },
+  {
+   "key": "scorched silver",
+   "title": "Pokémon Scorched Silver",
+   "files": [
+    {
+     "file": "Scorched Silver.png",
+     "sha1": "87d8abc18346d0ba6fb1f50edfe6b82d3716d107"
+    }
+   ]
+  },
+  {
+   "key": "flora sky",
+   "title": "Pokémon Flora Sky",
+   "files": [
+    {
+     "file": "flora sky label.png",
+     "sha1": "97095f6d9baefcb43ca772e8ca2d5fc6542ef155"
+    }
+   ]
+  },
+  {
+   "key": "glazed",
+   "title": "Pokémon Glazed",
+   "files": [
+    {
+     "file": "glazed_label.png",
+     "sha1": "04568d3d793829b9c1c9204bc186161f517a2c7e"
+    }
+   ]
+  },
+  {
+   "key": "inkwell",
+   "title": "Inkwell",
+   "files": [
+    {
+     "file": "inkwell.png",
+     "sha1": "55aa14f0bb563e89277a48c770a079d9499e7661"
+    }
+   ]
+  },
+  {
+   "key": "lazarus",
+   "title": "Pokémon Lazarus",
+   "files": [
+    {
+     "file": "lazarus labelv4.png",
+     "sha1": "55fb66857ab7db246392f960338b3d19d355c830"
+    }
+   ]
+  },
+  {
+   "key": "mariomon",
+   "title": "Super Mariomon",
+   "files": [
+    {
+     "file": "mariomon.png",
+     "sha1": "f61cd3493aa9fe921188de3981a2d5daf8a04016"
+    },
+    {
+     "file": "mariomon horizontal warp pipe.png",
+     "sha1": "be9f5233027ecd8aabf35ba8912e711d9d265075"
+    }
+   ]
+  },
+  {
+   "key": "orange islands",
+   "title": "Pokémon Orange Islands",
+   "files": [
+    {
+     "file": "orange islands.png",
+     "sha1": "ccbe5709ea42d228cc24d51838a84e0d97f2aad4"
+    }
+   ]
+  },
+  {
+   "key": "pisces",
+   "title": "Pokémon Pisces",
+   "files": [
+    {
+     "file": "pisces_label.png",
+     "sha1": "5fbdb857c8b437a41aece99213370b24cd00da80"
+    }
+   ]
+  },
+  {
+   "key": "pit of trials",
+   "title": "Pokémon The Pit (Pit of Trials)",
+   "files": [
+    {
+     "file": "pitoftrials2.0 sharpest w logos.png.png",
+     "sha1": "4b2e3575bd2cd90116e2114b02a4181da983e550"
+    }
+   ]
+  },
+  {
+   "key": "mega power",
+   "title": "Pokémon Mega Power",
+   "files": [
+    {
+     "file": "pokemon mega power label update.png",
+     "sha1": "f7f7399eb18eb13706030e6a8dca80d3cf8192af"
+    }
+   ]
+  },
+  {
+   "key": "sword and shield",
+   "title": "Pokémon Sword & Shield (GBA)",
+   "files": [
+    {
+     "file": "pokemon sword and shield.png",
+     "sha1": "5d818ed12aee0ec7bd7337d04577093988710724"
+    }
+   ]
+  },
+  {
+   "key": "adventures red chapter",
+   "title": "Pokémon Adventures: Red Chapter",
+   "files": [
+    {
+     "file": "pokemon_adventures___red_chapter_custom_label_by_yosoo5000_de7qysr.png",
+     "sha1": "cc7f35b11cc155095362ae85eba2a73a3836350f"
+    }
+   ],
+   "artist": "yosoo5000"
+  },
+  {
+   "key": "firered rocket edition",
+   "title": "Pokémon FireRed Rocket Edition",
+   "files": [
+    {
+     "file": "pokemon_firered_rocket_edition_custom_label_by_yosoo5000_deggk8h-pre.jpg",
+     "sha1": "f02cb79a6ab9f97c5ede07a66152bf2e011bdc26"
+    }
+   ],
+   "artist": "yosoo5000"
+  },
+  {
+   "key": "odyssey",
+   "title": "Pokémon Odyssey",
+   "files": [
+    {
+     "file": "pokemonodyssey1.png",
+     "sha1": "95b4ca883e047926b2291dc59b1ec5b916b9406a"
+    },
+    {
+     "file": "pokemonodyssey2.png",
+     "sha1": "828412ba6bd645ec8b95ddac213660be5e6659de"
+    },
+    {
+     "file": "pokemonodyssey3.png",
+     "sha1": "d5955b5b8158475ec6aa12772fa885c1445c059a"
+    },
+    {
+     "file": "pokemonodyssey4.png",
+     "sha1": "9390485938f29a728feeb048db8e6c0a81c240a4"
+    },
+    {
+     "file": "pokemonodyssey5.png",
+     "sha1": "758dcfebd9add06ac160b6814ee0eac9f2917a95"
+    }
+   ]
+  },
+  {
+   "key": "record keepers",
+   "title": "Pokémon Record Keepers",
+   "files": [
+    {
+     "file": "recordkeepers.png",
+     "sha1": "df082ebcd051d87df658a0168bacdb32f062aa46"
+    }
+   ]
+  },
+  {
+   "key": "transform",
+   "title": "Pokémon Transform",
+   "files": [
+    {
+     "file": "transform_label.png",
+     "sha1": "ac872091205fe38b8c132d44d16ab98a504018f1"
+    }
+   ]
+  }
+ ]
+}

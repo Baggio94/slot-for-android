@@ -1,0 +1,8 @@
+[
+ {
+  "replaces": "files/e1/e1ae616f570850e42950429c9f907db00032af89.webp",
+  "image": "firered-usa.png",
+  "sha1": "336c8e00b15d066b9f321acbe6ea88926140b52e",
+  "why": "Pokemon FireRed (USA, Europe): ScreenScraper's scan kept the white paper around its rounded corners; cleared with clear_border.py."
+ }
+]

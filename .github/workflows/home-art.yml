@@ -9,6 +9,10 @@ on:
     branches: [main]
     paths:
       - 'tools/home-art/manual-labels/**'
+      - 'tools/home-art/hack-labels/**'
+      - 'tools/home-art/label-fixes/**'
+      - 'tools/home-art/import_hacks.py'
+      - 'tools/home-art/fix_labels.py'
   pull_request:
     paths:
       - 'tools/home-art/**'
@@ -66,6 +70,9 @@ jobs:
       - name: Test manual label import
         id: manual_tests
         run: python3 -m unittest discover -s tools/home-art -p test_import_manual.py
+      - name: Test hack labels and fixes
+        id: hack_tests
+        run: python3 -m unittest discover -s tools/home-art -p test_import_hacks.py
       - name: Start from the published set
         id: load_published
         if: env.PUBLISH == 'true'
@@ -97,11 +104,19 @@ jobs:
         id: manual_labels
         if: always() && env.PUBLISH == 'true' && steps.load_published.outcome == 'success' && steps.manual_tests.outcome == 'success'
         run: python3 tools/home-art/import_manual.py --out art
+      # ROM hack labels (found by name: HACKS.json) and cleaned copies of published labels.
+      - name: Hack labels and label fixes
+        id: hack_labels
+        if: always() && env.PUBLISH == 'true' && steps.load_published.outcome == 'success' && steps.hack_tests.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python3 tools/home-art/import_hacks.py --out art
+          python3 tools/home-art/fix_labels.py --out art
       - name: Trial contributed labels (local empty set)
         if: (github.event_name == 'pull_request' || inputs.manual_only) && env.PUBLISH != 'true'
         run: python3 tools/home-art/import_manual.py --out art --allow-empty
       - name: Publish
-        if: always() && env.PUBLISH == 'true' && steps.load_published.outcome == 'success' && steps.manual_labels.outcome == 'success'
+        if: always() && env.PUBLISH == 'true' && steps.load_published.outcome == 'success' && steps.manual_labels.outcome == 'success' && steps.hack_labels.outcome == 'success'
         run: |
           set -euo pipefail
           endpoint="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
