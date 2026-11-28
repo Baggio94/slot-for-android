@@ -29,7 +29,12 @@ internal object SlotArtSet {
     private const val MAX_INDEX = 16 * 1024 * 1024
     private const val MAX_FILE = 6 * 1024 * 1024
     private val filePath = Regex("files/[0-9a-f]{2}/[0-9a-f]{40}\\.(png|webp|jpg)")
-    private val platforms = Systems.PLATFORMS.flatMap { Systems.artKeys(it) }.toSet()
+    /** The hack labels' indexes (HackLabels), read like a platform's. */
+    private const val HACKS = "HACKS"
+    private const val HACK_NAMES = "HACKS.names"
+    private const val HACK_PLATFORMS = "HACKS.platforms"
+    private val hackIndexes = listOf(HACKS, HACK_NAMES, HACK_PLATFORMS)
+    private val platforms = Systems.PLATFORMS.flatMap { Systems.artKeys(it) }.toSet() + hackIndexes
 
     class Entry(val type: String, val region: String, val file: String) {
         val url: String get() = BASE + file
@@ -62,6 +67,25 @@ internal object SlotArtSet {
             if (e.length() < 3 || !filePath.matches(file)) null
             else Entry(e.optString(0), e.optString(1), file)
         }
+    }
+
+    /** The label of the ROM hack a Game Boy family file names (HackLabels),
+     *  with the hack's key, or null. */
+    @Synchronized
+    fun hackLabel(context: Context, platform: String, fileName: String): Pair<String, Entry>? {
+        if (platform !in setOf(Systems.GB, Systems.GBC, Systems.GBA) || fileName.isBlank()) return null
+        val names = index(context, HACK_NAMES) ?: return null
+        val systems = index(context, HACK_PLATFORMS) ?: return null
+        val titles = HashMap<String, String>()
+        for (key in names.keys()) {
+            if (HackLabels.fits(platform, systems.optString(key))) titles[key] = names.optString(key)
+        }
+        val key = HackLabels.keyOf(fileName, titles) ?: return null
+        val list = index(context, HACKS)?.optJSONArray(key) ?: return null
+        val e = list.optJSONArray(0) ?: return null
+        val file = e.optString(2)
+        if (e.length() < 3 || !filePath.matches(file)) return null
+        return key to Entry(e.optString(0), e.optString(1), file)
     }
 
     /** A Neo Geo set's own name, else the set it is a clone of as FinalBurn
@@ -111,7 +135,9 @@ internal object SlotArtSet {
             }
             return shouldContinue()
         }
-        if (!batch(relevant.flatMap { Systems.artKeys(it) }.distinct()) { index(context, it, 0L) }) return false
+        val keys = relevant.flatMap { Systems.artKeys(it) } +
+            if (relevant.any { it in setOf(Systems.GB, Systems.GBC, Systems.GBA) }) hackIndexes else emptyList()
+        if (!batch(keys.distinct()) { index(context, it, 0L) }) return false
         return batch(relevant.toList()) { writeNames(context, it, 0L) }
     }
 

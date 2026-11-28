@@ -123,8 +123,11 @@ internal object AutoCartLabels {
         }
         scan(rom.platform, crc)?.let { return it }
         val alternate = GbFamilyArtwork.other(rom.platform)
+        if (alternate != null) scan(alternate, crc)?.let { return it }
+        // A ROM hack's own label, found by its file name, before the label
+        // of the game it was made from (3.2.0).
+        hackArtwork(context, rom, shouldContinue)?.let { return it }
         if (alternate != null) {
-            scan(alternate, crc)?.let { return it }
             val title = artworkTitle(rom)
             for ((platform, name) in GbFamilyArtwork.names(rom.platform, title)) {
                 if (!shouldContinue()) return null
@@ -138,6 +141,15 @@ internal object AutoCartLabels {
         if (!shouldContinue()) return null
         return ArtNames.crcFor(context, rom.platform, rom.filename.ifBlank { rom.title })
             ?.let { scan(rom.platform, it) }
+    }
+
+    private fun hackArtwork(context: Context, rom: CartStudioCatalog.Rom,
+                            shouldContinue: () -> Boolean): OwnArtwork? {
+        if (!shouldContinue()) return null
+        val (key, entry) = SlotArtSet.hackLabel(context, rom.platform, rom.filename.ifBlank { rom.title })
+            ?: return null
+        val png = SlotArtSet.file(context, entry)?.let(SlotArtSet::toPng) ?: return null
+        return OwnArtwork(ArtIdentity(rom.platform, "hack:$key"), png)
     }
 
     private fun ownScan(context: Context, rom: CartStudioCatalog.Rom, crc: String,
