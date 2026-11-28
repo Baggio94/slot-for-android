@@ -40,6 +40,17 @@ class SaveDeletesTest {
         assertEquals("Game", Systems.saveStem("Game.eeprom"))
     }
 
+    @Test fun neoGeoSavesAreSaves() {
+        assertEquals(SaveDeletes.Kind.SAVE, SaveDeletes.kindOf("Saves/FinalBurn Neo/mslug.fs"))
+        assertEquals(SaveDeletes.Kind.SAVE, SaveDeletes.kindOf("Saves/FinalBurn Neo/mslug.memcard"))
+        assertEquals(SaveDeletes.Kind.SAVE, SaveDeletes.kindOf("Saves/Geolith/mslug.mcr"))
+        assertEquals(SaveDeletes.Kind.SAVE, SaveDeletes.kindOf("Saves/Geolith/mslug.nv"))
+        assertEquals("fs", Systems.saveExtension("FinalBurn Neo"))
+        assertEquals("mcr", Systems.saveExtension("Geolith"))
+        assertEquals("srm", Systems.saveExtension("Beetle PCE Fast"))
+        assertEquals("mslug", Systems.saveStem("mslug.memcard"))
+    }
+
     @Test fun onlyThisGamesFilesAreAskedAbout() {
         val paths = listOf("Saves/mGBA/Golden Sun.srm", "Saves/gpSP/Golden Sun.srm",
             "States/mGBA/Golden Sun.state.auto", "Saves/mGBA/Golden Sun 2.srm",

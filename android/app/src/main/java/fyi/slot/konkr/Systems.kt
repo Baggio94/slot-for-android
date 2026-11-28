@@ -183,10 +183,15 @@ internal object Systems {
         "RACE" -> "ngf"
         // PICO-8's cartdata, the game's own copy (cores/fake08/zz-slot-game-saves.patch).
         "fake-08", "PICO-8" -> "p8d.txt"
+        // The Neo Geo: FinalBurn Neo's NVRAM (its memory card, .memcard,
+        // beside it), Geolith's memory card (its MVS NVRAM, .nv, beside it).
+        "FinalBurn Neo" -> "fs"
+        "Geolith" -> "mcr"
         else -> "srm"
     }
 
-    private val SAVE_SUFFIXES = listOf(".srm", ".eeprom", ".eep", ".flash", ".ngf", ".p8d.txt")
+    private val SAVE_SUFFIXES = listOf(".srm", ".eeprom", ".eep", ".flash", ".ngf", ".p8d.txt",
+        ".fs", ".memcard", ".mcr", ".nv")
 
     /** An in-game save's file name, whatever core wrote it. */
     fun isSaveName(name: String): Boolean =

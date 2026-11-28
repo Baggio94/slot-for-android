@@ -511,6 +511,25 @@ pub(crate) fn neogeo_system(choice: u8, aes_zip: bool) -> &'static str {
     }
 }
 
+/// The save directory handed to FinalBurn Neo: a folder whose "fbneo" is
+/// a link to the core's own Saves folder (outside Saves, so nothing that
+/// copies saves walks it twice).
+fn fbneo_save_dir(storage: &Path, core_root: &Path) -> std::io::Result<PathBuf> {
+    let dir = storage.join("CoreLinks").join("fbneo-saves");
+    std::fs::create_dir_all(&dir)?;
+    let link = dir.join("fbneo");
+    let target = std::fs::canonicalize(core_root)?;
+    if std::fs::read_link(&link).ok().as_deref() != Some(target.as_path()) {
+        match std::fs::symlink_metadata(&link) {
+            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&link)?,
+            Ok(_) => std::fs::remove_file(&link)?,
+            Err(_) => {}
+        }
+        std::os::unix::fs::symlink(&target, &link)?;
+    }
+    Ok(dir)
+}
+
 fn named_rom_alias(storage: &Path, rom: &Path, rom_stem: &str) -> Result<PathBuf, String> {
     let dir = storage.join("RomNames");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot prepare ROM name: {e}"))?;
@@ -768,7 +787,14 @@ impl GameSession {
             Core::Gambatte => vec![("gambatte_gb_bootloader".to_string(), "enabled".to_string())],
             _ => Vec::new(),
         };
-        let mut core = LibretroCore::open_with_options(core_file, &bios, &core_root, &init_options)
+        // FinalBurn Neo keeps a game's NVRAM (<set>.fs) and memory card
+        // (<set>.memcard) in <save directory>/fbneo/, as in RetroArch: that
+        // folder is Saves/FinalBurn Neo itself, so they sit beside every
+        // other core's save (Share Saves, RomM, backups).
+        let save_dir = if which == Core::FbNeo && linked_boot.is_none() {
+            fbneo_save_dir(storage, &core_root).unwrap_or_else(|_| core_root.clone())
+        } else { core_root.clone() };
+        let mut core = LibretroCore::open_with_options(core_file, &bios, &save_dir, &init_options)
             .map_err(|e| e.to_string())?;
         // Home consoles hand over frames of varying size (SNES hi-res, MD
         // H32/H40): keep each as it is instead of the GBA canvas.
@@ -946,6 +972,9 @@ impl GameSession {
                 let extras = crate::settings::CoreExtras::current();
                 core.set_option("fbneo-neogeo-mode",
                     crate::settings::fbneo_neogeo_mode(extras.neogeo_bios, extras.neogeo_region, aes));
+                // Each game its own memory card, as Geolith's (the AES saves
+                // its games there).
+                core.set_option("fbneo-memcard-mode", "per-game");
             }
             // Geolith reads aes.zip for the AES, neogeo.zip for the MVS and
             // the Universe BIOS; AES without aes.zip starts on the MVS.
@@ -3162,6 +3191,21 @@ mod xy_mapping_tests {
 
 #[cfg(test)]
 mod neogeo_bios_tests {
+    #[test]
+    fn fbneo_saves_land_in_its_own_saves_folder() {
+        let storage = std::env::temp_dir().join(format!("slot-fbneo-saves-{}", std::process::id()));
+        let core_root = storage.join("Saves").join("FinalBurn Neo");
+        std::fs::create_dir_all(&core_root).unwrap();
+        let dir = super::fbneo_save_dir(&storage, &core_root).unwrap();
+        std::fs::create_dir_all(dir.join("fbneo")).unwrap();
+        std::fs::write(dir.join("fbneo").join("mslug.fs"), b"nvram").unwrap();
+        assert_eq!(std::fs::read(core_root.join("mslug.fs")).unwrap(), b"nvram");
+        // Again: the link stays.
+        assert_eq!(super::fbneo_save_dir(&storage, &core_root).unwrap(), dir);
+        assert!(core_root.join("mslug.fs").is_file());
+        let _ = std::fs::remove_dir_all(&storage);
+    }
+
     use super::neogeo_system;
 
     #[test]
