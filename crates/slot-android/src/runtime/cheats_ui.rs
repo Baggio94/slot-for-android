@@ -41,7 +41,7 @@ impl Engine {
                 .map(|cart| cart.title.clone()).unwrap_or_default();
             match crate::cheats::custom(&storage, platform, game.rom_stem(), &title) {
                 Some(Ok(source)) => self.cheat_sources.insert(0, source),
-                Some(Err(())) => set_message("Couldn't read your cheat file for this game.".into()),
+                Some(Err(())) => set_message("Couldn't read this game's cheats.".into()),
                 None => {}
             }
         }

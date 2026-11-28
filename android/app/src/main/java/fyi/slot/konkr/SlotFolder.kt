@@ -261,7 +261,7 @@ internal class SlotFolder(private val activity: MainActivity) {
             }
         }
         try {
-            SlotToast.makeText(activity, "Open your slot. folder, or create one named slot, then tap Use this folder.",
+            SlotToast.makeText(activity, "Pick or create a folder named slot.",
                 Toast.LENGTH_LONG).show()
             @Suppress("DEPRECATION")
             activity.startActivityForResult(intent, REQUEST)
@@ -276,7 +276,7 @@ internal class SlotFolder(private val activity: MainActivity) {
         prefs.edit().remove(TREE).remove(ROOT).apply()
         activity.nativeSetSlotFolder(0)
         activity.nativeExternalReturn()
-        SlotToast.makeText(activity, "slot. keeps everything on this handheld only. Your slot. folder is untouched.",
+        SlotToast.makeText(activity, "Kept on this handheld. Folder untouched.",
             Toast.LENGTH_LONG).show()
     }
 
@@ -294,14 +294,13 @@ internal class SlotFolder(private val activity: MainActivity) {
             SlotLog.w(TAG, "No lasting access to the slot folder", error)
             TaskPill.problem(storageProblem(uri, listOf(SlotStorageProblem.describe(error))))
             activity.nativeExternalReturn()
-            SlotToast.makeText(activity, "Android didn't give slot. access to this folder.", Toast.LENGTH_LONG).show()
+            SlotToast.makeText(activity, "No access to this folder.", Toast.LENGTH_LONG).show()
             return
         }
         // Scenario A7: never a folder slot. already uses for something else.
         if (uri.toString() in activity.otherFolders()) {
             activity.nativeExternalReturn()
-            SlotToast.makeText(activity, "This folder is already your ROM, BIOS, save or state folder. " +
-                "Choose another one.", Toast.LENGTH_LONG).show()
+            SlotToast.makeText(activity, "Folder already in use. Choose another.", Toast.LENGTH_LONG).show()
             return
         }
         worker.execute { look(uri, DocumentsContract.getTreeDocumentId(uri)) }

@@ -45,7 +45,7 @@ internal object RommStates {
 
     /** Turns the sync on or off; a message when it can't be. */
     fun toggle(context: Context): String? {
-        if (!Romm.signedIn(context)) return "Connect to RomM first, in Library > RomM Server."
+        if (!Romm.signedIn(context)) return "Connect to RomM first, in Library."
         if (!RommSaves.enabled(context)) return "Turn on Sync Saves with RomM first."
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs.edit().putBoolean(KEY, !prefs.getBoolean(KEY, false)).apply()

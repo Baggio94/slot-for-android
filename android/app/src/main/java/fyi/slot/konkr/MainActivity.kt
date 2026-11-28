@@ -600,7 +600,7 @@ class MainActivity : Activity() {
             } else {
                 // Read-only folder (chosen before 2.3) or the file is gone:
                 // the shelf is read again, the cart comes back if it's there.
-                SlotToast.makeText(this, "Couldn't delete this game. Choose your ROM folder again.",
+                SlotToast.makeText(this, "Can't delete. Choose ROM folder again.",
                     Toast.LENGTH_LONG).show()
                 refreshLibraryAfterDownloads()
             }
@@ -720,7 +720,7 @@ class MainActivity : Activity() {
             !packageManager.canRequestPackageInstalls()) {
             try {
                 updateAfterPermission = true
-                SlotToast.makeText(this, "Allow slot. to install updates, then come back.",
+                SlotToast.makeText(this, "Allow slot. to install updates.",
                     Toast.LENGTH_LONG).show()
                 // About stays behind Android's page (it closed on the way
                 // there and the player came back to the shelf, 2.4.1).
@@ -743,7 +743,7 @@ class MainActivity : Activity() {
                 } catch (error: Exception) {
                     SlotLog.w(TAG, "User-confirmed installer not available", error)
                     SlotToast.makeText(this@MainActivity,
-                        "Allow updates from slot. in Android settings.",
+                        "Allow slot. updates in Android settings.",
                         Toast.LENGTH_LONG).show()
                 }
             }
@@ -1087,7 +1087,7 @@ class MainActivity : Activity() {
             startActivity(Intent.createChooser(send, "Send the room code"))
         } catch (error: Exception) {
             SlotLog.w(TAG, "No app can share the room code", error)
-            SlotToast.makeText(this, "Code copied. Paste it in a message to your friend.",
+            SlotToast.makeText(this, "Code copied. Send it to your friend.",
                 Toast.LENGTH_LONG).show()
         }
     }
@@ -1302,7 +1302,7 @@ class MainActivity : Activity() {
                 70 -> slotFolder.choose()
                 71 -> {
                     if (!RommSaves.toggle(this@MainActivity)) {
-                        SlotToast.makeText(this@MainActivity, "Connect to RomM first, in Library > RomM Server.",
+                        SlotToast.makeText(this@MainActivity, "Connect to RomM first, in Library.",
                             Toast.LENGTH_SHORT).show()
                     }
                     nativeSetRommSync(RommSaves.state(this@MainActivity))
@@ -1853,7 +1853,7 @@ class MainActivity : Activity() {
         if (!cleanSignOut) {
             uiHandler.postDelayed({
                 SlotToast.makeText(this,
-                    "Last RA sign-out unfinished. Unlocks safe.",
+                    "RA sign-out unfinished. Unlocks safe.",
                     Toast.LENGTH_LONG).show()
             }, 800L)
         }
@@ -2932,8 +2932,7 @@ class MainActivity : Activity() {
                 if (folderFailed) {
                     runOnUiThread {
                         if (!isDestroyed) SlotToast.makeText(this@MainActivity,
-                            "Couldn't read your save folder, so this game uses slot.'s own save. " +
-                                "Choose the folder again in START > Library.",
+                            "Save folder unreadable: slot.'s save used.",
                             Toast.LENGTH_LONG).show()
                     }
                 }
@@ -3585,7 +3584,7 @@ class MainActivity : Activity() {
                         Log.i("SlotAutoLabels", "Deferred: Android default Internet network is not validated")
                         if (manualArtworkRefresh.get() && manualOfflineNotice.compareAndSet(false, true)) uiHandler.post {
                             if (!isDestroyed && resumed) SlotToast.makeText(this,
-                                "ROM library scanned. Labels will resume when online.", Toast.LENGTH_SHORT).show()
+                                "Library scanned. Labels when online.", Toast.LENGTH_SHORT).show()
                         }
                         return@execute
                     }
@@ -3717,8 +3716,8 @@ class MainActivity : Activity() {
                                             val errors = report.networkError + report.otherError
                                             val message = when {
                                                 !ok -> "Library scanned. Folder sync pending."
-                                                manualBiosFailed.get() -> "Library scanned. BIOS folder unavailable."
-                                                manualCatalogueFailed.get() || errors > 0 -> "Library scanned. Some labels could not be checked."
+                                                manualBiosFailed.get() -> "Scanned. BIOS folder unavailable."
+                                                manualCatalogueFailed.get() || errors > 0 -> "Library scanned. Some labels unchecked."
                                                 else -> "Library is up to date."
                                             }
                                             SlotToast.makeText(this, message, Toast.LENGTH_SHORT).show()
@@ -3869,7 +3868,7 @@ class MainActivity : Activity() {
         if (isDestroyed || nativeIsPlaying()) return
         if (attempt >= 25) {
             SlotToast.makeText(this,
-                "Unlocks still saving. Sign-out cancelled.",
+                "Unlocks saving. Sign-out cancelled.",
                 Toast.LENGTH_LONG).show()
             return
         }
@@ -3897,7 +3896,7 @@ class MainActivity : Activity() {
         if (isDestroyed || nativeIsPlaying()) return
         if (attempt >= 150) {
             SlotToast.makeText(this,
-                "Couldn't sign out. Restart slot. and try again.",
+                "Couldn't sign out. Restart slot.",
                 Toast.LENGTH_LONG).show()
             return
         }
@@ -4057,7 +4056,7 @@ class MainActivity : Activity() {
      */
     private fun toggleShareGbaSaves() {
         if (nativeIsPlaying()) {
-            SlotToast.makeText(this, "Eject the cartridge before changing this setting.",
+            SlotToast.makeText(this, "Eject the cartridge first.",
                 Toast.LENGTH_LONG).show()
             return
         }
@@ -4070,7 +4069,7 @@ class MainActivity : Activity() {
         }
         nativeSetShareSaves(enabled)
         SlotToast.makeText(this,
-            if (enabled) "mGBA, gpSP and Gambatte now share the same saves."
+            if (enabled) "mGBA, gpSP and Gambatte share saves."
             else "Each core now keeps its own saves.",
             Toast.LENGTH_LONG).show()
     }
@@ -4084,7 +4083,7 @@ class MainActivity : Activity() {
         }
         val uri = Uri.parse(saved)
         if (contentResolver.persistedUriPermissions.none { it.uri == uri && it.isReadPermission }) {
-            SlotToast.makeText(this, "ROM folder access expired. Choose it again.", Toast.LENGTH_SHORT).show()
+            SlotToast.makeText(this, "ROM folder access lost. Choose it again.", Toast.LENGTH_SHORT).show()
             openRomFolderPicker()
             return
         }
@@ -4177,7 +4176,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     if (manualRefresh) {
-                        SlotToast.makeText(this, "BIOS folder unavailable. Existing BIOS kept.", Toast.LENGTH_LONG).show()
+                        SlotToast.makeText(this, "BIOS folder unavailable. BIOS kept.", Toast.LENGTH_LONG).show()
                     } else if (!persistSelection) {
                         // Silent startup restore: right after a reboot (slot.
                         // as home app) the storage provider may not be ready
@@ -4189,7 +4188,7 @@ class MainActivity : Activity() {
                             }, 5_000L)
                         }
                     } else {
-                        SlotToast.makeText(this, "Couldn't import BIOS files. Check the folder.",
+                        SlotToast.makeText(this, "Couldn't import BIOS. Check the folder.",
                             Toast.LENGTH_LONG).show()
                     }
                 }
@@ -4304,7 +4303,7 @@ class MainActivity : Activity() {
     private fun resetVisualFile(kind: Int) {
         val file = visualFile(kind)
         if (file.exists() && !file.delete()) {
-            SlotToast.makeText(this, "Couldn't remove the wallpaper. Try again.", Toast.LENGTH_LONG).show()
+            SlotToast.makeText(this, "Couldn't remove wallpaper. Try again.", Toast.LENGTH_LONG).show()
             return
         }
         nativeReloadVisualAssets()
@@ -4656,7 +4655,7 @@ class MainActivity : Activity() {
                     val states = requestCode == STATE_REQUEST
                     val kind = if (states) "Save State" else "Save"
                     SlotToast.makeText(this,
-                        "$kind folder selected. Copying your ${if (states) "states" else "saves"} there…",
+                        "Folder chosen. Copying ${if (states) "states" else "saves"}…",
                         Toast.LENGTH_LONG).show()
                     transferToFolder(uri, states)
                 }
@@ -4665,7 +4664,7 @@ class MainActivity : Activity() {
             if (requestCode == FOLDER_REQUEST) {
                 nativeSetShelfStatus(shelfPermissionError)
             } else {
-                SlotToast.makeText(this, "Couldn't access this folder. Select it again.", Toast.LENGTH_LONG).show()
+                SlotToast.makeText(this, "Can't access folder. Select it again.", Toast.LENGTH_LONG).show()
             }
             SlotLog.e(TAG, "Android folder permission error", error)
         }
@@ -4693,7 +4692,7 @@ class MainActivity : Activity() {
                 null
             }
             val text = when {
-                result == null -> "Couldn't copy your ${noun}s to the folder. Your ${noun}s are safe in slot."
+                result == null -> "Couldn't copy ${noun}s. They're safe."
                 result.copied + result.replaced + result.kept == 0 && result.failed == 0 ->
                     if (result.same > 0) "Your ${noun}s were already in the folder." else "No ${noun}s to copy yet."
                 else -> buildString {
@@ -4856,7 +4855,7 @@ class MainActivity : Activity() {
             // Even after a quiet scan: the player should know why some
             // games are missing (issue #122).
             SlotToast.makeText(this,
-                "ROM folder too big: $count cartridges ready, some games skipped.",
+                "Too many games: $count ready, rest skipped.",
                 Toast.LENGTH_LONG).show()
         } else if (!next.quiet && !next.refreshArtwork && count > 0) {
             SlotToast.makeText(this,

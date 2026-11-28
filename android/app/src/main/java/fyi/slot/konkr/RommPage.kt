@@ -524,7 +524,7 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
             activity.nativeRommProgress(chosen.size, chosen.size, -1)
             waitingForFolder = ids
             SlotToast.makeText(activity,
-                if (activity.hasRomFolder()) "Choose your ROM folder again to save games."
+                if (activity.hasRomFolder()) "Choose ROM folder again to save games."
                 else "Choose your ROM folder to save games.",
                 Toast.LENGTH_LONG).show()
             activity.chooseRomFolderForRomm()
@@ -592,7 +592,7 @@ internal class RommPage(private val activity: MainActivity, private val romRoot:
                 val text = when {
                     failed == 0 && saved == 1 -> "1 game downloaded."
                     failed == 0 -> "$saved games downloaded."
-                    saved == 0 -> "Download failed. Check your Wi-Fi and the ROM folder."
+                    saved == 0 -> "Download failed. Check Wi-Fi and folder."
                     else -> "$saved downloaded, $failed failed."
                 } + biosNote
                 SlotToast.makeText(activity, text, Toast.LENGTH_SHORT).show()

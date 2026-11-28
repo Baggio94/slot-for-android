@@ -459,11 +459,11 @@ fn set_message(message: String) {
 /// puts the step that failed before the reason (Siham 2026-11-16).
 fn game_error_text(message: &str) -> &'static str {
     if message.starts_with("rom:") {
-        "Couldn't read this game file. Refresh the library, or choose your ROM folder again."
+        "Can't read this game. Refresh Library."
     } else if message.starts_with("saves:") {
-        "Couldn't read your save folder. Choose it again in Library."
+        "Save folder unreadable. Choose it again."
     } else {
-        "Couldn't open this game. Check the ROM and core."
+        "Couldn't open this game. Check the ROM."
     }
 }
 
@@ -3290,7 +3290,7 @@ impl Engine {
         if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
             self.mode_last_tap = None;
             self.overlay = ShelfOverlay::GameMenu { row: 0 };
-            set_message("Press A to eject, then reinsert to play solo.".into());
+            set_message("Press A, then reinsert to play solo.".into());
         } else if self.game.is_some() {
             let is_double=self.mode_last_tap.take()
                 .is_some_and(|t|t.elapsed().as_millis()<360);
@@ -3451,7 +3451,7 @@ impl Engine {
                 // Game Boy colours are the palette's: nothing to correct.
                 if platform==Platform::Gb {return;}
                 if self.game_settings().shader_for(platform).includes_gba_color() {
-                    set_message("This shader already includes color correction.".into());
+                    set_message("This shader already corrects color.".into());
                     return;
                 }
                 if self.game.is_some() {
@@ -3719,7 +3719,7 @@ impl Engine {
         let storage = PATHS.lock().unwrap_or_else(|e| e.into_inner())
             .clone().map(|(storage, _)| storage);
         let Some(relay) = crate::link_internet::relay_address(storage.as_deref()) else {
-            set_message("WAN Multiplayer isn't set up in this build.".into());
+            set_message("WAN Multiplayer not in this build.".into());
             return;
         };
         if let Err(error) = self.ensure_gpsp_link_serial() {
@@ -3784,7 +3784,7 @@ impl Engine {
     fn enter_multiplayer_menu(&mut self) {
         if self.game.is_none() { return; }
         if self.game.as_ref().is_some_and(GameSession::requires_relaunch) {
-            set_message("Eject and reinsert the cartridge to link again.".into());
+            set_message("Reinsert the cartridge to link again.".into());
             return;
         }
         if self.link_identity.is_none() {
@@ -3824,7 +3824,7 @@ impl Engine {
                 link_kind::preferred_mode(&identity.code, &identity.title,
                     identity.clean_header));
             if !link_kind::gpsp_runtime_mode_supported(&identity.code, self.link_mode) {
-                set_message("gpSP can't link this game. Try mGBA on both.".into());
+                set_message("gpSP can't link it. Use mGBA on both.".into());
                 return;
             }
         }
@@ -4645,7 +4645,7 @@ impl Engine {
                         // explicit Exit to discard and reload from last disk
                         // checkpoint. This branch has NO SAVE_SYNC event.
                         if !session.confirm_rollback_discard() {
-                            set_message("Paused to protect your save. Eject again to quit.".into());
+                            set_message("Save protected. Eject again to quit.".into());
                             self.overlay = ShelfOverlay::GameMenu { row: 0 };
                             self.game_accum = 0.0;
                             return;
@@ -4662,7 +4662,7 @@ impl Engine {
                     } {
                         Ok(saved) => {
                             if session.take_kept_flash_save() {
-                                set_message("In-game save kept: this state has none yet.".into());
+                                set_message("Save kept: this state has none.".into());
                             }
                             saved
                         }
@@ -5681,7 +5681,7 @@ impl Engine {
                             self.insert_started = Some(Instant::now());
                             self.a_down_at = self.insert_started;
                             self.fresh_launch = false;
-                            set_message("No core for this system yet: 3.0 test cart.".into());
+                            set_message("No core yet for this test cart.".into());
                             return;
                         }
                         // Splore without PICO-8 in the BIOS folder (taken out since): say so.
@@ -7490,7 +7490,7 @@ impl Engine {
         if key == 2 && self.game_settings().shader_for(platform).includes_gba_color() {
             // These two RetroArch presets bake GBA Color into the shader.
             // Never silently toggle an option that cannot affect the picture.
-            set_message("This shader already includes color correction.".into());
+            set_message("This shader already corrects color.".into());
             return;
         }
         let linked=self.game.as_ref().is_some_and(GameSession::linked);
@@ -7578,12 +7578,12 @@ impl Engine {
         }
         if key == 12 && self.game.as_ref().is_some_and(|game|
             game.sma4_runahead_blocked()) {
-            set_message("Run-Ahead off to protect this game's saves.".into());
+            set_message("Run-Ahead off to protect saves.".into());
             return;
         }
         if key == 12 && self.game.as_ref().is_some_and(|game|
             game.mgba_flash_runahead_blocked()) {
-            set_message("Run-Ahead off with mGBA to protect saves.".into());
+            set_message("mGBA: Run-Ahead off to protect saves.".into());
             return;
         }
         if key == 12 && self.game.as_ref().is_some_and(|game|
@@ -8689,7 +8689,7 @@ impl Engine {
             return;
         }
         if matches!(key,2|22) && self.settings.shader_gba.includes_gba_color() {
-            set_message("This shader already includes color correction.".into());
+            set_message("This shader already corrects color.".into());
             return;
         }
         if !self.settings.change(key, right) { return; }
@@ -9930,7 +9930,7 @@ impl Engine {
         let Some(game)=self.game.as_ref() else {return;};
         let entries=game.history();
         if entries.is_empty() {
-            set_message("No save states yet. Press SELECT + R1 to save.".into());
+            set_message("No states yet. SELECT + R1 saves one.".into());
             return;
         }
         let mut polaroids=Polaroids::new(entries);
@@ -10799,7 +10799,7 @@ impl Engine {
                 PLAYING.store(false, Ordering::Release);
                 AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clear();
                 self.overlay = ShelfOverlay::GameMenu { row: 0 };
-                set_message("Paused to protect your save. Eject twice to quit.".into());
+                set_message("Save protected. Eject twice to quit.".into());
             }
             match stepped {
                 0 => self.perf_step0 = self.perf_step0.saturating_add(1),

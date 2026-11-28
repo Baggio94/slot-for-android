@@ -425,7 +425,7 @@ impl Engine {
                     self.persist_controls();
                 } else if let Some(holder) = holder {
                     let holder = controls::BUTTONS[holder].0;
-                    set_message(format!("Menus need this key for {holder}. Move {holder} first."));
+                    set_message(format!("Menus need this key for {holder}."));
                 }
             }
             Listen::Console { port, button, .. } => {

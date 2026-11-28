@@ -498,7 +498,7 @@ class AppsActivity : Activity() {
             Log.w(TAG, "Android Home role chooser unavailable", error)
         }
         SlotToast.makeText(this,
-            "This device doesn't provide a Home app chooser.",
+            "No Home app chooser on this device.",
             Toast.LENGTH_LONG).show()
     }
 

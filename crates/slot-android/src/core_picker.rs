@@ -283,8 +283,8 @@ impl CorePicker {
 pub fn refusal_message(only: Core) -> String {
     match only {
         Core::Pico8 => crate::pico8::SPLORE_ONLY.to_string(),
-        Core::FbNeo => "Only this game's .zip set is here: FinalBurn Neo plays it. Geolith needs its .neo.".to_string(),
-        Core::Geolith => "Only this game's .neo is here: Geolith plays it. FinalBurn Neo needs its .zip set.".to_string(),
+        Core::FbNeo => "Geolith needs this game's .neo.".to_string(),
+        Core::Geolith => "FinalBurn Neo needs this game's .zip.".to_string(),
         Core::BeetlePce => "SuperGrafx games run on Beetle PCE only.".to_string(),
         other => format!("Only {} can play this game.", other.text()),
     }
@@ -297,8 +297,9 @@ mod refusal_tests {
     #[test]
     fn each_lone_core_says_why() {
         assert_eq!(refusal_message(Core::Pico8), crate::pico8::SPLORE_ONLY);
-        assert!(refusal_message(Core::FbNeo).contains(".zip"));
-        assert!(refusal_message(Core::Geolith).contains(".neo"));
+        // Only the .zip here: Geolith would need the .neo, and the reverse.
+        assert!(refusal_message(Core::FbNeo).contains("Geolith") && refusal_message(Core::FbNeo).contains(".neo"));
+        assert!(refusal_message(Core::Geolith).contains("FinalBurn Neo") && refusal_message(Core::Geolith).contains(".zip"));
         assert!(refusal_message(Core::BeetlePce).contains("SuperGrafx"));
         assert!(!refusal_message(Core::FbNeo).contains("Splore"));
     }
