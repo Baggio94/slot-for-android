@@ -303,3 +303,38 @@ mod tests {
     }
 
 }
+
+/// A frame's light (B,G,R,X texels): its mean brightness and the share of
+/// texels that aren't black, on a coarse grid, so it costs nothing.
+pub(crate) fn picture_light(frame: &[u8]) -> String {
+    let texels = frame.len() / 4;
+    if texels == 0 { return "no picture".into(); }
+    let step = (texels / 4096).max(1);
+    let (mut sum, mut lit, mut seen) = (0u64, 0u64, 0u64);
+    for i in (0..texels).step_by(step) {
+        let o = i * 4;
+        let luma = (u64::from(frame[o]) + u64::from(frame[o + 1]) + u64::from(frame[o + 2])) / 3;
+        sum += luma;
+        if luma > 16 { lit += 1; }
+        seen += 1;
+    }
+    format!("mean {} of 255, {}% lit", sum / seen, lit * 100 / seen)
+}
+
+/// The CPU this thread runs on now, -1 when unknown.
+pub(crate) fn current_cpu() -> i32 {
+    #[cfg(target_os = "android")]
+    { unsafe { libc::sched_getcpu() } }
+    #[cfg(not(target_os = "android"))]
+    { -1 }
+}
+
+#[cfg(test)]
+mod light_tests {
+    #[test]
+    fn a_black_frame_and_a_grey_one() {
+        assert_eq!(super::picture_light(&[0u8; 64]), "mean 0 of 255, 0% lit");
+        assert_eq!(super::picture_light(&[200u8, 200, 200, 0].repeat(16)), "mean 200 of 255, 100% lit");
+        assert_eq!(super::picture_light(&[]), "no picture");
+    }
+}

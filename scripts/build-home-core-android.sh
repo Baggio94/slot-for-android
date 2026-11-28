@@ -21,6 +21,7 @@ OWNER=libretro
 LIBNAME=retro
 # A command run in the jni folder after the patches, before ndk-build.
 PREBUILD=""
+EXTRA_CFLAGS=""
 # name | upstream repository | pinned commit | jni folder | licence file
 case "$CORE" in
   fceumm)          REPO=libretro-fceumm;  PIN=fb919fb6fa881aaa6279b765d480220579e5c606; JNI=jni;                         LICENCE=Copying ;;
@@ -49,7 +50,10 @@ case "$CORE" in
   # Geolith (2026-11-25, BSD-3).
   fbneo)           REPO=FBNeo;                 PIN=85c89235d5358aa3282d78d837e7682f77dee82f; JNI=src/burner/libretro/jni; LICENCE=src/license.txt
                    PREBUILD='perl ../../../dep/scripts/gamelist.pl -o ../../../dep/generated/driverlist.h -l ../../../../gamelist.txt ../../../burn/drv/neogeo/d_neogeo.cpp' ;;
-  geolith)         REPO=geolith-libretro;      PIN=f91bfdee1e821c4078cea68187f72d7ee0f59d1b; JNI=libretro/jni; LICENCE=LICENSE ;;
+  # Geolith runs its CPUs in lockstep, ten times FinalBurn Neo's work: -O3
+  # as its own Makefile builds it everywhere but Android (3.2.0).
+  geolith)         REPO=geolith-libretro;      PIN=f91bfdee1e821c4078cea68187f72d7ee0f59d1b; JNI=libretro/jni; LICENCE=LICENSE
+                   EXTRA_CFLAGS='-O3' ;;
   # PC Engine (3.2): Beetle PCE FAST (2026-11-20), Beetle PCE (2026-11-22).
   mednafen_pce_fast) REPO=beetle-pce-fast-libretro; PIN=4cf066e22533186d0cfad85a0fec2aced93e4e29; JNI=jni; LICENCE=COPYING ;;
   mednafen_pce)    REPO=beetle-pce-libretro;   PIN=974fe085a9842be2069afc95beaf469a90e9ae44; JNI=jni;          LICENCE=COPYING ;;
@@ -109,7 +113,8 @@ fi
   APP_ABI=arm64-v8a APP_PLATFORM=android-31 APP_STL=c++_static \
   APP_SUPPORT_FLEXIBLE_PAGE_SIZES=true \
   NDK_PROJECT_PATH="$SRC/$JNI/.." \
-  NDK_OUT="$OUT/obj" NDK_LIBS_OUT="$OUT/libs"
+  NDK_OUT="$OUT/obj" NDK_LIBS_OUT="$OUT/libs" \
+  ${EXTRA_CFLAGS:+APP_CFLAGS="$EXTRA_CFLAGS"}
 LIB="$OUT/libs/arm64-v8a/lib$LIBNAME.so"
 [ -s "$LIB" ] || { echo "Missing $CORE libretro library" >&2; exit 1; }
 SYMBOLS="$("$LLVM/llvm-nm" -D --defined-only "$LIB")"

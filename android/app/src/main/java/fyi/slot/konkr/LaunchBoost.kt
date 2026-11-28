@@ -45,6 +45,20 @@ object LaunchBoost {
         }
     }
 
+    /** A game frame's own work, from the screen thread, every frame a
+     *  game plays: Android then keeps a heavy core (Geolith) on a CPU and
+     *  at a speed that hold its 60 frames, the way ADPF is meant to be fed
+     *  (3.2.0). Cheap, and nothing when hints are unavailable. */
+    @Synchronized
+    fun frame(workNs: Long) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || workNs <= 0L) return
+        try {
+            session?.reportActualWorkDuration(workNs)
+        } catch (error: RuntimeException) {
+            session = null
+        }
+    }
+
     /** The thread that joined is gone (a new GL surface thread): start over. */
     @Synchronized
     fun reset() {

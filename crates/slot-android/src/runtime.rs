@@ -10914,6 +10914,14 @@ impl Engine {
                 if let Some(summary) = window.add(frame_phases) {
                     // Exactly one log entry per ~5s; never stringify each draw.
                     crate::game::log_launch_timing(&summary.report());
+                    // What the core last showed and where this thread ran:
+                    // a black screen that is the core's own, or a slow core
+                    // left on a little CPU (Geolith, 3.2.0).
+                    let (w, h) = session.frame_size();
+                    crate::game::log_launch_timing(&format!(
+                        "Game picture: {} ({w}x{h}, {}), on CPU {}",
+                        crate::frame_phases::picture_light(session.frame()),
+                        session.core_kind().text(), crate::frame_phases::current_cpu()));
                 }
             });
             a12_draw_sample(session.linked() && session.core_kind() == Core::Mgba,

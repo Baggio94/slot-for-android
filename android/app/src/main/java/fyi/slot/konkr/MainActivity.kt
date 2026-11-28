@@ -1705,6 +1705,7 @@ class MainActivity : Activity() {
                     nativeDrawFrame(if (raSwapLoopApplied) System.nanoTime()
                         else if (displaySyncApplied) latestVsyncFrameNs else 0L)
                     a12NativeUs = (SystemClock.elapsedRealtimeNanos() - beginNativeNs) / 1000L
+                    if (nativeIsPlaying()) LaunchBoost.frame(a12NativeUs * 1000L)
                     // Notify the existing AudioTrack worker that libretro
                     // may have produced samples. Never block GL on audio.
                     if (audioRunning.get() && nativeIsPlaying() &&
