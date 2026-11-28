@@ -269,7 +269,9 @@ pub fn game_default_mode(platform: Platform, panel: (u32, u32), square: bool,
 {
     // PICO-8's 128x128 starts at Integer: every pixel the same size.
     if platform == Platform::Pico8 { return VideoMode::Actual; }
-    if !home_console(platform) { return VideoMode::Aspect; }
+    // Neo Geo games start at Original Ratio, the screen's full height
+    // (Siham 2026-11-28).
+    if !home_console(platform) || platform == Platform::NeoGeo { return VideoMode::Aspect; }
     let mut frame = if frame.0 == 0 || frame.1 == 0 {
         default_frame(platform, square)
     } else { frame };
@@ -740,6 +742,13 @@ pub fn source_rect(platform: Platform, mode: VideoMode) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn neo_geo_starts_at_original_ratio() {
+        for panel in [(960, 640), (1920, 1080), (720, 720)] {
+            assert_eq!(game_default_mode(Platform::NeoGeo, panel, false, (304, 224)), VideoMode::Aspect, "{panel:?}");
+        }
+    }
+
     use super::*;
 
     #[test]
