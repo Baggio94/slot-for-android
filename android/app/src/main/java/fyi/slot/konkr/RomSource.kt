@@ -38,13 +38,14 @@ internal object RomSource {
     /** A Neo Geo set's ROM chip as MAME and FinalBurn Neo name them:
      *  201-p1.p1, 201-c1.c1, 232-m1.m1, k2k4s-p1.bin... */
     private val NEOGEO_CHIP = Regex("""^(p|c|m|s|v|sp|ep)[0-9]{1,2}$""")
+    private val CHIP_FILE_EXTENSIONS = setOf("bin", "rom")
     private val NEOGEO_CHIP_STEM = Regex("""[-_](p|c|m|s|v)[0-9]{1,2}[a-z]?$""")
     internal fun neoGeoChip(entryName: String): Boolean {
         val name = entryName.substringAfterLast('/').lowercase(Locale.ROOT)
         val ext = name.substringAfterLast('.', "")
         val stem = name.substringBeforeLast('.')
         return NEOGEO_CHIP.matches(ext) ||
-            (ext in setOf("bin", "rom") && NEOGEO_CHIP_STEM.containsMatchIn(stem))
+            (ext in CHIP_FILE_EXTENSIONS && NEOGEO_CHIP_STEM.containsMatchIn(stem))
     }
 
     fun isContainer(filename: String): Boolean =
@@ -90,7 +91,9 @@ internal object RomSource {
                 val romExt = extension(entry.name.substringAfterLast('/'))
                 // A Neo Geo set's chips are no cartridge of their own: the
                 // whole ZIP is the game, known by its first chip.
-                if (romExt !in supported && neoGeoChip(entry.name)) throw NeoGeoSet()
+                // A chip named like 201-p1.bin wins over the Mega Drive's .bin.
+                if ((romExt !in supported || romExt in CHIP_FILE_EXTENSIONS) &&
+                    neoGeoChip(entry.name)) throw NeoGeoSet()
                 if (romExt !in supported || !Systems.acceptsName(entry.name)) continue
                 require(entry.size == -1L || entry.size in Systems.minRomBytes(romExt).toLong()..maxRomBytes(romExt)) {
                     "ZIP ROM exceeds safe size limits"

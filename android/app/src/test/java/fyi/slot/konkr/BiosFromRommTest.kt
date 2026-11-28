@@ -23,7 +23,7 @@ class BiosFromRommTest {
 
     @Test fun allRecognizedSystemsAreEligibleForAutomaticRommBios() {
         val supported = setOf(Systems.GB, Systems.GBC, Systems.GBA, Systems.LYNX,
-            Systems.GG, Systems.SMS, Systems.MD, Systems.POKEMINI)
+            Systems.GG, Systems.SMS, Systems.MD, Systems.POKEMINI, Systems.NEOGEO)
         assertEquals(supported, BiosLibrary.ROMM_AUTO_PLATFORMS)
         for (system in supported) {
             assertEquals(BiosLibrary.namesFor(system), BiosLibrary.automaticNamesFor(system))
